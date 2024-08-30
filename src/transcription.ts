@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import {createReadStream, unlinkSync, writeFileSync} from "node:fs";
+import {createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync} from "node:fs";
 import {CHANNELS, OPENAI_API_KEY, SAMPLE_RATE_LOW} from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
@@ -22,10 +22,17 @@ export async function transcribeSnippet(snippet: AudioSnippet, userId: string, u
     const tempPcmFileName = `./temp_snippet_${userId}_${snippet.timestamp}.pcm`;
     const tempWavFileName = `./temp_snippet_${userId}_${snippet.timestamp}.wav`;
 
+    // Ensure the directories exist
+    const tempDir = './';
+    if (!existsSync(tempDir)) {
+        mkdirSync(tempDir, { recursive: true });
+    }
+
+    // Write the PCM buffer to a file
     const buffer = Buffer.concat(snippet.chunks);
-    console.log(snippet.chunks.length);
     writeFileSync(tempPcmFileName, buffer);
 
+    // Convert PCM to WAV using ffmpeg
     await new Promise<void>((resolve, reject) => {
         ffmpeg(tempPcmFileName)
             .inputOptions([
@@ -37,29 +44,49 @@ export async function transcribeSnippet(snippet: AudioSnippet, userId: string, u
                 `-f wav`,
                 `-c:a pcm_s16le`
             ])
-            .save(tempWavFileName)
             .on('end', () => {
-                console.log("Finished converting PCM to WAV")
+                console.log("Finished converting PCM to WAV");
                 resolve();
             })
             .on('error', (err) => {
                 console.error(`Error converting PCM to WAV: ${err.message}`);
                 reject(err);
-            });
+            })
+            .save(tempWavFileName); // Ensure this is within the promise chain
     });
 
     try {
-        const transcription = transcribe(tempWavFileName);
+        // Transcribe the WAV file
+        const transcription = await transcribe(tempWavFileName);
 
         // Cleanup temporary files
-        unlinkSync(tempPcmFileName);
-        unlinkSync(tempWavFileName);
+        if (existsSync(tempPcmFileName)) {
+            unlinkSync(tempPcmFileName);
+        } else {
+            console.log('failed cleaning up temp pcm file, continuing')
+        }
+        if (existsSync(tempWavFileName)) {
+            unlinkSync(tempWavFileName);
+        } else {
+            console.log('failed cleaning up temp wav file, continuing')
+        }
 
         return `[${userTag} @ ${new Date(snippet.timestamp).toLocaleString()}]: ${transcription}`;
     } catch (e) {
         console.error(`Failed to transcribe snippet for user ${userId}:`, e);
-        unlinkSync(tempPcmFileName);
-        unlinkSync(tempWavFileName);
+
+        // Cleanup temporary files on error
+        if (existsSync(tempPcmFileName)) {
+            unlinkSync(tempPcmFileName);
+        } else {
+            console.log('failed cleaning up temp pcm file, continuing')
+        }
+        if (existsSync(tempWavFileName)) {
+            unlinkSync(tempWavFileName);
+        } else {
+            console.log('failed cleaning up temp wav file, continuing')
+        }
+
         return `[${userTag} @ ${new Date(snippet.timestamp).toLocaleString()}]: [Transcription failed]`;
     }
 }

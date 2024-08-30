@@ -1,7 +1,11 @@
 import {statSync, unlinkSync} from "node:fs";
-import {BYTES_PER_SAMPLE, CHANNELS, SAMPLE_RATE_LOW, SILENCE_THRESHOLD} from "./constants";
+import {BYTES_PER_SAMPLE, CHANNELS, FRAME_SIZE, SAMPLE_RATE_LOW, SILENCE_THRESHOLD} from "./constants";
 import {exec} from "node:child_process";
 import {AudioSnippet} from "./types/audio";
+import {MeetingData} from "./types/meeting-data";
+import {EndBehaviorType} from "@discordjs/voice";
+import prism from "prism-media";
+import {PassThrough} from "node:stream";
 
 export function synchronizeUserAudio(userChunks: AudioSnippet[]) {
     const finalUserBuffer: Buffer[] = [];
@@ -117,4 +121,32 @@ export function mergeSnippetsAcrossUsers(audioData: Map<string, AudioSnippet[]>)
     }
 
     return mergedSnippets;
+}
+
+export async function subscribeToUserVoice(meeting: MeetingData, userId: string) {
+    const opusStream = meeting.connection.receiver.subscribe(userId, {
+        end: {
+            behavior: EndBehaviorType.Manual,
+        },
+    });
+
+    // @ts-ignore
+    const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE_LOW, channels: CHANNELS, frameSize: FRAME_SIZE }));
+    const passThrough = new PassThrough();
+    // @ts-ignore
+    decodedStream.pipe(passThrough);
+
+    if (!meeting.audioData.has(userId)) {
+        meeting.audioData.set(userId, []);
+    }
+
+    const snippet: AudioSnippet = {
+        chunks: [],
+        timestamp: Date.now(),
+    };
+    meeting.audioData.get(userId)!.push(snippet);
+
+    passThrough.on('data', chunk => {
+        snippet.chunks.push(chunk);
+    });
 }
