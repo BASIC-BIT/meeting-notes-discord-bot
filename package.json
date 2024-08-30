@@ -16,6 +16,7 @@
   "dependencies": {
     "@discordjs/rest": "^2.3.0",
     "@discordjs/voice": "^0.17.0",
+    "date-fns": "^3.6.0",
     "discord-api-types": "^0.37.98",
     "discord.js": "^14.15.3",
     "dotenv": "^16.4.5",
