@@ -22,13 +22,13 @@ import {createReadStream, readFileSync, statSync, unlinkSync, writeFileSync} fro
 import OpenAI from "openai";
 import {PassThrough} from "node:stream";
 import {exec} from "node:child_process";
+import ffmpeg from 'fluent-ffmpeg';
 
 dotenv.config();
 
-
-const SAMPLE_RATE = 8000; // 48 kHz sample rate
-const CHANNELS = 2; // Stereo (2 channels)
-const BYTES_PER_SAMPLE = 2; // 16-bit PCM = 2 bytes per sample
+const SAMPLE_RATE = 8000;
+const CHANNELS = 2;
+const BYTES_PER_SAMPLE = 2;
 const FRAME_SIZE = 960;
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -47,7 +47,6 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
     ],
     partials: [Partials.Channel, Partials.User],
-
 });
 
 const openAIClient = new OpenAI({
@@ -71,8 +70,6 @@ interface MeetingData {
     channelId: string;
     audioData: Map<string, AudioSnippet[]>
 }
-
-// We're going to separate each user's audio data into "phrases", which are each time they cue their mic, so that we can cleanly transcribe later
 
 const meetings = new Map<string, MeetingData>();
 
@@ -253,22 +250,31 @@ async function handleEndMeeting(interaction: CommandInteraction) {
         return;
     }
 
+    await interaction.reply('Meeting ended, please wait for the summary...');
+
+    // Leave the voice channel
+    if (meeting.connection) {
+        meeting.connection.disconnect();
+        meeting.connection.destroy();
+    }
+
     // Write chat log
     const chatLogFilePath = `./logs/chatlog-${guildId}-${channelId}-${Date.now()}.txt`;
     writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
 
-
-    //
-    // if(meeting.pcmStream) {
-    //     meeting.pcmStream.end();
-    // }
-
     const attendanceList = Array.from(meeting.attendance).join('\n');
-
     const userBuffers: string[] = [];
+    const transcriptionPromises: Promise<string>[] = [];
 
+    // Combine and transcribe audio snippets
     meeting.audioData.forEach((snippets, userId) => {
-        const userBuffer = synchronizeUserAudio(snippets);
+        const mergedSnippets = mergeSnippets(snippets);
+
+        mergedSnippets.forEach(mergedSnippet => {
+            transcriptionPromises.push(transcribeSnippet(mergedSnippet, userId));
+        });
+
+        const userBuffer = synchronizeUserAudio(mergedSnippets);
         const fileName = `./temp_user_${userId}.pcm`;
         writeFileSync(fileName, userBuffer);
         userBuffers.push(fileName);
@@ -276,12 +282,9 @@ async function handleEndMeeting(interaction: CommandInteraction) {
 
     await combineAudioWithFFmpeg(userBuffers, meeting.audioFilePath);
 
-    // const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
-    // const transcription = await transcribe(meeting.audioFilePath);
-    //
-    // if(transcription !== null) {
-    //     writeFileSync(transcriptionFilePath, transcription);
-    // }
+    const transcriptions = await Promise.all(transcriptionPromises);
+    const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
+    writeFileSync(transcriptionFilePath, transcriptions.join('\n'));
 
     const embed = new EmbedBuilder()
         .setTitle('Meeting Summary')
@@ -301,22 +304,93 @@ async function handleEndMeeting(interaction: CommandInteraction) {
         if (doesFileHaveContent(meeting.audioFilePath)) {
             files.push({ attachment: meeting.audioFilePath, name: 'AudioRecording.wav' });
         }
-        // if (doesFileHaveContent(transcriptionFilePath)) {
-        //     files.push({ attachment: transcriptionFilePath, name: 'Transcription.txt' })
-        // }
+        if (doesFileHaveContent(transcriptionFilePath)) {
+            files.push({ attachment: transcriptionFilePath, name: 'Transcription.txt' })
+        }
         await channel.send({
             embeds: [embed],
             files,
         });
     }
 
-    await interaction.reply('Meeting ended, the summary has been posted.');
-
     meetings.delete(`${guildId}-${channelId}`);
+}
 
-    if (meeting.connection) {
-        meeting.connection.disconnect();
-        meeting.connection.destroy();
+// Merge subsequent snippets from the same user
+function mergeSnippets(snippets: AudioSnippet[]): AudioSnippet[] {
+    const mergedSnippets: AudioSnippet[] = [];
+    let currentSnippet: AudioSnippet | null = null;
+    const maxTimeGap = 5000; // Maximum time gap in milliseconds to consider snippets as part of the same phrase
+
+    snippets.forEach(snippet => {
+        if (!currentSnippet) {
+            currentSnippet = { chunks: [...snippet.chunks], timestamp: snippet.timestamp };
+        } else {
+            if (snippet.timestamp - currentSnippet.timestamp <= maxTimeGap) {
+                currentSnippet.chunks.push(...snippet.chunks);
+            } else {
+                mergedSnippets.push(currentSnippet);
+                currentSnippet = { chunks: [...snippet.chunks], timestamp: snippet.timestamp };
+            }
+        }
+    });
+
+    if (currentSnippet) {
+        mergedSnippets.push(currentSnippet);
+    }
+
+    return mergedSnippets;
+}
+
+async function transcribeSnippet(snippet: AudioSnippet, userId: string): Promise<string> {
+    const tempPcmFileName = `./temp_snippet_${userId}_${snippet.timestamp}.pcm`;
+    const tempWavFileName = `./temp_snippet_${userId}_${snippet.timestamp}.wav`;
+
+    // Save the PCM data to a temporary file
+    const buffer = Buffer.concat(snippet.chunks);
+    writeFileSync(tempPcmFileName, buffer);
+
+    // Use ffmpeg to convert the PCM file to a WAV file
+    await new Promise<void>((resolve, reject) => {
+        ffmpeg(tempPcmFileName)
+            .inputOptions([
+                `-f s16le`,
+                `-ar ${SAMPLE_RATE}`,
+                `-ac ${CHANNELS}`
+            ])
+            .outputOptions([
+                `-f wav`,
+                `-c:a pcm_s16le`
+            ])
+            .on('end', () => {
+                resolve();
+            })
+            .on('error', (err) => {
+                console.error(`Error converting PCM to WAV: ${err.message}`);
+                reject(err);
+            })
+            .save(tempWavFileName);
+    });
+
+    // Once the WAV file is created, send it to the transcription API
+    try {
+        const transcription = await openAIClient.audio.transcriptions.create({
+            file: createReadStream(tempWavFileName),
+            model: "whisper-1",
+            language: "en",
+        });
+
+        // Cleanup temporary files
+        unlinkSync(tempPcmFileName);
+        unlinkSync(tempWavFileName);
+
+        // Return the formatted transcription
+        return `[${userId} @ ${new Date(snippet.timestamp).toLocaleString()}]: ${transcription.text}`;
+    } catch (e) {
+        console.error(`Failed to transcribe snippet for user ${userId}:`, e);
+        unlinkSync(tempPcmFileName);
+        unlinkSync(tempWavFileName);
+        return `[${userId} @ ${new Date(snippet.timestamp).toLocaleString()}]: [Transcription failed]`;
     }
 }
 
@@ -378,8 +452,7 @@ function hasMeeting(guildId: string, channelId: string) {
 function generateSilentBuffer(durationMs: number, sampleRate: number, channels: number, prevSampleCount: number) {
     // TODO: prevSamples might have to get divided or multiplied by 2 here
     const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels - prevSampleCount;
-    const silenceBuffer = Buffer.alloc(numSamples * 2); // 16-bit PCM, so 2 bytes per sample
-    return silenceBuffer;
+    return Buffer.alloc(numSamples * BYTES_PER_SAMPLE);
 }
 
 // Function to synchronize a single user's audio
