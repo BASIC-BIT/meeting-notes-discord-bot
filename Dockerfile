@@ -1,8 +1,6 @@
-FROM jrottenberg/ffmpeg:4.4-alpine AS ffmpeg
 FROM node:18-alpine
 
-# Copy ffmpeg binaries from the ffmpeg image
-COPY --from=ffmpeg /usr/local /usr/local/
+RUN apk add --no-cache ffmpeg
 
 RUN mkdir -p /home/node/app/node_modules && chown -R node:node /home/node/app
 
