@@ -13,6 +13,10 @@ RUN yarn
 
 COPY --chown=node:node . .
 
+# TODO: These folders probably don't need to exist, and we should be deleting this data after it gets sent to discord anyway
+RUN mkdir ./logs
+RUN mkdir ./recordings
+
 EXPOSE 3001
 
 CMD npx ts-node ./src/index.ts
