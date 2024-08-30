@@ -203,7 +203,6 @@ async function handleStartMeeting(interaction: CommandInteraction) {
 
     // Cleanup when user stops speaking
     receiver.speaking.on('end', userId => {
-        console.log(`Stopped recording ${userId}`);
         const opusStream = receiver.subscriptions.get(userId);
         if (opusStream) {
             opusStream.destroy();
@@ -237,7 +236,6 @@ async function handleStartMeeting(interaction: CommandInteraction) {
         channelId,
     });
 }
-
 async function handleEndMeeting(interaction: CommandInteraction) {
     try {
         const guildId = interaction.guildId!;
@@ -267,16 +265,25 @@ async function handleEndMeeting(interaction: CommandInteraction) {
         const mergedSnippets = mergeSnippetsAcrossUsers(meeting.audioData);
 
         mergedSnippets.forEach(mergedSnippet => {
-            transcriptionPromises.push(transcribeSnippet(mergedSnippet.snippet, mergedSnippet.userId));
-
-            // Synchronize the audio snippets before saving them
             const synchronizedBuffer = synchronizeUserAudio([mergedSnippet.snippet]);
-            const fileName = `./temp_user_${mergedSnippet.userId}_${mergedSnippet.snippet.timestamp}.pcm`;
-            writeFileSync(fileName, synchronizedBuffer);
-            userBuffers.push(fileName);
+
+            if (synchronizedBuffer.length > 0) {
+                const fileName = `./temp_user_${mergedSnippet.userId}_${mergedSnippet.snippet.timestamp}.pcm`;
+                writeFileSync(fileName, synchronizedBuffer);
+                userBuffers.push(fileName);
+            } else {
+                console.warn(`Empty buffer detected for user ${mergedSnippet.userId} at timestamp ${mergedSnippet.snippet.timestamp}, skipping.`);
+            }
+
+            transcriptionPromises.push(transcribeSnippet(mergedSnippet.snippet, mergedSnippet.userId));
         });
 
-        await combineAudioWithFFmpeg(userBuffers, meeting.audioFilePath);
+        if (userBuffers.length > 0) {
+            await combineAudioWithFFmpeg(userBuffers, meeting.audioFilePath);
+        } else {
+            console.error('No valid audio files to combine.');
+            throw new Error('No valid audio files to combine.');
+        }
 
         const transcriptions = await Promise.all(transcriptionPromises);
         const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
