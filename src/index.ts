@@ -17,14 +17,19 @@ import {
     VoiceConnection,
     VoiceConnectionStatus
 } from '@discordjs/voice';
-import prism, {opus} from 'prism-media';
-import {writeFileSync, readFileSync, createReadStream} from "node:fs";
-import ffmpeg, {FfmpegCommand} from 'fluent-ffmpeg';
-import Decoder = opus.Decoder;
+import prism from 'prism-media';
+import {createReadStream, readFileSync, statSync, unlinkSync, writeFileSync} from "node:fs";
 import OpenAI from "openai";
 import {PassThrough} from "node:stream";
+import {exec} from "node:child_process";
 
 dotenv.config();
+
+
+const SAMPLE_RATE = 8000; // 48 kHz sample rate
+const CHANNELS = 2; // Stereo (2 channels)
+const BYTES_PER_SAMPLE = 2; // 16-bit PCM = 2 bytes per sample
+const FRAME_SIZE = 960;
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
@@ -49,19 +54,25 @@ const openAIClient = new OpenAI({
     apiKey: process.env['OPENAI_API_KEY'],
 });
 
+//Array of chunks of PCM data
+interface AudioSnippet {
+    chunks: any[],
+    timestamp: number,
+}
+
 interface MeetingData {
     active: boolean;
     chatLog: string[];
     attendance: Set<string>;
     audioFilePath: string;
-    pcmStream: Decoder;
-    ffmpeg: FfmpegCommand
     connection: VoiceConnection;
-    combinedOpusStream: PassThrough;
     textChannel: TextChannel | null;
     guildId: string;
     channelId: string;
+    audioData: Map<string, AudioSnippet[]>
 }
+
+// We're going to separate each user's audio data into "phrases", which are each time they cue their mic, so that we can cleanly transcribe later
 
 const meetings = new Map<string, MeetingData>();
 
@@ -161,46 +172,55 @@ async function handleStartMeeting(interaction: CommandInteraction) {
 
     const receiver = connection.receiver;
 
-    const combinedOpusStream = new PassThrough();
+    const audioData: Map<string, AudioSnippet[]> = new Map<string, AudioSnippet[]>();
 
-    const attendance = new Set();
+    const attendance: Set<string> = new Set<string>();
 
-    voiceChannel.members.forEach((member) => {
-        if (member.id === client.user?.id) return; // Skip the bot itself
+    voiceChannel.members.forEach((member) => attendance.add(member.user.tag));
 
-        const opusStream = receiver.subscribe(member.id, {
-            end: {
-                behavior: EndBehaviorType.Manual,
-            },
+    receiver.speaking.on('start', userId => {
+        const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
+        // @ts-ignore
+        const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE, channels: CHANNELS, frameSize: FRAME_SIZE }));
+
+        console.log(`Started recording ${userId}`);
+        const passThrough = new PassThrough();
+        // @ts-ignore
+        decodedStream.pipe(passThrough);
+
+        // Create the snippet
+        if (!audioData.has(userId)) {
+            audioData.set(userId, []);
+        }
+        const snippet: AudioSnippet = {
+            chunks: [],
+            timestamp: Date.now(),
+        }
+        audioData.get(userId)!.push(snippet);
+
+        passThrough.on('data', chunk => {
+            snippet.chunks.push(chunk);
         });
 
-        // @ts-ignore
-        opusStream.pipe(combinedOpusStream, { end: false });
-
-        attendance.add(member.user.tag);
+        console.log(`Started recording ${userId}`);
     });
 
-    //@ts-ignore
-    const pcmStream = combinedOpusStream.pipe(new prism.opus.Decoder({ rate: 8000, channels: 2, frameSize: 960 }));
-
-
-    const ffmpegProcess = ffmpeg()
-        // @ts-ignore
-        .input(pcmStream)
-        .inputOptions(["-f", "s16le", "-ar", "8k", "-ac", "2"])
-        .outputFormat('wav')
-        .save(audioFilePath)
-        .on('error', (err: Error) => {
-            console.error('Error processing audio with ffmpeg:', err);
-        })
-
+    // Cleanup when user stops speaking
+    receiver.speaking.on('end', userId => {
+        console.log(`Stopped recording ${userId}`);
+        // Manually close the Opus stream when the user stops speaking
+        const opusStream = receiver.subscriptions.get(userId);
+        if (opusStream) {
+            opusStream.destroy();
+        }
+    });
 
     const textChannel = interaction.channel as TextChannel;
 
     await textChannel.send('The bot is now listening to the voice channel and monitoring this chat.');
 
+    // Save chat messages
     const collector = textChannel.createMessageCollector();
-
     collector.on('collect', message => {
         if (message.author.bot) return;
         const meeting = meetings.get(`${guildId}-${channelId}`);
@@ -213,18 +233,16 @@ async function handleStartMeeting(interaction: CommandInteraction) {
     meetings.set(`${guildId}-${channelId}`, {
         active: true,
         chatLog: [],
-        attendance: new Set(),
+        attendance,
         audioFilePath,
-        ffmpeg: ffmpegProcess,
         connection,
         textChannel,
-        combinedOpusStream,
-        // @ts-ignore
-        pcmStream,
+        audioData,
         guildId,
         channelId,
     });
 }
+
 async function handleEndMeeting(interaction: CommandInteraction) {
     const guildId = interaction.guildId!;
     const channelId = interaction.channelId;
@@ -235,55 +253,66 @@ async function handleEndMeeting(interaction: CommandInteraction) {
         return;
     }
 
-    if(meeting.pcmStream) {
-        meeting.pcmStream.end();
+    // Write chat log
+    const chatLogFilePath = `./logs/chatlog-${guildId}-${channelId}-${Date.now()}.txt`;
+    writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
+
+
+    //
+    // if(meeting.pcmStream) {
+    //     meeting.pcmStream.end();
+    // }
+
+    const attendanceList = Array.from(meeting.attendance).join('\n');
+
+    const userBuffers: string[] = [];
+
+    meeting.audioData.forEach((snippets, userId) => {
+        const userBuffer = synchronizeUserAudio(snippets);
+        const fileName = `./temp_user_${userId}.pcm`;
+        writeFileSync(fileName, userBuffer);
+        userBuffers.push(fileName);
+    });
+
+    await combineAudioWithFFmpeg(userBuffers, meeting.audioFilePath);
+
+    // const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
+    // const transcription = await transcribe(meeting.audioFilePath);
+    //
+    // if(transcription !== null) {
+    //     writeFileSync(transcriptionFilePath, transcription);
+    // }
+
+    const embed = new EmbedBuilder()
+        .setTitle('Meeting Summary')
+        .setColor(0x00AE86)
+        .setDescription('Here are the details of the recent meeting:')
+        .addFields(
+            { name: 'Members in Attendance', value: attendanceList || 'No members recorded.' },
+        )
+        .setTimestamp();
+
+    const channel = await client.channels.fetch(meeting.channelId) as TextChannel;
+    if (channel) {
+        const files = [];
+        if (doesFileHaveContent(chatLogFilePath)) {
+            files.push({ attachment: chatLogFilePath, name: 'ChatLog.txt' });
+        }
+        if (doesFileHaveContent(meeting.audioFilePath)) {
+            files.push({ attachment: meeting.audioFilePath, name: 'AudioRecording.wav' });
+        }
+        // if (doesFileHaveContent(transcriptionFilePath)) {
+        //     files.push({ attachment: transcriptionFilePath, name: 'Transcription.txt' })
+        // }
+        await channel.send({
+            embeds: [embed],
+            files,
+        });
     }
 
-    meeting.ffmpeg.on('end', async () => {
-        console.log('Recording finished and saved.');
+    await interaction.reply('Meeting ended, the summary has been posted.');
 
-        const chatLogFilePath = `./logs/chatlog-${guildId}-${channelId}-${Date.now()}.txt`;
-        const attendanceList = Array.from(meeting.attendance).join('\n');
-        writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
-
-        const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
-        const transcription = await transcribe(meeting.audioFilePath);
-
-        if(transcription !== null) {
-            writeFileSync(transcriptionFilePath, transcription);
-        }
-
-        const embed = new EmbedBuilder()
-            .setTitle('Meeting Summary')
-            .setColor(0x00AE86)
-            .setDescription('Here are the details of the recent meeting:')
-            .addFields(
-                { name: 'Members in Attendance', value: attendanceList || 'No members recorded.' },
-            )
-            .setTimestamp();
-
-        const preconfiguredChannel = await client.channels.fetch(meeting.channelId) as TextChannel;
-        if (preconfiguredChannel) {
-            const files = [];
-            if (doesFileHaveContent(chatLogFilePath)) {
-                files.push({ attachment: chatLogFilePath, name: 'ChatLog.txt' });
-            }
-            if (doesFileHaveContent(meeting.audioFilePath)) {
-                files.push({ attachment: meeting.audioFilePath, name: 'AudioRecording.wav' });
-            }
-            if (doesFileHaveContent(transcriptionFilePath)) {
-                files.push({ attachment: transcriptionFilePath, name: 'Transcription.txt' })
-            }
-            await preconfiguredChannel.send({
-                embeds: [embed],
-                files,
-            });
-        }
-
-        await interaction.reply('Meeting ended, the summary has been posted.');
-
-        meetings.delete(`${guildId}-${channelId}`);
-    });
+    meetings.delete(`${guildId}-${channelId}`);
 
     if (meeting.connection) {
         meeting.connection.disconnect();
@@ -321,14 +350,18 @@ client.on('voiceStateUpdate', (oldState, newState) => {
         const member = newState.member;
 
         meeting.attendance.add(member.user.tag);
-        const opusStream = meeting.connection.receiver.subscribe(member.id, {
-            end: {
-                behavior: EndBehaviorType.Manual,
-            },
-        });
 
-        // @ts-ignore
-        opusStream.pipe(combinedOpusStream, { end: false });
+        meeting.connection.receiver.speaking.on('start', (userId) => {
+            const opusStream = meeting.connection.receiver.subscribe(member.id, {
+                end: {
+                    behavior: EndBehaviorType.Manual,
+                },
+            });
+
+            // @ts-ignore
+            opusStream.pipe(combinedOpusStream, { end: false });
+        })
+
     }
 });
 
@@ -340,4 +373,89 @@ function getMeeting(guildId: string, channelId: string) {
 function hasMeeting(guildId: string, channelId: string) {
     const meeting = getMeeting(guildId, channelId);
     return meeting && meeting.active;
+}
+
+function generateSilentBuffer(durationMs: number, sampleRate: number, channels: number, prevSampleCount: number) {
+    // TODO: prevSamples might have to get divided or multiplied by 2 here
+    const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels - prevSampleCount;
+    const silenceBuffer = Buffer.alloc(numSamples * 2); // 16-bit PCM, so 2 bytes per sample
+    return silenceBuffer;
+}
+
+// Function to synchronize a single user's audio
+function synchronizeUserAudio(userChunks: AudioSnippet[]) {
+    const finalUserBuffer: Buffer[] = [];
+    let lastTimestamp = userChunks[0].timestamp;
+    let lastPacketCount = 0;
+
+    for (let i = 0; i < userChunks.length; i++) {
+        const currentData = userChunks[i];
+        const timeDiff = currentData.timestamp - lastTimestamp;
+
+        if (timeDiff > 0) {
+            // Insert silence if there is a gap
+            const silenceBuffer = generateSilentBuffer(timeDiff, SAMPLE_RATE, CHANNELS, lastPacketCount);
+            finalUserBuffer.push(silenceBuffer);
+        }
+
+        finalUserBuffer.push(...currentData.chunks);
+        lastTimestamp = currentData.timestamp;
+        lastPacketCount = currentData.chunks.length;
+    }
+
+    return Buffer.concat(finalUserBuffer);
+}
+
+// Function to combine audio files using ffmpeg
+
+function combineAudioWithFFmpeg(userBuffers: string[], audioFilePath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        // Filter out any empty or non-existent files
+        const validBuffers = userBuffers.filter(fileName => {
+            try {
+                const stats = statSync(fileName);
+                return stats.size > 0; // Only include files with data
+            } catch (err) {
+                console.error(`Error checking file ${fileName}:`, err);
+                return false;
+            }
+        });
+
+        if (validBuffers.length === 0) {
+            return reject(new Error('No valid audio files to combine.'));
+        }
+
+        let ffmpegCommand;
+
+        if (validBuffers.length === 1) {
+            // If only one buffer is present, simply copy it to the output file as a WAV
+            ffmpegCommand = `ffmpeg -f s16le -ar ${SAMPLE_RATE} -ac ${CHANNELS} -i ${validBuffers[0]} -f wav -c:a pcm_s16le ${audioFilePath}`;
+        } else {
+            // If multiple buffers are present, use the amix filter to combine them into a WAV
+            const inputs = validBuffers.map(fileName => `-f s16le -ar ${SAMPLE_RATE} -ac ${CHANNELS} -i ${fileName}`).join(' ');
+
+            const inputCount = validBuffers.length;
+            const filterComplex = validBuffers
+                .map((_, index) => `[${index}:a]`)
+                .join('') + `amix=inputs=${inputCount}:duration=longest`;
+
+            ffmpegCommand = `ffmpeg ${inputs} -filter_complex "${filterComplex}" -f wav -c:a pcm_s16le ${audioFilePath}`;
+        }
+
+        exec(ffmpegCommand, (err, stdout, stderr) => {
+            if (err) {
+                console.error('Error combining audio with ffmpeg:', err);
+                console.error(stderr); // Print ffmpeg's stderr output for debugging
+                reject();
+                return;
+            }
+
+            console.log(`Final mixed audio file created as ${audioFilePath}`);
+
+            // Clean up temporary files
+            validBuffers.forEach(fileName => unlinkSync(fileName));
+
+            resolve();
+        });
+    });
 }
