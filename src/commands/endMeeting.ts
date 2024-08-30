@@ -1,7 +1,11 @@
 import {Client, CommandInteraction} from "discord.js";
 import {deleteMeeting, getMeeting} from "../meetings";
 import {unlinkSync, writeFileSync} from "node:fs";
-import {combineAudioWithFFmpeg, mergeSnippetsAcrossUsers, synchronizeUserAudio} from "../audio";
+import {
+    combineAudioWithFFmpeg, compileTranscriptions,
+    startProcessingCurrentSnippet,
+    waitForFinishProcessing,
+} from "../audio";
 import {transcribeSnippet} from "../transcription";
 import {sendMeetingEndEmbed} from "../embed";
 
@@ -27,39 +31,18 @@ export async function handleEndMeeting(client: Client, interaction: CommandInter
         const chatLogFilePath = `./logs/chatlog-${guildId}-${channelId}-${Date.now()}.txt`;
         writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
 
-        const userBuffers: string[] = [];
-        const transcriptionPromises: Promise<string>[] = [];
+        const audioFilePath = `./recordings/meeting-${meeting.guildId}-${meeting.channelId}-${Date.now()}.mp4`;
 
-        const mergedSnippets = mergeSnippetsAcrossUsers(meeting.audioData);
+        startProcessingCurrentSnippet(meeting);
 
-        mergedSnippets.forEach(mergedSnippet => {
-            const synchronizedBuffer = synchronizeUserAudio([mergedSnippet.snippet]);
+        await waitForFinishProcessing(meeting);
 
-            if (synchronizedBuffer.length > 0) {
-                const fileName = `./temp_user_${mergedSnippet.userId}_${mergedSnippet.snippet.timestamp}.pcm`;
-                writeFileSync(fileName, synchronizedBuffer);
-                userBuffers.push(fileName);
-            } else {
-                console.warn(`Empty buffer detected for user ${mergedSnippet.userId} at timestamp ${mergedSnippet.snippet.timestamp}, skipping.`);
-            }
+        await combineAudioWithFFmpeg(meeting.audioData.audioFiles, audioFilePath);
 
-            const userTag = client.users.cache.get(mergedSnippet.userId)?.tag ?? mergedSnippet.userId;
+        const transcriptions = compileTranscriptions(client, meeting);
 
-            transcriptionPromises.push(transcribeSnippet(mergedSnippet.snippet, mergedSnippet.userId, userTag));
-        });
-
-        const audioFilePath = `./recordings/meeting-${meeting.guildId}-${meeting.channelId}-${Date.now()}.wav`;
-
-        if (userBuffers.length > 0) {
-            await combineAudioWithFFmpeg(userBuffers, audioFilePath);
-        } else {
-            console.error('No valid audio files to combine.');
-            throw new Error('No valid audio files to combine.');
-        }
-
-        const transcriptions = await Promise.all(transcriptionPromises);
         const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
-        writeFileSync(transcriptionFilePath, transcriptions.join('\n'));
+        writeFileSync(transcriptionFilePath, transcriptions);
 
         await sendMeetingEndEmbed(meeting, chatLogFilePath, audioFilePath, transcriptionFilePath);
 

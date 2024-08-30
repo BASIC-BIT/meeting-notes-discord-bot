@@ -38,8 +38,6 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
 
     const receiver = connection.receiver;
 
-    const audioData: Map<string, AudioSnippet[]> = new Map<string, AudioSnippet[]>();
-
     const attendance: Set<string> = new Set<string>();
 
     const meeting: MeetingData = {
@@ -47,10 +45,14 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         attendance,
         connection,
         textChannel,
-        audioData,
+        audioData: {
+            audioFiles: [],
+            currentSnippet: null,
+        },
         voiceChannel,
         guildId,
         channelId,
+        startTime: new Date(),
     };
 
     connection.on(VoiceConnectionStatus.Ready, () => {

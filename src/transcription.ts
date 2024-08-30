@@ -18,9 +18,9 @@ async function transcribe(file: string): Promise<string> {
     return transcription.text;
 }
 
-export async function transcribeSnippet(snippet: AudioSnippet, userId: string, userTag: string): Promise<string> {
-    const tempPcmFileName = `./temp_snippet_${userId}_${snippet.timestamp}.pcm`;
-    const tempWavFileName = `./temp_snippet_${userId}_${snippet.timestamp}.wav`;
+export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> {
+    const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}.pcm`;
+    const tempWavFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}.wav`;
 
     // Ensure the directories exist
     const tempDir = './';
@@ -71,9 +71,9 @@ export async function transcribeSnippet(snippet: AudioSnippet, userId: string, u
             console.log('failed cleaning up temp wav file, continuing')
         }
 
-        return `[${userTag} @ ${new Date(snippet.timestamp).toLocaleString()}]: ${transcription}`;
+        return transcription;
     } catch (e) {
-        console.error(`Failed to transcribe snippet for user ${userId}:`, e);
+        console.error(`Failed to transcribe snippet for user ${snippet.userId}:`, e);
 
         // Cleanup temporary files on error
         if (existsSync(tempPcmFileName)) {
@@ -87,6 +87,6 @@ export async function transcribeSnippet(snippet: AudioSnippet, userId: string, u
             console.log('failed cleaning up temp wav file, continuing')
         }
 
-        return `[${userTag} @ ${new Date(snippet.timestamp).toLocaleString()}]: [Transcription failed]`;
+        return `[Transcription failed]`;
     }
 }
