@@ -1,6 +1,6 @@
 import {Client, CommandInteraction} from "discord.js";
 import {deleteMeeting, getMeeting} from "../meetings";
-import {writeFileSync} from "node:fs";
+import {unlinkSync, writeFileSync} from "node:fs";
 import {combineAudioWithFFmpeg, mergeSnippetsAcrossUsers, synchronizeUserAudio} from "../audio";
 import {transcribeSnippet} from "../transcription";
 import {sendMeetingEndEmbed} from "../embed";
@@ -11,7 +11,7 @@ export async function handleEndMeeting(client: Client, interaction: CommandInter
         const channelId = interaction.channelId;
 
         const meeting = getMeeting(guildId, channelId);
-        if (!meeting || !meeting.active) {
+        if (!meeting) {
             await interaction.reply('No active meeting to end in this channel.');
             return;
         }
@@ -48,8 +48,10 @@ export async function handleEndMeeting(client: Client, interaction: CommandInter
             transcriptionPromises.push(transcribeSnippet(mergedSnippet.snippet, mergedSnippet.userId, userTag));
         });
 
+        const audioFilePath = `./recordings/meeting-${meeting.guildId}-${meeting.channelId}-${Date.now()}.wav`;
+
         if (userBuffers.length > 0) {
-            await combineAudioWithFFmpeg(userBuffers, meeting.audioFilePath);
+            await combineAudioWithFFmpeg(userBuffers, audioFilePath);
         } else {
             console.error('No valid audio files to combine.');
             throw new Error('No valid audio files to combine.');
@@ -59,12 +61,15 @@ export async function handleEndMeeting(client: Client, interaction: CommandInter
         const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
         writeFileSync(transcriptionFilePath, transcriptions.join('\n'));
 
-        await sendMeetingEndEmbed(meeting, chatLogFilePath, transcriptionFilePath);
+        await sendMeetingEndEmbed(meeting, chatLogFilePath, audioFilePath, transcriptionFilePath);
 
         // Edit the initial deferred reply to include the final message
         await interaction.editReply('Meeting ended, the summary has been posted.');
 
         deleteMeeting(guildId, channelId);
+        unlinkSync(chatLogFilePath);
+        unlinkSync(audioFilePath);
+        unlinkSync(transcriptionFilePath);
 
     } catch (error) {
         console.error('Error during meeting end:', error);

@@ -12,8 +12,7 @@ export function getMeeting(guildId: string, channelId: string) {
 }
 
 export function hasMeeting(guildId: string, channelId: string) {
-    const meeting = getMeeting(guildId, channelId);
-    return meeting && meeting.active;
+    return meetings.has(getId(guildId, channelId));
 }
 
 export function addMeeting(meeting: MeetingData) {

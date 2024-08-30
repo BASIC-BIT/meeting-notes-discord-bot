@@ -3,14 +3,12 @@ import {TextChannel, VoiceBasedChannel} from "discord.js";
 import {AudioSnippet} from "./audio";
 
 export interface MeetingData {
-    active: boolean;
     chatLog: string[];
     attendance: Set<string>;
-    audioFilePath: string;
     connection: VoiceConnection;
     textChannel: TextChannel;
+    voiceChannel: VoiceBasedChannel;
     guildId: string;
     channelId: string;
     audioData: Map<string, AudioSnippet[]>;
-    voiceChannel: VoiceBasedChannel;
 }

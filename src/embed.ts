@@ -2,7 +2,7 @@ import {MeetingData} from "./types/meeting-data";
 import {EmbedBuilder} from "discord.js";
 import {doesFileHaveContent} from "./util";
 
-export async function sendMeetingEndEmbed(meeting: MeetingData, chatLogFilePath: string, transcriptionFilePath: string): Promise<void> {
+export async function sendMeetingEndEmbed(meeting: MeetingData, chatLogFilePath: string, audioFilePath: string, transcriptionFilePath: string): Promise<void> {
     const attendanceList = Array.from(meeting.attendance).join('\n');
 
     const embed = new EmbedBuilder()
@@ -18,8 +18,8 @@ export async function sendMeetingEndEmbed(meeting: MeetingData, chatLogFilePath:
     if (doesFileHaveContent(chatLogFilePath)) {
         files.push({ attachment: chatLogFilePath, name: 'ChatLog.txt' });
     }
-    if (doesFileHaveContent(meeting.audioFilePath)) {
-        files.push({ attachment: meeting.audioFilePath, name: 'AudioRecording.wav' });
+    if (doesFileHaveContent(audioFilePath)) {
+        files.push({ attachment: audioFilePath, name: 'AudioRecording.wav' });
     }
     if (doesFileHaveContent(transcriptionFilePath)) {
         files.push({ attachment: transcriptionFilePath, name: 'Transcription.txt' });

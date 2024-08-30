@@ -36,8 +36,6 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         selfMute: true,
     });
 
-    const audioFilePath = `./recordings/meeting-${guildId}-${channelId}-${Date.now()}.wav`;
-
     const receiver = connection.receiver;
 
     const audioData: Map<string, AudioSnippet[]> = new Map<string, AudioSnippet[]>();
@@ -45,16 +43,14 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
     const attendance: Set<string> = new Set<string>();
 
     const meeting: MeetingData = {
-        active: true,
         chatLog: [],
         attendance,
-        audioFilePath,
         connection,
         textChannel,
         audioData,
+        voiceChannel,
         guildId,
         channelId,
-        voiceChannel,
     };
 
     connection.on(VoiceConnectionStatus.Ready, () => {
@@ -87,7 +83,7 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
     });
 
 
-    await textChannel.send('The bot is now listening to the voice channel and monitoring this chat.');
+    await textChannel.send('The bot is now listening to the voice channel.');
 
     await setupChatCollector(meeting);
 
@@ -108,7 +104,7 @@ async function onUserEndTalking(meeting: MeetingData, userId: string) {
 
 async function setupChatCollector(meeting: MeetingData) {
     // Save chat messages
-    const collector = meeting.textChannel.createMessageCollector();
+    const collector = meeting.voiceChannel.createMessageCollector();
     collector.on('collect', message => {
         if (message.author.bot) return;
 

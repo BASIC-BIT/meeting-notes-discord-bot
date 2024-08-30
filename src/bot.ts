@@ -12,8 +12,6 @@ import {getMeeting, hasMeeting} from "./meetings";
 import {subscribeToUserVoice} from "./audio";
 import {handleStartMeeting} from "./commands/startMeeting";
 import {handleEndMeeting} from "./commands/endMeeting";
-import {MeetingData} from "./types/meeting-data";
-
 
 export async function setupBot() {
     if (!TOKEN || !CLIENT_ID) {
