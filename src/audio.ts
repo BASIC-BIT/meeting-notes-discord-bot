@@ -1,21 +1,19 @@
-import {statSync, unlinkSync, writeFileSync} from "node:fs";
+import { statSync, unlinkSync, writeFileSync } from "node:fs";
 import {
     BYTES_PER_SAMPLE,
-    CHANNELS,
-    FRAME_SIZE,
-    MAX_SNIPPET_LENGTH,
+    CHANNELS, FRAME_SIZE, MAX_SNIPPET_LENGTH,
     SAMPLE_RATE_LOW,
     SILENCE_THRESHOLD
 } from "./constants";
-import {exec} from "node:child_process";
-import {AudioFileData, AudioSnippet} from "./types/audio";
-import {MeetingData} from "./types/meeting-data";
-import {EndBehaviorType} from "@discordjs/voice";
+import { exec } from "node:child_process";
+import { AudioFileData, AudioSnippet } from "./types/audio";
+import { MeetingData } from "./types/meeting-data";
+import { EndBehaviorType } from "@discordjs/voice";
 import prism from "prism-media";
-import {PassThrough} from "node:stream";
-import {transcribeSnippet} from "./transcription";
+import { PassThrough } from "node:stream";
+import { transcribeSnippet } from "./transcription";
 import ffmpeg from "fluent-ffmpeg";
-import {Client} from "discord.js";
+import { Client } from "discord.js";
 
 function generateSilentBuffer(durationMs: number, sampleRate: number, channels: number): Buffer {
     const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels;
@@ -34,38 +32,39 @@ export function combineAudioWithFFmpeg(audioFiles: AudioFileData[], outputFileNa
             return reject(new Error('No valid audio files to combine.'));
         }
 
+        // Create a list of inputs and set up the filter_complex for handling delays and concatenation
         let ffmpegCommand = `ffmpeg -y `;
-
-        validFiles.forEach((file, index) => {
-            ffmpegCommand += `-f s16le -ar ${SAMPLE_RATE_LOW} -ac ${CHANNELS} -i ${file.fileName} `;
-        });
-
         const filterComplexParts = [];
         let previousEndTime = 0;
 
         validFiles.forEach((file, index) => {
+            ffmpegCommand += `-i ${file.fileName} `;
+
             const currentStartTime = (file.timestamp - audioFiles[0].timestamp) / 1000; // Convert to seconds
             const delay = currentStartTime - previousEndTime;
 
             if (delay > 0) {
-                // Add silence for the delay
                 filterComplexParts.push(`[${index}:a]adelay=${delay * 1000}|${delay * 1000}[a${index}];`);
             } else {
                 filterComplexParts.push(`[${index}:a]anull[a${index}];`);
             }
 
-            previousEndTime = currentStartTime + (statSync(file.fileName!).size / (SAMPLE_RATE_LOW * CHANNELS * 2));
+            previousEndTime = currentStartTime + (file.fileName ? statSync(file.fileName).size / (128 * 1000 / 8) : 0);
         });
 
         // Layer all the audio streams on top of each other
         const amixInputs = validFiles.map((_, index) => `[a${index}]`).join('');
-        filterComplexParts.push(`${amixInputs}amix=inputs=${validFiles.length}:duration=longest`);
+        filterComplexParts.push(`${amixInputs}amix=inputs=${validFiles.length}:duration=longest[out]`);
 
-        ffmpegCommand += `-filter_complex "${filterComplexParts.join('')}" -f wav -c:a pcm_s16le ${outputFileName}`;
+        // Construct the full ffmpeg command
+        ffmpegCommand += `-filter_complex "${filterComplexParts.join('')}" -map "[out]" -c:a aac -b:a 128k ${outputFileName}`;
+
+        console.log(`Executing ffmpeg command: ${ffmpegCommand}`);
 
         exec(ffmpegCommand, (err, stdout, stderr) => {
             if (err) {
                 console.error('Error combining audio with ffmpeg:', err);
+                console.error(stderr); // Useful for debugging
                 reject(err);
                 return;
             }
@@ -73,8 +72,7 @@ export function combineAudioWithFFmpeg(audioFiles: AudioFileData[], outputFileNa
             console.log(`Final mixed audio file created as ${outputFileName}`);
 
             // Cleanup temp files
-            // TODO: Uncomment this
-            // validFiles.forEach(file => unlinkSync(file.fileName!));
+            validFiles.forEach(file => unlinkSync(file.fileName!));
             resolve();
         });
     });

@@ -9,9 +9,9 @@ import {
 } from "discord.js";
 import {Routes} from "discord-api-types/v10";
 import {getMeeting, hasMeeting} from "./meetings";
-import {subscribeToUserVoice} from "./audio";
 import {handleStartMeeting} from "./commands/startMeeting";
 import {handleEndMeeting} from "./commands/endMeeting";
+import {subscribeToUserVoice} from "./audio";
 
 export async function setupBot() {
     if (!TOKEN || !CLIENT_ID) {
