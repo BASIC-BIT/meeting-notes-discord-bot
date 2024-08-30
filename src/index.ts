@@ -53,7 +53,7 @@ const openAIClient = new OpenAI({
     apiKey: process.env['OPENAI_API_KEY'],
 });
 
-//Array of chunks of PCM data
+// Array of chunks of PCM data
 interface AudioSnippet {
     chunks: any[],
     timestamp: number,
@@ -180,15 +180,14 @@ async function handleStartMeeting(interaction: CommandInteraction) {
         // @ts-ignore
         const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE, channels: CHANNELS, frameSize: FRAME_SIZE }));
 
-        console.log(`Started recording ${userId}`);
         const passThrough = new PassThrough();
         // @ts-ignore
         decodedStream.pipe(passThrough);
 
-        // Create the snippet
         if (!audioData.has(userId)) {
             audioData.set(userId, []);
         }
+
         const snippet: AudioSnippet = {
             chunks: [],
             timestamp: Date.now(),
@@ -205,7 +204,6 @@ async function handleStartMeeting(interaction: CommandInteraction) {
     // Cleanup when user stops speaking
     receiver.speaking.on('end', userId => {
         console.log(`Stopped recording ${userId}`);
-        // Manually close the Opus stream when the user stops speaking
         const opusStream = receiver.subscriptions.get(userId);
         if (opusStream) {
             opusStream.destroy();
@@ -241,96 +239,122 @@ async function handleStartMeeting(interaction: CommandInteraction) {
 }
 
 async function handleEndMeeting(interaction: CommandInteraction) {
-    const guildId = interaction.guildId!;
-    const channelId = interaction.channelId;
+    try {
+        const guildId = interaction.guildId!;
+        const channelId = interaction.channelId;
 
-    const meeting = meetings.get(`${guildId}-${channelId}`);
-    if (!meeting || !meeting.active) {
-        await interaction.reply('No active meeting to end in this channel.');
-        return;
-    }
+        const meeting = meetings.get(`${guildId}-${channelId}`);
+        if (!meeting || !meeting.active) {
+            await interaction.reply('No active meeting to end in this channel.');
+            return;
+        }
 
-    await interaction.reply('Meeting ended, please wait for the summary...');
+        // Acknowledge the interaction immediately
+        await interaction.deferReply();
 
-    // Leave the voice channel
-    if (meeting.connection) {
-        meeting.connection.disconnect();
-        meeting.connection.destroy();
-    }
+        if (meeting.connection) {
+            meeting.connection.disconnect();
+            meeting.connection.destroy();
+        }
 
-    // Write chat log
-    const chatLogFilePath = `./logs/chatlog-${guildId}-${channelId}-${Date.now()}.txt`;
-    writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
+        const chatLogFilePath = `./logs/chatlog-${guildId}-${channelId}-${Date.now()}.txt`;
+        writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
 
-    const attendanceList = Array.from(meeting.attendance).join('\n');
-    const userBuffers: string[] = [];
-    const transcriptionPromises: Promise<string>[] = [];
+        const attendanceList = Array.from(meeting.attendance).join('\n');
+        const userBuffers: string[] = [];
+        const transcriptionPromises: Promise<string>[] = [];
 
-    // Combine and transcribe audio snippets
-    meeting.audioData.forEach((snippets, userId) => {
-        const mergedSnippets = mergeSnippets(snippets);
+        const mergedSnippets = mergeSnippetsAcrossUsers(meeting.audioData);
 
         mergedSnippets.forEach(mergedSnippet => {
-            transcriptionPromises.push(transcribeSnippet(mergedSnippet, userId));
+            transcriptionPromises.push(transcribeSnippet(mergedSnippet.snippet, mergedSnippet.userId));
+
+            // Synchronize the audio snippets before saving them
+            const synchronizedBuffer = synchronizeUserAudio([mergedSnippet.snippet]);
+            const fileName = `./temp_user_${mergedSnippet.userId}_${mergedSnippet.snippet.timestamp}.pcm`;
+            writeFileSync(fileName, synchronizedBuffer);
+            userBuffers.push(fileName);
         });
 
-        const userBuffer = synchronizeUserAudio(mergedSnippets);
-        const fileName = `./temp_user_${userId}.pcm`;
-        writeFileSync(fileName, userBuffer);
-        userBuffers.push(fileName);
-    });
+        await combineAudioWithFFmpeg(userBuffers, meeting.audioFilePath);
 
-    await combineAudioWithFFmpeg(userBuffers, meeting.audioFilePath);
+        const transcriptions = await Promise.all(transcriptionPromises);
+        const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
+        writeFileSync(transcriptionFilePath, transcriptions.join('\n'));
 
-    const transcriptions = await Promise.all(transcriptionPromises);
-    const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
-    writeFileSync(transcriptionFilePath, transcriptions.join('\n'));
+        const embed = new EmbedBuilder()
+            .setTitle('Meeting Summary')
+            .setColor(0x00AE86)
+            .setDescription('Here are the details of the recent meeting:')
+            .addFields(
+                { name: 'Members in Attendance', value: attendanceList || 'No members recorded.' },
+            )
+            .setTimestamp();
 
-    const embed = new EmbedBuilder()
-        .setTitle('Meeting Summary')
-        .setColor(0x00AE86)
-        .setDescription('Here are the details of the recent meeting:')
-        .addFields(
-            { name: 'Members in Attendance', value: attendanceList || 'No members recorded.' },
-        )
-        .setTimestamp();
-
-    const channel = await client.channels.fetch(meeting.channelId) as TextChannel;
-    if (channel) {
-        const files = [];
-        if (doesFileHaveContent(chatLogFilePath)) {
-            files.push({ attachment: chatLogFilePath, name: 'ChatLog.txt' });
+        const channel = await client.channels.fetch(meeting.channelId) as TextChannel;
+        if (channel) {
+            const files = [];
+            if (doesFileHaveContent(chatLogFilePath)) {
+                files.push({ attachment: chatLogFilePath, name: 'ChatLog.txt' });
+            }
+            if (doesFileHaveContent(meeting.audioFilePath)) {
+                files.push({ attachment: meeting.audioFilePath, name: 'AudioRecording.wav' });
+            }
+            if (doesFileHaveContent(transcriptionFilePath)) {
+                files.push({ attachment: transcriptionFilePath, name: 'Transcription.txt' });
+            }
+            await channel.send({
+                embeds: [embed],
+                files,
+            });
         }
-        if (doesFileHaveContent(meeting.audioFilePath)) {
-            files.push({ attachment: meeting.audioFilePath, name: 'AudioRecording.wav' });
-        }
-        if (doesFileHaveContent(transcriptionFilePath)) {
-            files.push({ attachment: transcriptionFilePath, name: 'Transcription.txt' })
-        }
-        await channel.send({
-            embeds: [embed],
-            files,
-        });
+
+        // Edit the initial deferred reply to include the final message
+        await interaction.editReply('Meeting ended, the summary has been posted.');
+
+        meetings.delete(`${guildId}-${channelId}`);
+
+    } catch (error) {
+        console.error('Error during meeting end:', error);
     }
-
-    meetings.delete(`${guildId}-${channelId}`);
 }
 
-// Merge subsequent snippets from the same user
-function mergeSnippets(snippets: AudioSnippet[]): AudioSnippet[] {
-    const mergedSnippets: AudioSnippet[] = [];
-    let currentSnippet: AudioSnippet | null = null;
+function mergeSnippetsAcrossUsers(audioData: Map<string, AudioSnippet[]>): { snippet: AudioSnippet, userId: string }[] {
+    const allSnippets: { snippet: AudioSnippet, userId: string }[] = [];
+
+    audioData.forEach((snippets, userId) => {
+        snippets.forEach(snippet => {
+            allSnippets.push({ snippet, userId });
+        });
+    });
+
+    allSnippets.sort((a, b) => a.snippet.timestamp - b.snippet.timestamp);
+
+    const mergedSnippets: { snippet: AudioSnippet, userId: string }[] = [];
+    let currentSnippet: { snippet: AudioSnippet, userId: string } | null = null;
+    let lastSnippetEndTime = 0;
     const maxTimeGap = 5000; // Maximum time gap in milliseconds to consider snippets as part of the same phrase
 
-    snippets.forEach(snippet => {
+    allSnippets.forEach(({ snippet, userId }) => {
+        const snippetDuration = snippet.chunks.length * (1000 / SAMPLE_RATE) / CHANNELS;
+        const snippetEndTime = snippet.timestamp + snippetDuration;
+
         if (!currentSnippet) {
-            currentSnippet = { chunks: [...snippet.chunks], timestamp: snippet.timestamp };
+            currentSnippet = { snippet: { chunks: [...snippet.chunks], timestamp: snippet.timestamp }, userId };
+            lastSnippetEndTime = snippetEndTime;
         } else {
-            if (snippet.timestamp - currentSnippet.timestamp <= maxTimeGap) {
-                currentSnippet.chunks.push(...snippet.chunks);
+            if (snippet.timestamp <= lastSnippetEndTime + maxTimeGap) {
+                currentSnippet.snippet.chunks.push(...snippet.chunks);
+                lastSnippetEndTime = snippetEndTime;
             } else {
+                const silenceDuration = snippet.timestamp - lastSnippetEndTime;
+                if (silenceDuration > 0) {
+                    const silenceBuffer = generateSilentBuffer(silenceDuration, SAMPLE_RATE, CHANNELS);
+                    currentSnippet.snippet.chunks.push(silenceBuffer);
+                }
                 mergedSnippets.push(currentSnippet);
-                currentSnippet = { chunks: [...snippet.chunks], timestamp: snippet.timestamp };
+                currentSnippet = { snippet: { chunks: [...snippet.chunks], timestamp: snippet.timestamp }, userId };
+                lastSnippetEndTime = snippetEndTime;
             }
         }
     });
@@ -342,15 +366,18 @@ function mergeSnippets(snippets: AudioSnippet[]): AudioSnippet[] {
     return mergedSnippets;
 }
 
+function generateSilentBuffer(durationMs: number, sampleRate: number, channels: number): Buffer {
+    const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels;
+    return Buffer.alloc(numSamples * BYTES_PER_SAMPLE);
+}
+
 async function transcribeSnippet(snippet: AudioSnippet, userId: string): Promise<string> {
     const tempPcmFileName = `./temp_snippet_${userId}_${snippet.timestamp}.pcm`;
     const tempWavFileName = `./temp_snippet_${userId}_${snippet.timestamp}.wav`;
 
-    // Save the PCM data to a temporary file
     const buffer = Buffer.concat(snippet.chunks);
     writeFileSync(tempPcmFileName, buffer);
 
-    // Use ffmpeg to convert the PCM file to a WAV file
     await new Promise<void>((resolve, reject) => {
         ffmpeg(tempPcmFileName)
             .inputOptions([
@@ -372,7 +399,6 @@ async function transcribeSnippet(snippet: AudioSnippet, userId: string): Promise
             .save(tempWavFileName);
     });
 
-    // Once the WAV file is created, send it to the transcription API
     try {
         const transcription = await openAIClient.audio.transcriptions.create({
             file: createReadStream(tempWavFileName),
@@ -384,7 +410,6 @@ async function transcribeSnippet(snippet: AudioSnippet, userId: string): Promise
         unlinkSync(tempPcmFileName);
         unlinkSync(tempWavFileName);
 
-        // Return the formatted transcription
         return `[${userId} @ ${new Date(snippet.timestamp).toLocaleString()}]: ${transcription.text}`;
     } catch (e) {
         console.error(`Failed to transcribe snippet for user ${userId}:`, e);
@@ -397,9 +422,6 @@ async function transcribeSnippet(snippet: AudioSnippet, userId: string): Promise
 function doesFileHaveContent(path: string): boolean {
     return readFileSync(path).length > 0;
 }
-
-client.login(TOKEN);
-
 
 async function transcribe(file: string): Promise<string | null> {
     try {
@@ -420,22 +442,37 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 
     if(!oldState.channel && newState.channel && newState.member && newState.member.user && hasMeeting(guildId, newState.channel.id)) {
         const meeting = getMeeting(guildId, newState.channel.id)!;
-
         const member = newState.member;
 
         meeting.attendance.add(member.user.tag);
 
         meeting.connection.receiver.speaking.on('start', (userId) => {
-            const opusStream = meeting.connection.receiver.subscribe(member.id, {
+            const opusStream = meeting.connection.receiver.subscribe(userId, {
                 end: {
                     behavior: EndBehaviorType.Manual,
                 },
             });
 
             // @ts-ignore
-            opusStream.pipe(combinedOpusStream, { end: false });
-        })
+            const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE, channels: CHANNELS, frameSize: FRAME_SIZE }));
+            const passThrough = new PassThrough();
+            // @ts-ignore
+            decodedStream.pipe(passThrough);
 
+            if (!meeting.audioData.has(userId)) {
+                meeting.audioData.set(userId, []);
+            }
+
+            const snippet: AudioSnippet = {
+                chunks: [],
+                timestamp: Date.now(),
+            };
+            meeting.audioData.get(userId)!.push(snippet);
+
+            passThrough.on('data', chunk => {
+                snippet.chunks.push(chunk);
+            });
+        });
     }
 });
 
@@ -448,14 +485,6 @@ function hasMeeting(guildId: string, channelId: string) {
     const meeting = getMeeting(guildId, channelId);
     return meeting && meeting.active;
 }
-
-function generateSilentBuffer(durationMs: number, sampleRate: number, channels: number, prevSampleCount: number) {
-    // TODO: prevSamples might have to get divided or multiplied by 2 here
-    const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels - prevSampleCount;
-    return Buffer.alloc(numSamples * BYTES_PER_SAMPLE);
-}
-
-// Function to synchronize a single user's audio
 function synchronizeUserAudio(userChunks: AudioSnippet[]) {
     const finalUserBuffer: Buffer[] = [];
     let lastTimestamp = userChunks[0].timestamp;
@@ -467,7 +496,7 @@ function synchronizeUserAudio(userChunks: AudioSnippet[]) {
 
         if (timeDiff > 0) {
             // Insert silence if there is a gap
-            const silenceBuffer = generateSilentBuffer(timeDiff, SAMPLE_RATE, CHANNELS, lastPacketCount);
+            const silenceBuffer = generateSilentBuffer(timeDiff, SAMPLE_RATE, CHANNELS);
             finalUserBuffer.push(silenceBuffer);
         }
 
@@ -479,15 +508,12 @@ function synchronizeUserAudio(userChunks: AudioSnippet[]) {
     return Buffer.concat(finalUserBuffer);
 }
 
-// Function to combine audio files using ffmpeg
-
 function combineAudioWithFFmpeg(userBuffers: string[], audioFilePath: string): Promise<void> {
     return new Promise((resolve, reject) => {
-        // Filter out any empty or non-existent files
         const validBuffers = userBuffers.filter(fileName => {
             try {
                 const stats = statSync(fileName);
-                return stats.size > 0; // Only include files with data
+                return stats.size > 0;
             } catch (err) {
                 console.error(`Error checking file ${fileName}:`, err);
                 return false;
@@ -498,37 +524,31 @@ function combineAudioWithFFmpeg(userBuffers: string[], audioFilePath: string): P
             return reject(new Error('No valid audio files to combine.'));
         }
 
-        let ffmpegCommand;
+        // Concatenate audio files with proper timing
+        let ffmpegCommand = `ffmpeg -y `;
 
-        if (validBuffers.length === 1) {
-            // If only one buffer is present, simply copy it to the output file as a WAV
-            ffmpegCommand = `ffmpeg -f s16le -ar ${SAMPLE_RATE} -ac ${CHANNELS} -i ${validBuffers[0]} -f wav -c:a pcm_s16le ${audioFilePath}`;
-        } else {
-            // If multiple buffers are present, use the amix filter to combine them into a WAV
-            const inputs = validBuffers.map(fileName => `-f s16le -ar ${SAMPLE_RATE} -ac ${CHANNELS} -i ${fileName}`).join(' ');
+        validBuffers.forEach((fileName, index) => {
+            ffmpegCommand += `-f s16le -ar ${SAMPLE_RATE} -ac ${CHANNELS} -i ${fileName} `;
+        });
 
-            const inputCount = validBuffers.length;
-            const filterComplex = validBuffers
-                .map((_, index) => `[${index}:a]`)
-                .join('') + `amix=inputs=${inputCount}:duration=longest`;
+        // Use concat filter to join all audio files together
+        const concatFilter = validBuffers.map((_, index) => `[${index}:a]`).join('') + `concat=n=${validBuffers.length}:v=0:a=1[out]`;
 
-            ffmpegCommand = `ffmpeg ${inputs} -filter_complex "${filterComplex}" -f wav -c:a pcm_s16le ${audioFilePath}`;
-        }
+        ffmpegCommand += `-filter_complex "${concatFilter}" -map "[out]" -f wav -c:a pcm_s16le ${audioFilePath}`;
 
         exec(ffmpegCommand, (err, stdout, stderr) => {
             if (err) {
                 console.error('Error combining audio with ffmpeg:', err);
-                console.error(stderr); // Print ffmpeg's stderr output for debugging
-                reject();
+                reject(err);
                 return;
             }
 
             console.log(`Final mixed audio file created as ${audioFilePath}`);
-
-            // Clean up temporary files
-            validBuffers.forEach(fileName => unlinkSync(fileName));
-
+            validBuffers.forEach(fileName => unlinkSync(fileName)); // Cleanup temp files
             resolve();
         });
     });
 }
+
+
+client.login(TOKEN);
