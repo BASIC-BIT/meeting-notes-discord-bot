@@ -12,7 +12,6 @@ import {
 import {Routes} from 'discord-api-types/v10';
 import dotenv from 'dotenv';
 import {
-    AudioReceiveStream,
     EndBehaviorType,
     joinVoiceChannel,
     VoiceConnection,
@@ -50,23 +49,18 @@ const openAIClient = new OpenAI({
     apiKey: process.env['OPENAI_API_KEY'],
 });
 
-interface UserAudioStream {
-    userId: string;
-    pcmStream: prism.opus.Decoder;
-    ffmpegProcess: FfmpegCommand;
-}
-
 interface MeetingData {
     active: boolean;
     chatLog: string[];
     attendance: Set<string>;
     audioFilePath: string;
-    audioStream: AudioReceiveStream;
-    // combinedOpusStream: PassThrough;
     pcmStream: Decoder;
     ffmpeg: FfmpegCommand
     connection: VoiceConnection;
+    combinedOpusStream: PassThrough;
     textChannel: TextChannel | null;
+    guildId: string;
+    channelId: string;
 }
 
 const meetings = new Map<string, MeetingData>();
@@ -166,14 +160,28 @@ async function handleStartMeeting(interaction: CommandInteraction) {
     const audioFilePath = `./recordings/meeting-${guildId}-${channelId}-${Date.now()}.wav`;
 
     const receiver = connection.receiver;
-    const opusStream = receiver.subscribe("211750261922725888", {
-        end: {
-            behavior: EndBehaviorType.Manual,
-        },
+
+    const combinedOpusStream = new PassThrough();
+
+    const attendance = new Set();
+
+    voiceChannel.members.forEach((member) => {
+        if (member.id === client.user?.id) return; // Skip the bot itself
+
+        const opusStream = receiver.subscribe(member.id, {
+            end: {
+                behavior: EndBehaviorType.Manual,
+            },
+        });
+
+        // @ts-ignore
+        opusStream.pipe(combinedOpusStream, { end: false });
+
+        attendance.add(member.user.tag);
     });
 
     //@ts-ignore
-    const pcmStream = opusStream.pipe(new prism.opus.Decoder({ rate: 8000, channels: 2, frameSize: 960 }));
+    const pcmStream = combinedOpusStream.pipe(new prism.opus.Decoder({ rate: 8000, channels: 2, frameSize: 960 }));
 
 
     const ffmpegProcess = ffmpeg()
@@ -207,12 +215,14 @@ async function handleStartMeeting(interaction: CommandInteraction) {
         chatLog: [],
         attendance: new Set(),
         audioFilePath,
-        audioStream: opusStream,
         ffmpeg: ffmpegProcess,
         connection,
         textChannel,
+        combinedOpusStream,
         // @ts-ignore
         pcmStream,
+        guildId,
+        channelId,
     });
 }
 async function handleEndMeeting(interaction: CommandInteraction) {
@@ -252,7 +262,7 @@ async function handleEndMeeting(interaction: CommandInteraction) {
             )
             .setTimestamp();
 
-        const preconfiguredChannel = await client.channels.fetch('1278730769572958238') as TextChannel;
+        const preconfiguredChannel = await client.channels.fetch(meeting.channelId) as TextChannel;
         if (preconfiguredChannel) {
             const files = [];
             if (doesFileHaveContent(chatLogFilePath)) {
@@ -300,4 +310,34 @@ async function transcribe(file: string): Promise<string | null> {
     } catch (e) {
         return null;
     }
+}
+
+client.on('voiceStateUpdate', (oldState, newState) => {
+    const guildId = newState.guild.id;
+
+    if(!oldState.channel && newState.channel && newState.member && newState.member.user && hasMeeting(guildId, newState.channel.id)) {
+        const meeting = getMeeting(guildId, newState.channel.id)!;
+
+        const member = newState.member;
+
+        meeting.attendance.add(member.user.tag);
+        const opusStream = meeting.connection.receiver.subscribe(member.id, {
+            end: {
+                behavior: EndBehaviorType.Manual,
+            },
+        });
+
+        // @ts-ignore
+        opusStream.pipe(combinedOpusStream, { end: false });
+    }
+});
+
+function getMeeting(guildId: string, channelId: string) {
+    const id = `${guildId}-${channelId}`;
+    return meetings.get(id);
+}
+
+function hasMeeting(guildId: string, channelId: string) {
+    const meeting = getMeeting(guildId, channelId);
+    return meeting && meeting.active;
 }
