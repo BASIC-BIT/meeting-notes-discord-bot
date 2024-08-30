@@ -19,10 +19,11 @@ import {
     VoiceConnectionStatus
 } from '@discordjs/voice';
 import prism, {opus} from 'prism-media';
-import {writeFileSync} from "node:fs";
-import {readFileSync} from "fs";
+import {writeFileSync, readFileSync, createReadStream} from "node:fs";
 import ffmpeg, {FfmpegCommand} from 'fluent-ffmpeg';
 import Decoder = opus.Decoder;
+import OpenAI from "openai";
+import {PassThrough} from "node:stream";
 
 dotenv.config();
 
@@ -45,12 +46,23 @@ const client = new Client({
 
 });
 
+const openAIClient = new OpenAI({
+    apiKey: process.env['OPENAI_API_KEY'],
+});
+
+interface UserAudioStream {
+    userId: string;
+    pcmStream: prism.opus.Decoder;
+    ffmpegProcess: FfmpegCommand;
+}
+
 interface MeetingData {
     active: boolean;
     chatLog: string[];
     attendance: Set<string>;
     audioFilePath: string;
     audioStream: AudioReceiveStream;
+    // combinedOpusStream: PassThrough;
     pcmStream: Decoder;
     ffmpeg: FfmpegCommand
     connection: VoiceConnection;
@@ -151,32 +163,28 @@ async function handleStartMeeting(interaction: CommandInteraction) {
         interaction.reply('There was an error trying to join the voice channel.');
     });
 
-    const audioFilePath = `./recordings/meeting-${guildId}-${channelId}-${Date.now()}.mp4`;
+    const audioFilePath = `./recordings/meeting-${guildId}-${channelId}-${Date.now()}.wav`;
 
     const receiver = connection.receiver;
-    const opusStream = receiver.subscribe(voiceChannel.members.first()?.id!, {
+    const opusStream = receiver.subscribe("211750261922725888", {
         end: {
             behavior: EndBehaviorType.Manual,
         },
     });
 
     //@ts-ignore
-    const pcmStream = opusStream.pipe(new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 }));
+    const pcmStream = opusStream.pipe(new prism.opus.Decoder({ rate: 8000, channels: 2, frameSize: 960 }));
 
 
     const ffmpegProcess = ffmpeg()
         // @ts-ignore
         .input(pcmStream)
-        .inputFormat('s16le')
-        .audioCodec('aac')
-        .outputOptions([
-            '-ar 48000',
-            '-ac 2',
-        ])
-        .toFormat('mp4')
+        .inputOptions(["-f", "s16le", "-ar", "8k", "-ac", "2"])
+        .outputFormat('wav')
+        .save(audioFilePath)
         .on('error', (err: Error) => {
             console.error('Error processing audio with ffmpeg:', err);
-        });
+        })
 
 
     const textChannel = interaction.channel as TextChannel;
@@ -217,8 +225,6 @@ async function handleEndMeeting(interaction: CommandInteraction) {
         return;
     }
 
-    meeting.ffmpeg.save(meeting.audioFilePath);
-
     if(meeting.pcmStream) {
         meeting.pcmStream.end();
     }
@@ -229,6 +235,13 @@ async function handleEndMeeting(interaction: CommandInteraction) {
         const chatLogFilePath = `./logs/chatlog-${guildId}-${channelId}-${Date.now()}.txt`;
         const attendanceList = Array.from(meeting.attendance).join('\n');
         writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
+
+        const transcriptionFilePath = `./logs/transcription-${guildId}-${channelId}-${Date.now()}.txt`;
+        const transcription = await transcribe(meeting.audioFilePath);
+
+        if(transcription !== null) {
+            writeFileSync(transcriptionFilePath, transcription);
+        }
 
         const embed = new EmbedBuilder()
             .setTitle('Meeting Summary')
@@ -246,7 +259,10 @@ async function handleEndMeeting(interaction: CommandInteraction) {
                 files.push({ attachment: chatLogFilePath, name: 'ChatLog.txt' });
             }
             if (doesFileHaveContent(meeting.audioFilePath)) {
-                files.push({ attachment: meeting.audioFilePath, name: 'AudioRecording.mp4' });
+                files.push({ attachment: meeting.audioFilePath, name: 'AudioRecording.wav' });
+            }
+            if (doesFileHaveContent(transcriptionFilePath)) {
+                files.push({ attachment: transcriptionFilePath, name: 'Transcription.txt' })
             }
             await preconfiguredChannel.send({
                 embeds: [embed],
@@ -270,3 +286,18 @@ function doesFileHaveContent(path: string): boolean {
 }
 
 client.login(TOKEN);
+
+
+async function transcribe(file: string): Promise<string | null> {
+    try {
+        const transcription = await openAIClient.audio.transcriptions.create({
+            file: createReadStream(file),
+            model: "whisper-1",
+            language: "en",
+        })
+
+        return transcription.text;
+    } catch (e) {
+        return null;
+    }
+}
