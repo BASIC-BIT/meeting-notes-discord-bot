@@ -7,9 +7,9 @@
     "start": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
     "serve": "node dist/index.js",
-    "terraform:init": "terraform -chdir=_infra init",
-    "terraform:plan": "terraform -chdir=_infra plan",
-    "terraform:apply": "terraform -chdir=_infra apply"
+    "terraform:init": "terraform -chdir=_infra init -var-file=\"secret.tfvars\"",
+    "terraform:plan": "terraform -chdir=_infra plan -var-file=\"secret.tfvars\"",
+    "terraform:apply": "terraform -chdir=_infra apply -var-file=\"secret.tfvars\""
   },
   "author": "",
   "license": "ISC",

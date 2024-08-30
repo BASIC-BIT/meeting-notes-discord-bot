@@ -12,9 +12,21 @@ terraform {
 }
 
 
-variable GITHUB_TOKEN {}
-
-variable AWS_TOKEN_KEY {}
+variable GITHUB_TOKEN {
+  sensitive = true
+}
+variable AWS_TOKEN_KEY {
+  sensitive = true
+}
+variable DISCORD_CLIENT_ID {
+  sensitive = true
+}
+variable DISCORD_BOT_TOKEN {
+  sensitive = true
+}
+variable OPENAI_API_KEY {
+  sensitive = true
+}
 
 provider "aws" {
   region = "us-east-1"
@@ -112,6 +124,11 @@ resource "aws_apprunner_service" "api" {
     image_repository {
       image_configuration {
         port = "3001"
+        runtime_environment_variables = {
+          DISCORD_CLIENT_ID = var.DISCORD_CLIENT_ID
+          DISCORD_BOT_TOKEN = var.DISCORD_BOT_TOKEN
+          OPENAI_API_KEY = var.OPENAI_API_KEY
+        }
       }
       image_identifier      = "079358094174.dkr.ecr.us-east-1.amazonaws.com/meeting-notes-bot-repo:latest"
       image_repository_type = "ECR"
