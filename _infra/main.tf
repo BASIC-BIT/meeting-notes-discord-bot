@@ -22,6 +22,7 @@ provider "aws" {
 
 provider "github" {
   owner = "BASIC-BIT"
+  token = var.GITHUB_TOKEN
 }
 
 resource "aws_ecr_repository" "app_ecr_repo" {
