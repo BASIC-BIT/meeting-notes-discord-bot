@@ -40,9 +40,9 @@ export async function setupBot() {
 
         const { commandName } = interaction;
 
-        if (commandName === 'startmeetingdev') {
+        if (commandName === 'startmeeting') {
             await handleStartMeeting(commandInteraction);
-        } else if (commandName === 'endmeetingdev') {
+        } else if (commandName === 'endmeeting') {
             await handleEndMeeting(client, commandInteraction);
         }
     });
@@ -72,10 +72,10 @@ function subscribeToUserVoiceUponJoiningChannel(oldState: VoiceState, newState: 
 async function setupApplicationCommands() {
     const commands = [
         new SlashCommandBuilder()
-            .setName('startmeetingdev')
+            .setName('startmeeting')
             .setDescription('Starts the meeting and begins recording attendance and chat logs.'),
         new SlashCommandBuilder()
-            .setName('endmeetingdev')
+            .setName('endmeeting')
             .setDescription('Ends the meeting and compiles the notes.'),
     ].map(command => command.toJSON());
 
