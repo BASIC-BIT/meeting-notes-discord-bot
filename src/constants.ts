@@ -9,6 +9,8 @@ export const SILENCE_THRESHOLD = 5000; // ms of silence before determining that 
 
 export const MAX_SNIPPET_LENGTH = 60000; // maximum amount of time to put into a single snippet, to prevent our lossless audio buffer from getting too large
 
+export const MINIMUM_TRANSCRIPTION_LENGTH = 0.11;
+
 dotenv.config();
 
 export const TOKEN = process.env.DISCORD_BOT_TOKEN!;

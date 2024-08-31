@@ -29,7 +29,7 @@ export async function sendMeetingEndEmbed(meeting: MeetingData, chatLogFilePath:
         files.push(new AttachmentBuilder(chatLogFilePath).setName('ChatLog.txt'));
     }
     if (doesFileHaveContent(audioFilePath)) {
-        files.push(new AttachmentBuilder(audioFilePath).setName('AudioRecording.mp4'));
+        files.push(new AttachmentBuilder(audioFilePath).setName('AudioRecording.mp3'));
     }
     if (doesFileHaveContent(transcriptionFilePath)) {
         files.push(new AttachmentBuilder(transcriptionFilePath).setName('Transcription.txt'));

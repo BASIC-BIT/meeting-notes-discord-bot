@@ -1,6 +1,5 @@
-import {readFileSync} from "node:fs";
-
+import {existsSync, statSync} from "node:fs";
 
 export function doesFileHaveContent(path: string): boolean {
-    return readFileSync(path).length > 0;
+    return existsSync(path) && statSync(path).size > 0;
 }

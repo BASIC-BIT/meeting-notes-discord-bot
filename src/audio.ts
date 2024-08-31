@@ -1,11 +1,10 @@
-import { statSync, unlinkSync, writeFileSync } from "node:fs";
+import { unlinkSync, writeFileSync, createWriteStream, readFileSync } from "node:fs";
 import {
     BYTES_PER_SAMPLE,
-    CHANNELS, FRAME_SIZE, MAX_SNIPPET_LENGTH,
+    CHANNELS, FRAME_SIZE, MAX_SNIPPET_LENGTH, MINIMUM_TRANSCRIPTION_LENGTH,
     SAMPLE_RATE_LOW,
     SILENCE_THRESHOLD
 } from "./constants";
-import { exec } from "node:child_process";
 import { AudioFileData, AudioSnippet } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType } from "@discordjs/voice";
@@ -21,6 +20,11 @@ function generateSilentBuffer(durationMs: number, sampleRate: number, channels: 
 }
 
 export function combineAudioWithFFmpeg(audioFiles: AudioFileData[], outputFileName: string): Promise<void> {
+    if(audioFiles.length === 0) {
+        console.log('combineAudioWithFFmpeg received 0 files, returning...')
+        return Promise.resolve();
+    }
+
     return new Promise((resolve, reject) => {
         // Sort the audio files by timestamp to ensure they are in the correct order
         audioFiles.sort((a, b) => a.timestamp - b.timestamp);
@@ -32,49 +36,41 @@ export function combineAudioWithFFmpeg(audioFiles: AudioFileData[], outputFileNa
             return reject(new Error('No valid audio files to combine.'));
         }
 
-        // Create a list of inputs and set up the filter_complex for handling delays and concatenation
-        let ffmpegCommand = `ffmpeg -y `;
-        const filterComplexParts = [];
+        const outputStream = createWriteStream(outputFileName);
+
         let previousEndTime = 0;
 
-        validFiles.forEach((file, index) => {
-            ffmpegCommand += `-i ${file.fileName} `;
+        const processNextFile = (index: number) => {
+            if (index >= validFiles.length) {
+                outputStream.end();
+                console.log(`Final mixed audio file created as ${outputFileName}`);
+                return resolve();
+            }
 
+            const file = validFiles[index];
             const currentStartTime = (file.timestamp - audioFiles[0].timestamp) / 1000; // Convert to seconds
             const delay = currentStartTime - previousEndTime;
 
             if (delay > 0) {
-                filterComplexParts.push(`[${index}:a]adelay=${delay * 1000}|${delay * 1000}[a${index}];`);
-            } else {
-                filterComplexParts.push(`[${index}:a]anull[a${index}];`);
+                // Add silence for the delay
+                const silenceBuffer = generateSilentBuffer(delay * 1000, SAMPLE_RATE_LOW, CHANNELS);
+                outputStream.write(silenceBuffer);
             }
 
-            previousEndTime = currentStartTime + (file.fileName ? statSync(file.fileName).size / (128 * 1000 / 8) : 0);
-        });
+            // Append the current file's PCM data to the output
+            const pcmData = readFileSync(file.fileName!);
+            outputStream.write(pcmData);
 
-        // Layer all the audio streams on top of each other
-        const amixInputs = validFiles.map((_, index) => `[a${index}]`).join('');
-        filterComplexParts.push(`${amixInputs}amix=inputs=${validFiles.length}:duration=longest[out]`);
+            previousEndTime = currentStartTime + (pcmData.length / (SAMPLE_RATE_LOW * CHANNELS * BYTES_PER_SAMPLE));
 
-        // Construct the full ffmpeg command
-        ffmpegCommand += `-filter_complex "${filterComplexParts.join('')}" -map "[out]" -c:a aac -b:a 128k ${outputFileName}`;
+            // Remove the file after processing
+            unlinkSync(file.fileName!);
 
-        console.log(`Executing ffmpeg command: ${ffmpegCommand}`);
+            // Process the next file
+            processNextFile(index + 1);
+        };
 
-        exec(ffmpegCommand, (err, stdout, stderr) => {
-            if (err) {
-                console.error('Error combining audio with ffmpeg:', err);
-                console.error(stderr); // Useful for debugging
-                reject(err);
-                return;
-            }
-
-            console.log(`Final mixed audio file created as ${outputFileName}`);
-
-            // Cleanup temp files
-            validFiles.forEach(file => unlinkSync(file.fileName!));
-            resolve();
-        });
+        processNextFile(0);
     });
 }
 
@@ -109,7 +105,7 @@ function updateSnippetsIfNecessary(meeting: MeetingData, userId: string): void {
     }
 
     // If there was a long period of silence, process it and stop
-    const snippetSilence = (Date.now() - prevSnippet.timestamp) - (prevSnippet.chunks.length * 1000 / SAMPLE_RATE_LOW / CHANNELS);
+    const snippetSilence = (Date.now() - prevSnippet.timestamp) - (prevSnippet.chunks.length * 1000 / SAMPLE_RATE_LOW / CHANNELS / BYTES_PER_SAMPLE);
     if(snippetSilence >= SILENCE_THRESHOLD) {
         startProcessingCurrentSnippet(meeting, userId);
         return;
@@ -135,15 +131,26 @@ export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: 
         processing: true,
     }
 
-    const transcriptionPromise = transcribeSnippet(currentSnippet).then((transcription) => {
-        audioFileData.transcript = transcription;
-    });
+    // Calculate the duration of the snippet in seconds
+    const snippetDuration = currentSnippet.chunks.length / (SAMPLE_RATE_LOW * CHANNELS * BYTES_PER_SAMPLE);
+    console.log(currentSnippet.chunks.length);
+    console.log(snippetDuration);
 
-    const audioProcessingPromise = convertSnippetToMp4(currentSnippet).then((fileName) => {
-        audioFileData.fileName = fileName;
-    })
+    const promises: Promise<void>[] = [];
 
-    audioFileData.processingPromise = Promise.all([transcriptionPromise, audioProcessingPromise]).then(() => {
+    if (snippetDuration > MINIMUM_TRANSCRIPTION_LENGTH) {
+        promises.push(transcribeSnippet(currentSnippet).then((transcription) => {
+            audioFileData.transcript = transcription;
+        }));
+    }
+
+    promises.push(
+        convertSnippetToMp4(currentSnippet).then((fileName) => {
+            audioFileData.fileName = fileName;
+        }),
+    )
+
+    audioFileData.processingPromise = Promise.all(promises).then(() => {
         audioFileData.processing = false;
     });
 
@@ -171,8 +178,8 @@ export async function subscribeToUserVoice(meeting: MeetingData, userId: string)
 }
 
 export async function convertSnippetToMp4(snippet: AudioSnippet): Promise<string> {
-    const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}.pcm`;
-    const outputMp4FileName = `./snippet_${snippet.userId}_${snippet.timestamp}.mp4`;
+    const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}_audio.pcm`;
+    const outputMp4FileName = `./snippet_${snippet.userId}_${snippet.timestamp}.mp3`;
 
     // Save the PCM buffer to a file
     const buffer = Buffer.concat(snippet.chunks);
@@ -186,11 +193,11 @@ export async function convertSnippetToMp4(snippet: AudioSnippet): Promise<string
                 `-ac ${CHANNELS}`                 // Number of audio channels
             ])
             .outputOptions([
-                `-b:a 64k`,                      // Bitrate for lossy compression
+                `-b:a 128k`,                      // Bitrate for lossy compression
                 `-ac ${CHANNELS}`,                // Ensure stereo output
                 `-ar ${SAMPLE_RATE_LOW}`          // Ensure output sample rate
             ])
-            .toFormat('mp4')                     // Output format
+            .toFormat('mp3')                     // Output format
             .on('end', () => {
                 // Cleanup the temporary PCM file
                 unlinkSync(tempPcmFileName);

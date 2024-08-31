@@ -19,7 +19,7 @@ async function transcribe(file: string): Promise<string> {
 }
 
 export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> {
-    const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}.pcm`;
+    const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}_transcript.pcm`;
     const tempWavFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}.wav`;
 
     // Ensure the directories exist

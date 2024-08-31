@@ -40,10 +40,14 @@ export async function setupBot() {
 
         const { commandName } = interaction;
 
-        if (commandName === 'startmeeting') {
-            await handleStartMeeting(commandInteraction);
-        } else if (commandName === 'endmeeting') {
-            await handleEndMeeting(client, commandInteraction);
+        try {
+            if (commandName === 'startmeeting') {
+                await handleStartMeeting(commandInteraction);
+            } else if (commandName === 'endmeeting') {
+                await handleEndMeeting(client, commandInteraction);
+            }
+        } catch (e){
+            await commandInteraction.reply("Unknown Error handling request.");
         }
     });
 
