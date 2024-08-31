@@ -1,4 +1,3 @@
-import { unlinkSync, writeFileSync, createWriteStream, readFileSync } from "node:fs";
 import {
     BYTES_PER_SAMPLE,
     CHANNELS, FRAME_SIZE, MAX_SNIPPET_LENGTH, MINIMUM_TRANSCRIPTION_LENGTH,
@@ -13,66 +12,10 @@ import { PassThrough } from "node:stream";
 import { transcribeSnippet } from "./transcription";
 import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
-import { deleteIfExists } from "./util";
 
 function generateSilentBuffer(durationMs: number, sampleRate: number, channels: number): Buffer {
     const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels;
     return Buffer.alloc(numSamples * BYTES_PER_SAMPLE);
-}
-
-export function combineAudioWithFFmpeg(audioFiles: AudioFileData[], outputFileName: string): Promise<void> {
-    if(audioFiles.length === 0) {
-        console.log('combineAudioWithFFmpeg received 0 files, returning...')
-        return Promise.resolve();
-    }
-
-    return new Promise((resolve, reject) => {
-        // Sort the audio files by timestamp to ensure they are in the correct order
-        audioFiles.sort((a, b) => a.timestamp - b.timestamp);
-
-        // Filter out files that are still processing or do not have a fileName
-        const validFiles = audioFiles.filter(file => file.processing === false && file.fileName);
-
-        if (validFiles.length === 0) {
-            return reject(new Error('No valid audio files to combine.'));
-        }
-
-        const outputStream = createWriteStream(outputFileName);
-
-        let previousEndTime = 0;
-
-        const processNextFile = (index: number) => {
-            if (index >= validFiles.length) {
-                outputStream.end();
-                console.log(`Final mixed audio file created as ${outputFileName}`);
-                return resolve();
-            }
-
-            const file = validFiles[index];
-            const currentStartTime = (file.timestamp - audioFiles[0].timestamp) / 1000; // Convert to seconds
-            const delay = currentStartTime - previousEndTime;
-
-            if (delay > 0) {
-                // Add silence for the delay
-                const silenceBuffer = generateSilentBuffer(delay * 1000, SAMPLE_RATE_LOW, CHANNELS);
-                outputStream.write(silenceBuffer);
-            }
-
-            // Append the current file's PCM data to the output
-            const pcmData = readFileSync(file.fileName!);
-            outputStream.write(pcmData);
-
-            previousEndTime = currentStartTime + (pcmData.length / (SAMPLE_RATE_LOW * CHANNELS * BYTES_PER_SAMPLE));
-
-            // Remove the file after processing
-            unlinkSync(file.fileName!);
-
-            // Process the next file
-            processNextFile(index + 1);
-        };
-
-        processNextFile(0);
-    });
 }
 
 function generateNewSnippet(userId: string): AudioSnippet {
@@ -121,8 +64,8 @@ export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: 
     const currentSnippet = meeting.audioData.currentSnippet;
     meeting.audioData.currentSnippet = newUserId ? generateNewSnippet(newUserId) : null;
 
-    if(!currentSnippet) {
-        console.log("ODD BEHAVIOR - got told to process the current snippet, but was null!");
+    if (!currentSnippet) {
+        console.log("ODD BEHAVIOR - got told to process the current snippet, but it was null!");
         return;
     }
 
@@ -130,7 +73,7 @@ export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: 
         timestamp: currentSnippet.timestamp,
         userId: currentSnippet.userId,
         processing: true,
-    }
+    };
 
     const promises: Promise<void>[] = [];
 
@@ -141,10 +84,21 @@ export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: 
     }
 
     promises.push(
-        convertSnippetToMp4(currentSnippet).then((fileName) => {
-            audioFileData.fileName = fileName;
-        }),
-    )
+      new Promise<void>((resolve, reject) => {
+          const buffer = Buffer.concat(currentSnippet.chunks);
+          if (meeting.audioData.audioPassThrough) {
+              meeting.audioData.audioPassThrough.write(buffer, (err) => {
+                  if (err) {
+                      reject(err);
+                  } else {
+                      resolve();
+                  }
+              });
+          } else {
+              reject(new Error('PassThrough stream is not available.'));
+          }
+      })
+    );
 
     audioFileData.processingPromise = Promise.all(promises).then(() => {
         audioFileData.processing = false;
@@ -173,41 +127,6 @@ export async function subscribeToUserVoice(meeting: MeetingData, userId: string)
     });
 }
 
-export async function convertSnippetToMp4(snippet: AudioSnippet): Promise<string> {
-    const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}_audio.pcm`;
-    const outputMp4FileName = `./snippet_${snippet.userId}_${snippet.timestamp}.mp3`;
-
-    // Save the PCM buffer to a file
-    const buffer = Buffer.concat(snippet.chunks);
-    writeFileSync(tempPcmFileName, buffer);
-
-    return new Promise<string>((resolve, reject) => {
-        ffmpeg(tempPcmFileName)
-            .inputOptions([
-                `-f s16le`,                      // PCM format
-                `-ar ${SAMPLE_RATE_LOW}`,         // Sample rate
-                `-ac ${CHANNELS}`                 // Number of audio channels
-            ])
-            .outputOptions([
-                `-b:a 128k`,                      // Bitrate for lossy compression
-                `-ac ${CHANNELS}`,                // Ensure stereo output
-                `-ar ${SAMPLE_RATE_LOW}`          // Ensure output sample rate
-            ])
-            .toFormat('mp3')                     // Output format
-            .on('end', () => {
-                // Cleanup the temporary PCM file
-                deleteIfExists(tempPcmFileName);
-                resolve(outputMp4FileName);
-            })
-            .on('error', (err) => {
-                console.error(`Error converting PCM to MP4: ${err.message}`);
-                deleteIfExists(tempPcmFileName);
-                reject(err);
-            })
-            .save(outputMp4FileName);
-    });
-}
-
 export async function waitForFinishProcessing(meeting: MeetingData) {
     await Promise.all(meeting.audioData.audioFiles.map((fileData) => fileData.processingPromise));
 }
@@ -218,10 +137,51 @@ function getAudioDuration(audio: AudioSnippet): number {
 
 export function compileTranscriptions(client: Client, meeting: MeetingData): string {
     return meeting.audioData.audioFiles
-      .filter((fileData) => fileData.transcript?.length > 0)
+      .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
       .map((fileData) => {
         const userTag = client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
 
         return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
     }).join('\n');
+}
+
+export function openOutputFile(meeting: MeetingData) {
+    const outputFileName = `./recording_${meeting.guildId}_${meeting.channelId}.mp3`;
+    meeting.audioData.outputFileName = outputFileName;
+
+    meeting.audioData.audioPassThrough = new PassThrough();
+
+    meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
+      .inputOptions([
+          '-f s16le',                      // PCM format
+          `-ar ${SAMPLE_RATE_LOW}`,         // Sample rate
+          `-ac ${CHANNELS}`                 // Number of audio channels
+      ])
+      .audioCodec('libmp3lame')             // Use LAME codec for MP3
+      .outputOptions([
+          `-b:a 128k`,                      // Bitrate for lossy compression
+          `-ac ${CHANNELS}`,                // Ensure stereo output
+          `-ar ${SAMPLE_RATE_LOW}`          // Ensure output sample rate
+      ])
+      .toFormat('mp3')                      // Output format as MP3
+      .on('error', (err) => {
+          console.error('ffmpeg error:', err);
+      })
+      .save(outputFileName);
+
+    // You don't need to manually end the PassThrough stream here; it will be ended when the meeting ends.
+}
+
+export function closeOutputFile(meeting: MeetingData): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (meeting.audioData.audioPassThrough) {
+            meeting.audioData.audioPassThrough.end(); // End the PassThrough stream
+        }
+        if (meeting.audioData.ffmpegProcess) {
+            meeting.audioData.ffmpegProcess.on('end', () => {
+                console.log(`Final MP3 file created as ${meeting.audioData.outputFileName}`);
+                resolve();
+            });
+        }
+    });
 }

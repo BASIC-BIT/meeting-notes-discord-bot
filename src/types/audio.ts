@@ -1,3 +1,6 @@
+import { FfmpegCommand } from "fluent-ffmpeg";
+import { PassThrough, Writable } from "node:stream";
+
 export interface AudioSnippet {
     chunks: Buffer[],
     timestamp: number,
@@ -18,4 +21,7 @@ export interface AudioData {
     // TODO: Not really worried about storing snippets that are being processed... garbage collector should clear them up, I think?
     // processing: AudioSnippet[]
     audioFiles: AudioFileData[]
+    audioPassThrough?: PassThrough;
+    outputFileName?: string;
+    ffmpegProcess?: FfmpegCommand;
 }

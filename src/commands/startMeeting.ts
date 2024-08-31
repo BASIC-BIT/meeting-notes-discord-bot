@@ -1,9 +1,8 @@
 import {CommandInteraction, GuildMember, TextChannel} from "discord.js";
 import {addMeeting, hasMeeting} from "../meetings";
 import {joinVoiceChannel, VoiceConnectionStatus} from "@discordjs/voice";
-import {AudioSnippet} from "../types/audio";
 import {MeetingData} from "../types/meeting-data";
-import {subscribeToUserVoice} from "../audio";
+import { openOutputFile, subscribeToUserVoice } from "../audio";
 
 export async function handleStartMeeting(interaction: CommandInteraction) {
     const guildId = interaction.guildId!;
@@ -54,6 +53,8 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         channelId,
         startTime: new Date(),
     };
+
+    openOutputFile(meeting);
 
     connection.on(VoiceConnectionStatus.Ready, () => {
         console.log('The bot has connected to the voice channel!');
