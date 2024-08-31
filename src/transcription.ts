@@ -66,7 +66,7 @@ export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> 
             console.log('failed cleaning up temp pcm file, continuing')
         }
         if (existsSync(tempWavFileName)) {
-            // unlinkSync(tempWavFileName);
+            unlinkSync(tempWavFileName);
         } else {
             console.log('failed cleaning up temp wav file, continuing')
         }
@@ -82,7 +82,7 @@ export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> 
             console.log('failed cleaning up temp pcm file, continuing')
         }
         if (existsSync(tempWavFileName)) {
-            // unlinkSync(tempWavFileName);
+            unlinkSync(tempWavFileName);
         } else {
             console.log('failed cleaning up temp wav file, continuing')
         }
