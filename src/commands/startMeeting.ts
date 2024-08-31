@@ -4,17 +4,47 @@ import {
     ButtonStyle,
     CommandInteraction,
     EmbedBuilder,
-    GuildMember,
+    GuildMember, PermissionsBitField,
     TextChannel
 } from "discord.js";
 import {addMeeting, hasMeeting} from "../meetings";
 import {joinVoiceChannel, VoiceConnectionStatus} from "@discordjs/voice";
 import {MeetingData} from "../types/meeting-data";
 import { openOutputFile, subscribeToUserVoice } from "../audio";
+import { GuildChannel } from "discord.js/typings";
 
 export async function handleStartMeeting(interaction: CommandInteraction) {
     const guildId = interaction.guildId!;
     const channelId = interaction.channelId;
+
+    const channel = interaction.channel;
+
+    if (!channel || !interaction.guild) {
+        await interaction.reply('Unable to find the channel or guild.');
+        return;
+    }
+
+    if(channel.isDMBased()) {
+        await interaction.reply('Bot cannot be used within DMs.');
+        return;
+    }
+
+    const guildChannel = channel as GuildChannel;
+
+    // Check if the bot has permission to send messages in the channel
+    const botMember = interaction.guild.members.cache.get(interaction.client.user!.id);
+
+    if (!botMember) {
+        await interaction.reply('Bot not found in guild.');
+        return;
+    }
+
+    const permissions = guildChannel.permissionsFor(botMember);
+
+    if (!permissions || !permissions.has(PermissionsBitField.Flags.SendMessages) || !permissions.has(PermissionsBitField.Flags.ViewChannel)) {
+        await interaction.reply('I do not have permission to send messages in this channel.');
+        return;
+    }
 
     if (hasMeeting(guildId)) {
         await interaction.reply('A meeting is already active in this server.');

@@ -139,13 +139,21 @@ function getAudioDuration(audio: AudioSnippet): number {
 }
 
 export function compileTranscriptions(client: Client, meeting: MeetingData): string {
-    return meeting.audioData.audioFiles
+    const transcription = meeting.audioData.audioFiles
       .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
       .map((fileData) => {
           const userTag = client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
 
           return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
       }).join('\n');
+
+    if(transcription.length === 0) {
+        return transcription;
+    }
+
+    return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!
+    -----------------------------------------------------------------------------------
+    ${transcription}`;
 }
 
 export function openOutputFile(meeting: MeetingData) {

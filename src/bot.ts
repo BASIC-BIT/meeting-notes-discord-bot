@@ -11,7 +11,7 @@ import {
 import { Routes } from "discord-api-types/v10";
 import { getMeeting } from "./meetings";
 import { handleStartMeeting } from "./commands/startMeeting";
-import { handleEndMeeting } from "./commands/endMeeting";
+import { handleEndMeetingButton, handleEndMeetingOther } from "./commands/endMeeting";
 
 const client = new Client({
     intents: [
@@ -52,7 +52,7 @@ export async function setupBot() {
 				const buttonInteraction = interaction as ButtonInteraction;
 
 				if(buttonInteraction.customId === "end_meeting") {
-					await handleEndMeeting(client, buttonInteraction);
+					await handleEndMeetingButton(client, buttonInteraction);
 				}
 			}
         } catch (e) {
@@ -89,13 +89,18 @@ function handleUserJoin(newState: VoiceState) {
     }
 }
 
-function handleUserLeave(oldState: VoiceState) {
+async function handleUserLeave(oldState: VoiceState) {
     const meeting = getMeeting(oldState.guild.id);
     if (meeting && oldState.member && oldState.member.user.id !== client.user!.id && meeting.voiceChannel.id === oldState.channelId) {
         const userTag = oldState.member!.user.tag;
         console.log(`${userTag} left the voice channel.`);
         // Optionally, log the time they left
         meeting.chatLog.push(`[${userTag}] left the channel at ${new Date().toLocaleTimeString()}`);
+
+        if(meeting.voiceChannel.members.size <= 1) {
+            await meeting.textChannel.send("Meeting ending due to nobody being left in the voice channel.");
+            await handleEndMeetingOther(client, meeting);
+        }
     }
 }
 
