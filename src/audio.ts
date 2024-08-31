@@ -1,7 +1,7 @@
 import {
     BYTES_PER_SAMPLE,
     CHANNELS, FRAME_SIZE, MAX_SNIPPET_LENGTH, MINIMUM_TRANSCRIPTION_LENGTH,
-    SAMPLE_RATE_LOW,
+    SAMPLE_RATE,
     SILENCE_THRESHOLD
 } from "./constants";
 import { AudioFileData, AudioSnippet } from "./types/audio";
@@ -23,41 +23,43 @@ function generateNewSnippet(userId: string): AudioSnippet {
         chunks: [],
         timestamp: Date.now(),
         userId,
-    }
+    };
 }
-// Create a new snippet if a new user is talking or if there was over 5 seconds of silence, otherwise returns the existing one to continue to capture data.  ALSO, generates silence since the last received packet
+
+// Create a new snippet if a new user is talking or if there was over 5 seconds of silence,
+// otherwise returns the existing one to continue to capture data.
+// Generates silence since the last received packet.
 function updateSnippetsIfNecessary(meeting: MeetingData, userId: string): void {
     const prevSnippet = meeting.audioData.currentSnippet;
 
-    //If this is our first snippet, generate a new one and stop
-    if(!prevSnippet) {
+    // If this is our first snippet, generate a new one and stop.
+    if (!prevSnippet) {
         meeting.audioData.currentSnippet = generateNewSnippet(userId);
         return;
     }
 
-    // If a new user is speaking, process current snippet and stop
-    if(prevSnippet.userId !== userId) {
+    // If a new user is speaking, process current snippet and stop.
+    if (prevSnippet.userId !== userId) {
         startProcessingCurrentSnippet(meeting, userId);
         return;
     }
 
-    // If it's been too long with the same snippet, process it and stop
+    // If it's been too long with the same snippet, process it and stop.
     const elapsedTime = Date.now() - prevSnippet.timestamp;
-    if(elapsedTime >= MAX_SNIPPET_LENGTH) {
+    if (elapsedTime >= MAX_SNIPPET_LENGTH) {
         startProcessingCurrentSnippet(meeting, userId);
         return;
     }
 
-    // If there was a long period of silence, process it and stop
-    const snippetSilence = (Date.now() - prevSnippet.timestamp) - (prevSnippet.chunks.length * 1000 / SAMPLE_RATE_LOW / CHANNELS / BYTES_PER_SAMPLE);
-    if(snippetSilence >= SILENCE_THRESHOLD) {
+    // If there was a long period of silence, process it and stop.
+    const snippetSilence = (Date.now() - prevSnippet.timestamp) - (prevSnippet.chunks.length * 1000 / SAMPLE_RATE / CHANNELS / BYTES_PER_SAMPLE);
+    if (snippetSilence >= SILENCE_THRESHOLD) {
         startProcessingCurrentSnippet(meeting, userId);
         return;
     }
 
-    // If we want to continue the same snippet, add a silence buffer to cover the gap
-    // TODO: Should this even be here? Why keep useless silence?
-    prevSnippet.chunks.push(generateSilentBuffer(snippetSilence, SAMPLE_RATE_LOW, CHANNELS));
+    // If we want to continue the same snippet, add a silence buffer to cover the gap.
+    prevSnippet.chunks.push(generateSilentBuffer(snippetSilence, SAMPLE_RATE, CHANNELS));
 }
 
 export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: string) {
@@ -114,16 +116,27 @@ export async function subscribeToUserVoice(meeting: MeetingData, userId: string)
         },
     });
 
+    // Decode the stream with high sample rate for both transcription and MP3 storage.
     // @ts-ignore
-    const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE_LOW, channels: CHANNELS, frameSize: FRAME_SIZE }));
+    const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE, channels: CHANNELS, frameSize: FRAME_SIZE }));
+
+    // Create a pass-through stream to handle the high-fidelity audio data.
     const passThrough = new PassThrough();
     // @ts-ignore
     decodedStream.pipe(passThrough);
 
+    // Handle the high-fidelity audio for processing and transcription.
     updateSnippetsIfNecessary(meeting, userId);
 
     passThrough.on('data', chunk => {
         meeting.audioData.currentSnippet!.chunks.push(chunk);
+    });
+
+    // Pipe the high-fidelity stream directly to the MP3 storage.
+    passThrough.on('data', chunk => {
+        if (meeting.audioData.audioPassThrough) {
+            meeting.audioData.audioPassThrough.write(chunk);
+        }
     });
 }
 
@@ -132,17 +145,17 @@ export async function waitForFinishProcessing(meeting: MeetingData) {
 }
 
 function getAudioDuration(audio: AudioSnippet): number {
-    return audio.chunks.reduce((acc, cur) => acc + cur.length, 0) / (SAMPLE_RATE_LOW * CHANNELS * BYTES_PER_SAMPLE);
+    return audio.chunks.reduce((acc, cur) => acc + cur.length, 0) / (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE);
 }
 
 export function compileTranscriptions(client: Client, meeting: MeetingData): string {
     return meeting.audioData.audioFiles
       .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
       .map((fileData) => {
-        const userTag = client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
+          const userTag = client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
 
-        return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
-    }).join('\n');
+          return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
+      }).join('\n');
 }
 
 export function openOutputFile(meeting: MeetingData) {
@@ -154,22 +167,20 @@ export function openOutputFile(meeting: MeetingData) {
     meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
       .inputOptions([
           '-f s16le',                      // PCM format
-          `-ar ${SAMPLE_RATE_LOW}`,         // Sample rate
+          `-ar ${SAMPLE_RATE}`,        // Sample rate
           `-ac ${CHANNELS}`                 // Number of audio channels
       ])
       .audioCodec('libmp3lame')             // Use LAME codec for MP3
       .outputOptions([
           `-b:a 128k`,                      // Bitrate for lossy compression
           `-ac ${CHANNELS}`,                // Ensure stereo output
-          `-ar ${SAMPLE_RATE_LOW}`          // Ensure output sample rate
+          `-ar ${SAMPLE_RATE}`         // Ensure output sample rate
       ])
       .toFormat('mp3')                      // Output format as MP3
       .on('error', (err) => {
           console.error('ffmpeg error:', err);
       })
       .save(outputFileName);
-
-    // You don't need to manually end the PassThrough stream here; it will be ended when the meeting ends.
 }
 
 export function closeOutputFile(meeting: MeetingData): Promise<void> {

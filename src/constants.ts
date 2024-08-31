@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 
-export const SAMPLE_RATE_HIGH = 48000; // 48kHz for audio recording and transcription
-export const SAMPLE_RATE_LOW = 8000; // 8kHz for audio storage
+export const SAMPLE_RATE = 48000; // 48kHz for audio recording and transcriptio
 export const CHANNELS = 2; // Stereo data
 export const BYTES_PER_SAMPLE = 2; // 16 bit audio in this format
 export const FRAME_SIZE = 960; // something about the UDP connection?

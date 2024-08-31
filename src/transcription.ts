@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import {createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync} from "node:fs";
-import {CHANNELS, OPENAI_API_KEY, SAMPLE_RATE_LOW} from "./constants";
+import { CHANNELS, OPENAI_API_KEY, SAMPLE_RATE } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
 
@@ -37,7 +37,7 @@ export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> 
         ffmpeg(tempPcmFileName)
             .inputOptions([
                 `-f s16le`,
-                `-ar ${SAMPLE_RATE_LOW}`,
+                `-ar ${SAMPLE_RATE}`,
                 `-ac ${CHANNELS}`
             ])
             .outputOptions([
@@ -66,7 +66,7 @@ export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> 
             console.log('failed cleaning up temp pcm file, continuing')
         }
         if (existsSync(tempWavFileName)) {
-            unlinkSync(tempWavFileName);
+            // unlinkSync(tempWavFileName);
         } else {
             console.log('failed cleaning up temp wav file, continuing')
         }
@@ -82,7 +82,7 @@ export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> 
             console.log('failed cleaning up temp pcm file, continuing')
         }
         if (existsSync(tempWavFileName)) {
-            unlinkSync(tempWavFileName);
+            // unlinkSync(tempWavFileName);
         } else {
             console.log('failed cleaning up temp wav file, continuing')
         }
