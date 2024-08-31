@@ -10,6 +10,9 @@ export const MAX_SNIPPET_LENGTH = 60000; // maximum amount of time to put into a
 
 export const MINIMUM_TRANSCRIPTION_LENGTH = 0.11;
 
+export const MAXIMUM_MEETING_DURATION = 7200000; // Max meeting duration of 2 hours
+export const MAXIMUM_MEETING_DURATION_PRETTY = "2 hours"; // Max meeting duration of 2 hours
+
 dotenv.config();
 
 export const TOKEN = process.env.DISCORD_BOT_TOKEN!;

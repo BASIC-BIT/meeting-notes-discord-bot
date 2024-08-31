@@ -24,6 +24,11 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
             return;
         }
 
+        if(meeting.timeoutTimer) {
+            clearTimeout(meeting.timeoutTimer);
+            meeting.timeoutTimer = undefined;
+        }
+
         meeting.endTime = new Date();
 
         // Acknowledge the interaction immediately
@@ -65,6 +70,11 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
 
 export async function handleEndMeetingOther(client: Client, meeting: MeetingData) {
     try {
+        if(meeting.timeoutTimer) {
+            clearTimeout(meeting.timeoutTimer);
+            meeting.timeoutTimer = undefined;
+        }
+
         meeting.endTime = new Date();
 
         if (meeting.connection) {

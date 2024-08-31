@@ -58,8 +58,9 @@ function updateSnippetsIfNecessary(meeting: MeetingData, userId: string): void {
         return;
     }
 
+    // TODO: Consider re-enabling this.  It was generating silence that was too long
     // If we want to continue the same snippet, add a silence buffer to cover the gap.
-    prevSnippet.chunks.push(generateSilentBuffer(snippetSilence, SAMPLE_RATE, CHANNELS));
+    // prevSnippet.chunks.push(generateSilentBuffer(snippetSilence, SAMPLE_RATE, CHANNELS));
 }
 
 export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: string) {

@@ -13,4 +13,5 @@ export interface MeetingData {
     audioData: AudioData;
     startTime: Date;
     endTime?: Date;
+    timeoutTimer?: ReturnType<typeof setTimeout>;
 }

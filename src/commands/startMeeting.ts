@@ -12,6 +12,8 @@ import {joinVoiceChannel, VoiceConnectionStatus} from "@discordjs/voice";
 import {MeetingData} from "../types/meeting-data";
 import { openOutputFile, subscribeToUserVoice } from "../audio";
 import { GuildChannel } from "discord.js/typings";
+import { handleEndMeetingOther } from "./endMeeting";
+import { MAXIMUM_MEETING_DURATION, MAXIMUM_MEETING_DURATION_PRETTY } from "../constants";
 
 export async function handleStartMeeting(interaction: CommandInteraction) {
     const guildId = interaction.guildId!;
@@ -115,6 +117,12 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
     await setupChatCollector(meeting);
 
     addMeeting(meeting);
+
+    // Set a timer to automatically end the meeting after the specified duration
+    meeting.timeoutTimer = setTimeout(() => {
+        meeting.textChannel.send(`Ending meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`);
+        handleEndMeetingOther(interaction.client, meeting);
+    }, MAXIMUM_MEETING_DURATION);
 
     const embed = new EmbedBuilder()
         .setTitle('Meeting Started')
