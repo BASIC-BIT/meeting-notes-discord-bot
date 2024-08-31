@@ -3,22 +3,22 @@ import {MeetingData} from "./types/meeting-data";
 
 const meetings = new Map<string, MeetingData>();
 
-function getId(guildId: string, channelId: string) {
-    return `${guildId}-${channelId}`;
+
+// Since the bot can't be in multiple channels at once, we can just track a single meeting per guild, that's good enough.
+// This actually solves a separate issue of having to track meeting by both voice channel and text channel
+
+export function getMeeting(guildId: string) {
+    return meetings.get(guildId);
 }
 
-export function getMeeting(guildId: string, channelId: string) {
-    return meetings.get(getId(guildId, channelId));
-}
-
-export function hasMeeting(guildId: string, channelId: string) {
-    return meetings.has(getId(guildId, channelId));
+export function hasMeeting(guildId: string) {
+    return meetings.has(guildId);
 }
 
 export function addMeeting(meeting: MeetingData) {
-    meetings.set(getId(meeting.guildId, meeting.channelId), meeting);
+    meetings.set(meeting.guildId, meeting);
 }
 
-export function deleteMeeting(guildId: string, channelId: string) {
-    meetings.delete(getId(guildId, channelId));
+export function deleteMeeting(guildId: string) {
+    meetings.delete(guildId);
 }

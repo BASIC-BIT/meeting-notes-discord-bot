@@ -1,4 +1,4 @@
-import {Client, CommandInteraction} from "discord.js";
+import { ButtonInteraction, Client, CommandInteraction } from "discord.js";
 import {deleteMeeting, getMeeting} from "../meetings";
 import {writeFileSync} from "node:fs";
 import {
@@ -10,12 +10,12 @@ import {
 import {sendMeetingEndEmbed} from "../embed";
 import { deleteIfExists } from "../util";
 
-export async function handleEndMeeting(client: Client, interaction: CommandInteraction) {
+export async function handleEndMeeting(client: Client, interaction: ButtonInteraction) {
     try {
         const guildId = interaction.guildId!;
         const channelId = interaction.channelId;
 
-        const meeting = getMeeting(guildId, channelId);
+        const meeting = getMeeting(guildId);
 
         if (!meeting) {
             await interaction.reply('No active meeting to end in this channel.');
@@ -42,8 +42,6 @@ export async function handleEndMeeting(client: Client, interaction: CommandInter
 
         await waitForFinishProcessing(meeting);
 
-        // await combineAudioWithFFmpeg(meeting.audioData.audioFiles, audioFilePath);
-
         await closeOutputFile(meeting);
 
         const transcriptions = compileTranscriptions(client, meeting);
@@ -51,12 +49,9 @@ export async function handleEndMeeting(client: Client, interaction: CommandInter
         const transcriptionFilePath = `./transcription-${guildId}-${channelId}-${Date.now()}.txt`;
         writeFileSync(transcriptionFilePath, transcriptions);
 
-        await sendMeetingEndEmbed(meeting, chatLogFilePath, meeting.audioData.outputFileName!, transcriptionFilePath);
+        await sendMeetingEndEmbed(meeting, interaction, chatLogFilePath, meeting.audioData.outputFileName!, transcriptionFilePath);
 
-        // Edit the initial deferred reply to include the final message
-        await interaction.editReply('Meeting ended, the summary has been posted.');
-
-        deleteMeeting(guildId, channelId);
+        deleteMeeting(guildId);
         deleteIfExists(chatLogFilePath);
         deleteIfExists(meeting.audioData.outputFileName!);
         deleteIfExists(transcriptionFilePath);

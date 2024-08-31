@@ -120,22 +120,12 @@ export async function subscribeToUserVoice(meeting: MeetingData, userId: string)
     // @ts-ignore
     const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE, channels: CHANNELS, frameSize: FRAME_SIZE }));
 
-    // Create a pass-through stream to handle the high-fidelity audio data.
-    const passThrough = new PassThrough();
-    // @ts-ignore
-    decodedStream.pipe(passThrough);
-
     // Handle the high-fidelity audio for processing and transcription.
     updateSnippetsIfNecessary(meeting, userId);
 
-    passThrough.on('data', chunk => {
-        meeting.audioData.currentSnippet!.chunks.push(chunk);
-    });
-
-    // Pipe the high-fidelity stream directly to the MP3 storage.
-    passThrough.on('data', chunk => {
-        if (meeting.audioData.audioPassThrough) {
-            meeting.audioData.audioPassThrough.write(chunk);
+    decodedStream.on('data', chunk => {
+        if (meeting.audioData.currentSnippet) {
+            meeting.audioData.currentSnippet.chunks.push(chunk);
         }
     });
 }

@@ -1,4 +1,12 @@
-import {CommandInteraction, GuildMember, TextChannel} from "discord.js";
+import {
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    CommandInteraction,
+    EmbedBuilder,
+    GuildMember,
+    TextChannel
+} from "discord.js";
 import {addMeeting, hasMeeting} from "../meetings";
 import {joinVoiceChannel, VoiceConnectionStatus} from "@discordjs/voice";
 import {MeetingData} from "../types/meeting-data";
@@ -8,8 +16,8 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
     const guildId = interaction.guildId!;
     const channelId = interaction.channelId;
 
-    if (hasMeeting(guildId, channelId)) {
-        await interaction.reply('A meeting is already active in this channel.');
+    if (hasMeeting(guildId)) {
+        await interaction.reply('A meeting is already active in this server.');
         return;
     }
 
@@ -22,6 +30,8 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         await interaction.reply('You need to join a voice channel first!');
         return;
     }
+
+
 
     const textChannel = interaction.channel as TextChannel;
 
@@ -56,19 +66,6 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
 
     openOutputFile(meeting);
 
-    connection.on(VoiceConnectionStatus.Ready, () => {
-        console.log('The bot has connected to the voice channel!');
-        interaction.reply('Meeting started, the bot has joined the voice channel.');
-    });
-
-    connection.on(VoiceConnectionStatus.Connecting, () => {
-        console.log('Bot is connecting');
-    });
-
-    connection.on(VoiceConnectionStatus.Disconnected, () => {
-        console.log('The bot has been disconnected from the voice channel.');
-    });
-
     connection.on('error', (error) => {
         console.error('Voice connection error:', error);
         interaction.reply('There was an error trying to join the voice channel.');
@@ -85,12 +82,28 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         await onUserEndTalking(meeting, userId);
     });
 
-
-    await textChannel.send('The bot is now listening to the voice channel.');
-
     await setupChatCollector(meeting);
 
     addMeeting(meeting);
+
+    const embed = new EmbedBuilder()
+        .setTitle('Meeting Started')
+        .setDescription(`The meeting has started in **${voiceChannel.name}**.`)
+        .addFields(
+            { name: 'Start Time', value: `<t:${Math.floor(meeting.startTime.getTime() / 1000)}:F>` },
+        )
+        .setColor(0x00AE86)
+        .setTimestamp();
+
+    const endButton = new ButtonBuilder()
+        .setCustomId('end_meeting')
+        .setLabel('End Meeting')
+        .setStyle(ButtonStyle.Danger);
+
+    const row = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(endButton);
+
+    await interaction.reply({ embeds: [embed], components: [row] });
 }
 
 function recordInitialAttendance(meeting: MeetingData) {
@@ -111,7 +124,7 @@ async function setupChatCollector(meeting: MeetingData) {
     collector.on('collect', message => {
         if (message.author.bot) return;
 
-        meeting.chatLog.push(`[${message.author.tag}]: ${message.content} (${new Date(message.createdTimestamp).toLocaleString()})`);
+        meeting.chatLog.push(`[${message.author.tag} @ ${new Date(message.createdTimestamp).toLocaleString()}]: ${message.content}`);
         meeting.attendance.add(message.author.tag);
     });
 }

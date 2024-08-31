@@ -1,75 +1,101 @@
-import {CLIENT_ID, TOKEN} from "./constants";
+import { CLIENT_ID, TOKEN } from "./constants";
 import {
-    Client,
-    CommandInteraction,
-    GatewayIntentBits,
-    Partials,
-    REST,
-    SlashCommandBuilder, VoiceState
+	ButtonInteraction,
+	Client,
+	CommandInteraction,
+	GatewayIntentBits,
+	Partials, RepliableInteraction,
+	REST,
+	SlashCommandBuilder, VoiceState
 } from "discord.js";
-import {Routes} from "discord-api-types/v10";
-import {getMeeting, hasMeeting} from "./meetings";
-import {handleStartMeeting} from "./commands/startMeeting";
-import {handleEndMeeting} from "./commands/endMeeting";
-import {subscribeToUserVoice} from "./audio";
+import { Routes } from "discord-api-types/v10";
+import { getMeeting } from "./meetings";
+import { handleStartMeeting } from "./commands/startMeeting";
+import { handleEndMeeting } from "./commands/endMeeting";
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.MessageContent,
+    ],
+    partials: [Partials.Channel, Partials.User],
+});
 
 export async function setupBot() {
     if (!TOKEN || !CLIENT_ID) {
         throw new Error("Bot token or client ID is not defined in the environment variables");
     }
 
-    const client = new Client({
-        intents: [
-            GatewayIntentBits.Guilds,
-            GatewayIntentBits.GuildMessages,
-            GatewayIntentBits.GuildVoiceStates,
-            GatewayIntentBits.GuildMembers,
-            GatewayIntentBits.MessageContent,
-        ],
-        partials: [Partials.Channel, Partials.User],
-    });
 
     client.once('ready', () => {
-        console.log(`Logged in as ${client.user?.tag}!`);
+        console.log(`Logged in as ${client.user?.tag}!`)
+
+        client.on('voiceStateUpdate', handleVoiceStateUpdate);
+
     });
 
     client.on('interactionCreate', async interaction => {
-        if (!interaction.isCommand()) return;
-
-        const commandInteraction = interaction as CommandInteraction;
-
-        const { commandName } = interaction;
-
         try {
-            if (commandName === 'startmeeting') {
-                await handleStartMeeting(commandInteraction);
-            } else if (commandName === 'endmeeting') {
-                await handleEndMeeting(client, commandInteraction);
+            if (interaction.isCommand()) {
+                const commandInteraction = interaction as CommandInteraction;
+
+                const { commandName } = interaction;
+
+                if (commandName === 'startmeeting') {
+                    await handleStartMeeting(commandInteraction);
+                }
             }
-        } catch (e){
-            await commandInteraction.reply("Unknown Error handling request.");
+			if(interaction.isButton()) {
+				const buttonInteraction = interaction as ButtonInteraction;
+
+				if(buttonInteraction.customId === "end_meeting") {
+					await handleEndMeeting(client, buttonInteraction);
+				}
+			}
+        } catch (e) {
+            if (interaction.isRepliable()) {
+                const repliableInteraction = interaction as RepliableInteraction;
+                await repliableInteraction.reply("Unknown Error handling request.");
+            }
         }
     });
-
-    client.on('voiceStateUpdate', subscribeToUserVoiceUponJoiningChannel);
 
     setupApplicationCommands();
 
     client.login(TOKEN);
 }
 
-function subscribeToUserVoiceUponJoiningChannel(oldState: VoiceState, newState: VoiceState) {
-    const guildId = newState.guild.id;
+function handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState) {
+    if (!oldState.channel && newState.channel && newState.member) {
+        handleUserJoin(newState);
+    }
+    // Check if the user left a voice channel
+    else if (oldState.channel && !newState.channel && oldState.member) {
+        handleUserLeave(oldState);
+    }
+}
 
-    if(!oldState.channel && newState.channel && newState.member && newState.member.user && hasMeeting(guildId, newState.channel.id)) {
-        const meeting = getMeeting(guildId, newState.channel.id)!;
-        const member = newState.member;
+function handleUserJoin(newState: VoiceState) {
+    const meeting = getMeeting(newState.guild.id);
+    if (meeting && newState.member && newState.member.user.id !== client.user!.id && meeting.voiceChannel.id === newState.channelId) {
+        const userTag = newState.member!.user.tag;
+        console.log(`${userTag} joined the voice channel.`);
+        meeting.attendance.add(userTag);
+        // Optionally, log the time they joined
+        meeting.chatLog.push(`[${userTag}] joined the channel at ${new Date().toLocaleTimeString()}`);
+    }
+}
 
-        meeting.attendance.add(member.user.tag);
-
-        meeting.connection.receiver.speaking.on('start', (userId) => {
-            subscribeToUserVoice(meeting, userId);
-        });
+function handleUserLeave(oldState: VoiceState) {
+    const meeting = getMeeting(oldState.guild.id);
+    if (meeting && oldState.member && oldState.member.user.id !== client.user!.id && meeting.voiceChannel.id === oldState.channelId) {
+        const userTag = oldState.member!.user.tag;
+        console.log(`${userTag} left the voice channel.`);
+        // Optionally, log the time they left
+        meeting.chatLog.push(`[${userTag}] left the channel at ${new Date().toLocaleTimeString()}`);
     }
 }
 
@@ -77,10 +103,7 @@ async function setupApplicationCommands() {
     const commands = [
         new SlashCommandBuilder()
             .setName('startmeeting')
-            .setDescription('Starts the meeting and begins recording attendance and chat logs.'),
-        new SlashCommandBuilder()
-            .setName('endmeeting')
-            .setDescription('Ends the meeting and compiles the notes.'),
+            .setDescription('Record a meeting with voice and chat logs.'),
     ].map(command => command.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
