@@ -1,5 +1,5 @@
 export interface AudioSnippet {
-    chunks: any[],
+    chunks: Buffer[],
     timestamp: number,
     userId: string,
 }

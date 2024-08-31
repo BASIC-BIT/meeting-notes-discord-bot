@@ -13,6 +13,7 @@ import { PassThrough } from "node:stream";
 import { transcribeSnippet } from "./transcription";
 import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
+import { deleteIfExists } from "./util";
 
 function generateSilentBuffer(durationMs: number, sampleRate: number, channels: number): Buffer {
     const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels;
@@ -131,14 +132,9 @@ export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: 
         processing: true,
     }
 
-    // Calculate the duration of the snippet in seconds
-    const snippetDuration = currentSnippet.chunks.length / (SAMPLE_RATE_LOW * CHANNELS * BYTES_PER_SAMPLE);
-    console.log(currentSnippet.chunks.length);
-    console.log(snippetDuration);
-
     const promises: Promise<void>[] = [];
 
-    if (snippetDuration > MINIMUM_TRANSCRIPTION_LENGTH) {
+    if (getAudioDuration(currentSnippet) > MINIMUM_TRANSCRIPTION_LENGTH) {
         promises.push(transcribeSnippet(currentSnippet).then((transcription) => {
             audioFileData.transcript = transcription;
         }));
@@ -200,12 +196,12 @@ export async function convertSnippetToMp4(snippet: AudioSnippet): Promise<string
             .toFormat('mp3')                     // Output format
             .on('end', () => {
                 // Cleanup the temporary PCM file
-                unlinkSync(tempPcmFileName);
+                deleteIfExists(tempPcmFileName);
                 resolve(outputMp4FileName);
             })
             .on('error', (err) => {
                 console.error(`Error converting PCM to MP4: ${err.message}`);
-                unlinkSync(tempPcmFileName);
+                deleteIfExists(tempPcmFileName);
                 reject(err);
             })
             .save(outputMp4FileName);
@@ -216,8 +212,14 @@ export async function waitForFinishProcessing(meeting: MeetingData) {
     await Promise.all(meeting.audioData.audioFiles.map((fileData) => fileData.processingPromise));
 }
 
+function getAudioDuration(audio: AudioSnippet): number {
+    return audio.chunks.reduce((acc, cur) => acc + cur.length, 0) / (SAMPLE_RATE_LOW * CHANNELS * BYTES_PER_SAMPLE);
+}
+
 export function compileTranscriptions(client: Client, meeting: MeetingData): string {
-    return meeting.audioData.audioFiles.map((fileData) => {
+    return meeting.audioData.audioFiles
+      .filter((fileData) => fileData.transcript?.length > 0)
+      .map((fileData) => {
         const userTag = client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
 
         return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;

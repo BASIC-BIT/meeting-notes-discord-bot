@@ -7,6 +7,7 @@ import {
     waitForFinishProcessing,
 } from "../audio";
 import {sendMeetingEndEmbed} from "../embed";
+import { deleteIfExists } from "../util";
 
 export async function handleEndMeeting(client: Client, interaction: CommandInteraction) {
     try {
@@ -19,6 +20,8 @@ export async function handleEndMeeting(client: Client, interaction: CommandInter
             await interaction.reply('No active meeting to end in this channel.');
             return;
         }
+
+        meeting.endTime = new Date();
 
         // Acknowledge the interaction immediately
         await interaction.deferReply();
@@ -53,9 +56,9 @@ export async function handleEndMeeting(client: Client, interaction: CommandInter
         await interaction.editReply('Meeting ended, the summary has been posted.');
 
         deleteMeeting(guildId, channelId);
-        unlinkSync(chatLogFilePath);
-        unlinkSync(audioFilePath);
-        unlinkSync(transcriptionFilePath);
+        deleteIfExists(chatLogFilePath);
+        deleteIfExists(audioFilePath);
+        deleteIfExists(transcriptionFilePath);
 
     } catch (error) {
         console.error('Error during meeting end:', error);

@@ -12,4 +12,5 @@ export interface MeetingData {
     channelId: string;
     audioData: AudioData;
     startTime: Date;
+    endTime?: Date;
 }

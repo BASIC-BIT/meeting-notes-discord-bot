@@ -6,7 +6,7 @@ import { format } from "date-fns";  // Assuming date-fns is installed for date f
 export async function sendMeetingEndEmbed(meeting: MeetingData, chatLogFilePath: string, audioFilePath: string, transcriptionFilePath: string): Promise<void> {
     const attendanceList = Array.from(meeting.attendance).join('\n');
     const meetingStart = format(meeting.startTime, "PPpp"); // Format the meeting start time
-    const meetingEnd = format(new Date(), "PPpp"); // Current time as the meeting end time
+    const meetingEnd = format(meeting.endTime!, "PPpp"); // Current time as the meeting end time
     const meetingDuration = Math.floor((Date.now() - meeting.startTime.getTime()) / 60000); // Duration in minutes
 
     const embed = new EmbedBuilder()
