@@ -1,32 +1,29 @@
+# Use an official Node.js runtime as a parent image
 FROM node:18-alpine
 
 # Install build tools necessary for node-gyp
 RUN apk add --no-cache \
     python3 \
+    py3-pip \
     make \
     g++ \
     ffmpeg \
-    && python3 -m ensurepip \
-    && pip3 install --no-cache --upgrade pip setuptools \
     && npm install -g node-gyp
 
-RUN mkdir -p /home/node/app/node_modules && chown -R node:node /home/node/app
+# Set the working directory
+WORKDIR /app
 
-WORKDIR /home/node/app
+# Copy package.json and package-lock.json
+COPY package*.json ./
 
-COPY package.json ./
-COPY yarn.lock ./
+# Install dependencies
+RUN npm install
 
-USER node
+# Copy the rest of the application code
+COPY . .
 
-RUN yarn
+# Expose the port the app runs on
+EXPOSE 3000
 
-COPY --chown=node:node . .
-
-# TODO: These folders probably don't need to exist, and we should be deleting this data after it gets sent to discord anyway
-RUN mkdir ./logs
-RUN mkdir ./recordings
-
-EXPOSE 3001
-
-CMD npx ts-node ./src/index.ts
+# Command to run the application
+CMD ["npm", "start"]
