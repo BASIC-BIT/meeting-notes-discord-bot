@@ -3,8 +3,7 @@ import {deleteMeeting, getMeeting} from "../meetings";
 import {writeFileSync} from "node:fs";
 import {
     closeOutputFile,
-    compileTranscriptions,
-    startProcessingCurrentSnippet,
+    compileTranscriptions, startProcessingSnippet,
     waitForFinishProcessing,
 } from "../audio";
 import { sendMeetingEndEmbed, sendMeetingEndEmbedToChannel } from "../embed";
@@ -43,9 +42,9 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
         writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
 
         // checking if the current snippet exists should only matter when there was no audio recorded at all
-        if(meeting.audioData.currentSnippet) {
-            startProcessingCurrentSnippet(meeting);
-        }
+        meeting.audioData.currentSnippets?.forEach((snippet) => {
+            startProcessingSnippet(meeting, snippet.userId);
+        });
 
         await waitForFinishProcessing(meeting);
 
@@ -86,9 +85,9 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
         writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
 
         // checking if the current snippet exists should only matter when there was no audio recorded at all
-        if(meeting.audioData.currentSnippet) {
-            startProcessingCurrentSnippet(meeting);
-        }
+        meeting.audioData.currentSnippets?.forEach((snippet) => {
+            startProcessingSnippet(meeting, snippet.userId);
+        });
 
         await waitForFinishProcessing(meeting);
 

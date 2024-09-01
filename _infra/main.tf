@@ -95,60 +95,211 @@ resource "github_actions_environment_variable" "envvar_aws_access_key_id" {
   value = var.AWS_TOKEN_KEY
 }
 
-### AppRunner backend
+resource "aws_vpc" "app_vpc" {
+  cidr_block = "10.0.0.0/16"
 
-resource "aws_iam_role" "ecrAccessorRole" {
-  name               = "MeetingNotesDiscordBotEcrAccessorRole"
-  assume_role_policy = data.aws_iam_policy_document.apprunner_assume_role_policy.json
-}
-
-resource "aws_iam_role_policy_attachment" "ecrAccessorRole_policy" {
-  role       = aws_iam_role.ecrAccessorRole.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-}
-
-data "aws_iam_policy_document" "apprunner_assume_role_policy" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    effect = "Allow"
-    principals {
-      type        = "Service"
-      identifiers = ["tasks.apprunner.amazonaws.com", "build.apprunner.amazonaws.com", "apprunner.amazonaws.com"]
-    }
+  tags = {
+    Name = "app-vpc"
   }
 }
 
-resource "aws_apprunner_service" "api" {
-  service_name = "meeting-notes-bot-api"
-  source_configuration {
-    image_repository {
-      image_configuration {
-        port = "3001"
-        runtime_environment_variables = {
-          DISCORD_CLIENT_ID = var.DISCORD_CLIENT_ID
-          DISCORD_BOT_TOKEN = var.DISCORD_BOT_TOKEN
-          OPENAI_API_KEY = var.OPENAI_API_KEY
+resource "aws_subnet" "app_public_subnet_1" {
+  vpc_id                  = aws_vpc.app_vpc.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
+  availability_zone       = "us-east-1a"
+
+  tags = {
+    Name = "app-public-subnet-1"
+  }
+}
+
+resource "aws_subnet" "app_public_subnet_2" {
+  vpc_id                  = aws_vpc.app_vpc.id
+  cidr_block              = "10.0.2.0/24"
+  map_public_ip_on_launch = true
+  availability_zone       = "us-east-1b"
+
+  tags = {
+    Name = "app-public-subnet-2"
+  }
+}
+
+resource "aws_internet_gateway" "app_internet_gateway" {
+  vpc_id = aws_vpc.app_vpc.id
+
+  tags = {
+    Name = "app-internet-gateway"
+  }
+}
+
+resource "aws_route_table" "app_route_table" {
+  vpc_id = aws_vpc.app_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.app_internet_gateway.id
+  }
+
+  tags = {
+    Name = "app-route-table"
+  }
+}
+
+resource "aws_route_table_association" "public_subnet_1_assoc" {
+  subnet_id      = aws_subnet.app_public_subnet_1.id
+  route_table_id = aws_route_table.app_route_table.id
+}
+
+resource "aws_route_table_association" "public_subnet_2_assoc" {
+  subnet_id      = aws_subnet.app_public_subnet_2.id
+  route_table_id = aws_route_table.app_route_table.id
+}
+
+resource "aws_security_group" "ecs_service_sg" {
+  vpc_id = aws_vpc.app_vpc.id
+
+  ingress {
+    from_port   = 3001
+    to_port     = 3001
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "ecs-service-sg"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "app_log_group" {
+  name              = "/ecs/meeting-notes-bot"
+  retention_in_days = 7
+
+  tags = {
+    Name = "app-log-group"
+  }
+}
+
+resource "aws_ecs_cluster" "main" {
+  name = "meeting-notes-bot-cluster"
+
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+}
+
+# Define an IAM role for ECS task execution
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "ecs_task_execution_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
         }
       }
-      image_identifier      = "079358094174.dkr.ecr.us-east-1.amazonaws.com/meeting-notes-bot-repo:latest"
-      image_repository_type = "ECR"
-    }
-    auto_deployments_enabled = true
-    authentication_configuration {
-      access_role_arn = aws_iam_role.ecrAccessorRole.arn
-    }
-  }
-  instance_configuration {
-    cpu = "1024"
-    memory = "2048"
-  }
-  auto_scaling_configuration_arn = aws_apprunner_auto_scaling_configuration_version.api_scaling.arn
+    ]
+  })
 }
 
-resource "aws_apprunner_auto_scaling_configuration_version" "api_scaling" {
-  auto_scaling_configuration_name = "meeting-notes-bot-api-scaling"
+# Attach the required policy to the execution role
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
 
-  max_concurrency = 1
-  max_size        = 1
-  min_size        = 1
+# Update the ECS task definition to include the execution role ARN
+resource "aws_ecs_task_definition" "app_task" {
+  family                   = "meeting-notes-bot-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "1024"
+  memory                   = "2048"
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "meeting-notes-bot"
+      image     = aws_ecr_repository.app_ecr_repo.repository_url
+      cpu       = 1024
+      memory    = 2048
+      essential = true
+      portMappings = [
+        {
+          containerPort = 3001
+          hostPort      = 3001
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.app_log_group.name
+          "awslogs-region"        = "us-east-1"
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+      environment = [
+        {
+          name  = "DISCORD_CLIENT_ID"
+          value = var.DISCORD_CLIENT_ID
+        },
+        {
+          name  = "DISCORD_BOT_TOKEN"
+          value = var.DISCORD_BOT_TOKEN
+        },
+        {
+          name  = "OPENAI_API_KEY"
+          value = var.OPENAI_API_KEY
+        }
+      ]
+    }
+  ])
+}
+
+resource "aws_ecs_service" "app_service" {
+  name            = "meeting-notes-bot-service"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.app_task.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  deployment_controller {
+    type = "ECS"
+  }
+
+  deployment_minimum_healthy_percent = 50
+  deployment_maximum_percent = 200
+
+  network_configuration {
+    subnets         = [aws_subnet.app_public_subnet_1.id, aws_subnet.app_public_subnet_2.id]
+    security_groups = [aws_security_group.ecs_service_sg.id]
+    assign_public_ip = true
+  }
+}
+
+# Output the VPC ID
+output "vpc_id" {
+  value = aws_vpc.app_vpc.id
+}
+
+# Output the Subnet IDs
+output "public_subnet_ids" {
+  value = [aws_subnet.app_public_subnet_1.id, aws_subnet.app_public_subnet_2.id]
+}
+
+# Output the Security Group ID
+output "ecs_service_sg_id" {
+  value = aws_security_group.ecs_service_sg.id
 }

@@ -10,7 +10,7 @@ import {
 import {addMeeting, hasMeeting} from "../meetings";
 import {joinVoiceChannel, VoiceConnectionStatus} from "@discordjs/voice";
 import {MeetingData} from "../types/meeting-data";
-import { openOutputFile, subscribeToUserVoice } from "../audio";
+import {openOutputFile, subscribeToUserVoice, userStopTalking} from "../audio";
 import { GuildChannel } from "discord.js/typings";
 import { handleEndMeetingOther } from "./endMeeting";
 import { MAXIMUM_MEETING_DURATION, MAXIMUM_MEETING_DURATION_PRETTY } from "../constants";
@@ -88,7 +88,6 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         textChannel,
         audioData: {
             audioFiles: [],
-            currentSnippet: null,
         },
         voiceChannel,
         guildId,
@@ -112,6 +111,7 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
     // Cleanup when user stops speaking
     receiver.speaking.on('end', async userId => {
         await onUserEndTalking(meeting, userId);
+        await userStopTalking(meeting, userId);
     });
 
     await setupChatCollector(meeting);

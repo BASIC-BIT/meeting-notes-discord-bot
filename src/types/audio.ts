@@ -17,10 +17,9 @@ export interface AudioFileData {
 }
 
 export interface AudioData {
-    currentSnippet: AudioSnippet | null;
-    // TODO: Not really worried about storing snippets that are being processed... garbage collector should clear them up, I think?
-    // processing: AudioSnippet[]
-    audioFiles: AudioFileData[]
+    currentSnippets?: Map<string, AudioSnippet>; // Map of userId to their current AudioSnippet
+    silenceTimers?: Map<string, NodeJS.Timeout>; // Optional: Map of userId to their silence timer
+    audioFiles: AudioFileData[];
     audioPassThrough?: PassThrough;
     outputFileName?: string;
     ffmpegProcess?: FfmpegCommand;

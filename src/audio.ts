@@ -13,11 +13,6 @@ import { transcribeSnippet } from "./transcription";
 import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
 
-function generateSilentBuffer(durationMs: number, sampleRate: number, channels: number): Buffer {
-    const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels;
-    return Buffer.alloc(numSamples * BYTES_PER_SAMPLE);
-}
-
 function generateNewSnippet(userId: string): AudioSnippet {
     return {
         chunks: [],
@@ -26,81 +21,61 @@ function generateNewSnippet(userId: string): AudioSnippet {
     };
 }
 
-// Create a new snippet if a new user is talking or if there was over 5 seconds of silence,
-// otherwise returns the existing one to continue to capture data.
-// Generates silence since the last received packet.
+// Handle snippets based on the user speaking
 function updateSnippetsIfNecessary(meeting: MeetingData, userId: string): void {
-    const prevSnippet = meeting.audioData.currentSnippet;
+    const currentSnippets = meeting.audioData.currentSnippets || new Map<string, AudioSnippet>();
 
-    // If this is our first snippet, generate a new one and stop.
-    if (!prevSnippet) {
-        meeting.audioData.currentSnippet = generateNewSnippet(userId);
-        return;
+    let snippet = currentSnippets.get(userId);
+
+    if (!snippet) {
+        snippet = generateNewSnippet(userId);
+        currentSnippets.set(userId, snippet);
+    } else {
+        const elapsedTime = Date.now() - snippet.timestamp;
+        if (elapsedTime >= MAX_SNIPPET_LENGTH) {
+            startProcessingSnippet(meeting, userId);
+            snippet = generateNewSnippet(userId);
+            currentSnippets.set(userId, snippet);
+        }
     }
 
-    // If a new user is speaking, process current snippet and stop.
-    if (prevSnippet.userId !== userId) {
-        startProcessingCurrentSnippet(meeting, userId);
-        return;
-    }
-
-    // If it's been too long with the same snippet, process it and stop.
-    const elapsedTime = Date.now() - prevSnippet.timestamp;
-    if (elapsedTime >= MAX_SNIPPET_LENGTH) {
-        startProcessingCurrentSnippet(meeting, userId);
-        return;
-    }
-
-    // If there was a long period of silence, process it and stop.
-    const snippetSilence = (Date.now() - prevSnippet.timestamp) - (prevSnippet.chunks.length * 1000 / SAMPLE_RATE / CHANNELS / BYTES_PER_SAMPLE);
-    if (snippetSilence >= SILENCE_THRESHOLD) {
-        startProcessingCurrentSnippet(meeting, userId);
-        return;
-    }
-
-    // TODO: Consider re-enabling this.  It was generating silence that was too long
-    // If we want to continue the same snippet, add a silence buffer to cover the gap.
-    // prevSnippet.chunks.push(generateSilentBuffer(snippetSilence, SAMPLE_RATE, CHANNELS));
+    meeting.audioData.currentSnippets = currentSnippets;
 }
 
-export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: string) {
-    const currentSnippet = meeting.audioData.currentSnippet;
-    meeting.audioData.currentSnippet = newUserId ? generateNewSnippet(newUserId) : null;
-
-    if (!currentSnippet) {
-        console.log("ODD BEHAVIOR - got told to process the current snippet, but it was null!");
-        return;
-    }
+// Start processing a specific user's snippet
+export function startProcessingSnippet(meeting: MeetingData, userId: string) {
+    const snippet = meeting.audioData.currentSnippets?.get(userId);
+    if (!snippet) return;
 
     const audioFileData: AudioFileData = {
-        timestamp: currentSnippet.timestamp,
-        userId: currentSnippet.userId,
+        timestamp: snippet.timestamp,
+        userId: snippet.userId,
         processing: true,
     };
 
     const promises: Promise<void>[] = [];
 
-    if (getAudioDuration(currentSnippet) > MINIMUM_TRANSCRIPTION_LENGTH) {
-        promises.push(transcribeSnippet(currentSnippet).then((transcription) => {
+    if (getAudioDuration(snippet) > MINIMUM_TRANSCRIPTION_LENGTH) {
+        promises.push(transcribeSnippet(snippet).then((transcription) => {
             audioFileData.transcript = transcription;
         }));
     }
 
     promises.push(
-      new Promise<void>((resolve, reject) => {
-          const buffer = Buffer.concat(currentSnippet.chunks);
-          if (meeting.audioData.audioPassThrough) {
-              meeting.audioData.audioPassThrough.write(buffer, (err) => {
-                  if (err) {
-                      reject(err);
-                  } else {
-                      resolve();
-                  }
-              });
-          } else {
-              reject(new Error('PassThrough stream is not available.'));
-          }
-      })
+        new Promise<void>((resolve, reject) => {
+            const buffer = Buffer.concat(snippet!.chunks);
+            if (meeting.audioData.audioPassThrough) {
+                meeting.audioData.audioPassThrough.write(buffer, (err) => {
+                    if (err) {
+                        reject(err);
+                    } else {
+                        resolve();
+                    }
+                });
+            } else {
+                reject(new Error('PassThrough stream is not available.'));
+            }
+        })
     );
 
     audioFileData.processingPromise = Promise.all(promises).then(() => {
@@ -108,8 +83,27 @@ export function startProcessingCurrentSnippet(meeting: MeetingData, newUserId?: 
     });
 
     meeting.audioData.audioFiles.push(audioFileData);
+    meeting.audioData.currentSnippets?.delete(userId); // Remove snippet after processing
 }
 
+// Set a timer to process the snippet after SILENCE_THRESHOLD
+function setSnippetTimer(meeting: MeetingData, userId: string) {
+    const currentTimers = meeting.audioData.silenceTimers || new Map<string, NodeJS.Timeout>();
+
+    if (currentTimers.has(userId)) {
+        clearTimeout(currentTimers.get(userId)!);
+    }
+
+    const timer = setTimeout(() => {
+        startProcessingSnippet(meeting, userId);
+        currentTimers.delete(userId);
+    }, SILENCE_THRESHOLD);
+
+    currentTimers.set(userId, timer);
+    meeting.audioData.silenceTimers = currentTimers;
+}
+
+// Subscribe to a user's voice stream and handle the audio data
 export async function subscribeToUserVoice(meeting: MeetingData, userId: string) {
     const opusStream = meeting.connection.receiver.subscribe(userId, {
         end: {
@@ -125,10 +119,16 @@ export async function subscribeToUserVoice(meeting: MeetingData, userId: string)
     updateSnippetsIfNecessary(meeting, userId);
 
     decodedStream.on('data', chunk => {
-        if (meeting.audioData.currentSnippet) {
-            meeting.audioData.currentSnippet.chunks.push(chunk);
+        const snippet = meeting.audioData.currentSnippets?.get(userId);
+        if (snippet) {
+            snippet.chunks.push(chunk);
         }
     });
+}
+
+// Subscribe to a user's voice stream and handle the audio data
+export async function userStopTalking(meeting: MeetingData, userId: string) {
+    setSnippetTimer(meeting, userId);
 }
 
 export async function waitForFinishProcessing(meeting: MeetingData) {
@@ -141,14 +141,14 @@ function getAudioDuration(audio: AudioSnippet): number {
 
 export function compileTranscriptions(client: Client, meeting: MeetingData): string {
     const transcription = meeting.audioData.audioFiles
-      .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
-      .map((fileData) => {
-          const userTag = client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
+        .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
+        .map((fileData) => {
+            const userTag = client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
 
-          return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
-      }).join('\n');
+            return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
+        }).join('\n');
 
-    if(transcription.length === 0) {
+    if (transcription.length === 0) {
         return transcription;
     }
 
@@ -164,22 +164,22 @@ export function openOutputFile(meeting: MeetingData) {
     meeting.audioData.audioPassThrough = new PassThrough();
 
     meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
-      .inputOptions([
-          '-f s16le',                      // PCM format
-          `-ar ${SAMPLE_RATE}`,        // Sample rate
-          `-ac ${CHANNELS}`                 // Number of audio channels
-      ])
-      .audioCodec('libmp3lame')             // Use LAME codec for MP3
-      .outputOptions([
-          `-b:a 128k`,                      // Bitrate for lossy compression
-          `-ac ${CHANNELS}`,                // Ensure stereo output
-          `-ar ${SAMPLE_RATE}`         // Ensure output sample rate
-      ])
-      .toFormat('mp3')                      // Output format as MP3
-      .on('error', (err) => {
-          console.error('ffmpeg error:', err);
-      })
-      .save(outputFileName);
+        .inputOptions([
+            '-f s16le',                      // PCM format
+            `-ar ${SAMPLE_RATE}`,        // Sample rate
+            `-ac ${CHANNELS}`                 // Number of audio channels
+        ])
+        .audioCodec('libmp3lame')             // Use LAME codec for MP3
+        .outputOptions([
+            `-b:a 128k`,                      // Bitrate for lossy compression
+            `-ac ${CHANNELS}`,                // Ensure stereo output
+            `-ar ${SAMPLE_RATE}`         // Ensure output sample rate
+        ])
+        .toFormat('mp3')                      // Output format as MP3
+        .on('error', (err) => {
+            console.error('ffmpeg error:', err);
+        })
+        .save(outputFileName);
 }
 
 export function closeOutputFile(meeting: MeetingData): Promise<void> {
