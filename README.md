@@ -6,7 +6,6 @@ A tool for recording and transcribing audio from Discord voice channels, compili
 
 ## Commands
 * `/startmeeting`: Begin recording the meeting. The bot joins the voice channel and starts capturing audio and chat logs.
-* `/endmeeting`: Stop the recording and generate a summary. The bot compiles all data into a final report and posts it in the text channel.
 
 ## Contribution
 Contributions are welcome! If you have ideas for new features or improvements, feel free to open an issue or submit a pull request.

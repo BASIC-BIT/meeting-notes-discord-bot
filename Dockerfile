@@ -1,5 +1,12 @@
 FROM node:18-alpine
 
+# Install Python and other dependencies
+RUN apk add --no-cache python3 py3-pip
+
+# Ensure that 'python' command refers to 'python3'
+RUN ln -sf python3 /usr/bin/python
+
+
 RUN apk add --no-cache ffmpeg
 
 RUN mkdir -p /home/node/app/node_modules && chown -R node:node /home/node/app
