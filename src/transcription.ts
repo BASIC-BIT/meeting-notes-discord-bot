@@ -10,16 +10,19 @@ import {
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
 import {bulkhead, circuitBreaker, ConsecutiveBreaker, ExponentialBackoff, handleAll, retry, wrap} from "cockatiel";
+import { MeetingData } from "./types/meeting-data";
 
 const openAIClient = new OpenAI({
     apiKey: OPENAI_API_KEY,
 });
 
-async function transcribeInternal(file: string): Promise<string> {
+async function transcribeInternal(meeting: MeetingData, file: string): Promise<string> {
     const transcription = await openAIClient.audio.transcriptions.create({
         file: createReadStream(file),
         model: "whisper-1",
         language: "en",
+        prompt: getTranscriptionKeywords(meeting),
+        temperature: 0,
     });
 
     return transcription.text;
@@ -34,13 +37,13 @@ const bulkheadPolicy = bulkhead(TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_
 
 const policies = wrap(bulkheadPolicy, breakerPolicy, retryPolicy);
 
-async function transcribe(file: string): Promise<string> {
-    return await policies.execute((() => transcribeInternal(file)));
+async function transcribe(meeting: MeetingData, file: string): Promise<string> {
+    return await policies.execute((() => transcribeInternal(meeting, file)));
 }
 
 // TODO: Add a retry mechanism and a queue to avoid getting rate limited
 
-export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> {
+export async function transcribeSnippet(meeting: MeetingData, snippet: AudioSnippet): Promise<string> {
     const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}_transcript.pcm`;
     const tempWavFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}.wav`;
 
@@ -79,7 +82,7 @@ export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> 
 
     try {
         // Transcribe the WAV file
-        const transcription = await transcribe(tempWavFileName);
+        const transcription = await transcribe(meeting, tempWavFileName);
 
         // Cleanup temporary files
         if (existsSync(tempPcmFileName)) {
@@ -111,4 +114,55 @@ export async function transcribeSnippet(snippet: AudioSnippet): Promise<string> 
 
         return `[Transcription failed]`;
     }
+}
+
+
+export async function cleanupTranscription(meeting: MeetingData, transcription: string) {
+    const systemPrompt = await getTranscriptionCleanupSystemPrompt(meeting);
+    const response = await openAIClient.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+            {
+                role: "system",
+                content: systemPrompt,
+            },
+            {
+                role: "user",
+                content: transcription,
+            }
+        ],
+        temperature: 0,
+        user: meeting.creator.id,
+    });
+
+    return response.choices[0].message.content;
+}
+
+// Get keywords from the server that are likely to help the translation, such as server name, channel names, role names, and attendee names
+export function getTranscriptionKeywords(meeting: MeetingData): string {
+    const serverName = meeting.voiceChannel.guild.name;
+    const attendees = Array.from(meeting.attendance).map((attendee) => `"${attendee}"`).join(', ');
+    return `The transcript is a meeting held in a Discord server with the name "${serverName}", and attendees: ${attendees}.`;
+}
+
+export async function getTranscriptionCleanupSystemPrompt(meeting: MeetingData): Promise<string> {
+
+    const serverName = meeting.voiceChannel.guild.name;
+    const serverDescription = meeting.voiceChannel.guild.description;
+    const roles = meeting.voiceChannel.guild.roles.valueOf().map((role) => role.name).join(', ');
+    const events = meeting.voiceChannel.guild.scheduledEvents.valueOf().map((event) => event.name).join(', ');
+    const channelNames = meeting.voiceChannel.guild.channels.valueOf().map((channel) => channel.name).join(', ');
+    const prompt = "You are a helpful Discord bot that records meetings and provides transcriptions. " +
+        "Your task is to correct any spelling discrepancies in the transcribed text, and to correct anything that could've been mis-transcribed. " +
+        "Remove any lines that are likely mis-transcriptions due to the Whisper model being sent non-vocal audio like breathing or typing, but only if the certainty is high. " +
+        "Only make changes if you are confident it would not alter the meaning of the transcription. " +
+        "Output only the altered transcription, in the same format it was received in. " +
+        "The meeting attendees are: " +
+        Array.from(meeting.attendance).join(', ') + ".\n" +
+        `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
+        `The roles available to users in this server are: ${roles}.\n` +
+        `The upcoming events happening in this server are: ${events}.\n` +
+        `The channels in this server are: ${channelNames}.`;
+
+    return prompt;
 }

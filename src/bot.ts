@@ -12,6 +12,7 @@ import { Routes } from "discord-api-types/v10";
 import { getMeeting } from "./meetings";
 import { handleStartMeeting } from "./commands/startMeeting";
 import { handleEndMeetingButton, handleEndMeetingOther } from "./commands/endMeeting";
+import { MeetingData } from "./types/meeting-data";
 
 const client = new Client({
     intents: [

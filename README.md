@@ -17,5 +17,9 @@ Contributions are welcome! If you have ideas for new features or improvements, f
 * Copy `.env.example` to `.env`, and fill in your Discord Bot Client ID, Secret Token, and Open AI API key
 * Run `yarn start`
 
+### CI/CD/Infrastructure
+
+This project uses GitHub actions for deployment, and AWS for hosting, managed by Terraform.
+
 # License
 This project is licensed under the AGPL3 License. See the LICENSE file for details.

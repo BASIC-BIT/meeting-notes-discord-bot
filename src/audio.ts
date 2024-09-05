@@ -1,6 +1,6 @@
 import {
     BYTES_PER_SAMPLE,
-    CHANNELS, FRAME_SIZE, MAX_SNIPPET_LENGTH, MINIMUM_TRANSCRIPTION_LENGTH,
+    CHANNELS, FRAME_SIZE, MAX_DISCORD_UPLOAD_SIZE, MAX_SNIPPET_LENGTH, MINIMUM_TRANSCRIPTION_LENGTH,
     SAMPLE_RATE,
     SILENCE_THRESHOLD
 } from "./constants";
@@ -9,9 +9,11 @@ import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType } from "@discordjs/voice";
 import prism from "prism-media";
 import { PassThrough } from "node:stream";
-import { transcribeSnippet } from "./transcription";
+import { cleanupTranscription, transcribeSnippet } from "./transcription";
 import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
+import * as fs from "node:fs";
+import path from "node:path";
 
 function generateNewSnippet(userId: string): AudioSnippet {
     return {
@@ -56,7 +58,7 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
     const promises: Promise<void>[] = [];
 
     if (getAudioDuration(snippet) > MINIMUM_TRANSCRIPTION_LENGTH) {
-        promises.push(transcribeSnippet(snippet).then((transcription) => {
+        promises.push(transcribeSnippet(meeting, snippet).then((transcription) => {
             audioFileData.transcript = transcription;
         }));
     }
@@ -139,7 +141,7 @@ function getAudioDuration(audio: AudioSnippet): number {
     return audio.chunks.reduce((acc, cur) => acc + cur.length, 0) / (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE);
 }
 
-export function compileTranscriptions(client: Client, meeting: MeetingData): string {
+export async function compileTranscriptions(client: Client, meeting: MeetingData): Promise<string> {
     const transcription = meeting.audioData.audioFiles
         .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
         .map((fileData) => {
@@ -152,9 +154,13 @@ export function compileTranscriptions(client: Client, meeting: MeetingData): str
         return transcription;
     }
 
+    console.log(transcription);
+
+    const cleanedUpTranscription = await cleanupTranscription(meeting, transcription);
+
     return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!
     -----------------------------------------------------------------------------------
-    ${transcription}`;
+    ${cleanedUpTranscription}`;
 }
 
 export function openOutputFile(meeting: MeetingData) {
@@ -194,4 +200,94 @@ export function closeOutputFile(meeting: MeetingData): Promise<void> {
             });
         }
     });
+}
+
+interface ChunkInfo {
+    start: number;
+    end: number;
+    file: string;
+}
+
+/**
+ * Split audio into chunks that are under 25MB
+ * @param {string} inputFile - The path to the input MP3 file
+ * @param {string} outputDir - The directory to store the output chunks
+ * @returns {Promise<ChunkInfo[]>} - An array of chunk info (start, end, file)
+ */
+export async function splitAudioIntoChunks(inputFile: string, outputDir: string): Promise<ChunkInfo[]> {
+    try {
+        // Ensure the output directory exists
+        await fs.promises.mkdir(outputDir, { recursive: true });
+
+        const stats = await fs.promises.stat(inputFile);
+        const totalFileSize = stats.size;
+
+        const metadata = await new Promise<ffmpeg.FfprobeData>((resolve, reject) => {
+            ffmpeg.ffprobe(inputFile, (err, data) => {
+                if (err) return reject(err);
+                resolve(data);
+            });
+        });
+
+        const duration = metadata.format.duration || 0; // Total duration in seconds
+        const bitRate = (totalFileSize * 8) / duration; // Calculate the bitrate in bits per second
+
+        // Calculate the maximum chunk duration based on the 25MB limit
+        const maxChunkDuration = (MAX_DISCORD_UPLOAD_SIZE * 8) / bitRate; // in seconds
+        const numChunks = Math.ceil(duration / maxChunkDuration);
+
+        let startTime = 0;
+        const chunkPromises: Promise<ChunkInfo>[] = [];
+
+        // Ensure output directory exists
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        for (let i = 0; i < numChunks; i++) {
+            const chunkFileName = path.join(outputDir, `chunk_${i}.mp3`);
+            const endTime = Math.min(startTime + maxChunkDuration, duration);
+
+            chunkPromises.push(
+                new Promise<ChunkInfo>((resolve, reject) => {
+                    ffmpeg(inputFile)
+                        .setStartTime(startTime)
+                        .setDuration(endTime - startTime)
+                        .output(chunkFileName)
+                        .on('end', () => {
+                            console.log(`Chunk ${i} saved: ${chunkFileName}`);
+                            resolve({ start: startTime, end: endTime, file: chunkFileName });
+                        })
+                        .on('error', (err: Error) => {
+                            console.error(`Error splitting chunk ${i}: ${err.message}`);
+                            reject(err);
+                        })
+                        .run();
+                })
+            );
+
+            startTime += maxChunkDuration;
+        }
+
+        return Promise.all(chunkPromises);
+    } catch (err) {
+        console.error(`Error splitting audio: ${err}`);
+        throw err;
+    }
+}
+
+/**
+ * Get all files from a folder into a string array
+ * @param {string} folderPath - The path to the folder
+ * @returns {Promise<string[]>} - An array of file paths
+ */
+export async function getFilesInFolder(folderPath: string): Promise<string[]> {
+    try {
+        const files = await fs.promises.readdir(folderPath);
+        const filePaths = files.map(file => path.join(folderPath, file));
+        return filePaths;
+    } catch (err) {
+        console.error(`Error reading folder: ${err}`);
+        throw err;
+    }
 }

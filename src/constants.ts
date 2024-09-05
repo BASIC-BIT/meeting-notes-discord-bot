@@ -19,6 +19,8 @@ export const TRANSCRIPTION_MAX_QUEUE = 100;
 export const TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES = 5;
 export const TRANSCRIPTION_BREAK_DURATION = 10_000;
 
+export const MAX_DISCORD_UPLOAD_SIZE = 24_000_000; //24MB, to give safety margin from Discord's 25MB upload limit
+
 dotenv.config();
 
 export const TOKEN = process.env.DISCORD_BOT_TOKEN!;

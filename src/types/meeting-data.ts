@@ -1,5 +1,5 @@
 import {VoiceConnection} from "@discordjs/voice";
-import {TextChannel, VoiceBasedChannel} from "discord.js";
+import { TextChannel, User, VoiceBasedChannel } from "discord.js";
 import {AudioData} from "./audio";
 
 export interface MeetingData {
@@ -14,4 +14,5 @@ export interface MeetingData {
     startTime: Date;
     endTime?: Date;
     timeoutTimer?: ReturnType<typeof setTimeout>;
+    creator: User;
 }

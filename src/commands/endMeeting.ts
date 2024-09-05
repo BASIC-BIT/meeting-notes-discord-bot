@@ -50,7 +50,7 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
 
         await closeOutputFile(meeting);
 
-        const transcriptions = compileTranscriptions(client, meeting);
+        const transcriptions = await compileTranscriptions(client, meeting);
 
         const transcriptionFilePath = `./transcription-${guildId}-${channelId}-${Date.now()}.txt`;
         writeFileSync(transcriptionFilePath, transcriptions);
@@ -93,7 +93,7 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
 
         await closeOutputFile(meeting);
 
-        const transcriptions = compileTranscriptions(client, meeting);
+        const transcriptions = await compileTranscriptions(client, meeting);
 
         const transcriptionFilePath = `./transcription-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
         writeFileSync(transcriptionFilePath, transcriptions);

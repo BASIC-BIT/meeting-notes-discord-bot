@@ -93,6 +93,7 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         guildId,
         channelId,
         startTime: new Date(),
+        creator: interaction.user,
     };
 
     openOutputFile(meeting);
