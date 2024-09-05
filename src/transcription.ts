@@ -1,14 +1,21 @@
 import OpenAI from "openai";
 import {createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync} from "node:fs";
-import { CHANNELS, OPENAI_API_KEY, SAMPLE_RATE } from "./constants";
+import {
+    CHANNELS,
+    OPENAI_API_KEY,
+    SAMPLE_RATE, TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
+    TRANSCRIPTION_BREAK_DURATION, TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_QUEUE,
+    TRANSCRIPTION_MAX_RETRIES
+} from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
+import {bulkhead, circuitBreaker, ConsecutiveBreaker, ExponentialBackoff, handleAll, retry, wrap} from "cockatiel";
 
 const openAIClient = new OpenAI({
     apiKey: OPENAI_API_KEY,
 });
 
-async function transcribe(file: string): Promise<string> {
+async function transcribeInternal(file: string): Promise<string> {
     const transcription = await openAIClient.audio.transcriptions.create({
         file: createReadStream(file),
         model: "whisper-1",
@@ -16,6 +23,19 @@ async function transcribe(file: string): Promise<string> {
     });
 
     return transcription.text;
+}
+
+const retryPolicy = retry(handleAll, { maxAttempts: TRANSCRIPTION_MAX_RETRIES, backoff: new ExponentialBackoff()});
+const breakerPolicy = circuitBreaker(handleAll, {
+    halfOpenAfter: TRANSCRIPTION_BREAK_DURATION,
+    breaker: new ConsecutiveBreaker(TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES),
+});
+const bulkheadPolicy = bulkhead(TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_QUEUE);
+
+const policies = wrap(bulkheadPolicy, breakerPolicy, retryPolicy);
+
+async function transcribe(file: string): Promise<string> {
+    return await policies.execute((() => transcribeInternal(file)));
 }
 
 // TODO: Add a retry mechanism and a queue to avoid getting rate limited
