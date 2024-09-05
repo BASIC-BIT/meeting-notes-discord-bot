@@ -47,16 +47,19 @@ jobs:
         run: |
           # Get the current task definition
           TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition meeting-notes-bot-task --region $AWS_REGION)
-
+      
           # Update the container image in the task definition
           NEW_TASK_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
-
+      
+          # Clean up the task definition JSON to remove invalid fields
+          CLEAN_TASK_DEFINITION=$(echo "$NEW_TASK_DEFINITION" | jq 'del(.status, .taskDefinitionArn, .revision, .registeredAt, .registeredBy, .compatibilities, .requiresAttributes)')
+      
           # Register the new task definition revision
-          echo "$NEW_TASK_DEFINITION" | jq 'del(.status, .taskDefinitionArn, .revision, .registeredAt, .registeredBy)' > new-task-def.json
+          echo "$CLEAN_TASK_DEFINITION" | jq 'del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy)' > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
-
+      
           # Get the new task definition revision
           NEW_TASK_DEFINITION_REVISION=$(aws ecs describe-task-definition --task-definition meeting-notes-bot-task --region $AWS_REGION | jq -r '.taskDefinition.taskDefinitionArn')
-
+      
           # Update the ECS service to use the new task definition revision
           aws ecs update-service --cluster meeting-notes-bot-cluster --service meeting-notes-bot-service --task-definition $NEW_TASK_DEFINITION_REVISION --region $AWS_REGION
