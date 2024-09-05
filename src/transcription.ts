@@ -5,12 +5,13 @@ import {
     OPENAI_API_KEY,
     SAMPLE_RATE, TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
     TRANSCRIPTION_BREAK_DURATION, TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_QUEUE,
-    TRANSCRIPTION_MAX_RETRIES
+    TRANSCRIPTION_MAX_RETRIES, TRANSCRIPTION_RATE_MIN_TIME
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
 import {bulkhead, circuitBreaker, ConsecutiveBreaker, ExponentialBackoff, handleAll, retry, wrap} from "cockatiel";
 import { MeetingData } from "./types/meeting-data";
+import Bottleneck from "bottleneck";
 
 const openAIClient = new OpenAI({
     apiKey: OPENAI_API_KEY,
@@ -37,11 +38,15 @@ const bulkheadPolicy = bulkhead(TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_
 
 const policies = wrap(bulkheadPolicy, breakerPolicy, retryPolicy);
 
-async function transcribe(meeting: MeetingData, file: string): Promise<string> {
-    return await policies.execute((() => transcribeInternal(meeting, file)));
-}
+const limiter = new Bottleneck({
+    minTime: TRANSCRIPTION_RATE_MIN_TIME,
+});
 
-// TODO: Add a retry mechanism and a queue to avoid getting rate limited
+async function transcribe(meeting: MeetingData, file: string): Promise<string> {
+    return await policies.execute((() =>
+        limiter.schedule(() =>
+            transcribeInternal(meeting, file))));
+}
 
 export async function transcribeSnippet(meeting: MeetingData, snippet: AudioSnippet): Promise<string> {
     const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}_transcript.pcm`;
