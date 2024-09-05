@@ -39,3 +39,24 @@ jobs:
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY --all-tags
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      - name: Update ECS service with new task definition
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          # Get the current task definition
+          TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition meeting-notes-bot-task --region $AWS_REGION)
+
+          # Update the container image in the task definition
+          NEW_TASK_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
+
+          # Register the new task definition revision
+          echo "$NEW_TASK_DEFINITION" | jq 'del(.status, .taskDefinitionArn, .revision, .registeredAt, .registeredBy)' > new-task-def.json
+          aws ecs register-task-definition --cli-input-json file://new-task-def.json
+
+          # Get the new task definition revision
+          NEW_TASK_DEFINITION_REVISION=$(aws ecs describe-task-definition --task-definition meeting-notes-bot-task --region $AWS_REGION | jq -r '.taskDefinition.taskDefinitionArn')
+
+          # Update the ECS service to use the new task definition revision
+          aws ecs update-service --cluster meeting-notes-bot-cluster --service meeting-notes-bot-service --task-definition $NEW_TASK_DEFINITION_REVISION --region $AWS_REGION
