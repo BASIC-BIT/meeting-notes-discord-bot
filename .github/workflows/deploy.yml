@@ -42,7 +42,7 @@ jobs:
       - name: Update ECS service with new task definition
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
-          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
         run: |
           # Get the current task definition
