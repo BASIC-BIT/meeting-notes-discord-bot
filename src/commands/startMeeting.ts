@@ -81,6 +81,10 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
 
     const attendance: Set<string> = new Set<string>();
 
+    let setFinished: ((val?: any) => void) | undefined = undefined;
+    const isFinished = new Promise<void>((resolve, reject) => {
+        setFinished = resolve;
+    });
     const meeting: MeetingData = {
         chatLog: [],
         attendance,
@@ -94,6 +98,9 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         channelId,
         startTime: new Date(),
         creator: interaction.user,
+        isFinished,
+        setFinished: () => setFinished && setFinished(),
+        finishing: false,
     };
 
     openOutputFile(meeting);

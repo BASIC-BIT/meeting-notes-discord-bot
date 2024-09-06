@@ -22,3 +22,7 @@ export function addMeeting(meeting: MeetingData) {
 export function deleteMeeting(guildId: string) {
     meetings.delete(guildId);
 }
+
+export function getAllMeetings(): MeetingData[] {
+    return Array.from(meetings.values())
+}

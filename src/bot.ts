@@ -9,10 +9,9 @@ import {
 	SlashCommandBuilder, VoiceState
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
-import { getMeeting } from "./meetings";
+import { getAllMeetings, getMeeting } from "./meetings";
 import { handleStartMeeting } from "./commands/startMeeting";
 import { handleEndMeetingButton, handleEndMeetingOther } from "./commands/endMeeting";
-import { MeetingData } from "./types/meeting-data";
 
 const client = new Client({
     intents: [
@@ -39,6 +38,11 @@ export async function setupBot() {
     });
 
     client.on('interactionCreate', async interaction => {
+        if(isShuttingDown) {
+            // Assume another instance has already been spun up to handle traffic, and don't handle it
+            console.log("Interaction received but bot is shutting down. Not handling");
+            return;
+        }
         try {
             if (interaction.isCommand()) {
                 const commandInteraction = interaction as CommandInteraction;
@@ -98,7 +102,7 @@ async function handleUserLeave(oldState: VoiceState) {
         // Optionally, log the time they left
         meeting.chatLog.push(`[${userTag}] left the channel at ${new Date().toLocaleTimeString()}`);
 
-        if(meeting.voiceChannel.members.size <= 1) {
+        if(meeting.voiceChannel.members.size <= 1 && !meeting.finishing) {
             await meeting.textChannel.send("Meeting ending due to nobody being left in the voice channel.");
             await handleEndMeetingOther(client, meeting);
         }
@@ -125,5 +129,35 @@ async function setupApplicationCommands() {
         console.log('Successfully reloaded application (/) commands.');
     } catch (error) {
         console.error(error);
+    }
+}
+
+// Signal listener to start graceful shutdown
+process.on('SIGTERM', async () => {
+    console.log("Received SIGTERM, initiating graceful shutdown");
+
+    // Stop accepting new meetings/requests
+    stopHandlingNewMeetings();
+
+    // Wait for ongoing meetings to finish
+    await completeOngoingMeetings();
+
+    // Shut down the bot gracefully
+    console.log("Shutting down...");
+    process.exit(0); // Exit the process when all meetings are done
+});
+let isShuttingDown = false;
+
+function stopHandlingNewMeetings() {
+    isShuttingDown = true;
+}
+
+async function completeOngoingMeetings() {
+    const meetings = getAllMeetings();
+    if (meetings.length > 0) {
+        console.log("Waiting for ongoing meetings to finish...");
+        await Promise.all(meetings.map(meeting => meeting.isFinished));
+    } else {
+        console.log("No ongoing meetings, ready to shut down.");
     }
 }

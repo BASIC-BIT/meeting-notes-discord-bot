@@ -15,4 +15,9 @@ export interface MeetingData {
     endTime?: Date;
     timeoutTimer?: ReturnType<typeof setTimeout>;
     creator: User;
+
+    finishing: boolean;
+    // Used for functions that are waiting for the meeting to be completely over
+    isFinished: Promise<void>;
+    setFinished: () => void;
 }

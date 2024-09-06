@@ -23,11 +23,17 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
             return;
         }
 
+        if(meeting.finishing) {
+            await interaction.reply("Meeting is already finishing!");
+            return;
+        }
+
         if(meeting.timeoutTimer) {
             clearTimeout(meeting.timeoutTimer);
             meeting.timeoutTimer = undefined;
         }
 
+        meeting.finishing = true;
         meeting.endTime = new Date();
 
         // Acknowledge the interaction immediately
@@ -62,6 +68,7 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
         deleteIfExists(meeting.audioData.outputFileName!);
         deleteIfExists(transcriptionFilePath);
 
+        meeting.setFinished();
     } catch (error) {
         console.error('Error during meeting end:', error);
     }
@@ -74,6 +81,7 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
             meeting.timeoutTimer = undefined;
         }
 
+        meeting.finishing = true;
         meeting.endTime = new Date();
 
         if (meeting.connection) {
@@ -105,6 +113,7 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
         deleteIfExists(meeting.audioData.outputFileName!);
         deleteIfExists(transcriptionFilePath);
 
+        meeting.setFinished();
     } catch (error) {
         console.error('Error during meeting end:', error);
     }
