@@ -2,19 +2,20 @@ import { MeetingData } from "./types/meeting-data";
 import { EmbedBuilder, AttachmentBuilder, ButtonInteraction, TextChannel } from "discord.js";
 import { doesFileHaveContent } from "./util";
 import { format } from "date-fns";
-import { BaseMessageOptions, Message, MessagePayload } from "discord.js/typings";  // Assuming date-fns is installed for date formatting
+import { BaseMessageOptions, Message, MessagePayload } from "discord.js/typings";
+import { ChunkInfo } from "./types/audio";  // Assuming date-fns is installed for date formatting
 
-export async function sendMeetingEndEmbedToChannel(meeting: MeetingData, channel: TextChannel, chatLogFilePath: string, audioFilePath: string, transcriptionFilePath: string): Promise<void> {
-    await channel.send(getEmbed(meeting, chatLogFilePath, audioFilePath, transcriptionFilePath));
+export async function sendMeetingEndEmbedToChannel(meeting: MeetingData, channel: TextChannel, chatLogFilePath: string, audioChunks: ChunkInfo[], transcriptionFilePath: string): Promise<void> {
+    await channel.send(getEmbed(meeting, chatLogFilePath, audioChunks, transcriptionFilePath));
 }
 
 
-export async function sendMeetingEndEmbed(meeting: MeetingData, interaction: ButtonInteraction, chatLogFilePath: string, audioFilePath: string, transcriptionFilePath: string): Promise<void> {
+export async function sendMeetingEndEmbed(meeting: MeetingData, interaction: ButtonInteraction, chatLogFilePath: string, audioChunks: ChunkInfo[], transcriptionFilePath: string): Promise<void> {
 
-    await interaction.editReply(getEmbed(meeting, chatLogFilePath, audioFilePath, transcriptionFilePath));
+    await interaction.editReply(getEmbed(meeting, chatLogFilePath, audioChunks, transcriptionFilePath));
 }
 
-function getEmbed(meeting: MeetingData, chatLogFilePath: string, audioFilePath: string, transcriptionFilePath: string): BaseMessageOptions {
+function getEmbed(meeting: MeetingData, chatLogFilePath: string, audioChunks: ChunkInfo[], transcriptionFilePath: string): BaseMessageOptions {
     const attendanceList = Array.from(meeting.attendance).join('\n');
     const meetingStart = format(meeting.startTime, "PPpp"); // Format the meeting start time
     const meetingEnd = format(meeting.endTime!, "PPpp"); // Current time as the meeting end time
@@ -40,9 +41,9 @@ function getEmbed(meeting: MeetingData, chatLogFilePath: string, audioFilePath: 
     if (doesFileHaveContent(chatLogFilePath)) {
         files.push(new AttachmentBuilder(chatLogFilePath).setName('ChatLog.txt'));
     }
-    if (doesFileHaveContent(audioFilePath)) {
-        files.push(new AttachmentBuilder(audioFilePath).setName('AudioRecording.mp3'));
-    }
+    audioChunks.forEach((chunk, index) => {
+        files.push(new AttachmentBuilder(chunk.file).setName(`audio_${index+1}.mp3`));
+    });
     if (doesFileHaveContent(transcriptionFilePath)) {
         files.push(new AttachmentBuilder(transcriptionFilePath).setName('Transcription.txt'));
     }

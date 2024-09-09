@@ -1,13 +1,13 @@
-import { ButtonInteraction, Client, CommandInteraction } from "discord.js";
+import { ButtonInteraction, Client } from "discord.js";
 import {deleteMeeting, getMeeting} from "../meetings";
 import {writeFileSync} from "node:fs";
 import {
     closeOutputFile,
-    compileTranscriptions, startProcessingSnippet,
+    compileTranscriptions, splitAudioIntoChunks, startProcessingSnippet,
     waitForFinishProcessing,
 } from "../audio";
 import { sendMeetingEndEmbed, sendMeetingEndEmbedToChannel } from "../embed";
-import { deleteIfExists } from "../util";
+import { deleteDirectoryRecursively, deleteIfExists } from "../util";
 import { MeetingData } from "../types/meeting-data";
 
 // TODO: End meeting on a timer, or if there's nobody left in voice chat
@@ -61,12 +61,16 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
         const transcriptionFilePath = `./transcription-${guildId}-${channelId}-${Date.now()}.txt`;
         writeFileSync(transcriptionFilePath, transcriptions);
 
-        await sendMeetingEndEmbed(meeting, interaction, chatLogFilePath, meeting.audioData.outputFileName!, transcriptionFilePath);
+        const splitAudioDir = `./split_${meeting.guildId}_${meeting.channelId}_${Date.now()}`;
+        const splitFiles = await splitAudioIntoChunks(meeting.audioData.outputFileName!, splitAudioDir);
+
+        await sendMeetingEndEmbed(meeting, interaction, chatLogFilePath, splitFiles, transcriptionFilePath);
 
         deleteMeeting(guildId);
         deleteIfExists(chatLogFilePath);
         deleteIfExists(meeting.audioData.outputFileName!);
         deleteIfExists(transcriptionFilePath);
+        deleteDirectoryRecursively(splitAudioDir);
 
         meeting.setFinished();
     } catch (error) {
@@ -106,12 +110,16 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
         const transcriptionFilePath = `./transcription-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
         writeFileSync(transcriptionFilePath, transcriptions);
 
-        await sendMeetingEndEmbedToChannel(meeting, meeting.textChannel, chatLogFilePath, meeting.audioData.outputFileName!, transcriptionFilePath);
+        const splitAudioDir = `./split_${meeting.guildId}_${meeting.channelId}`;
+        const splitFiles = await splitAudioIntoChunks(meeting.audioData.outputFileName!, splitAudioDir);
+
+        await sendMeetingEndEmbedToChannel(meeting, meeting.textChannel, chatLogFilePath, splitFiles, transcriptionFilePath);
 
         deleteMeeting(meeting.guildId);
         deleteIfExists(chatLogFilePath);
         deleteIfExists(meeting.audioData.outputFileName!);
         deleteIfExists(transcriptionFilePath);
+        deleteDirectoryRecursively(splitAudioDir);
 
         meeting.setFinished();
     } catch (error) {

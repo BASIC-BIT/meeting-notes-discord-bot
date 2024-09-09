@@ -4,7 +4,7 @@ import {
     SAMPLE_RATE,
     SILENCE_THRESHOLD
 } from "./constants";
-import { AudioFileData, AudioSnippet } from "./types/audio";
+import { AudioFileData, AudioSnippet, ChunkInfo } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType } from "@discordjs/voice";
 import prism from "prism-media";
@@ -158,9 +158,9 @@ export async function compileTranscriptions(client: Client, meeting: MeetingData
 
     const cleanedUpTranscription = await cleanupTranscription(meeting, transcription);
 
-    return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!
-    -----------------------------------------------------------------------------------
-    ${cleanedUpTranscription}`;
+    return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
+    `-----------------------------------------------------------------------------------\n` +
+    cleanedUpTranscription;
 }
 
 export function openOutputFile(meeting: MeetingData) {
@@ -202,12 +202,6 @@ export function closeOutputFile(meeting: MeetingData): Promise<void> {
     });
 }
 
-interface ChunkInfo {
-    start: number;
-    end: number;
-    file: string;
-}
-
 /**
  * Split audio into chunks that are under 25MB
  * @param {string} inputFile - The path to the input MP3 file
@@ -221,6 +215,16 @@ export async function splitAudioIntoChunks(inputFile: string, outputDir: string)
 
         const stats = await fs.promises.stat(inputFile);
         const totalFileSize = stats.size;
+
+        if(totalFileSize <= MAX_DISCORD_UPLOAD_SIZE) {
+            return [
+                {
+                    file: inputFile,
+                    start: 0,
+                    end: 0, // TODO: Put real data here
+                }
+            ]
+        }
 
         const metadata = await new Promise<ffmpeg.FfprobeData>((resolve, reject) => {
             ffmpeg.ffprobe(inputFile, (err, data) => {

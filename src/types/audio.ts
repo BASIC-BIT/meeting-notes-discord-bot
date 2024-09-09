@@ -10,7 +10,6 @@ export interface AudioSnippet {
 export interface AudioFileData {
     userId: string;
     timestamp: number;
-    fileName?: string;
     transcript?: string;
     processing: boolean;
     processingPromise?: Promise<void>;
@@ -23,4 +22,10 @@ export interface AudioData {
     audioPassThrough?: PassThrough;
     outputFileName?: string;
     ffmpegProcess?: FfmpegCommand;
+}
+
+export interface ChunkInfo {
+    start: number;
+    end: number;
+    file: string;
 }
