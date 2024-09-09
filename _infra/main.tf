@@ -9,6 +9,13 @@ terraform {
       version = "~> 6.0"
     }
   }
+  backend "s3" {
+    region = "us-east-1"
+    bucket         = "meeting-notes-terraform-state-bucket"
+    key            = "meeting-notes-terraform/state"
+    dynamodb_table = "meeting-notes-terraform-state-locks"
+    encrypt = true
+  }
 }
 
 
@@ -272,6 +279,13 @@ resource "aws_ecs_service" "app_service" {
   name            = "meeting-notes-bot-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
+
+  lifecycle {
+    ignore_changes = [
+      task_definition
+    ]
+  }
+
   desired_count   = 1
   launch_type     = "FARGATE"
 

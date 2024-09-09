@@ -4,5 +4,8 @@ dist/
 .env
 logs/
 recordings/
-_infra/secret.tfvars
+
+_infra/terraform.tfvars
 _infra/.terraform/
+
+_infra_state_mgmt/.terraform
