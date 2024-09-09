@@ -24,29 +24,25 @@ function generateNewSnippet(userId: string): AudioSnippet {
 }
 
 // Handle snippets based on the user speaking
-function updateSnippetsIfNecessary(meeting: MeetingData, userId: string): void {
-    const currentSnippets = meeting.audioData.currentSnippets || new Map<string, AudioSnippet>();
-
-    let snippet = currentSnippets.get(userId);
+export function updateSnippetsIfNecessary(meeting: MeetingData, userId: string): void {
+    let snippet = meeting.audioData.currentSnippets.get(userId);
 
     if (!snippet) {
         snippet = generateNewSnippet(userId);
-        currentSnippets.set(userId, snippet);
+        meeting.audioData.currentSnippets.set(userId, snippet);
     } else {
         const elapsedTime = Date.now() - snippet.timestamp;
         if (elapsedTime >= MAX_SNIPPET_LENGTH) {
             startProcessingSnippet(meeting, userId);
             snippet = generateNewSnippet(userId);
-            currentSnippets.set(userId, snippet);
+            meeting.audioData.currentSnippets.set(userId, snippet);
         }
     }
-
-    meeting.audioData.currentSnippets = currentSnippets;
 }
 
 // Start processing a specific user's snippet
 export function startProcessingSnippet(meeting: MeetingData, userId: string) {
-    const snippet = meeting.audioData.currentSnippets?.get(userId);
+    const snippet = meeting.audioData.currentSnippets.get(userId);
     if (!snippet) return;
 
     const audioFileData: AudioFileData = {
@@ -85,7 +81,7 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
     });
 
     meeting.audioData.audioFiles.push(audioFileData);
-    meeting.audioData.currentSnippets?.delete(userId); // Remove snippet after processing
+    meeting.audioData.currentSnippets.delete(userId); // Remove snippet after processing
 }
 
 // Set a timer to process the snippet after SILENCE_THRESHOLD
@@ -117,11 +113,11 @@ export async function subscribeToUserVoice(meeting: MeetingData, userId: string)
     // @ts-ignore
     const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE, channels: CHANNELS, frameSize: FRAME_SIZE }));
 
-    // Handle the high-fidelity audio for processing and transcription.
-    updateSnippetsIfNecessary(meeting, userId);
-
     decodedStream.on('data', chunk => {
-        const snippet = meeting.audioData.currentSnippets?.get(userId);
+        // Handle the high-fidelity audio for processing and transcription.
+        updateSnippetsIfNecessary(meeting, userId);
+
+        const snippet = meeting.audioData.currentSnippets.get(userId);
         if (snippet) {
             snippet.chunks.push(chunk);
         }
@@ -129,7 +125,7 @@ export async function subscribeToUserVoice(meeting: MeetingData, userId: string)
 }
 
 // Subscribe to a user's voice stream and handle the audio data
-export async function userStopTalking(meeting: MeetingData, userId: string) {
+export function userStopTalking(meeting: MeetingData, userId: string) {
     setSnippetTimer(meeting, userId);
 }
 
@@ -280,18 +276,10 @@ export async function splitAudioIntoChunks(inputFile: string, outputDir: string)
     }
 }
 
-/**
- * Get all files from a folder into a string array
- * @param {string} folderPath - The path to the folder
- * @returns {Promise<string[]>} - An array of file paths
- */
-export async function getFilesInFolder(folderPath: string): Promise<string[]> {
-    try {
-        const files = await fs.promises.readdir(folderPath);
-        const filePaths = files.map(file => path.join(folderPath, file));
-        return filePaths;
-    } catch (err) {
-        console.error(`Error reading folder: ${err}`);
-        throw err;
+export function unsubscribeToVoiceUponLeaving(meeting: MeetingData, userId: string) {
+    const opusStream = meeting.connection.receiver.subscriptions.get(userId);
+    if (opusStream) {
+        opusStream.destroy();
     }
+    meeting.connection.receiver.subscriptions.delete(userId);
 }

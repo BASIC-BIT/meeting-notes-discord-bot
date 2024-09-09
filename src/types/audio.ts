@@ -16,7 +16,7 @@ export interface AudioFileData {
 }
 
 export interface AudioData {
-    currentSnippets?: Map<string, AudioSnippet>; // Map of userId to their current AudioSnippet
+    currentSnippets: Map<string, AudioSnippet>; // Map of userId to their current AudioSnippet
     silenceTimers?: Map<string, NodeJS.Timeout>; // Optional: Map of userId to their silence timer
     audioFiles: AudioFileData[];
     audioPassThrough?: PassThrough;

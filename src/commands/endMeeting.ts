@@ -48,7 +48,7 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
         writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
 
         // checking if the current snippet exists should only matter when there was no audio recorded at all
-        meeting.audioData.currentSnippets?.forEach((snippet) => {
+        meeting.audioData.currentSnippets.forEach((snippet) => {
             startProcessingSnippet(meeting, snippet.userId);
         });
 
@@ -97,7 +97,7 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
         writeFileSync(chatLogFilePath, meeting.chatLog.join('\n'));
 
         // checking if the current snippet exists should only matter when there was no audio recorded at all
-        meeting.audioData.currentSnippets?.forEach((snippet) => {
+        meeting.audioData.currentSnippets.forEach((snippet) => {
             startProcessingSnippet(meeting, snippet.userId);
         });
 

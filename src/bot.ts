@@ -12,6 +12,7 @@ import { Routes } from "discord-api-types/v10";
 import { getAllMeetings, getMeeting } from "./meetings";
 import { handleStartMeeting } from "./commands/startMeeting";
 import { handleEndMeetingButton, handleEndMeetingOther } from "./commands/endMeeting";
+import { subscribeToUserVoice, unsubscribeToVoiceUponLeaving } from "./audio";
 
 const client = new Client({
     intents: [
@@ -73,17 +74,17 @@ export async function setupBot() {
     client.login(TOKEN);
 }
 
-function handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState) {
+async function handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState) {
     if (!oldState.channel && newState.channel && newState.member) {
-        handleUserJoin(newState);
+        await handleUserJoin(newState);
     }
     // Check if the user left a voice channel
     else if (oldState.channel && !newState.channel && oldState.member) {
-        handleUserLeave(oldState);
+        await handleUserLeave(oldState);
     }
 }
 
-function handleUserJoin(newState: VoiceState) {
+async function handleUserJoin(newState: VoiceState) {
     const meeting = getMeeting(newState.guild.id);
     if (meeting && newState.member && newState.member.user.id !== client.user!.id && meeting.voiceChannel.id === newState.channelId) {
         const userTag = newState.member!.user.tag;
@@ -91,6 +92,8 @@ function handleUserJoin(newState: VoiceState) {
         meeting.attendance.add(userTag);
         // Optionally, log the time they joined
         meeting.chatLog.push(`[${userTag}] joined the channel at ${new Date().toLocaleTimeString()}`);
+
+        await subscribeToUserVoice(meeting, newState.member!.user.id);
     }
 }
 
@@ -101,6 +104,8 @@ async function handleUserLeave(oldState: VoiceState) {
         console.log(`${userTag} left the voice channel.`);
         // Optionally, log the time they left
         meeting.chatLog.push(`[${userTag}] left the channel at ${new Date().toLocaleTimeString()}`);
+
+        unsubscribeToVoiceUponLeaving(meeting, oldState.member!.user.id);
 
         if(meeting.voiceChannel.members.size <= 1 && !meeting.finishing) {
             await meeting.textChannel.send("Meeting ending due to nobody being left in the voice channel.");

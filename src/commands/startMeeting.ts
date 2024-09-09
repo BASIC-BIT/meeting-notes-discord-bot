@@ -7,13 +7,14 @@ import {
     GuildMember, PermissionsBitField,
     TextChannel
 } from "discord.js";
-import {addMeeting, hasMeeting} from "../meetings";
-import {joinVoiceChannel, VoiceConnectionStatus} from "@discordjs/voice";
-import {MeetingData} from "../types/meeting-data";
-import {openOutputFile, subscribeToUserVoice, userStopTalking} from "../audio";
+import { addMeeting, hasMeeting } from "../meetings";
+import { joinVoiceChannel } from "@discordjs/voice";
+import { MeetingData } from "../types/meeting-data";
+import { openOutputFile, subscribeToUserVoice, updateSnippetsIfNecessary, userStopTalking } from "../audio";
 import { GuildChannel } from "discord.js/typings";
 import { handleEndMeetingOther } from "./endMeeting";
 import { MAXIMUM_MEETING_DURATION, MAXIMUM_MEETING_DURATION_PRETTY } from "../constants";
+import { AudioSnippet } from "../types/audio";
 
 export async function handleStartMeeting(interaction: CommandInteraction) {
     const guildId = interaction.guildId!;
@@ -26,7 +27,7 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         return;
     }
 
-    if(channel.isDMBased()) {
+    if (channel.isDMBased()) {
         await interaction.reply('Bot cannot be used within DMs.');
         return;
     }
@@ -64,7 +65,6 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
     }
 
 
-
     const textChannel = interaction.channel as TextChannel;
 
     // TODO: Set voice channel status to RECORDING
@@ -92,6 +92,7 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         textChannel,
         audioData: {
             audioFiles: [],
+            currentSnippets: new Map<string, AudioSnippet>(),
         },
         voiceChannel,
         guildId,
@@ -111,15 +112,16 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
     });
 
     recordInitialAttendance(meeting);
+    await subscribeToInitialMembersVoice(meeting);
 
-    receiver.speaking.on('start', async userId => {
-        await subscribeToUserVoice(meeting, userId);
+    receiver.speaking.on('start', userId => {
+        updateSnippetsIfNecessary(meeting, userId);
     });
 
     // Cleanup when user stops speaking
-    receiver.speaking.on('end', async userId => {
-        await onUserEndTalking(meeting, userId);
-        await userStopTalking(meeting, userId);
+    receiver.speaking.on('end',  userId => {
+        // await onUserEndTalking(meeting, userId);
+        userStopTalking(meeting, userId);
     });
 
     await setupChatCollector(meeting);
@@ -157,11 +159,10 @@ function recordInitialAttendance(meeting: MeetingData) {
         meeting.attendance.add(member.user.tag));
 }
 
-async function onUserEndTalking(meeting: MeetingData, userId: string) {
-    const opusStream = meeting.connection.receiver.subscriptions.get(userId);
-    if (opusStream) {
-        opusStream.destroy();
-    }
+async function subscribeToInitialMembersVoice(meeting: MeetingData) {
+    await Promise.all(
+        meeting.voiceChannel.members.map((member) =>
+            subscribeToUserVoice(meeting, member.user.id)));
 }
 
 async function setupChatCollector(meeting: MeetingData) {
