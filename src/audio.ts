@@ -159,11 +159,18 @@ export async function compileTranscriptions(client: Client, meeting: MeetingData
 
     console.log(transcription);
 
-    const cleanedUpTranscription = await cleanupTranscription(meeting, transcription);
+    try {
+        const cleanedUpTranscription = await cleanupTranscription(meeting, transcription);
+        return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
+            `-----------------------------------------------------------------------------------\n` +
+            cleanedUpTranscription;
+    } catch (e) {
+        console.log("Transcription cleanup failed, returning original");
 
-    return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
-    `-----------------------------------------------------------------------------------\n` +
-    cleanedUpTranscription;
+        return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
+            `-----------------------------------------------------------------------------------\n` +
+            transcription;
+    }
 }
 
 export function openOutputFile(meeting: MeetingData) {

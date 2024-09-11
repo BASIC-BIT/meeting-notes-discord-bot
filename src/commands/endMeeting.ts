@@ -92,6 +92,8 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
         deleteIfExists(chatLogFilePath);
         deleteIfExists(meeting.audioData.outputFileName!);
 
+        const waitingForTranscriptionsMessage = await meeting.textChannel.send("Processing transcription... please wait...");
+
         await waitForFinishProcessing(meeting);
 
         const transcriptions = await compileTranscriptions(client, meeting);
@@ -100,6 +102,8 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
         writeFileSync(transcriptionFilePath, transcriptions);
 
         await sendTranscriptionFiles(meeting, transcriptionFilePath);
+
+        await waitingForTranscriptionsMessage.delete();
 
         deleteMeeting(guildId);
         deleteIfExists(transcriptionFilePath);
@@ -154,6 +158,8 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
         deleteIfExists(chatLogFilePath);
         deleteIfExists(meeting.audioData.outputFileName!);
 
+        const waitingForTranscriptionsMessage = await meeting.textChannel.send("Processing transcription... please wait...");
+
         await waitForFinishProcessing(meeting);
 
         const transcriptions = await compileTranscriptions(client, meeting);
@@ -162,6 +168,8 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
         writeFileSync(transcriptionFilePath, transcriptions);
 
         await sendTranscriptionFiles(meeting, transcriptionFilePath);
+
+        await waitingForTranscriptionsMessage.delete();
 
         deleteMeeting(meeting.guildId);
         deleteIfExists(transcriptionFilePath);
