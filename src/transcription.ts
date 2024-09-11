@@ -5,13 +5,14 @@ import {
     OPENAI_API_KEY,
     SAMPLE_RATE, TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
     TRANSCRIPTION_BREAK_DURATION, TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_QUEUE,
-    TRANSCRIPTION_MAX_RETRIES, TRANSCRIPTION_RATE_MIN_TIME
+    TRANSCRIPTION_MAX_RETRIES, TRANSCRIPTION_RATE_MIN_TIME, TRANSCRIPTION_SPEECH_PROBABILITY_CUTOFF
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
 import {bulkhead, circuitBreaker, ConsecutiveBreaker, ExponentialBackoff, handleAll, retry, wrap} from "cockatiel";
-import { MeetingData } from "./types/meeting-data";
+import {MeetingData} from "./types/meeting-data";
 import Bottleneck from "bottleneck";
+import {TranscriptionResponse} from "./types/transcription";
 
 const openAIClient = new OpenAI({
     apiKey: OPENAI_API_KEY,
@@ -24,12 +25,25 @@ async function transcribeInternal(meeting: MeetingData, file: string): Promise<s
         language: "en",
         prompt: getTranscriptionKeywords(meeting),
         temperature: 0,
-    });
+        response_format: "verbose_json"
+    }) as TranscriptionResponse;
 
-    return transcription.text;
+    console.log(transcription);
+
+    return cleanupTranscriptionResponse(transcription);
 }
 
-const retryPolicy = retry(handleAll, { maxAttempts: TRANSCRIPTION_MAX_RETRIES, backoff: new ExponentialBackoff()});
+function cleanupTranscriptionResponse(response: TranscriptionResponse): string {
+    return response.segments
+        .filter((segment) =>
+            segment.no_speech_prob < TRANSCRIPTION_SPEECH_PROBABILITY_CUTOFF)
+        .map((segment) => segment.text)
+        .join('')
+        .trim();
+}
+
+
+const retryPolicy = retry(handleAll, {maxAttempts: TRANSCRIPTION_MAX_RETRIES, backoff: new ExponentialBackoff()});
 const breakerPolicy = circuitBreaker(handleAll, {
     halfOpenAfter: TRANSCRIPTION_BREAK_DURATION,
     breaker: new ConsecutiveBreaker(TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES),
@@ -55,7 +69,7 @@ export async function transcribeSnippet(meeting: MeetingData, snippet: AudioSnip
     // Ensure the directories exist
     const tempDir = './';
     if (!existsSync(tempDir)) {
-        mkdirSync(tempDir, { recursive: true });
+        mkdirSync(tempDir, {recursive: true});
     }
 
     // Write the PCM buffer to a file
