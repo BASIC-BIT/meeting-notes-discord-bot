@@ -42,9 +42,9 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         return;
     }
 
-    const permissions = guildChannel.permissionsFor(botMember);
+    const chatChannelPermissions = guildChannel.permissionsFor(botMember);
 
-    if (!permissions || !permissions.has(PermissionsBitField.Flags.SendMessages) || !permissions.has(PermissionsBitField.Flags.ViewChannel)) {
+    if (!chatChannelPermissions || !chatChannelPermissions.has(PermissionsBitField.Flags.SendMessages) || !chatChannelPermissions.has(PermissionsBitField.Flags.ViewChannel)) {
         await interaction.reply('I do not have permission to send messages in this channel.');
         return;
     }
@@ -64,6 +64,12 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         return;
     }
 
+    const voiceChannelPermissions = voiceChannel.permissionsFor(botMember);
+
+    if (!voiceChannelPermissions || !voiceChannelPermissions.has(PermissionsBitField.Flags.ViewChannel) || !voiceChannelPermissions.has(PermissionsBitField.Flags.Connect)) {
+        await interaction.reply('I do not have permission to join your voice channel.');
+        return;
+    }
 
     const textChannel = interaction.channel as TextChannel;
 
