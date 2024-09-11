@@ -108,6 +108,8 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         isFinished,
         setFinished: () => setFinished && setFinished(),
         finishing: false,
+        guild: interaction.guild,
+        initialInteraction: interaction,
     };
 
     openOutputFile(meeting);

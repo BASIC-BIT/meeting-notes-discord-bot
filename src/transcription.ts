@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import {createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync} from "node:fs";
 import {
     CHANNELS,
-    OPENAI_API_KEY,
+    OPENAI_API_KEY, OPENAI_ORGANIZATION_ID, OPENAI_PROJECT_ID,
     SAMPLE_RATE, TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
     TRANSCRIPTION_BREAK_DURATION, TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_QUEUE,
     TRANSCRIPTION_MAX_RETRIES, TRANSCRIPTION_RATE_MIN_TIME, TRANSCRIPTION_SPEECH_PROBABILITY_CUTOFF
@@ -16,6 +16,8 @@ import {TranscriptionResponse} from "./types/transcription";
 
 const openAIClient = new OpenAI({
     apiKey: OPENAI_API_KEY,
+    organization: OPENAI_ORGANIZATION_ID,
+    project: OPENAI_PROJECT_ID,
 });
 
 async function transcribeInternal(meeting: MeetingData, file: string): Promise<string> {
@@ -166,11 +168,11 @@ export function getTranscriptionKeywords(meeting: MeetingData): string {
 
 export async function getTranscriptionCleanupSystemPrompt(meeting: MeetingData): Promise<string> {
 
-    const serverName = meeting.voiceChannel.guild.name;
-    const serverDescription = meeting.voiceChannel.guild.description;
-    const roles = meeting.voiceChannel.guild.roles.valueOf().map((role) => role.name).join(', ');
-    const events = meeting.voiceChannel.guild.scheduledEvents.valueOf().map((event) => event.name).join(', ');
-    const channelNames = meeting.voiceChannel.guild.channels.valueOf().map((channel) => channel.name).join(', ');
+    const serverName = meeting.guild.name;
+    const serverDescription = meeting.guild.description;
+    const roles = meeting.guild.roles.valueOf().map((role) => role.name).join(', ');
+    const events = meeting.guild.scheduledEvents.valueOf().map((event) => event.name).join(', ');
+    const channelNames = meeting.guild.channels.valueOf().map((channel) => channel.name).join(', ');
     const prompt = "You are a helpful Discord bot that records meetings and provides transcriptions. " +
         "Your task is to correct any spelling discrepancies in the transcribed text, and to correct anything that could've been mis-transcribed. " +
         "Remove any lines that are likely mis-transcriptions due to the Whisper model being sent non-vocal audio like breathing or typing, but only if the certainty is high. " +

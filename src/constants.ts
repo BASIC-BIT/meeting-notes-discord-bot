@@ -18,9 +18,9 @@ export const TRANSCRIPTION_MAX_CONCURRENT = 1;
 export const TRANSCRIPTION_MAX_QUEUE = 100;
 export const TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES = 5;
 export const TRANSCRIPTION_BREAK_DURATION = 10_000;
-export const TRANSCRIPTION_RATE_MIN_TIME = 10_000 // Rate limit in minimum milliseconds between requests
+export const TRANSCRIPTION_RATE_MIN_TIME = 1_300; // Rate limit in minimum milliseconds between requests
 
-export const TRANSCRIPTION_SPEECH_PROBABILITY_CUTOFF = 0.65;
+export const TRANSCRIPTION_SPEECH_PROBABILITY_CUTOFF = 0.75;
 
 export const MAX_DISCORD_UPLOAD_SIZE = 24_000_000; //24MB, to give safety margin from Discord's 25MB upload limit
 
@@ -30,4 +30,5 @@ export const TOKEN = process.env.DISCORD_BOT_TOKEN!;
 export const CLIENT_ID = process.env.DISCORD_CLIENT_ID!;
 
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
-
+export const OPENAI_ORGANIZATION_ID = process.env.OPENAI_ORGANIZATION_ID;
+export const OPENAI_PROJECT_ID = process.env.OPENAI_PROJECT_ID;

@@ -13,6 +13,8 @@ export interface AudioFileData {
     transcript?: string;
     processing: boolean;
     processingPromise?: Promise<void>;
+    audioOnlyProcessing: boolean; //Is just the audio finished (don't worry about transcriptions which may be slower)
+    audioOnlyProcessingPromise?: Promise<void>;
 }
 
 export interface AudioData {

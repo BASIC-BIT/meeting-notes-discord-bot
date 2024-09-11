@@ -1,5 +1,5 @@
 import {VoiceConnection} from "@discordjs/voice";
-import { TextChannel, User, VoiceBasedChannel } from "discord.js";
+import { CommandInteraction, Guild, TextChannel, User, VoiceBasedChannel } from "discord.js";
 import {AudioData} from "./audio";
 
 export interface MeetingData {
@@ -15,6 +15,8 @@ export interface MeetingData {
     endTime?: Date;
     timeoutTimer?: ReturnType<typeof setTimeout>;
     creator: User;
+    guild: Guild;
+    initialInteraction: CommandInteraction;
 
     finishing: boolean;
     // Used for functions that are waiting for the meeting to be completely over
