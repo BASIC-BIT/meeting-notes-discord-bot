@@ -187,3 +187,52 @@ export async function getTranscriptionCleanupSystemPrompt(meeting: MeetingData):
 
     return prompt;
 }
+
+export async function getTodoListSystemPrompt(meeting: MeetingData): Promise<string> {
+
+    const serverName = meeting.guild.name;
+    const serverDescription = meeting.guild.description;
+    const roles = meeting.guild.roles.valueOf().map((role) => role.name).join(', ');
+    const events = meeting.guild.scheduledEvents.valueOf().map((event) => event.name).join(', ');
+    const channelNames = meeting.guild.channels.valueOf().map((channel) => channel.name).join(', ');
+    const prompt = "You are a helpful Discord bot that records meetings and provides transcriptions. " +
+        "Your task is to create a list of todo items based upon the provided transcription. " +
+        "If there are no action items, return only the phrase \"none\". " +
+        "Display action items as \" - *name*: *Task*\".  The name may be omitted if the owner of the task is not clear, or use the speaker's name if it's likely the task is meant for them. " +
+        "The meeting attendees are: " +
+        Array.from(meeting.attendance).join(', ') + ".\n" +
+        `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
+        `The roles available to users in this server are: ${roles}.\n` +
+        `The upcoming events happening in this server are: ${events}.\n` +
+        `The channels in this server are: ${channelNames}.`;
+
+    return prompt;
+}
+
+export async function getTodoList(meeting: MeetingData, transcription: string): Promise<string | null> {
+    const systemPrompt = await getTodoListSystemPrompt(meeting);
+    const response = await openAIClient.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+            {
+                role: "system",
+                content: systemPrompt,
+            },
+            {
+                role: "user",
+                content: transcription,
+            }
+        ],
+        temperature: 0,
+        user: meeting.creator.id,
+    });
+
+    const output = response.choices[0].message.content;
+
+    // Extremely hacky way to return nothing. The system prompt seems to refuse to answer nothing at all, but will happily just return a certain phrase.
+    if(!output || output.trim().toLowerCase() === "none" || output.trim().toLowerCase() === "\"none\"") {
+        return "";
+    }
+
+    return output;
+}

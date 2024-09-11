@@ -7,8 +7,9 @@ import {
     waitForFinishProcessing,
 } from "../audio";
 import { sendMeetingEndEmbed, sendMeetingEndEmbedToChannel, sendTranscriptionFiles } from "../embed";
-import { deleteDirectoryRecursively, deleteIfExists } from "../util";
+import { deleteDirectoryRecursively, deleteIfExists, doesFileHaveContent } from "../util";
 import { MeetingData } from "../types/meeting-data";
+import { getTodoList } from "../transcription";
 
 function doesUserHavePermissionToEndMeeting(meeting: MeetingData, userId: string): boolean {
     if(meeting.creator.id === userId) {
@@ -105,6 +106,8 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
 
         await waitingForTranscriptionsMessage.delete();
 
+        await generateAndSendTodoList(meeting, transcriptions);
+
         deleteMeeting(guildId);
         deleteIfExists(transcriptionFilePath);
         deleteDirectoryRecursively(splitAudioDir);
@@ -113,6 +116,18 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
     } catch (error) {
         console.error('Error during meeting end:', error);
     }
+}
+
+async function generateAndSendTodoList(meeting: MeetingData, transcription: string) {
+    const todoList = await getTodoList(meeting, transcription) || '';
+    const todoListFilePath = `./todo-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
+    writeFileSync(todoListFilePath, todoList);
+    if(doesFileHaveContent(todoListFilePath)) {
+        await meeting.textChannel.send({
+            files: [todoListFilePath],
+        });
+    }
+    deleteIfExists(todoListFilePath)
 }
 
 export async function handleEndMeetingOther(client: Client, meeting: MeetingData) {
@@ -170,6 +185,8 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
         await sendTranscriptionFiles(meeting, transcriptionFilePath);
 
         await waitingForTranscriptionsMessage.delete();
+
+        await generateAndSendTodoList(meeting, transcriptions);
 
         deleteMeeting(meeting.guildId);
         deleteIfExists(transcriptionFilePath);
