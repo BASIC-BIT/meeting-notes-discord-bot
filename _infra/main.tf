@@ -34,6 +34,13 @@ variable DISCORD_BOT_TOKEN {
 variable OPENAI_API_KEY {
   sensitive = true
 }
+variable OPENAI_ORGANIZATION_ID {
+  sensitive = true
+}
+variable OPENAI_PROJECT_ID {
+  sensitive = true
+}
+
 
 provider "aws" {
   region = "us-east-1"
@@ -235,6 +242,7 @@ resource "aws_ecs_task_definition" "app_task" {
   cpu                      = "1024"
   memory                   = "2048"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
     {
@@ -269,8 +277,23 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "OPENAI_API_KEY"
           value = var.OPENAI_API_KEY
+        },
+        {
+          name = "OPENAI_ORGANIZATION_ID"
+          value = var.OPENAI_ORGANIZATION_ID
+        },
+        {
+          name = "OPENAI_PROJECT_ID"
+          value = var.OPENAI_PROJECT_ID
         }
       ]
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:3001/health || exit 1"]
+        interval    = 30      # seconds
+        timeout     = 5       # seconds
+        retries     = 3
+        startPeriod = 60      # seconds, grace period before health checks start
+      }
     }
   ])
 }
@@ -279,12 +302,13 @@ resource "aws_ecs_service" "app_service" {
   name            = "meeting-notes-bot-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
-
   lifecycle {
     ignore_changes = [
       task_definition
     ]
   }
+
+  enable_execute_command = true
 
   desired_count   = 1
   launch_type     = "FARGATE"
@@ -300,6 +324,66 @@ resource "aws_ecs_service" "app_service" {
     subnets         = [aws_subnet.app_public_subnet_1.id, aws_subnet.app_public_subnet_2.id]
     security_groups = [aws_security_group.ecs_service_sg.id]
     assign_public_ip = true
+  }
+}
+
+resource "aws_dynamodb_table" "subscription_table" {
+  name           = "SubscriptionTable"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "UserID"
+
+  attribute {
+    name = "UserID"
+    type = "S"
+  }
+
+  tags = {
+    Name = "SubscriptionTable"
+  }
+}
+
+resource "aws_dynamodb_table" "payment_transaction_table" {
+  name           = "PaymentTransactionTable"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "TransactionID"
+
+  attribute {
+    name = "TransactionID"
+    type = "S"
+  }
+
+  tags = {
+    Name = "PaymentTransactionTable"
+  }
+}
+
+resource "aws_dynamodb_table" "access_logs_table" {
+  name           = "AccessLogsTable"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "AccessLogID"
+
+  attribute {
+    name = "AccessLogID"
+    type = "S"
+  }
+
+  tags = {
+    Name = "AccessLogsTable"
+  }
+}
+
+resource "aws_dynamodb_table" "recording_transcript_table" {
+  name           = "RecordingTranscriptTable"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "MeetingID"
+
+  attribute {
+    name = "MeetingID"
+    type = "S"
+  }
+
+  tags = {
+    Name = "RecordingTranscriptTable"
   }
 }
 
