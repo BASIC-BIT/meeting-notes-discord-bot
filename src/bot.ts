@@ -10,9 +10,11 @@ import {
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
 import { getAllMeetings, getMeeting } from "./meetings";
-import { handleStartMeeting } from "./commands/startMeeting";
+import {handleRequestStartMeeting, handleStartMeeting} from "./commands/startMeeting";
 import { handleEndMeetingButton, handleEndMeetingOther } from "./commands/endMeeting";
 import { subscribeToUserVoice, unsubscribeToVoiceUponLeaving } from "./audio";
+import {generateAndSendTodoList} from "./commands/generateTodoList";
+import {generateAndSendSummary} from "./commands/generateSummary";
 
 const client = new Client({
     intents: [
@@ -51,7 +53,7 @@ export async function setupBot() {
                 const { commandName } = interaction;
 
                 if (commandName === 'startmeeting') {
-                    await handleStartMeeting(commandInteraction);
+                    await handleRequestStartMeeting(commandInteraction);
                 }
             }
 			if(interaction.isButton()) {
@@ -60,8 +62,21 @@ export async function setupBot() {
 				if(buttonInteraction.customId === "end_meeting") {
 					await handleEndMeetingButton(client, buttonInteraction);
 				}
+                if(buttonInteraction.customId === "with_transcription") {
+                    await handleStartMeeting(buttonInteraction, true);
+                }
+                if(buttonInteraction.customId === "without_transcription") {
+                    await handleStartMeeting(buttonInteraction, false);
+                }
+                if(buttonInteraction.customId === "generate_summary") {
+                    await generateAndSendSummary(interaction);
+                }
+                if(buttonInteraction.customId === "generate_todo") {
+                    await generateAndSendTodoList(interaction);
+                }
 			}
         } catch (e) {
+            console.log("Unknown error processing command: ", e);
             if (interaction.isRepliable()) {
                 const repliableInteraction = interaction as RepliableInteraction;
                 await repliableInteraction.reply("Unknown Error handling request.");

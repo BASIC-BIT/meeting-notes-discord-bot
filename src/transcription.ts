@@ -209,7 +209,7 @@ export async function getTodoListSystemPrompt(meeting: MeetingData): Promise<str
     return prompt;
 }
 
-export async function getTodoList(meeting: MeetingData, transcription: string): Promise<string | null> {
+export async function getTodoList(meeting: MeetingData): Promise<string> {
     const systemPrompt = await getTodoListSystemPrompt(meeting);
     const response = await openAIClient.chat.completions.create({
         model: "gpt-4o",
@@ -220,7 +220,7 @@ export async function getTodoList(meeting: MeetingData, transcription: string): 
             },
             {
                 role: "user",
-                content: transcription,
+                content: meeting.finalTranscript!,
             }
         ],
         temperature: 0,
@@ -235,4 +235,46 @@ export async function getTodoList(meeting: MeetingData, transcription: string): 
     }
 
     return output;
+}
+
+export async function getSummarySystemPrompt(meeting: MeetingData): Promise<string> {
+
+    const serverName = meeting.guild.name;
+    const serverDescription = meeting.guild.description;
+    const roles = meeting.guild.roles.valueOf().map((role) => role.name).join(', ');
+    const events = meeting.guild.scheduledEvents.valueOf().map((event) => event.name).join(', ');
+    const channelNames = meeting.guild.channels.valueOf().map((channel) => channel.name).join(', ');
+    const prompt = "You are a helpful Discord bot that records meetings and provides transcriptions. " +
+        "Your task is to create a summary of the meeting based upon the provided transcription. There is no need to include any metadata, just get right to the summary. " +
+        "The meeting attendees are: " +
+        Array.from(meeting.attendance).join(', ') + ".\n" +
+        `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
+        `The roles available to users in this server are: ${roles}.\n` +
+        `The upcoming events happening in this server are: ${events}.\n` +
+        `The channels in this server are: ${channelNames}.`;
+
+    return prompt;
+}
+
+export async function getSummary(meeting: MeetingData): Promise<string> {
+    const systemPrompt = await getSummarySystemPrompt(meeting);
+    const response = await openAIClient.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+            {
+                role: "system",
+                content: systemPrompt,
+            },
+            {
+                role: "user",
+                content: meeting.finalTranscript!,
+            }
+        ],
+        temperature: 0,
+        user: meeting.creator.id,
+    });
+
+    const output = response.choices[0].message.content;
+
+    return output || '';
 }

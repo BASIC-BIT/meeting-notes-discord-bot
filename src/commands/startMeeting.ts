@@ -1,13 +1,13 @@
 import {
     ActionRowBuilder,
-    ButtonBuilder,
+    ButtonBuilder, ButtonInteraction,
     ButtonStyle,
     CommandInteraction,
     EmbedBuilder,
     GuildMember, PermissionsBitField,
     TextChannel
 } from "discord.js";
-import { addMeeting, hasMeeting } from "../meetings";
+import {addMeeting, deleteMeeting, getMeeting, hasMeeting} from "../meetings";
 import { joinVoiceChannel } from "@discordjs/voice";
 import { MeetingData } from "../types/meeting-data";
 import { openOutputFile, subscribeToUserVoice, updateSnippetsIfNecessary, userStopTalking } from "../audio";
@@ -16,7 +16,103 @@ import { handleEndMeetingOther } from "./endMeeting";
 import { MAXIMUM_MEETING_DURATION, MAXIMUM_MEETING_DURATION_PRETTY } from "../constants";
 import { AudioSnippet } from "../types/audio";
 
-export async function handleStartMeeting(interaction: CommandInteraction) {
+export async function handleRequestStartMeeting(interaction: CommandInteraction) {
+    const guildId = interaction.guildId!;
+
+    const channel = interaction.channel;
+
+    if (!channel || !interaction.guild) {
+        await interaction.reply('Unable to find the channel or guild.');
+        return;
+    }
+
+    if (channel.isDMBased()) {
+        await interaction.reply('Bot cannot be used within DMs.');
+        return;
+    }
+
+    const guildChannel = channel as GuildChannel;
+
+    // Check if the bot has permission to send messages in the channel
+    const botMember = interaction.guild.members.cache.get(interaction.client.user!.id);
+
+    if (!botMember) {
+        await interaction.reply('Bot not found in guild.');
+        return;
+    }
+
+    const chatChannelPermissions = guildChannel.permissionsFor(botMember);
+
+    if (!chatChannelPermissions || !chatChannelPermissions.has(PermissionsBitField.Flags.SendMessages) || !chatChannelPermissions.has(PermissionsBitField.Flags.ViewChannel)) {
+        await interaction.reply('I do not have permission to send messages in this channel.');
+        return;
+    }
+
+    if (hasMeeting(guildId)) {
+        const meeting = getMeeting(guildId)!;
+        if(meeting.finished) {
+            // Cleanup the old meeting in preparation for a new one
+            // TODO: Eventually, store meetings in a database and get rid of this, no need to remove data unnecessarily
+            deleteMeeting(guildId);
+        } else {
+            await interaction.reply('A meeting is already active in this server.');
+            return;
+        }
+    }
+
+    const untypedMember = interaction.member;
+    if (!untypedMember || !interaction.guild) return;
+    const member = untypedMember as GuildMember;
+
+    const voiceChannel = member.voice.channel;
+    if (!voiceChannel) {
+        await interaction.reply('You need to join a voice channel first!');
+        return;
+    }
+
+    const voiceChannelPermissions = voiceChannel.permissionsFor(botMember);
+
+    if (!voiceChannelPermissions || !voiceChannelPermissions.has(PermissionsBitField.Flags.ViewChannel) || !voiceChannelPermissions.has(PermissionsBitField.Flags.Connect)) {
+        await interaction.reply('I do not have permission to join your voice channel.');
+        return;
+    }
+
+    const withTranscription = new ButtonBuilder()
+        .setCustomId('with_transcription')
+        .setLabel('With Transcription')
+        .setStyle(ButtonStyle.Primary);
+
+    const withoutTranscription = new ButtonBuilder()
+        .setCustomId('without_transcription')
+        .setLabel('NO Transcription')
+        .setStyle(ButtonStyle.Primary);
+
+    const row = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(withTranscription, withoutTranscription);
+
+    await interaction.reply({
+        embeds: [
+            new EmbedBuilder()
+                .setTitle("Meeting Setup")
+                .setColor('#3498db')
+                .setDescription("Would you like a transcription of your meeting? Please be aware that the transcription service I use is *not* free~ please consider [donating here](https://ko-fi.com/basicbit) if you use this feature regularly!")
+        ],
+        components: [
+            row
+        ]
+    });
+}
+
+export async function handleStartMeeting(interaction: ButtonInteraction, transcribe: boolean) {
+    // TODO: Enable this code, using the meeting setup store to get the initial interaction to edit it.
+    // try {
+    //     await interaction.message.editReply({
+    //         components: [],
+    //     }); //Remove "End Meeting" button from initial reply if able
+    // } catch (e) {
+    //     console.log("Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...")
+    // }
+
     const guildId = interaction.guildId!;
     const channelId = interaction.channelId;
 
@@ -50,8 +146,15 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
     }
 
     if (hasMeeting(guildId)) {
-        await interaction.reply('A meeting is already active in this server.');
-        return;
+        const meeting = getMeeting(guildId)!;
+        if(meeting.finished) {
+            // Cleanup the old meeting in preparation for a new one
+            // TODO: Eventually, store meetings in a database and get rid of this, no need to remove data unnecessarily
+            deleteMeeting(guildId);
+        } else {
+            await interaction.reply('A meeting is already active in this server.');
+            return;
+        }
     }
 
     const untypedMember = interaction.member;
@@ -108,8 +211,10 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
         isFinished,
         setFinished: () => setFinished && setFinished(),
         finishing: false,
+        finished: false,
         guild: interaction.guild,
         initialInteraction: interaction,
+        transcribeMeeting: transcribe,
     };
 
     openOutputFile(meeting);
@@ -138,7 +243,7 @@ export async function handleStartMeeting(interaction: CommandInteraction) {
 
     // Set a timer to automatically end the meeting after the specified duration
     meeting.timeoutTimer = setTimeout(() => {
-        meeting.textChannel.send(`Ending meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`);
+        meeting.initialInteraction.followUp(`Ending meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`);
         handleEndMeetingOther(interaction.client, meeting);
     }, MAXIMUM_MEETING_DURATION);
 

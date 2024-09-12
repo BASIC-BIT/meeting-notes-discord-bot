@@ -1,4 +1,4 @@
-import {MeetingData} from "./types/meeting-data";
+import {MeetingData, MeetingSetup} from "./types/meeting-data";
 
 
 const meetings = new Map<string, MeetingData>();
@@ -25,4 +25,14 @@ export function deleteMeeting(guildId: string) {
 
 export function getAllMeetings(): MeetingData[] {
     return Array.from(meetings.values())
+}
+
+
+const meetingSetups = new Map<string, MeetingSetup>();
+
+export function getMeetingSetup(key: string) {
+    return meetingSetups.get(key);
+}
+export function deleteMeetingSetup(key: string) {
+    return meetingSetups.delete(key);
 }

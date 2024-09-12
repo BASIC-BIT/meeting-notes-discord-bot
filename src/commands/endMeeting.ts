@@ -1,4 +1,12 @@
-import { ButtonInteraction, Client, PermissionFlagsBits, PermissionResolvable } from "discord.js";
+import {
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonInteraction,
+    ButtonStyle,
+    Client, EmbedBuilder,
+    PermissionFlagsBits,
+    PermissionResolvable
+} from "discord.js";
 import {deleteMeeting, getMeeting} from "../meetings";
 import {writeFileSync} from "node:fs";
 import {
@@ -49,6 +57,11 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
             return;
         }
 
+        if(meeting.finished) {
+            await interaction.reply("Meeting is already finished!");
+            return;
+        }
+
         if(meeting.timeoutTimer) {
             clearTimeout(meeting.timeoutTimer);
             meeting.timeoutTimer = undefined;
@@ -93,41 +106,63 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
         deleteIfExists(chatLogFilePath);
         deleteIfExists(meeting.audioData.outputFileName!);
 
-        const waitingForTranscriptionsMessage = await meeting.textChannel.send("Processing transcription... please wait...");
+        if(meeting.transcribeMeeting) {
+            const waitingForTranscriptionsMessage = await meeting.textChannel.send("Processing transcription... please wait...");
 
-        await waitForFinishProcessing(meeting);
+            await waitForFinishProcessing(meeting);
 
-        const transcriptions = await compileTranscriptions(client, meeting);
+            const transcriptions = await compileTranscriptions(client, meeting);
+            meeting.finalTranscript = transcriptions;
 
-        const transcriptionFilePath = `./transcription-${guildId}-${channelId}-${Date.now()}.txt`;
-        writeFileSync(transcriptionFilePath, transcriptions);
+            const transcriptionFilePath = `./transcription-${guildId}-${channelId}-${Date.now()}.txt`;
+            writeFileSync(transcriptionFilePath, transcriptions);
 
-        await sendTranscriptionFiles(meeting, transcriptionFilePath);
+            await sendTranscriptionFiles(meeting, transcriptionFilePath);
 
-        await waitingForTranscriptionsMessage.delete();
+            deleteIfExists(transcriptionFilePath);
 
-        await generateAndSendTodoList(meeting, transcriptions);
+            await waitingForTranscriptionsMessage.delete();
 
-        deleteMeeting(guildId);
-        deleteIfExists(transcriptionFilePath);
+            if(meeting.finalTranscript && meeting.finalTranscript.length > 0) {
+                await sendPostMeetingOptions(meeting);
+            }
+        }
+
         deleteDirectoryRecursively(splitAudioDir);
 
         meeting.setFinished();
+        meeting.finished = true;
     } catch (error) {
         console.error('Error during meeting end:', error);
     }
 }
 
-async function generateAndSendTodoList(meeting: MeetingData, transcription: string) {
-    const todoList = await getTodoList(meeting, transcription) || '';
-    const todoListFilePath = `./todo-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
-    writeFileSync(todoListFilePath, todoList);
-    if(doesFileHaveContent(todoListFilePath)) {
-        await meeting.textChannel.send({
-            files: [todoListFilePath],
-        });
-    }
-    deleteIfExists(todoListFilePath)
+
+async function sendPostMeetingOptions(meeting: MeetingData) {
+    const withTranscription = new ButtonBuilder()
+        .setCustomId('generate_todo')
+        .setLabel('Generate Todo List')
+        .setStyle(ButtonStyle.Primary);
+
+    const withoutTranscription = new ButtonBuilder()
+        .setCustomId('generate_summary')
+        .setLabel('Generate Summary')
+        .setStyle(ButtonStyle.Primary);
+
+    const row = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(withTranscription, withoutTranscription);
+
+    await meeting.textChannel.send({
+        embeds: [
+            new EmbedBuilder()
+                .setTitle("Meeting Transcript Options")
+                .setColor('#3498db')
+                .setDescription("Would you like any additional detection ran on your meeting?")
+        ],
+        components: [
+            row
+        ]
+    });
 }
 
 export async function handleEndMeetingOther(client: Client, meeting: MeetingData) {
@@ -173,26 +208,32 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
         deleteIfExists(chatLogFilePath);
         deleteIfExists(meeting.audioData.outputFileName!);
 
-        const waitingForTranscriptionsMessage = await meeting.textChannel.send("Processing transcription... please wait...");
+        if(meeting.transcribeMeeting) {
+            const waitingForTranscriptionsMessage = await meeting.textChannel.send("Processing transcription... please wait...");
 
-        await waitForFinishProcessing(meeting);
+            await waitForFinishProcessing(meeting);
 
-        const transcriptions = await compileTranscriptions(client, meeting);
+            const transcriptions = await compileTranscriptions(client, meeting);
+            meeting.finalTranscript = transcriptions;
 
-        const transcriptionFilePath = `./transcription-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
-        writeFileSync(transcriptionFilePath, transcriptions);
+            const transcriptionFilePath = `./transcription-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
+            writeFileSync(transcriptionFilePath, transcriptions);
 
-        await sendTranscriptionFiles(meeting, transcriptionFilePath);
+            await sendTranscriptionFiles(meeting, transcriptionFilePath);
 
-        await waitingForTranscriptionsMessage.delete();
+            deleteIfExists(transcriptionFilePath);
 
-        await generateAndSendTodoList(meeting, transcriptions);
+            await waitingForTranscriptionsMessage.delete();
 
-        deleteMeeting(meeting.guildId);
-        deleteIfExists(transcriptionFilePath);
+            if(meeting.finalTranscript && meeting.finalTranscript.length > 0) {
+                await sendPostMeetingOptions(meeting);
+            }
+        }
+
         deleteDirectoryRecursively(splitAudioDir);
 
         meeting.setFinished();
+        meeting.finished = true;
     } catch (error) {
         console.error('Error during meeting end:', error);
     }
