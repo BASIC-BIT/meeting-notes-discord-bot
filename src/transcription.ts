@@ -4,8 +4,8 @@ import {
     CHANNELS,
     OPENAI_API_KEY, OPENAI_ORGANIZATION_ID, OPENAI_PROJECT_ID,
     SAMPLE_RATE, TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
-    TRANSCRIPTION_BREAK_DURATION, TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_QUEUE,
-    TRANSCRIPTION_MAX_RETRIES, TRANSCRIPTION_RATE_MIN_TIME, TRANSCRIPTION_SPEECH_PROBABILITY_CUTOFF
+    TRANSCRIPTION_BREAK_DURATION, TRANSCRIPTION_LOGPROB_CUTOFF, TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_QUEUE,
+    TRANSCRIPTION_MAX_RETRIES, TRANSCRIPTION_RATE_MIN_TIME, TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
@@ -27,7 +27,7 @@ async function transcribeInternal(meeting: MeetingData, file: string): Promise<s
         language: "en",
         prompt: getTranscriptionKeywords(meeting),
         temperature: 0,
-        response_format: "verbose_json"
+        response_format: "verbose_json",
     }) as TranscriptionResponse;
 
     console.log(transcription);
@@ -38,7 +38,9 @@ async function transcribeInternal(meeting: MeetingData, file: string): Promise<s
 function cleanupTranscriptionResponse(response: TranscriptionResponse): string {
     return response.segments
         .filter((segment) =>
-            segment.no_speech_prob < TRANSCRIPTION_SPEECH_PROBABILITY_CUTOFF)
+            // Only remove lines from transcription if no_speech_prob is very high, AND logprob is very low
+            segment.no_speech_prob < TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF ||
+            segment.avg_logprob > TRANSCRIPTION_LOGPROB_CUTOFF)
         .map((segment) => segment.text)
         .join('')
         .trim();

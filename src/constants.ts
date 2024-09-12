@@ -20,7 +20,8 @@ export const TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES = 5;
 export const TRANSCRIPTION_BREAK_DURATION = 10_000;
 export const TRANSCRIPTION_RATE_MIN_TIME = 1_300; // Rate limit in minimum milliseconds between requests
 
-export const TRANSCRIPTION_SPEECH_PROBABILITY_CUTOFF = 0.75;
+export const TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF = 0.7;
+export const TRANSCRIPTION_LOGPROB_CUTOFF = -0.7;
 
 export const MAX_DISCORD_UPLOAD_SIZE = 24_000_000; //24MB, to give safety margin from Discord's 25MB upload limit
 
