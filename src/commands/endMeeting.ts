@@ -15,9 +15,8 @@ import {
     waitForFinishProcessing,
 } from "../audio";
 import { sendMeetingEndEmbed, sendMeetingEndEmbedToChannel, sendTranscriptionFiles } from "../embed";
-import { deleteDirectoryRecursively, deleteIfExists, doesFileHaveContent } from "../util";
+import { deleteDirectoryRecursively, deleteIfExists } from "../util";
 import { MeetingData } from "../types/meeting-data";
-import { getTodoList } from "../transcription";
 
 function doesUserHavePermissionToEndMeeting(meeting: MeetingData, userId: string): boolean {
     if(meeting.creator.id === userId) {

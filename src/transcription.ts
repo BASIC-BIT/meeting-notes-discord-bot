@@ -2,10 +2,19 @@ import OpenAI from "openai";
 import {createReadStream, existsSync, mkdirSync, unlinkSync, writeFileSync} from "node:fs";
 import {
     CHANNELS,
-    OPENAI_API_KEY, OPENAI_ORGANIZATION_ID, OPENAI_PROJECT_ID,
-    SAMPLE_RATE, TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
-    TRANSCRIPTION_BREAK_DURATION, TRANSCRIPTION_LOGPROB_CUTOFF, TRANSCRIPTION_MAX_CONCURRENT, TRANSCRIPTION_MAX_QUEUE,
-    TRANSCRIPTION_MAX_RETRIES, TRANSCRIPTION_RATE_MIN_TIME, TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF
+    OPENAI_API_KEY,
+    OPENAI_ORGANIZATION_ID,
+    OPENAI_PROJECT_ID,
+    SAMPLE_RATE,
+    TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
+    TRANSCRIPTION_BREAK_DURATION,
+    TRANSCRIPTION_LOGPROB_CUTOFF,
+    TRANSCRIPTION_MAX_CONCURRENT,
+    TRANSCRIPTION_MAX_QUEUE,
+    TRANSCRIPTION_MAX_RETRIES,
+    TRANSCRIPTION_RATE_MIN_TIME,
+    TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF,
+    TRANSCRIPTION_LOGPROB_HARD_CUTOFF
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
@@ -39,8 +48,9 @@ function cleanupTranscriptionResponse(response: TranscriptionResponse): string {
     return response.segments
         .filter((segment) =>
             // Only remove lines from transcription if no_speech_prob is very high, AND logprob is very low
-            segment.no_speech_prob < TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF ||
-            segment.avg_logprob > TRANSCRIPTION_LOGPROB_CUTOFF)
+            (segment.no_speech_prob < TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF ||
+                segment.avg_logprob > TRANSCRIPTION_LOGPROB_CUTOFF) &&
+            segment.avg_logprob > TRANSCRIPTION_LOGPROB_HARD_CUTOFF)
         .map((segment) => segment.text)
         .join('')
         .trim();
@@ -232,7 +242,7 @@ export async function getTodoList(meeting: MeetingData): Promise<string> {
     const output = response.choices[0].message.content;
 
     // Extremely hacky way to return nothing. The system prompt seems to refuse to answer nothing at all, but will happily just return a certain phrase.
-    if(!output || output.trim().toLowerCase() === "none" || output.trim().toLowerCase() === "\"none\"") {
+    if (!output || output.trim().toLowerCase() === "none" || output.trim().toLowerCase() === "\"none\"") {
         return "";
     }
 

@@ -58,6 +58,8 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
         promises.push(transcribeSnippet(meeting, snippet).then((transcription) => {
             audioFileData.transcript = transcription;
         }));
+    } else {
+        console.log(`Snippet less than minimum transcription length, not transcribing: ${snippet.userId} ${snippet.timestamp}`);
     }
 
     const audioPromise = new Promise<void>((resolve, reject) => {
@@ -156,8 +158,6 @@ export async function compileTranscriptions(client: Client, meeting: MeetingData
     if (transcription.length === 0) {
         return transcription;
     }
-
-    console.log(transcription);
 
     try {
         const cleanedUpTranscription = await cleanupTranscription(meeting, transcription);
