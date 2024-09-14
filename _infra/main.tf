@@ -239,8 +239,8 @@ resource "aws_ecs_task_definition" "app_task" {
   family                   = "meeting-notes-bot-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "1024"
-  memory                   = "2048"
+  cpu                      = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_execution_role.arn
 
@@ -248,8 +248,8 @@ resource "aws_ecs_task_definition" "app_task" {
     {
       name      = "meeting-notes-bot"
       image     = aws_ecr_repository.app_ecr_repo.repository_url
-      cpu       = 1024
-      memory    = 2048
+      cpu       = 512
+      memory    = 1024
       essential = true
       portMappings = [
         {
@@ -327,65 +327,65 @@ resource "aws_ecs_service" "app_service" {
   }
 }
 
-resource "aws_dynamodb_table" "subscription_table" {
-  name           = "SubscriptionTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "UserID"
-
-  attribute {
-    name = "UserID"
-    type = "S"
-  }
-
-  tags = {
-    Name = "SubscriptionTable"
-  }
-}
-
-resource "aws_dynamodb_table" "payment_transaction_table" {
-  name           = "PaymentTransactionTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "TransactionID"
-
-  attribute {
-    name = "TransactionID"
-    type = "S"
-  }
-
-  tags = {
-    Name = "PaymentTransactionTable"
-  }
-}
-
-resource "aws_dynamodb_table" "access_logs_table" {
-  name           = "AccessLogsTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "AccessLogID"
-
-  attribute {
-    name = "AccessLogID"
-    type = "S"
-  }
-
-  tags = {
-    Name = "AccessLogsTable"
-  }
-}
-
-resource "aws_dynamodb_table" "recording_transcript_table" {
-  name           = "RecordingTranscriptTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "MeetingID"
-
-  attribute {
-    name = "MeetingID"
-    type = "S"
-  }
-
-  tags = {
-    Name = "RecordingTranscriptTable"
-  }
-}
+#resource "aws_dynamodb_table" "subscription_table" {
+#  name           = "SubscriptionTable"
+#  billing_mode   = "PAY_PER_REQUEST"
+#  hash_key       = "UserID"
+#
+#  attribute {
+#    name = "UserID"
+#    type = "S"
+#  }
+#
+#  tags = {
+#    Name = "SubscriptionTable"
+#  }
+#}
+#
+#resource "aws_dynamodb_table" "payment_transaction_table" {
+#  name           = "PaymentTransactionTable"
+#  billing_mode   = "PAY_PER_REQUEST"
+#  hash_key       = "TransactionID"
+#
+#  attribute {
+#    name = "TransactionID"
+#    type = "S"
+#  }
+#
+#  tags = {
+#    Name = "PaymentTransactionTable"
+#  }
+#}
+#
+#resource "aws_dynamodb_table" "access_logs_table" {
+#  name           = "AccessLogsTable"
+#  billing_mode   = "PAY_PER_REQUEST"
+#  hash_key       = "AccessLogID"
+#
+#  attribute {
+#    name = "AccessLogID"
+#    type = "S"
+#  }
+#
+#  tags = {
+#    Name = "AccessLogsTable"
+#  }
+#}
+#
+#resource "aws_dynamodb_table" "recording_transcript_table" {
+#  name           = "RecordingTranscriptTable"
+#  billing_mode   = "PAY_PER_REQUEST"
+#  hash_key       = "MeetingID"
+#
+#  attribute {
+#    name = "MeetingID"
+#    type = "S"
+#  }
+#
+#  tags = {
+#    Name = "RecordingTranscriptTable"
+#  }
+#}
 
 # Output the VPC ID
 output "vpc_id" {
