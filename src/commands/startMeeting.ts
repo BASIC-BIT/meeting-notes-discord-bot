@@ -243,7 +243,7 @@ export async function handleStartMeeting(interaction: ButtonInteraction, transcr
 
     // Set a timer to automatically end the meeting after the specified duration
     meeting.timeoutTimer = setTimeout(() => {
-        meeting.initialInteraction.followUp(`Ending meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`);
+        meeting.textChannel.send(`Ending meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`);
         handleEndMeetingOther(interaction.client, meeting);
     }, MAXIMUM_MEETING_DURATION);
 
