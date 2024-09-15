@@ -138,18 +138,23 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
 
 
 async function sendPostMeetingOptions(meeting: MeetingData) {
-    const withTranscription = new ButtonBuilder()
+    const generateTodo = new ButtonBuilder()
         .setCustomId('generate_todo')
         .setLabel('Generate Todo List')
         .setStyle(ButtonStyle.Primary);
 
-    const withoutTranscription = new ButtonBuilder()
+    const generateSummary = new ButtonBuilder()
         .setCustomId('generate_summary')
         .setLabel('Generate Summary')
         .setStyle(ButtonStyle.Primary);
 
+    const generateImage = new ButtonBuilder()
+        .setCustomId('generate_image')
+        .setLabel('Generate Image')
+        .setStyle(ButtonStyle.Primary);
+
     const row = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(withTranscription, withoutTranscription);
+        .addComponents(generateTodo, generateSummary, generateImage);
 
     await meeting.textChannel.send({
         embeds: [

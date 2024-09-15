@@ -287,13 +287,13 @@ resource "aws_ecs_task_definition" "app_task" {
           value = var.OPENAI_PROJECT_ID
         }
       ]
-      healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:3001/health || exit 1"]
-        interval    = 30      # seconds
-        timeout     = 5       # seconds
-        retries     = 3
-        startPeriod = 60      # seconds, grace period before health checks start
-      }
+#      healthCheck = {
+#        command     = ["CMD-SHELL", "curl -f http://127.0.0.1:3001/health || exit 1"]
+#        interval    = 30      # seconds
+#        timeout     = 5       # seconds
+#        retries     = 3
+#        startPeriod = 120      # seconds, grace period before health checks start
+#      }
     }
   ])
 }
@@ -302,11 +302,11 @@ resource "aws_ecs_service" "app_service" {
   name            = "meeting-notes-bot-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
-  lifecycle {
-    ignore_changes = [
-      task_definition
-    ]
-  }
+#  lifecycle {
+#    ignore_changes = [
+#      task_definition
+#    ]
+#  }
 
   enable_execute_command = true
 

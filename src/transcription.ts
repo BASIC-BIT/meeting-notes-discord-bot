@@ -290,3 +290,35 @@ export async function getSummary(meeting: MeetingData): Promise<string> {
 
     return output || '';
 }
+
+export async function getImage(meeting: MeetingData): Promise<string> {
+    const imagePrompt = (await openAIClient.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+            {
+                role: "system",
+                content: "Generate a concise, focused image prompt for DALL-E based on the main ideas from the meeting transcript. Avoid any text, logos, or complex symbols, and limit the inclusion of characters to a single figure at most, if any. Instead, suggest a simple, clear visual concept or scene using objects, environments, or abstract shapes. Ensure the prompt guides DALL-E to produce a visually cohesive and refined image with attention to detail, while avoiding any elements that AI image generation commonly mishandles. Keep the description straightforward to ensure the final image remains polished and coherent.",
+            },
+            {
+                role: "user",
+                content: meeting.finalTranscript!,
+            }
+        ],
+        temperature: 0.5,
+        user: meeting.creator.id,
+    })).choices[0].message.content;
+
+    console.log(imagePrompt);
+
+    const response = await openAIClient.images.generate({
+        model: "dall-e-3",
+        size: "1024x1024",
+        quality: "hd",
+        n: 1,
+        prompt: imagePrompt!,
+    });
+
+    const output = response.data[0].url;
+
+    return output || '';
+}

@@ -15,6 +15,7 @@ import { handleEndMeetingButton, handleEndMeetingOther } from "./commands/endMee
 import { subscribeToUserVoice, unsubscribeToVoiceUponLeaving } from "./audio";
 import {generateAndSendTodoList} from "./commands/generateTodoList";
 import {generateAndSendSummary} from "./commands/generateSummary";
+import {generateAndSendImage} from "./commands/generateImage";
 
 const client = new Client({
     intents: [
@@ -73,6 +74,9 @@ export async function setupBot() {
                 }
                 if(buttonInteraction.customId === "generate_todo") {
                     await generateAndSendTodoList(interaction);
+                }
+                if(buttonInteraction.customId === "generate_image") {
+                    await generateAndSendImage(interaction);
                 }
 			}
         } catch (e) {
