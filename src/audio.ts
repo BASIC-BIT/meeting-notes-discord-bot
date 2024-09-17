@@ -161,6 +161,9 @@ export async function compileTranscriptions(client: Client, meeting: MeetingData
 
     try {
         const cleanedUpTranscription = await cleanupTranscription(meeting, transcription);
+
+        console.log(`Transcription cleanup succeeded.  Original lines: ${transcription.split('\n').length}, Cleaned up lines: ${(cleanedUpTranscription || "").split('\n').length}`);
+
         return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
             `-----------------------------------------------------------------------------------\n` +
             cleanedUpTranscription;

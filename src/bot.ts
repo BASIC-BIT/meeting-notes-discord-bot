@@ -16,6 +16,7 @@ import { subscribeToUserVoice, unsubscribeToVoiceUponLeaving } from "./audio";
 import {generateAndSendTodoList} from "./commands/generateTodoList";
 import {generateAndSendSummary} from "./commands/generateSummary";
 import {generateAndSendImage} from "./commands/generateImage";
+import { generateAndSendNotes } from "./commands/generateNotes";
 
 const client = new Client({
     intents: [
@@ -77,6 +78,9 @@ export async function setupBot() {
                 }
                 if(buttonInteraction.customId === "generate_image") {
                     await generateAndSendImage(interaction);
+                }
+                if(buttonInteraction.customId === "generate_notes") {
+                    await generateAndSendNotes(interaction);
                 }
 			}
         } catch (e) {

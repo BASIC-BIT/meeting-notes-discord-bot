@@ -91,7 +91,7 @@ async function updateEndMessage(interaction: CommandInteraction, processedSnippe
 export async function sendTranscriptionFiles(meeting: MeetingData, transcriptionFilePath: string): Promise<void> {
     if(doesFileHaveContent(transcriptionFilePath)) {
         await meeting.textChannel.send({
-            files: [transcriptionFilePath]
+            files: [new AttachmentBuilder(transcriptionFilePath)]
         });
     }
 }

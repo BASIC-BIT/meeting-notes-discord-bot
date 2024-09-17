@@ -148,13 +148,18 @@ async function sendPostMeetingOptions(meeting: MeetingData) {
         .setLabel('Generate Summary')
         .setStyle(ButtonStyle.Primary);
 
+    const generateNotes = new ButtonBuilder()
+        .setCustomId('generate_notes')
+        .setLabel('Generate Meeting Notes')
+        .setStyle(ButtonStyle.Primary);
+
     const generateImage = new ButtonBuilder()
         .setCustomId('generate_image')
         .setLabel('Generate Image')
         .setStyle(ButtonStyle.Primary);
 
     const row = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(generateTodo, generateSummary, generateImage);
+        .addComponents(generateSummary, generateNotes, generateTodo, generateImage);
 
     await meeting.textChannel.send({
         embeds: [
