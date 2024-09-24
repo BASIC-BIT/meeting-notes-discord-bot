@@ -7,7 +7,7 @@ import {
     PermissionFlagsBits,
     PermissionResolvable
 } from "discord.js";
-import {deleteMeeting, getMeeting} from "../meetings";
+import { deleteMeeting, getMeeting, hasMeeting } from "../meetings";
 import {writeFileSync} from "node:fs";
 import {
     closeOutputFile,
@@ -17,6 +17,7 @@ import {
 import { sendMeetingEndEmbed, sendMeetingEndEmbedToChannel, sendTranscriptionFiles } from "../embed";
 import { deleteDirectoryRecursively, deleteIfExists } from "../util";
 import { MeetingData } from "../types/meeting-data";
+import { generateAndSendNotes } from "./generateNotes";
 
 function doesUserHavePermissionToEndMeeting(meeting: MeetingData, userId: string): boolean {
     if(meeting.creator.id === userId) {
@@ -34,11 +35,12 @@ function doesUserHavePermissionToEndMeeting(meeting: MeetingData, userId: string
 }
 
 export async function handleEndMeetingButton(client: Client, interaction: ButtonInteraction) {
-    try {
-        const guildId = interaction.guildId!;
-        const channelId = interaction.channelId;
+    const guildId = interaction.guildId!;
+    const channelId = interaction.channelId;
 
-        const meeting = getMeeting(guildId);
+    const meeting = getMeeting(guildId);
+
+    try {
 
         if (!meeting) {
             await interaction.reply('No active meeting to end in this channel.');
@@ -122,17 +124,29 @@ export async function handleEndMeetingButton(client: Client, interaction: Button
 
             await waitingForTranscriptionsMessage.delete();
 
-            if(meeting.finalTranscript && meeting.finalTranscript.length > 0) {
-                await sendPostMeetingOptions(meeting);
+            if(meeting.finalTranscript && meeting.generateNotes) {
+                const waitingForMeetingNotesMessage = await meeting.textChannel.send("Generating meeting notes... please wait...");
+                await generateAndSendNotes(meeting);
+                await waitingForMeetingNotesMessage.delete();
             }
+
+            // if(meeting.finalTranscript && meeting.finalTranscript.length > 0) {
+            //     await sendPostMeetingOptions(meeting);
+            // }
         }
 
         deleteDirectoryRecursively(splitAudioDir);
 
         meeting.setFinished();
         meeting.finished = true;
+        deleteMeeting(meeting.guildId);
     } catch (error) {
         console.error('Error during meeting end:', error);
+        if(meeting && hasMeeting(meeting.guildId)) {
+            meeting.setFinished();
+            meeting.finished = true;
+            deleteMeeting(meeting.guildId);
+        }
     }
 }
 
@@ -234,16 +248,28 @@ export async function handleEndMeetingOther(client: Client, meeting: MeetingData
 
             await waitingForTranscriptionsMessage.delete();
 
-            if(meeting.finalTranscript && meeting.finalTranscript.length > 0) {
-                await sendPostMeetingOptions(meeting);
+            if(meeting.finalTranscript && meeting.generateNotes) {
+                const waitingForMeetingNotesMessage = await meeting.textChannel.send("Generating meeting notes... please wait...");
+                await generateAndSendNotes(meeting);
+                await waitingForMeetingNotesMessage.delete();
             }
+
+            // if(meeting.finalTranscript && meeting.finalTranscript.length > 0) {
+            //     await sendPostMeetingOptions(meeting);
+            // }
         }
 
         deleteDirectoryRecursively(splitAudioDir);
 
         meeting.setFinished();
         meeting.finished = true;
+        deleteMeeting(meeting.guildId);
     } catch (error) {
         console.error('Error during meeting end:', error);
+        if(meeting && hasMeeting(meeting.guildId)) {
+            meeting.setFinished();
+            meeting.finished = true;
+            deleteMeeting(meeting.guildId);
+        }
     }
 }

@@ -77,9 +77,14 @@ export async function handleRequestStartMeeting(interaction: CommandInteraction)
         return;
     }
 
+    const withTranscriptionAndNotes = new ButtonBuilder()
+        .setCustomId('with_transcription_and_notes')
+        .setLabel('With Transcription And Meeting Notes')
+        .setStyle(ButtonStyle.Primary);
+
     const withTranscription = new ButtonBuilder()
         .setCustomId('with_transcription')
-        .setLabel('With Transcription')
+        .setLabel('With Just Transcription')
         .setStyle(ButtonStyle.Primary);
 
     const withoutTranscription = new ButtonBuilder()
@@ -88,7 +93,7 @@ export async function handleRequestStartMeeting(interaction: CommandInteraction)
         .setStyle(ButtonStyle.Primary);
 
     const row = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(withTranscription, withoutTranscription);
+        .addComponents(withTranscriptionAndNotes, withTranscription, withoutTranscription);
 
     await interaction.reply({
         embeds: [
@@ -103,7 +108,7 @@ export async function handleRequestStartMeeting(interaction: CommandInteraction)
     });
 }
 
-export async function handleStartMeeting(interaction: ButtonInteraction, transcribe: boolean) {
+export async function handleStartMeeting(interaction: ButtonInteraction, transcribeMeeting: boolean, generateNotes: boolean) {
     // TODO: Enable this code, using the meeting setup store to get the initial interaction to edit it.
     // try {
     //     await interaction.message.editReply({
@@ -214,7 +219,8 @@ export async function handleStartMeeting(interaction: ButtonInteraction, transcr
         finished: false,
         guild: interaction.guild,
         initialInteraction: interaction,
-        transcribeMeeting: transcribe,
+        transcribeMeeting,
+        generateNotes,
     };
 
     openOutputFile(meeting);

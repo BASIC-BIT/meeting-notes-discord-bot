@@ -23,6 +23,7 @@ export const TRANSCRIPTION_RATE_MIN_TIME = 1_300; // Rate limit in minimum milli
 export const TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF = 0.7;
 export const TRANSCRIPTION_LOGPROB_CUTOFF = -0.65;
 export const TRANSCRIPTION_LOGPROB_HARD_CUTOFF = -0.9;
+export const TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF = 4;
 
 export const MAX_DISCORD_UPLOAD_SIZE = 24_000_000; //24MB, to give safety margin from Discord's 25MB upload limit
 
@@ -34,3 +35,9 @@ export const CLIENT_ID = process.env.DISCORD_CLIENT_ID!;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
 export const OPENAI_ORGANIZATION_ID = process.env.OPENAI_ORGANIZATION_ID;
 export const OPENAI_PROJECT_ID = process.env.OPENAI_PROJECT_ID;
+
+
+export const GPT_MODEL_MAX_TOKENS = 128000;
+
+
+export const TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE = 0.75; // If over 25% of lines were lost in cleanup, assume something went wrong and return original transcription

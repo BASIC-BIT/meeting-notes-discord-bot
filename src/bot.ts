@@ -64,11 +64,14 @@ export async function setupBot() {
 				if(buttonInteraction.customId === "end_meeting") {
 					await handleEndMeetingButton(client, buttonInteraction);
 				}
+                if(buttonInteraction.customId === "with_transcription_and_notes") {
+                    await handleStartMeeting(buttonInteraction, true, true);
+                }
                 if(buttonInteraction.customId === "with_transcription") {
-                    await handleStartMeeting(buttonInteraction, true);
+                    await handleStartMeeting(buttonInteraction, true, false);
                 }
                 if(buttonInteraction.customId === "without_transcription") {
-                    await handleStartMeeting(buttonInteraction, false);
+                    await handleStartMeeting(buttonInteraction, false, false);
                 }
                 if(buttonInteraction.customId === "generate_summary") {
                     await generateAndSendSummary(interaction);
@@ -80,14 +83,18 @@ export async function setupBot() {
                     await generateAndSendImage(interaction);
                 }
                 if(buttonInteraction.customId === "generate_notes") {
-                    await generateAndSendNotes(interaction);
+                    // await generateAndSendNotes(interaction);
                 }
 			}
         } catch (e) {
-            console.log("Unknown error processing command: ", e);
-            if (interaction.isRepliable()) {
-                const repliableInteraction = interaction as RepliableInteraction;
-                await repliableInteraction.reply("Unknown Error handling request.");
+            console.error("Unknown error processing command: ", e);
+            try {
+                if (interaction.isRepliable()) {
+                    const repliableInteraction = interaction as RepliableInteraction;
+                    await repliableInteraction.reply("Unknown Error handling request.");
+                }
+            } catch(e2) {
+                console.error("Error replying to interaction about initial error", e)
             }
         }
     });

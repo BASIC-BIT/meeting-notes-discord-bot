@@ -2,7 +2,7 @@ import {
     BYTES_PER_SAMPLE,
     CHANNELS, FRAME_SIZE, MAX_DISCORD_UPLOAD_SIZE, MAX_SNIPPET_LENGTH, MINIMUM_TRANSCRIPTION_LENGTH,
     SAMPLE_RATE,
-    SILENCE_THRESHOLD
+    SILENCE_THRESHOLD, TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
 } from "./constants";
 import { AudioFileData, AudioSnippet, ChunkInfo } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
@@ -14,6 +14,9 @@ import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
 import * as fs from "node:fs";
 import path from "node:path";
+
+const TRANSCRIPTION_HEADER = `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
+    `-----------------------------------------------------------------------------------\n`;
 
 function generateNewSnippet(userId: string): AudioSnippet {
     return {
@@ -160,19 +163,25 @@ export async function compileTranscriptions(client: Client, meeting: MeetingData
     }
 
     try {
+        // return TRANSCRIPTION_HEADER + fs.readFileSync("./src/test/test_raw_transcript.txt").toString();
         const cleanedUpTranscription = await cleanupTranscription(meeting, transcription);
 
-        console.log(`Transcription cleanup succeeded.  Original lines: ${transcription.split('\n').length}, Cleaned up lines: ${(cleanedUpTranscription || "").split('\n').length}`);
+        const originalTranscriptionLines = transcription.split('\n').length;
+        const cleanedUpTranscriptionLines = (cleanedUpTranscription || "").split('\n').length;
+        console.log(`Transcription cleanup succeeded.  Original lines: ${originalTranscriptionLines}, Cleaned up lines: ${cleanedUpTranscriptionLines}`);
 
-        return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
-            `-----------------------------------------------------------------------------------\n` +
-            cleanedUpTranscription;
+        // If our cleaned up transcription is less than 75% of the lines of the original, assume something went critically wrong
+        if(cleanedUpTranscriptionLines < (originalTranscriptionLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE)) {
+            console.error("Transcription cleanup failed checks, returning original");
+
+            return TRANSCRIPTION_HEADER + transcription;
+        }
+
+        return TRANSCRIPTION_HEADER + cleanedUpTranscription;
     } catch (e) {
-        console.log("Transcription cleanup failed, returning original");
+        console.error("Transcription cleanup failed, returning original", e);
 
-        return `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
-            `-----------------------------------------------------------------------------------\n` +
-            transcription;
+        return TRANSCRIPTION_HEADER + transcription;
     }
 }
 

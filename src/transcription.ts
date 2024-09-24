@@ -14,7 +14,7 @@ import {
     TRANSCRIPTION_MAX_RETRIES,
     TRANSCRIPTION_RATE_MIN_TIME,
     TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF,
-    TRANSCRIPTION_LOGPROB_HARD_CUTOFF
+    TRANSCRIPTION_LOGPROB_HARD_CUTOFF, TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import {AudioSnippet} from "./types/audio";
@@ -39,18 +39,17 @@ async function transcribeInternal(meeting: MeetingData, file: string): Promise<s
         response_format: "verbose_json",
     }) as TranscriptionResponse;
 
-    console.log(transcription);
-
     return cleanupTranscriptionResponse(transcription);
 }
 
 function cleanupTranscriptionResponse(response: TranscriptionResponse): string {
     return response.segments
         .filter((segment) =>
-            // Only remove lines from transcription if no_speech_prob is very high, AND logprob is very low
+            // Only remove lines from transcription if no_speech_prob is very high AND logprob is very low, OR if logprob is insanely low, OR if compression ratio is insanely high
             (segment.no_speech_prob < TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF ||
                 segment.avg_logprob > TRANSCRIPTION_LOGPROB_CUTOFF) &&
-            segment.avg_logprob > TRANSCRIPTION_LOGPROB_HARD_CUTOFF)
+            segment.avg_logprob > TRANSCRIPTION_LOGPROB_HARD_CUTOFF &&
+            segment.compression_ratio < TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF)
         .map((segment) => segment.text)
         .join('')
         .trim();
@@ -152,8 +151,7 @@ export async function transcribeSnippet(meeting: MeetingData, snippet: AudioSnip
 
 export async function cleanupTranscription(meeting: MeetingData, transcription: string) {
     const systemPrompt = await getTranscriptionCleanupSystemPrompt(meeting);
-    const response = await openAIClient.chat.completions.create({
-        model: "gpt-4o",
+    return await chat(meeting, {
         messages: [
             {
                 role: "system",
@@ -165,10 +163,35 @@ export async function cleanupTranscription(meeting: MeetingData, transcription: 
             }
         ],
         temperature: 0,
-        user: meeting.creator.id,
     });
+}
 
-    return response.choices[0].message.content;
+type ChatInput = Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model" | "user">
+
+async function chat(meeting: MeetingData, body: ChatInput): Promise<string> {
+    let output: string = "";
+    let done: boolean = false;
+    let count = 0;
+    while(!done) {
+        const response = await openAIClient.chat.completions.create({
+            model: "gpt-4o",
+            user: meeting.creator.id,
+            ...body,
+        });
+        console.log(response.choices[0].finish_reason)
+        if(response.choices[0].finish_reason !== "length") {
+            done = true;
+        }
+        const responseValue = response.choices[0].message.content;
+        output += responseValue;
+        body.messages.push({
+            role: "assistant",
+            content: responseValue,
+        });
+        count++;
+    }
+    console.log(`Chat took ${count} calls to fully complete due to length.`);
+    return output;
 }
 
 // Get keywords from the server that are likely to help the translation, such as server name, channel names, role names, and attendee names
@@ -190,6 +213,7 @@ export async function getTranscriptionCleanupSystemPrompt(meeting: MeetingData):
         "Remove any lines that are likely mis-transcriptions due to the Whisper model being sent non-vocal audio like breathing or typing, but only if the certainty is high. " +
         "Only make changes if you are confident it would not alter the meaning of the transcription. " +
         "Output only the altered transcription, in the same format it was received in. " +
+        "Make sure to output the entirety of the conversation, regardless of the length. " +
         "The meeting attendees are: " +
         Array.from(meeting.attendance).join(', ') + ".\n" +
         `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
@@ -210,7 +234,7 @@ export async function getTodoListSystemPrompt(meeting: MeetingData): Promise<str
     const prompt = "You are a helpful Discord bot that records meetings and provides transcriptions. " +
         "Your task is to create a list of todo items based upon the provided transcription. " +
         "If there are no action items, return only the phrase \"none\". " +
-        "Display action items as \" - *name*: *Task*\".  The name may be omitted if the owner of the task is not clear, or use the speaker's name if it's likely the task is meant for them. " +
+        "Group tasks by name, grouping together names for tasks that are shared amongst multiple members. Display action items as \" - *name*:\\n\\t*Task*\".  The name may be omitted if the owner of the task is not clear, or use the speaker's name if it's likely the task is meant for them. " +
         "The meeting attendees are: " +
         Array.from(meeting.attendance).join(', ') + ".\n" +
         `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
@@ -223,8 +247,7 @@ export async function getTodoListSystemPrompt(meeting: MeetingData): Promise<str
 
 export async function getTodoList(meeting: MeetingData): Promise<string> {
     const systemPrompt = await getTodoListSystemPrompt(meeting);
-    const response = await openAIClient.chat.completions.create({
-        model: "gpt-4o",
+    const output = await chat(meeting, {
         messages: [
             {
                 role: "system",
@@ -236,10 +259,7 @@ export async function getTodoList(meeting: MeetingData): Promise<string> {
             }
         ],
         temperature: 0,
-        user: meeting.creator.id,
     });
-
-    const output = response.choices[0].message.content;
 
     // Extremely hacky way to return nothing. The system prompt seems to refuse to answer nothing at all, but will happily just return a certain phrase.
     if (!output || output.trim().toLowerCase() === "none" || output.trim().toLowerCase() === "\"none\"") {
@@ -257,7 +277,7 @@ export async function getSummarySystemPrompt(meeting: MeetingData): Promise<stri
     const events = meeting.guild.scheduledEvents.valueOf().map((event) => event.name).join(', ');
     const channelNames = meeting.guild.channels.valueOf().map((channel) => channel.name).join(', ');
     const prompt = "You are a helpful Discord bot that records meetings and provides transcriptions. " +
-        "Your task is to create a summary of the meeting based upon the provided transcription. There is no need to include any metadata, just get right to the summary. " +
+        "Your task is to create a succinct summary of the meeting based upon the provided transcription, including Summary, Discussion Points, Action Items, and Next Steps sections if appropriate." +
         "The meeting attendees are: " +
         Array.from(meeting.attendance).join(', ') + ".\n" +
         `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
@@ -270,8 +290,7 @@ export async function getSummarySystemPrompt(meeting: MeetingData): Promise<stri
 
 export async function getSummary(meeting: MeetingData): Promise<string> {
     const systemPrompt = await getSummarySystemPrompt(meeting);
-    const response = await openAIClient.chat.completions.create({
-        model: "gpt-4o",
+    return await chat(meeting, {
         messages: [
             {
                 role: "system",
@@ -283,21 +302,15 @@ export async function getSummary(meeting: MeetingData): Promise<string> {
             }
         ],
         temperature: 0,
-        user: meeting.creator.id,
     });
-
-    const output = response.choices[0].message.content;
-
-    return output || '';
 }
 
 export async function getImage(meeting: MeetingData): Promise<string> {
-    const imagePrompt = (await openAIClient.chat.completions.create({
-        model: "gpt-4o",
+    const imagePrompt = await chat(meeting, {
         messages: [
             {
                 role: "system",
-                content: "Generate a concise, focused image prompt for DALL-E based on the main ideas from the meeting transcript. Avoid any text, logos, or complex symbols, and limit the inclusion of characters to a single figure at most, if any. Instead, suggest a simple, clear visual concept or scene using objects, environments, or abstract shapes. Ensure the prompt guides DALL-E to produce a visually cohesive and refined image with attention to detail, while avoiding any elements that AI image generation commonly mishandles. Keep the description straightforward to ensure the final image remains polished and coherent.",
+                content: "Generate a concise, focused image prompt for DALL-E based on the main ideas from the meeting transcript. Avoid any text, logos, or complex symbols, and limit the inclusion of characters to a single figure at most, if any. Instead, suggest a simple, clear visual concept or scene using objects, environments, or abstract shapes. Ensure the prompt guides DALL-E to produce a visually cohesive and refined image with attention to detail, while avoiding any elements that AI image generation commonly mishandles. Keep the description straightforward to ensure the final image remains polished and coherent. Ensure it generates no text.",
             },
             {
                 role: "user",
@@ -305,8 +318,7 @@ export async function getImage(meeting: MeetingData): Promise<string> {
             }
         ],
         temperature: 0.5,
-        user: meeting.creator.id,
-    })).choices[0].message.content;
+    });
 
     console.log(imagePrompt);
 
@@ -331,11 +343,13 @@ export async function getNotesSystemPrompt(meeting: MeetingData): Promise<string
     const roles = meeting.guild.roles.valueOf().map((role) => role.name).join(', ');
     const events = meeting.guild.scheduledEvents.valueOf().map((event) => event.name).join(', ');
     const channelNames = meeting.guild.channels.valueOf().map((channel) => channel.name).join(', ');
-    const prompt = "You are a helpful Discord bot that records meetings and provides transcriptions. " +
-        "Your task is to create a meeting notes for the meeting based upon the provided transcription. There is no need to include any metadata, just get right to the summary. " +
-        "The meeting attendees are: " +
+    const prompt = "You are a helpful Discord bot that records discord calls and provides transcriptions. " +
+        "Your task is to create notes for the call based upon the provided transcription. If appropriate, include Summary, Action Items, and/or Next Steps sections. " +
+        "Output in a format suitable for the description section of a Discord embed. "
+        "If generating action items, include an attendee's name if a task has been assigned to them, or they volunteered to do it. "
+        "The attendees are: " +
         Array.from(meeting.attendance).join(', ') + ".\n" +
-        `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
+        `This conversation is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
         `The roles available to users in this server are: ${roles}.\n` +
         `The upcoming events happening in this server are: ${events}.\n` +
         `The channels in this server are: ${channelNames}.`;
@@ -345,8 +359,7 @@ export async function getNotesSystemPrompt(meeting: MeetingData): Promise<string
 
 export async function getNotes(meeting: MeetingData): Promise<string> {
     const systemPrompt = await getNotesSystemPrompt(meeting);
-    const response = await openAIClient.chat.completions.create({
-        model: "gpt-4o",
+    return await chat(meeting, {
         messages: [
             {
                 role: "system",
@@ -358,10 +371,5 @@ export async function getNotes(meeting: MeetingData): Promise<string> {
             }
         ],
         temperature: 0,
-        user: meeting.creator.id,
     });
-
-    const output = response.choices[0].message.content;
-
-    return output || '';
 }

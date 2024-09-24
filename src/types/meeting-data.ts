@@ -25,6 +25,7 @@ export interface MeetingData {
     finished: boolean;
 
     transcribeMeeting: boolean;
+    generateNotes: boolean;
 
     finalTranscript?: string;
 }
