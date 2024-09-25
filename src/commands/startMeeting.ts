@@ -242,8 +242,8 @@ export async function handleStartMeeting(
 
   const attendance: Set<string> = new Set<string>();
 
-  let setFinished: ((val?: any) => void) | undefined = undefined;
-  const isFinished = new Promise<void>((resolve, reject) => {
+  let setFinished: ((val?: void) => void) | undefined = undefined;
+  const isFinished = new Promise<void>((resolve) => {
     setFinished = resolve;
   });
   const meeting: MeetingData = {

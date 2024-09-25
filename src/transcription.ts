@@ -261,7 +261,7 @@ export async function getTranscriptionCleanupSystemPrompt(
     "The meeting attendees are: " +
     Array.from(meeting.attendance).join(", ") +
     ".\n" +
-    `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
+    `This meeting is happening in a discord named: "${serverName}", with a description of "${serverDescription}", in a voice channel named ${meeting.voiceChannel.name}.\n` +
     `The roles available to users in this server are: ${roles}.\n` +
     `The upcoming events happening in this server are: ${events}.\n` +
     `The channels in this server are: ${channelNames}.`;
@@ -294,7 +294,7 @@ export async function getTodoListSystemPrompt(
     "The meeting attendees are: " +
     Array.from(meeting.attendance).join(", ") +
     ".\n" +
-    `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
+    `This meeting is happening in a discord named: "${serverName}", with a description of ${serverDescription}, in a voice channel named ${meeting.voiceChannel.name}.\n` +
     `The roles available to users in this server are: ${roles}.\n` +
     `The upcoming events happening in this server are: ${events}.\n` +
     `The channels in this server are: ${channelNames}.`;
@@ -353,7 +353,7 @@ export async function getSummarySystemPrompt(
     "The meeting attendees are: " +
     Array.from(meeting.attendance).join(", ") +
     ".\n" +
-    `This meeting is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
+    `This meeting is happening in a discord named: "${serverName}", with a description of ${serverDescription}, in a voice channel named ${meeting.voiceChannel.name}.\n` +
     `The roles available to users in this server are: ${roles}.\n` +
     `The upcoming events happening in this server are: ${events}.\n` +
     `The channels in this server are: ${channelNames}.`;
@@ -429,12 +429,12 @@ export async function getNotesSystemPrompt(
   const prompt =
     "You are a helpful Discord bot that records discord calls and provides transcriptions. " +
     "Your task is to create notes for the call based upon the provided transcription. If appropriate, include Summary, Action Items, and/or Next Steps sections. " +
-    "Output in a format suitable for the description section of a Discord embed. ";
-  ("If generating action items, include an attendee's name if a task has been assigned to them, or they volunteered to do it. ");
-  "The attendees are: " +
+    "Output in a format suitable for the description section of a Discord embed. " +
+    "If generating action items, include an attendee's name if a task has been assigned to them, or they volunteered to do it. " +
+    "The attendees are: " +
     Array.from(meeting.attendance).join(", ") +
     ".\n" +
-    `This conversation is happening in a discord named: "${serverName}", with a description of \"${serverDescription}\", in a voice channel named ${meeting.voiceChannel.name}.\n` +
+    `This conversation is happening in a discord named: "${serverName}", with a description of "${serverDescription}", in a voice channel named ${meeting.voiceChannel.name}.\n` +
     `The roles available to users in this server are: ${roles}.\n` +
     `The upcoming events happening in this server are: ${events}.\n` +
     `The channels in this server are: ${channelNames}.`;

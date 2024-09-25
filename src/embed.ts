@@ -4,15 +4,10 @@ import {
   AttachmentBuilder,
   ButtonInteraction,
   TextChannel,
-  CommandInteraction,
 } from "discord.js";
 import { doesFileHaveContent } from "./util";
 import { format } from "date-fns";
-import {
-  BaseMessageOptions,
-  Message,
-  MessagePayload,
-} from "discord.js/typings";
+import { BaseMessageOptions } from "discord.js/typings";
 import { ChunkInfo } from "./types/audio"; // Assuming date-fns is installed for date formatting
 
 export async function sendMeetingEndEmbedToChannel(
@@ -100,60 +95,61 @@ function getEmbed(meeting: MeetingData): BaseMessageOptions {
   };
 }
 
+// TODO: Remove?
 // Function to generate a progress bar
-function createProgressBar(percentage: number): string {
-  const totalBars = 20;
-  const filledBars = Math.round((percentage / 100) * totalBars);
-  const emptyBars = totalBars - filledBars;
-  const bar = "█".repeat(filledBars) + "░".repeat(emptyBars);
-  return `${bar} ${percentage}%`;
-}
+// function createProgressBar(percentage: number): string {
+//   const totalBars = 20;
+//   const filledBars = Math.round((percentage / 100) * totalBars);
+//   const emptyBars = totalBars - filledBars;
+//   const bar = "█".repeat(filledBars) + "░".repeat(emptyBars);
+//   return `${bar} ${percentage}%`;
+// }
 
-async function updateEndMessage(
-  interaction: CommandInteraction,
-  processedSnippets: number,
-  totalSnippets: number,
-  status: string,
-  isComplete: boolean = false,
-) {
-  const progressPercentage = Math.floor(
-    (processedSnippets / totalSnippets) * 100,
-  );
-  const progressBar = createProgressBar(progressPercentage);
-
-  const embed = new EmbedBuilder()
-    .setTitle("Meeting End Progress")
-    .setDescription(`Processing meeting data...`)
-    .addFields(
-      {
-        name: "Audio Snippets",
-        value: `${processedSnippets}/${totalSnippets} snippets processed... ${progressBar}`,
-      },
-      {
-        name: "Splitting Audio",
-        value: isComplete
-          ? `✅ Audio data split into ${processedSnippets / 25} files`
-          : `🔄 Splitting... ${progressBar}`,
-      },
-      {
-        name: "Uploading",
-        value:
-          status === "uploading"
-            ? "🔄 Uploading..."
-            : status === "done"
-              ? "✅ Done!"
-              : "⬜ Waiting to upload...",
-      },
-    )
-    .setTimestamp();
-
-  // If first time, reply to interaction, otherwise edit existing reply
-  if (interaction.replied) {
-    await interaction.editReply({ embeds: [embed] });
-  } else {
-    await interaction.reply({ embeds: [embed] });
-  }
-}
+// async function updateEndMessage(
+//   interaction: CommandInteraction,
+//   processedSnippets: number,
+//   totalSnippets: number,
+//   status: string,
+//   isComplete: boolean = false,
+// ) {
+//   const progressPercentage = Math.floor(
+//     (processedSnippets / totalSnippets) * 100,
+//   );
+//   const progressBar = createProgressBar(progressPercentage);
+//
+//   const embed = new EmbedBuilder()
+//     .setTitle("Meeting End Progress")
+//     .setDescription(`Processing meeting data...`)
+//     .addFields(
+//       {
+//         name: "Audio Snippets",
+//         value: `${processedSnippets}/${totalSnippets} snippets processed... ${progressBar}`,
+//       },
+//       {
+//         name: "Splitting Audio",
+//         value: isComplete
+//           ? `✅ Audio data split into ${processedSnippets / 25} files`
+//           : `🔄 Splitting... ${progressBar}`,
+//       },
+//       {
+//         name: "Uploading",
+//         value:
+//           status === "uploading"
+//             ? "🔄 Uploading..."
+//             : status === "done"
+//               ? "✅ Done!"
+//               : "⬜ Waiting to upload...",
+//       },
+//     )
+//     .setTimestamp();
+//
+//   // If first time, reply to interaction, otherwise edit existing reply
+//   if (interaction.replied) {
+//     await interaction.editReply({ embeds: [embed] });
+//   } else {
+//     await interaction.reply({ embeds: [embed] });
+//   }
+// }
 
 export async function sendTranscriptionFiles(
   meeting: MeetingData,

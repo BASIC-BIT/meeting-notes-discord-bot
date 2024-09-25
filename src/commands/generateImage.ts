@@ -1,4 +1,4 @@
-import { getImage, getTodoList } from "../transcription";
+import { getImage } from "../transcription";
 import { ButtonInteraction, EmbedBuilder } from "discord.js";
 import { getMeeting } from "../meetings";
 

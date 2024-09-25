@@ -1,8 +1,8 @@
 {
   "name": "meeting-minutes-discord-bot",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Record and transcribe conversations in Discord",
+  "main": "src/index.ts",
   "scripts": {
     "start": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
@@ -10,10 +10,16 @@
     "terraform:init": "terraform -chdir=_infra init",
     "terraform:plan": "terraform -chdir=_infra plan",
     "terraform:apply": "terraform -chdir=_infra apply",
-    "test": "jest"
+    "test": "jest",
+    "lint": "eslint --fix src test",
+    "prettier": "prettier . --write"
   },
-  "author": "",
-  "license": "ISC",
+  "engines": {
+    "node": "~18.20.4",
+    "npm": "~10.7.0"
+  },
+  "author": "BASIC-BIT",
+  "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.649.0",
     "@aws-sdk/util-dynamodb": "^3.649.0",
@@ -40,6 +46,7 @@
     "@babel/preset-typescript": "^7.24.7",
     "@eslint/js": "^9.11.1",
     "@jest/globals": "^29.7.0",
+    "@types/express": "^4.17.21",
     "@types/fluent-ffmpeg": "^2.1.26",
     "@types/node": "^22.5.1",
     "babel-jest": "^29.7.0",
@@ -52,5 +59,6 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.7.0"
-  }
+  },
+  "funding": "https://ko-fi.com/basicbit"
 }

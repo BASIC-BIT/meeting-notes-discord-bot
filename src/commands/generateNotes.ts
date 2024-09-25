@@ -1,5 +1,5 @@
 import { EmbedBuilder } from "discord.js";
-import { getImage, getNotes } from "../transcription";
+import { getNotes } from "../transcription";
 import { MeetingData } from "../types/meeting-data";
 
 export async function generateAndSendNotes(meeting: MeetingData) {

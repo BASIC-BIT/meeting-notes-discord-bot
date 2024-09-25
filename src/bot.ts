@@ -24,7 +24,6 @@ import { subscribeToUserVoice, unsubscribeToVoiceUponLeaving } from "./audio";
 import { generateAndSendTodoList } from "./commands/generateTodoList";
 import { generateAndSendSummary } from "./commands/generateSummary";
 import { generateAndSendImage } from "./commands/generateImage";
-import { generateAndSendNotes } from "./commands/generateNotes";
 
 const client = new Client({
   intents: [
@@ -104,7 +103,7 @@ export async function setupBot() {
           await repliableInteraction.reply("Unknown Error handling request.");
         }
       } catch (e2) {
-        console.error("Error replying to interaction about initial error", e);
+        console.error("Error replying to interaction about initial error", e2);
       }
     }
   });

@@ -134,8 +134,6 @@ export async function subscribeToUserVoice(
     },
   });
 
-  // Decode the stream with high sample rate for both transcription and MP3 storage.
-  // @ts-ignore
   const decodedStream = opusStream.pipe(
     new prism.opus.Decoder({
       rate: SAMPLE_RATE,
@@ -145,7 +143,6 @@ export async function subscribeToUserVoice(
   );
 
   decodedStream.on("data", (chunk) => {
-    // Handle the high-fidelity audio for processing and transcription.
     updateSnippetsIfNecessary(meeting, userId);
 
     const snippet = meeting.audioData.currentSnippets.get(userId);
@@ -155,7 +152,6 @@ export async function subscribeToUserVoice(
   });
 }
 
-// Subscribe to a user's voice stream and handle the audio data
 export function userStopTalking(meeting: MeetingData, userId: string) {
   setSnippetTimer(meeting, userId);
 }
@@ -258,7 +254,7 @@ export function openOutputFile(meeting: MeetingData) {
 }
 
 export function closeOutputFile(meeting: MeetingData): Promise<void> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     if (meeting.audioData.audioPassThrough) {
       meeting.audioData.audioPassThrough.end(); // End the PassThrough stream
     }

@@ -19,6 +19,9 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
+# Build the project
+RUN npm build
+
 # Copy the rest of the application code
 COPY . .
 
@@ -26,4 +29,4 @@ COPY . .
 EXPOSE 3000
 
 # Command to run the application
-CMD ["npm", "start"]
+CMD ["npm", "run", "serve"]

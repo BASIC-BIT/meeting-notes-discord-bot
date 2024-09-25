@@ -1,5 +1,5 @@
 import { FfmpegCommand } from "fluent-ffmpeg";
-import { PassThrough, Writable } from "node:stream";
+import { PassThrough } from "node:stream";
 
 export interface AudioSnippet {
   chunks: Buffer[];

@@ -1,10 +1,6 @@
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
   ButtonInteraction,
-  ButtonStyle,
   Client,
-  EmbedBuilder,
   PermissionFlagsBits,
   PermissionResolvable,
 } from "discord.js";
@@ -98,8 +94,9 @@ export async function handleEndMeetingButton(
         components: [],
       }); //Remove "End Meeting" button from initial reply if able
     } catch (e) {
-      console.log(
+      console.error(
         "Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...",
+        e,
       );
     }
 
@@ -183,46 +180,46 @@ export async function handleEndMeetingButton(
   }
 }
 
-async function sendPostMeetingOptions(meeting: MeetingData) {
-  const generateTodo = new ButtonBuilder()
-    .setCustomId("generate_todo")
-    .setLabel("Generate Todo List")
-    .setStyle(ButtonStyle.Primary);
-
-  const generateSummary = new ButtonBuilder()
-    .setCustomId("generate_summary")
-    .setLabel("Generate Summary")
-    .setStyle(ButtonStyle.Primary);
-
-  const generateNotes = new ButtonBuilder()
-    .setCustomId("generate_notes")
-    .setLabel("Generate Meeting Notes")
-    .setStyle(ButtonStyle.Primary);
-
-  const generateImage = new ButtonBuilder()
-    .setCustomId("generate_image")
-    .setLabel("Generate Image")
-    .setStyle(ButtonStyle.Primary);
-
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    generateSummary,
-    generateNotes,
-    generateTodo,
-    generateImage,
-  );
-
-  await meeting.textChannel.send({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle("Meeting Transcript Options")
-        .setColor("#3498db")
-        .setDescription(
-          "Would you like any additional detection ran on your meeting?",
-        ),
-    ],
-    components: [row],
-  });
-}
+// async function sendPostMeetingOptions(meeting: MeetingData) {
+//   const generateTodo = new ButtonBuilder()
+//     .setCustomId("generate_todo")
+//     .setLabel("Generate Todo List")
+//     .setStyle(ButtonStyle.Primary);
+//
+//   const generateSummary = new ButtonBuilder()
+//     .setCustomId("generate_summary")
+//     .setLabel("Generate Summary")
+//     .setStyle(ButtonStyle.Primary);
+//
+//   const generateNotes = new ButtonBuilder()
+//     .setCustomId("generate_notes")
+//     .setLabel("Generate Meeting Notes")
+//     .setStyle(ButtonStyle.Primary);
+//
+//   const generateImage = new ButtonBuilder()
+//     .setCustomId("generate_image")
+//     .setLabel("Generate Image")
+//     .setStyle(ButtonStyle.Primary);
+//
+//   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+//     generateSummary,
+//     generateNotes,
+//     generateTodo,
+//     generateImage,
+//   );
+//
+//   await meeting.textChannel.send({
+//     embeds: [
+//       new EmbedBuilder()
+//         .setTitle("Meeting Transcript Options")
+//         .setColor("#3498db")
+//         .setDescription(
+//           "Would you like any additional detection ran on your meeting?",
+//         ),
+//     ],
+//     components: [row],
+//   });
+// }
 
 export async function handleEndMeetingOther(
   client: Client,
@@ -242,8 +239,9 @@ export async function handleEndMeetingOther(
         components: [],
       }); //Remove "End Meeting" button from initial reply if able
     } catch (e) {
-      console.log(
+      console.error(
         "Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...",
+        e,
       );
     }
 
