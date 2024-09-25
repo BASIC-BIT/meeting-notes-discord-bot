@@ -1,8 +1,13 @@
 import {
-    BYTES_PER_SAMPLE,
-    CHANNELS, FRAME_SIZE, MAX_DISCORD_UPLOAD_SIZE, MAX_SNIPPET_LENGTH, MINIMUM_TRANSCRIPTION_LENGTH,
-    SAMPLE_RATE,
-    SILENCE_THRESHOLD, TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
+  BYTES_PER_SAMPLE,
+  CHANNELS,
+  FRAME_SIZE,
+  MAX_DISCORD_UPLOAD_SIZE,
+  MAX_SNIPPET_LENGTH,
+  MINIMUM_TRANSCRIPTION_LENGTH,
+  SAMPLE_RATE,
+  SILENCE_THRESHOLD,
+  TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE,
 } from "./constants";
 import { AudioFileData, AudioSnippet, ChunkInfo } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
@@ -15,213 +20,257 @@ import { Client } from "discord.js";
 import * as fs from "node:fs";
 import path from "node:path";
 
-const TRANSCRIPTION_HEADER = `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
-    `-----------------------------------------------------------------------------------\n`;
+const TRANSCRIPTION_HEADER =
+  `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
+  `-----------------------------------------------------------------------------------\n`;
 
 function generateNewSnippet(userId: string): AudioSnippet {
-    return {
-        chunks: [],
-        timestamp: Date.now(),
-        userId,
-    };
+  return {
+    chunks: [],
+    timestamp: Date.now(),
+    userId,
+  };
 }
 
 // Handle snippets based on the user speaking
-export function updateSnippetsIfNecessary(meeting: MeetingData, userId: string): void {
-    let snippet = meeting.audioData.currentSnippets.get(userId);
+export function updateSnippetsIfNecessary(
+  meeting: MeetingData,
+  userId: string,
+): void {
+  let snippet = meeting.audioData.currentSnippets.get(userId);
 
-    if (!snippet) {
-        snippet = generateNewSnippet(userId);
-        meeting.audioData.currentSnippets.set(userId, snippet);
-    } else {
-        const elapsedTime = Date.now() - snippet.timestamp;
-        if (elapsedTime >= MAX_SNIPPET_LENGTH) {
-            startProcessingSnippet(meeting, userId);
-            snippet = generateNewSnippet(userId);
-            meeting.audioData.currentSnippets.set(userId, snippet);
-        }
+  if (!snippet) {
+    snippet = generateNewSnippet(userId);
+    meeting.audioData.currentSnippets.set(userId, snippet);
+  } else {
+    const elapsedTime = Date.now() - snippet.timestamp;
+    if (elapsedTime >= MAX_SNIPPET_LENGTH) {
+      startProcessingSnippet(meeting, userId);
+      snippet = generateNewSnippet(userId);
+      meeting.audioData.currentSnippets.set(userId, snippet);
     }
+  }
 }
 
 // Start processing a specific user's snippet
 export function startProcessingSnippet(meeting: MeetingData, userId: string) {
-    const snippet = meeting.audioData.currentSnippets.get(userId);
-    if (!snippet) return;
+  const snippet = meeting.audioData.currentSnippets.get(userId);
+  if (!snippet) return;
 
-    const audioFileData: AudioFileData = {
-        timestamp: snippet.timestamp,
-        userId: snippet.userId,
-        processing: true,
-        audioOnlyProcessing: true,
-    };
+  const audioFileData: AudioFileData = {
+    timestamp: snippet.timestamp,
+    userId: snippet.userId,
+    processing: true,
+    audioOnlyProcessing: true,
+  };
 
-    const promises: Promise<void>[] = [];
+  const promises: Promise<void>[] = [];
 
-    if (getAudioDuration(snippet) > MINIMUM_TRANSCRIPTION_LENGTH) {
-        promises.push(transcribeSnippet(meeting, snippet).then((transcription) => {
-            audioFileData.transcript = transcription;
-        }));
+  if (getAudioDuration(snippet) > MINIMUM_TRANSCRIPTION_LENGTH) {
+    promises.push(
+      transcribeSnippet(meeting, snippet).then((transcription) => {
+        audioFileData.transcript = transcription;
+      }),
+    );
+  } else {
+    console.log(
+      `Snippet less than minimum transcription length, not transcribing: ${snippet.userId} ${snippet.timestamp}`,
+    );
+  }
+
+  const audioPromise = new Promise<void>((resolve, reject) => {
+    const buffer = Buffer.concat(snippet!.chunks);
+    if (meeting.audioData.audioPassThrough) {
+      meeting.audioData.audioPassThrough.write(buffer, (err) => {
+        if (err) {
+          reject(err);
+        } else {
+          audioFileData.audioOnlyProcessing = false;
+          resolve();
+        }
+      });
     } else {
-        console.log(`Snippet less than minimum transcription length, not transcribing: ${snippet.userId} ${snippet.timestamp}`);
+      reject(new Error("PassThrough stream is not available."));
     }
+  });
+  promises.push(audioPromise);
 
-    const audioPromise = new Promise<void>((resolve, reject) => {
-            const buffer = Buffer.concat(snippet!.chunks);
-            if (meeting.audioData.audioPassThrough) {
-                meeting.audioData.audioPassThrough.write(buffer, (err) => {
-                    if (err) {
-                        reject(err);
-                    } else {
-                        audioFileData.audioOnlyProcessing = false;
-                        resolve();
-                    }
-                });
-            } else {
-                reject(new Error('PassThrough stream is not available.'));
-            }
-        });
-    promises.push(audioPromise);
+  audioFileData.audioOnlyProcessingPromise = audioPromise;
 
-    audioFileData.audioOnlyProcessingPromise = audioPromise;
+  audioFileData.processingPromise = Promise.all(promises).then(() => {
+    audioFileData.processing = false;
+  });
 
-    audioFileData.processingPromise = Promise.all(promises).then(() => {
-        audioFileData.processing = false;
-    });
-
-    meeting.audioData.audioFiles.push(audioFileData);
-    meeting.audioData.currentSnippets.delete(userId); // Remove snippet after processing
+  meeting.audioData.audioFiles.push(audioFileData);
+  meeting.audioData.currentSnippets.delete(userId); // Remove snippet after processing
 }
 
 // Set a timer to process the snippet after SILENCE_THRESHOLD
 function setSnippetTimer(meeting: MeetingData, userId: string) {
-    const currentTimers = meeting.audioData.silenceTimers || new Map<string, NodeJS.Timeout>();
+  const currentTimers =
+    meeting.audioData.silenceTimers || new Map<string, NodeJS.Timeout>();
 
-    if (currentTimers.has(userId)) {
-        clearTimeout(currentTimers.get(userId)!);
-    }
+  if (currentTimers.has(userId)) {
+    clearTimeout(currentTimers.get(userId)!);
+  }
 
-    const timer = setTimeout(() => {
-        startProcessingSnippet(meeting, userId);
-        currentTimers.delete(userId);
-    }, SILENCE_THRESHOLD);
+  const timer = setTimeout(() => {
+    startProcessingSnippet(meeting, userId);
+    currentTimers.delete(userId);
+  }, SILENCE_THRESHOLD);
 
-    currentTimers.set(userId, timer);
-    meeting.audioData.silenceTimers = currentTimers;
+  currentTimers.set(userId, timer);
+  meeting.audioData.silenceTimers = currentTimers;
 }
 
 // Subscribe to a user's voice stream and handle the audio data
-export async function subscribeToUserVoice(meeting: MeetingData, userId: string) {
-    const opusStream = meeting.connection.receiver.subscribe(userId, {
-        end: {
-            behavior: EndBehaviorType.Manual,
-        },
-    });
+export async function subscribeToUserVoice(
+  meeting: MeetingData,
+  userId: string,
+) {
+  const opusStream = meeting.connection.receiver.subscribe(userId, {
+    end: {
+      behavior: EndBehaviorType.Manual,
+    },
+  });
 
-    // Decode the stream with high sample rate for both transcription and MP3 storage.
-    // @ts-ignore
-    const decodedStream = opusStream.pipe(new prism.opus.Decoder({ rate: SAMPLE_RATE, channels: CHANNELS, frameSize: FRAME_SIZE }));
+  // Decode the stream with high sample rate for both transcription and MP3 storage.
+  // @ts-ignore
+  const decodedStream = opusStream.pipe(
+    new prism.opus.Decoder({
+      rate: SAMPLE_RATE,
+      channels: CHANNELS,
+      frameSize: FRAME_SIZE,
+    }),
+  );
 
-    decodedStream.on('data', chunk => {
-        // Handle the high-fidelity audio for processing and transcription.
-        updateSnippetsIfNecessary(meeting, userId);
+  decodedStream.on("data", (chunk) => {
+    // Handle the high-fidelity audio for processing and transcription.
+    updateSnippetsIfNecessary(meeting, userId);
 
-        const snippet = meeting.audioData.currentSnippets.get(userId);
-        if (snippet) {
-            snippet.chunks.push(chunk);
-        }
-    });
+    const snippet = meeting.audioData.currentSnippets.get(userId);
+    if (snippet) {
+      snippet.chunks.push(chunk);
+    }
+  });
 }
 
 // Subscribe to a user's voice stream and handle the audio data
 export function userStopTalking(meeting: MeetingData, userId: string) {
-    setSnippetTimer(meeting, userId);
+  setSnippetTimer(meeting, userId);
 }
 
 export async function waitForFinishProcessing(meeting: MeetingData) {
-    await Promise.all(meeting.audioData.audioFiles.map((fileData) => fileData.processingPromise));
+  await Promise.all(
+    meeting.audioData.audioFiles.map((fileData) => fileData.processingPromise),
+  );
 }
 
 export async function waitForAudioOnlyFinishProcessing(meeting: MeetingData) {
-    await Promise.all(meeting.audioData.audioFiles.map((fileData) => fileData.audioOnlyProcessingPromise));
+  await Promise.all(
+    meeting.audioData.audioFiles.map(
+      (fileData) => fileData.audioOnlyProcessingPromise,
+    ),
+  );
 }
 
 function getAudioDuration(audio: AudioSnippet): number {
-    return audio.chunks.reduce((acc, cur) => acc + cur.length, 0) / (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE);
+  return (
+    audio.chunks.reduce((acc, cur) => acc + cur.length, 0) /
+    (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)
+  );
 }
 
-export async function compileTranscriptions(client: Client, meeting: MeetingData): Promise<string> {
-    const transcription = meeting.audioData.audioFiles
-        .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
-        .map((fileData) => {
-            const userTag = client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
+export async function compileTranscriptions(
+  client: Client,
+  meeting: MeetingData,
+): Promise<string> {
+  const transcription = meeting.audioData.audioFiles
+    .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
+    .map((fileData) => {
+      const userTag =
+        client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
 
-            return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
-        }).join('\n');
+      return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
+    })
+    .join("\n");
 
-    if (transcription.length === 0) {
-        return transcription;
+  if (transcription.length === 0) {
+    return transcription;
+  }
+
+  try {
+    // return TRANSCRIPTION_HEADER + fs.readFileSync("./src/test/test_raw_transcript.txt").toString();
+    const cleanedUpTranscription = await cleanupTranscription(
+      meeting,
+      transcription,
+    );
+
+    const originalTranscriptionLines = transcription.split("\n").length;
+    const cleanedUpTranscriptionLines = (cleanedUpTranscription || "").split(
+      "\n",
+    ).length;
+    console.log(
+      `Transcription cleanup succeeded.  Original lines: ${originalTranscriptionLines}, Cleaned up lines: ${cleanedUpTranscriptionLines}`,
+    );
+
+    // If our cleaned up transcription is less than 75% of the lines of the original, assume something went critically wrong
+    if (
+      cleanedUpTranscriptionLines <
+      originalTranscriptionLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
+    ) {
+      console.error("Transcription cleanup failed checks, returning original");
+
+      return TRANSCRIPTION_HEADER + transcription;
     }
 
-    try {
-        // return TRANSCRIPTION_HEADER + fs.readFileSync("./src/test/test_raw_transcript.txt").toString();
-        const cleanedUpTranscription = await cleanupTranscription(meeting, transcription);
+    return TRANSCRIPTION_HEADER + cleanedUpTranscription;
+  } catch (e) {
+    console.error("Transcription cleanup failed, returning original", e);
 
-        const originalTranscriptionLines = transcription.split('\n').length;
-        const cleanedUpTranscriptionLines = (cleanedUpTranscription || "").split('\n').length;
-        console.log(`Transcription cleanup succeeded.  Original lines: ${originalTranscriptionLines}, Cleaned up lines: ${cleanedUpTranscriptionLines}`);
-
-        // If our cleaned up transcription is less than 75% of the lines of the original, assume something went critically wrong
-        if(cleanedUpTranscriptionLines < (originalTranscriptionLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE)) {
-            console.error("Transcription cleanup failed checks, returning original");
-
-            return TRANSCRIPTION_HEADER + transcription;
-        }
-
-        return TRANSCRIPTION_HEADER + cleanedUpTranscription;
-    } catch (e) {
-        console.error("Transcription cleanup failed, returning original", e);
-
-        return TRANSCRIPTION_HEADER + transcription;
-    }
+    return TRANSCRIPTION_HEADER + transcription;
+  }
 }
 
 export function openOutputFile(meeting: MeetingData) {
-    const outputFileName = `./recording_${meeting.guildId}_${meeting.channelId}.mp3`;
-    meeting.audioData.outputFileName = outputFileName;
+  const outputFileName = `./recording_${meeting.guildId}_${meeting.channelId}.mp3`;
+  meeting.audioData.outputFileName = outputFileName;
 
-    meeting.audioData.audioPassThrough = new PassThrough();
+  meeting.audioData.audioPassThrough = new PassThrough();
 
-    meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
-        .inputOptions([
-            '-f s16le',                      // PCM format
-            `-ar ${SAMPLE_RATE}`,        // Sample rate
-            `-ac ${CHANNELS}`                 // Number of audio channels
-        ])
-        .audioCodec('libmp3lame')             // Use LAME codec for MP3
-        .outputOptions([
-            `-b:a 128k`,                      // Bitrate for lossy compression
-            `-ac ${CHANNELS}`,                // Ensure stereo output
-            `-ar ${SAMPLE_RATE}`         // Ensure output sample rate
-        ])
-        .toFormat('mp3')                      // Output format as MP3
-        .on('error', (err) => {
-            console.error('ffmpeg error:', err);
-        })
-        .save(outputFileName);
+  meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
+    .inputOptions([
+      "-f s16le", // PCM format
+      `-ar ${SAMPLE_RATE}`, // Sample rate
+      `-ac ${CHANNELS}`, // Number of audio channels
+    ])
+    .audioCodec("libmp3lame") // Use LAME codec for MP3
+    .outputOptions([
+      `-b:a 128k`, // Bitrate for lossy compression
+      `-ac ${CHANNELS}`, // Ensure stereo output
+      `-ar ${SAMPLE_RATE}`, // Ensure output sample rate
+    ])
+    .toFormat("mp3") // Output format as MP3
+    .on("error", (err) => {
+      console.error("ffmpeg error:", err);
+    })
+    .save(outputFileName);
 }
 
 export function closeOutputFile(meeting: MeetingData): Promise<void> {
-    return new Promise((resolve, reject) => {
-        if (meeting.audioData.audioPassThrough) {
-            meeting.audioData.audioPassThrough.end(); // End the PassThrough stream
-        }
-        if (meeting.audioData.ffmpegProcess) {
-            meeting.audioData.ffmpegProcess.on('end', () => {
-                console.log(`Final MP3 file created as ${meeting.audioData.outputFileName}`);
-                resolve();
-            });
-        }
-    });
+  return new Promise((resolve, reject) => {
+    if (meeting.audioData.audioPassThrough) {
+      meeting.audioData.audioPassThrough.end(); // End the PassThrough stream
+    }
+    if (meeting.audioData.ffmpegProcess) {
+      meeting.audioData.ffmpegProcess.on("end", () => {
+        console.log(
+          `Final MP3 file created as ${meeting.audioData.outputFileName}`,
+        );
+        resolve();
+      });
+    }
+  });
 }
 
 /**
@@ -230,82 +279,90 @@ export function closeOutputFile(meeting: MeetingData): Promise<void> {
  * @param {string} outputDir - The directory to store the output chunks
  * @returns {Promise<ChunkInfo[]>} - An array of chunk info (start, end, file)
  */
-export async function splitAudioIntoChunks(inputFile: string, outputDir: string): Promise<ChunkInfo[]> {
-    try {
-        // Ensure the output directory exists
-        await fs.promises.mkdir(outputDir, { recursive: true });
+export async function splitAudioIntoChunks(
+  inputFile: string,
+  outputDir: string,
+): Promise<ChunkInfo[]> {
+  try {
+    // Ensure the output directory exists
+    await fs.promises.mkdir(outputDir, { recursive: true });
 
-        const stats = await fs.promises.stat(inputFile);
-        const totalFileSize = stats.size;
+    const stats = await fs.promises.stat(inputFile);
+    const totalFileSize = stats.size;
 
-        if(totalFileSize <= MAX_DISCORD_UPLOAD_SIZE) {
-            return [
-                {
-                    file: inputFile,
-                    start: 0,
-                    end: 0, // TODO: Put real data here
-                }
-            ]
-        }
-
-        const metadata = await new Promise<ffmpeg.FfprobeData>((resolve, reject) => {
-            ffmpeg.ffprobe(inputFile, (err, data) => {
-                if (err) return reject(err);
-                resolve(data);
-            });
-        });
-
-        const duration = metadata.format.duration || 0; // Total duration in seconds
-        const bitRate = (totalFileSize * 8) / duration; // Calculate the bitrate in bits per second
-
-        // Calculate the maximum chunk duration based on the 25MB limit
-        const maxChunkDuration = (MAX_DISCORD_UPLOAD_SIZE * 8) / bitRate; // in seconds
-        const numChunks = Math.ceil(duration / maxChunkDuration);
-
-        let startTime = 0;
-        const chunkPromises: Promise<ChunkInfo>[] = [];
-
-        // Ensure output directory exists
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        for (let i = 0; i < numChunks; i++) {
-            const chunkFileName = path.join(outputDir, `chunk_${i}.mp3`);
-            const endTime = Math.min(startTime + maxChunkDuration, duration);
-
-            chunkPromises.push(
-                new Promise<ChunkInfo>((resolve, reject) => {
-                    ffmpeg(inputFile)
-                        .setStartTime(startTime)
-                        .setDuration(endTime - startTime)
-                        .output(chunkFileName)
-                        .on('end', () => {
-                            console.log(`Chunk ${i} saved: ${chunkFileName}`);
-                            resolve({ start: startTime, end: endTime, file: chunkFileName });
-                        })
-                        .on('error', (err: Error) => {
-                            console.error(`Error splitting chunk ${i}: ${err.message}`);
-                            reject(err);
-                        })
-                        .run();
-                })
-            );
-
-            startTime += maxChunkDuration;
-        }
-
-        return Promise.all(chunkPromises);
-    } catch (err) {
-        console.error(`Error splitting audio: ${err}`);
-        throw err;
+    if (totalFileSize <= MAX_DISCORD_UPLOAD_SIZE) {
+      return [
+        {
+          file: inputFile,
+          start: 0,
+          end: 0, // TODO: Put real data here
+        },
+      ];
     }
+
+    const metadata = await new Promise<ffmpeg.FfprobeData>(
+      (resolve, reject) => {
+        ffmpeg.ffprobe(inputFile, (err, data) => {
+          if (err) return reject(err);
+          resolve(data);
+        });
+      },
+    );
+
+    const duration = metadata.format.duration || 0; // Total duration in seconds
+    const bitRate = (totalFileSize * 8) / duration; // Calculate the bitrate in bits per second
+
+    // Calculate the maximum chunk duration based on the 25MB limit
+    const maxChunkDuration = (MAX_DISCORD_UPLOAD_SIZE * 8) / bitRate; // in seconds
+    const numChunks = Math.ceil(duration / maxChunkDuration);
+
+    let startTime = 0;
+    const chunkPromises: Promise<ChunkInfo>[] = [];
+
+    // Ensure output directory exists
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    for (let i = 0; i < numChunks; i++) {
+      const chunkFileName = path.join(outputDir, `chunk_${i}.mp3`);
+      const endTime = Math.min(startTime + maxChunkDuration, duration);
+
+      chunkPromises.push(
+        new Promise<ChunkInfo>((resolve, reject) => {
+          ffmpeg(inputFile)
+            .setStartTime(startTime)
+            .setDuration(endTime - startTime)
+            .output(chunkFileName)
+            .on("end", () => {
+              console.log(`Chunk ${i} saved: ${chunkFileName}`);
+              resolve({ start: startTime, end: endTime, file: chunkFileName });
+            })
+            .on("error", (err: Error) => {
+              console.error(`Error splitting chunk ${i}: ${err.message}`);
+              reject(err);
+            })
+            .run();
+        }),
+      );
+
+      startTime += maxChunkDuration;
+    }
+
+    return Promise.all(chunkPromises);
+  } catch (err) {
+    console.error(`Error splitting audio: ${err}`);
+    throw err;
+  }
 }
 
-export function unsubscribeToVoiceUponLeaving(meeting: MeetingData, userId: string) {
-    const opusStream = meeting.connection.receiver.subscriptions.get(userId);
-    if (opusStream) {
-        opusStream.destroy();
-    }
-    meeting.connection.receiver.subscriptions.delete(userId);
+export function unsubscribeToVoiceUponLeaving(
+  meeting: MeetingData,
+  userId: string,
+) {
+  const opusStream = meeting.connection.receiver.subscriptions.get(userId);
+  if (opusStream) {
+    opusStream.destroy();
+  }
+  meeting.connection.receiver.subscriptions.delete(userId);
 }

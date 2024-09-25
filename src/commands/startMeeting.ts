@@ -1,296 +1,350 @@
 import {
-    ActionRowBuilder,
-    ButtonBuilder, ButtonInteraction,
-    ButtonStyle,
-    CommandInteraction,
-    EmbedBuilder,
-    GuildMember, PermissionsBitField,
-    TextChannel
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
+  CommandInteraction,
+  EmbedBuilder,
+  GuildMember,
+  PermissionsBitField,
+  TextChannel,
 } from "discord.js";
-import {addMeeting, deleteMeeting, getMeeting, hasMeeting} from "../meetings";
+import { addMeeting, deleteMeeting, getMeeting, hasMeeting } from "../meetings";
 import { joinVoiceChannel } from "@discordjs/voice";
 import { MeetingData } from "../types/meeting-data";
-import { openOutputFile, subscribeToUserVoice, updateSnippetsIfNecessary, userStopTalking } from "../audio";
+import {
+  openOutputFile,
+  subscribeToUserVoice,
+  updateSnippetsIfNecessary,
+  userStopTalking,
+} from "../audio";
 import { GuildChannel } from "discord.js/typings";
 import { handleEndMeetingOther } from "./endMeeting";
-import { MAXIMUM_MEETING_DURATION, MAXIMUM_MEETING_DURATION_PRETTY } from "../constants";
+import {
+  MAXIMUM_MEETING_DURATION,
+  MAXIMUM_MEETING_DURATION_PRETTY,
+} from "../constants";
 import { AudioSnippet } from "../types/audio";
 
-export async function handleRequestStartMeeting(interaction: CommandInteraction) {
-    const guildId = interaction.guildId!;
+export async function handleRequestStartMeeting(
+  interaction: CommandInteraction,
+) {
+  const guildId = interaction.guildId!;
 
-    const channel = interaction.channel;
+  const channel = interaction.channel;
 
-    if (!channel || !interaction.guild) {
-        await interaction.reply('Unable to find the channel or guild.');
-        return;
+  if (!channel || !interaction.guild) {
+    await interaction.reply("Unable to find the channel or guild.");
+    return;
+  }
+
+  if (channel.isDMBased()) {
+    await interaction.reply("Bot cannot be used within DMs.");
+    return;
+  }
+
+  const guildChannel = channel as GuildChannel;
+
+  // Check if the bot has permission to send messages in the channel
+  const botMember = interaction.guild.members.cache.get(
+    interaction.client.user!.id,
+  );
+
+  if (!botMember) {
+    await interaction.reply("Bot not found in guild.");
+    return;
+  }
+
+  const chatChannelPermissions = guildChannel.permissionsFor(botMember);
+
+  if (
+    !chatChannelPermissions ||
+    !chatChannelPermissions.has(PermissionsBitField.Flags.SendMessages) ||
+    !chatChannelPermissions.has(PermissionsBitField.Flags.ViewChannel)
+  ) {
+    await interaction.reply(
+      "I do not have permission to send messages in this channel.",
+    );
+    return;
+  }
+
+  if (hasMeeting(guildId)) {
+    const meeting = getMeeting(guildId)!;
+    if (meeting.finished) {
+      // Cleanup the old meeting in preparation for a new one
+      // TODO: Eventually, store meetings in a database and get rid of this, no need to remove data unnecessarily
+      deleteMeeting(guildId);
+    } else {
+      await interaction.reply("A meeting is already active in this server.");
+      return;
     }
+  }
 
-    if (channel.isDMBased()) {
-        await interaction.reply('Bot cannot be used within DMs.');
-        return;
-    }
+  const untypedMember = interaction.member;
+  if (!untypedMember || !interaction.guild) return;
+  const member = untypedMember as GuildMember;
 
-    const guildChannel = channel as GuildChannel;
+  const voiceChannel = member.voice.channel;
+  if (!voiceChannel) {
+    await interaction.reply("You need to join a voice channel first!");
+    return;
+  }
 
-    // Check if the bot has permission to send messages in the channel
-    const botMember = interaction.guild.members.cache.get(interaction.client.user!.id);
+  const voiceChannelPermissions = voiceChannel.permissionsFor(botMember);
 
-    if (!botMember) {
-        await interaction.reply('Bot not found in guild.');
-        return;
-    }
+  if (
+    !voiceChannelPermissions ||
+    !voiceChannelPermissions.has(PermissionsBitField.Flags.ViewChannel) ||
+    !voiceChannelPermissions.has(PermissionsBitField.Flags.Connect)
+  ) {
+    await interaction.reply(
+      "I do not have permission to join your voice channel.",
+    );
+    return;
+  }
 
-    const chatChannelPermissions = guildChannel.permissionsFor(botMember);
+  const withTranscriptionAndNotes = new ButtonBuilder()
+    .setCustomId("with_transcription_and_notes")
+    .setLabel("With Transcription And Meeting Notes")
+    .setStyle(ButtonStyle.Primary);
 
-    if (!chatChannelPermissions || !chatChannelPermissions.has(PermissionsBitField.Flags.SendMessages) || !chatChannelPermissions.has(PermissionsBitField.Flags.ViewChannel)) {
-        await interaction.reply('I do not have permission to send messages in this channel.');
-        return;
-    }
+  const withTranscription = new ButtonBuilder()
+    .setCustomId("with_transcription")
+    .setLabel("With Just Transcription")
+    .setStyle(ButtonStyle.Primary);
 
-    if (hasMeeting(guildId)) {
-        const meeting = getMeeting(guildId)!;
-        if(meeting.finished) {
-            // Cleanup the old meeting in preparation for a new one
-            // TODO: Eventually, store meetings in a database and get rid of this, no need to remove data unnecessarily
-            deleteMeeting(guildId);
-        } else {
-            await interaction.reply('A meeting is already active in this server.');
-            return;
-        }
-    }
+  const withoutTranscription = new ButtonBuilder()
+    .setCustomId("without_transcription")
+    .setLabel("NO Transcription")
+    .setStyle(ButtonStyle.Primary);
 
-    const untypedMember = interaction.member;
-    if (!untypedMember || !interaction.guild) return;
-    const member = untypedMember as GuildMember;
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    withTranscriptionAndNotes,
+    withTranscription,
+    withoutTranscription,
+  );
 
-    const voiceChannel = member.voice.channel;
-    if (!voiceChannel) {
-        await interaction.reply('You need to join a voice channel first!');
-        return;
-    }
-
-    const voiceChannelPermissions = voiceChannel.permissionsFor(botMember);
-
-    if (!voiceChannelPermissions || !voiceChannelPermissions.has(PermissionsBitField.Flags.ViewChannel) || !voiceChannelPermissions.has(PermissionsBitField.Flags.Connect)) {
-        await interaction.reply('I do not have permission to join your voice channel.');
-        return;
-    }
-
-    const withTranscriptionAndNotes = new ButtonBuilder()
-        .setCustomId('with_transcription_and_notes')
-        .setLabel('With Transcription And Meeting Notes')
-        .setStyle(ButtonStyle.Primary);
-
-    const withTranscription = new ButtonBuilder()
-        .setCustomId('with_transcription')
-        .setLabel('With Just Transcription')
-        .setStyle(ButtonStyle.Primary);
-
-    const withoutTranscription = new ButtonBuilder()
-        .setCustomId('without_transcription')
-        .setLabel('NO Transcription')
-        .setStyle(ButtonStyle.Primary);
-
-    const row = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(withTranscriptionAndNotes, withTranscription, withoutTranscription);
-
-    await interaction.reply({
-        embeds: [
-            new EmbedBuilder()
-                .setTitle("Meeting Setup")
-                .setColor('#3498db')
-                .setDescription("Would you like a transcription of your meeting? Please be aware that the transcription service I use is *not* free~ please consider [donating here](https://ko-fi.com/basicbit) if you use this feature regularly!")
-        ],
-        components: [
-            row
-        ]
-    });
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("Meeting Setup")
+        .setColor("#3498db")
+        .setDescription(
+          "Would you like a transcription of your meeting? Please be aware that the transcription service I use is *not* free~ please consider [donating here](https://ko-fi.com/basicbit) if you use this feature regularly!",
+        ),
+    ],
+    components: [row],
+  });
 }
 
-export async function handleStartMeeting(interaction: ButtonInteraction, transcribeMeeting: boolean, generateNotes: boolean) {
-    // TODO: Enable this code, using the meeting setup store to get the initial interaction to edit it.
-    // try {
-    //     await interaction.message.editReply({
-    //         components: [],
-    //     }); //Remove "End Meeting" button from initial reply if able
-    // } catch (e) {
-    //     console.log("Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...")
-    // }
+export async function handleStartMeeting(
+  interaction: ButtonInteraction,
+  transcribeMeeting: boolean,
+  generateNotes: boolean,
+) {
+  // TODO: Enable this code, using the meeting setup store to get the initial interaction to edit it.
+  // try {
+  //     await interaction.message.editReply({
+  //         components: [],
+  //     }); //Remove "End Meeting" button from initial reply if able
+  // } catch (e) {
+  //     console.log("Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...")
+  // }
 
-    const guildId = interaction.guildId!;
-    const channelId = interaction.channelId;
+  const guildId = interaction.guildId!;
+  const channelId = interaction.channelId;
 
-    const channel = interaction.channel;
+  const channel = interaction.channel;
 
-    if (!channel || !interaction.guild) {
-        await interaction.reply('Unable to find the channel or guild.');
-        return;
+  if (!channel || !interaction.guild) {
+    await interaction.reply("Unable to find the channel or guild.");
+    return;
+  }
+
+  if (channel.isDMBased()) {
+    await interaction.reply("Bot cannot be used within DMs.");
+    return;
+  }
+
+  const guildChannel = channel as GuildChannel;
+
+  // Check if the bot has permission to send messages in the channel
+  const botMember = interaction.guild.members.cache.get(
+    interaction.client.user!.id,
+  );
+
+  if (!botMember) {
+    await interaction.reply("Bot not found in guild.");
+    return;
+  }
+
+  const chatChannelPermissions = guildChannel.permissionsFor(botMember);
+
+  if (
+    !chatChannelPermissions ||
+    !chatChannelPermissions.has(PermissionsBitField.Flags.SendMessages) ||
+    !chatChannelPermissions.has(PermissionsBitField.Flags.ViewChannel)
+  ) {
+    await interaction.reply(
+      "I do not have permission to send messages in this channel.",
+    );
+    return;
+  }
+
+  if (hasMeeting(guildId)) {
+    const meeting = getMeeting(guildId)!;
+    if (meeting.finished) {
+      // Cleanup the old meeting in preparation for a new one
+      // TODO: Eventually, store meetings in a database and get rid of this, no need to remove data unnecessarily
+      deleteMeeting(guildId);
+    } else {
+      await interaction.reply("A meeting is already active in this server.");
+      return;
     }
+  }
 
-    if (channel.isDMBased()) {
-        await interaction.reply('Bot cannot be used within DMs.');
-        return;
-    }
+  const untypedMember = interaction.member;
+  if (!untypedMember || !interaction.guild) return;
+  const member = untypedMember as GuildMember;
 
-    const guildChannel = channel as GuildChannel;
+  const voiceChannel = member.voice.channel;
+  if (!voiceChannel) {
+    await interaction.reply("You need to join a voice channel first!");
+    return;
+  }
 
-    // Check if the bot has permission to send messages in the channel
-    const botMember = interaction.guild.members.cache.get(interaction.client.user!.id);
+  const voiceChannelPermissions = voiceChannel.permissionsFor(botMember);
 
-    if (!botMember) {
-        await interaction.reply('Bot not found in guild.');
-        return;
-    }
+  if (
+    !voiceChannelPermissions ||
+    !voiceChannelPermissions.has(PermissionsBitField.Flags.ViewChannel) ||
+    !voiceChannelPermissions.has(PermissionsBitField.Flags.Connect)
+  ) {
+    await interaction.reply(
+      "I do not have permission to join your voice channel.",
+    );
+    return;
+  }
 
-    const chatChannelPermissions = guildChannel.permissionsFor(botMember);
+  const textChannel = interaction.channel as TextChannel;
 
-    if (!chatChannelPermissions || !chatChannelPermissions.has(PermissionsBitField.Flags.SendMessages) || !chatChannelPermissions.has(PermissionsBitField.Flags.ViewChannel)) {
-        await interaction.reply('I do not have permission to send messages in this channel.');
-        return;
-    }
+  // TODO: Set voice channel status to RECORDING
 
-    if (hasMeeting(guildId)) {
-        const meeting = getMeeting(guildId)!;
-        if(meeting.finished) {
-            // Cleanup the old meeting in preparation for a new one
-            // TODO: Eventually, store meetings in a database and get rid of this, no need to remove data unnecessarily
-            deleteMeeting(guildId);
-        } else {
-            await interaction.reply('A meeting is already active in this server.');
-            return;
-        }
-    }
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: interaction.guild.id,
+    adapterCreator: interaction.guild.voiceAdapterCreator,
+    selfDeaf: false,
+    selfMute: true,
+  });
 
-    const untypedMember = interaction.member;
-    if (!untypedMember || !interaction.guild) return;
-    const member = untypedMember as GuildMember;
+  const receiver = connection.receiver;
 
-    const voiceChannel = member.voice.channel;
-    if (!voiceChannel) {
-        await interaction.reply('You need to join a voice channel first!');
-        return;
-    }
+  const attendance: Set<string> = new Set<string>();
 
-    const voiceChannelPermissions = voiceChannel.permissionsFor(botMember);
+  let setFinished: ((val?: any) => void) | undefined = undefined;
+  const isFinished = new Promise<void>((resolve, reject) => {
+    setFinished = resolve;
+  });
+  const meeting: MeetingData = {
+    chatLog: [],
+    attendance,
+    connection,
+    textChannel,
+    audioData: {
+      audioFiles: [],
+      currentSnippets: new Map<string, AudioSnippet>(),
+    },
+    voiceChannel,
+    guildId,
+    channelId,
+    startTime: new Date(),
+    creator: interaction.user,
+    isFinished,
+    setFinished: () => setFinished && setFinished(),
+    finishing: false,
+    finished: false,
+    guild: interaction.guild,
+    initialInteraction: interaction,
+    transcribeMeeting,
+    generateNotes,
+  };
 
-    if (!voiceChannelPermissions || !voiceChannelPermissions.has(PermissionsBitField.Flags.ViewChannel) || !voiceChannelPermissions.has(PermissionsBitField.Flags.Connect)) {
-        await interaction.reply('I do not have permission to join your voice channel.');
-        return;
-    }
+  openOutputFile(meeting);
 
-    const textChannel = interaction.channel as TextChannel;
+  connection.on("error", (error) => {
+    console.error("Voice connection error:", error);
+    interaction.reply("There was an error trying to join the voice channel.");
+  });
 
-    // TODO: Set voice channel status to RECORDING
+  recordInitialAttendance(meeting);
+  await subscribeToInitialMembersVoice(meeting);
 
-    const connection = joinVoiceChannel({
-        channelId: voiceChannel.id,
-        guildId: interaction.guild.id,
-        adapterCreator: interaction.guild.voiceAdapterCreator,
-        selfDeaf: false,
-        selfMute: true,
-    });
+  receiver.speaking.on("start", (userId) => {
+    updateSnippetsIfNecessary(meeting, userId);
+  });
 
-    const receiver = connection.receiver;
+  // Cleanup when user stops speaking
+  receiver.speaking.on("end", (userId) => {
+    // await onUserEndTalking(meeting, userId);
+    userStopTalking(meeting, userId);
+  });
 
-    const attendance: Set<string> = new Set<string>();
+  await setupChatCollector(meeting);
 
-    let setFinished: ((val?: any) => void) | undefined = undefined;
-    const isFinished = new Promise<void>((resolve, reject) => {
-        setFinished = resolve;
-    });
-    const meeting: MeetingData = {
-        chatLog: [],
-        attendance,
-        connection,
-        textChannel,
-        audioData: {
-            audioFiles: [],
-            currentSnippets: new Map<string, AudioSnippet>(),
-        },
-        voiceChannel,
-        guildId,
-        channelId,
-        startTime: new Date(),
-        creator: interaction.user,
-        isFinished,
-        setFinished: () => setFinished && setFinished(),
-        finishing: false,
-        finished: false,
-        guild: interaction.guild,
-        initialInteraction: interaction,
-        transcribeMeeting,
-        generateNotes,
-    };
+  addMeeting(meeting);
 
-    openOutputFile(meeting);
+  // Set a timer to automatically end the meeting after the specified duration
+  meeting.timeoutTimer = setTimeout(() => {
+    meeting.textChannel.send(
+      `Ending meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`,
+    );
+    handleEndMeetingOther(interaction.client, meeting);
+  }, MAXIMUM_MEETING_DURATION);
 
-    connection.on('error', (error) => {
-        console.error('Voice connection error:', error);
-        interaction.reply('There was an error trying to join the voice channel.');
-    });
+  const embed = new EmbedBuilder()
+    .setTitle("Meeting Started")
+    .setDescription(`The meeting has started in **${voiceChannel.name}**.`)
+    .addFields({
+      name: "Start Time",
+      value: `<t:${Math.floor(meeting.startTime.getTime() / 1000)}:F>`,
+    })
+    .setColor(0x00ae86)
+    .setTimestamp();
 
-    recordInitialAttendance(meeting);
-    await subscribeToInitialMembersVoice(meeting);
+  const endButton = new ButtonBuilder()
+    .setCustomId("end_meeting")
+    .setLabel("End Meeting")
+    .setStyle(ButtonStyle.Danger);
 
-    receiver.speaking.on('start', userId => {
-        updateSnippetsIfNecessary(meeting, userId);
-    });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(endButton);
 
-    // Cleanup when user stops speaking
-    receiver.speaking.on('end',  userId => {
-        // await onUserEndTalking(meeting, userId);
-        userStopTalking(meeting, userId);
-    });
-
-    await setupChatCollector(meeting);
-
-    addMeeting(meeting);
-
-    // Set a timer to automatically end the meeting after the specified duration
-    meeting.timeoutTimer = setTimeout(() => {
-        meeting.textChannel.send(`Ending meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`);
-        handleEndMeetingOther(interaction.client, meeting);
-    }, MAXIMUM_MEETING_DURATION);
-
-    const embed = new EmbedBuilder()
-        .setTitle('Meeting Started')
-        .setDescription(`The meeting has started in **${voiceChannel.name}**.`)
-        .addFields(
-            { name: 'Start Time', value: `<t:${Math.floor(meeting.startTime.getTime() / 1000)}:F>` },
-        )
-        .setColor(0x00AE86)
-        .setTimestamp();
-
-    const endButton = new ButtonBuilder()
-        .setCustomId('end_meeting')
-        .setLabel('End Meeting')
-        .setStyle(ButtonStyle.Danger);
-
-    const row = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(endButton);
-
-    await interaction.reply({ embeds: [embed], components: [row] });
+  await interaction.reply({ embeds: [embed], components: [row] });
 }
 
 function recordInitialAttendance(meeting: MeetingData) {
-    meeting.voiceChannel.members.forEach((member) =>
-        meeting.attendance.add(member.user.tag));
+  meeting.voiceChannel.members.forEach((member) =>
+    meeting.attendance.add(member.user.tag),
+  );
 }
 
 async function subscribeToInitialMembersVoice(meeting: MeetingData) {
-    await Promise.all(
-        meeting.voiceChannel.members.map((member) =>
-            subscribeToUserVoice(meeting, member.user.id)));
+  await Promise.all(
+    meeting.voiceChannel.members.map((member) =>
+      subscribeToUserVoice(meeting, member.user.id),
+    ),
+  );
 }
 
 async function setupChatCollector(meeting: MeetingData) {
-    // Save chat messages
-    const collector = meeting.voiceChannel.createMessageCollector();
-    collector.on('collect', message => {
-        if (message.author.bot) return;
+  // Save chat messages
+  const collector = meeting.voiceChannel.createMessageCollector();
+  collector.on("collect", (message) => {
+    if (message.author.bot) return;
 
-        meeting.chatLog.push(`[${message.author.tag} @ ${new Date(message.createdTimestamp).toLocaleString()}]: ${message.content}`);
-        meeting.attendance.add(message.author.tag);
-    });
+    meeting.chatLog.push(
+      `[${message.author.tag} @ ${new Date(message.createdTimestamp).toLocaleString()}]: ${message.content}`,
+    );
+    meeting.attendance.add(message.author.tag);
+  });
 }

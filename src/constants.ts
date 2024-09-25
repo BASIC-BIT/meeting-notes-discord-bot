@@ -36,8 +36,6 @@ export const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
 export const OPENAI_ORGANIZATION_ID = process.env.OPENAI_ORGANIZATION_ID;
 export const OPENAI_PROJECT_ID = process.env.OPENAI_PROJECT_ID;
 
-
 export const GPT_MODEL_MAX_TOKENS = 128000;
-
 
 export const TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE = 0.75; // If over 25% of lines were lost in cleanup, assume something went wrong and return original transcription
