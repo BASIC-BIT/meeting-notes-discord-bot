@@ -195,37 +195,40 @@ export async function compileTranscriptions(
     return transcription;
   }
 
-  try {
-    // return TRANSCRIPTION_HEADER + fs.readFileSync("./src/test/test_raw_transcript.txt").toString();
-    const cleanedUpTranscription = await cleanupTranscription(
-      meeting,
-      transcription,
-    );
+  return TRANSCRIPTION_HEADER + transcription;
 
-    const originalTranscriptionLines = transcription.split("\n").length;
-    const cleanedUpTranscriptionLines = (cleanedUpTranscription || "").split(
-      "\n",
-    ).length;
-    console.log(
-      `Transcription cleanup succeeded.  Original lines: ${originalTranscriptionLines}, Cleaned up lines: ${cleanedUpTranscriptionLines}`,
-    );
-
-    // If our cleaned up transcription is less than 75% of the lines of the original, assume something went critically wrong
-    if (
-      cleanedUpTranscriptionLines <
-      originalTranscriptionLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
-    ) {
-      console.error("Transcription cleanup failed checks, returning original");
-
-      return TRANSCRIPTION_HEADER + transcription;
-    }
-
-    return TRANSCRIPTION_HEADER + cleanedUpTranscription;
-  } catch (e) {
-    console.error("Transcription cleanup failed, returning original", e);
-
-    return TRANSCRIPTION_HEADER + transcription;
-  }
+  //
+  // try {
+  //   // return TRANSCRIPTION_HEADER + fs.readFileSync("./src/test/test_raw_transcript.txt").toString();
+  //   const cleanedUpTranscription = await cleanupTranscription(
+  //     meeting,
+  //     transcription,
+  //   );
+  //
+  //   const originalTranscriptionLines = transcription.split("\n").length;
+  //   const cleanedUpTranscriptionLines = (cleanedUpTranscription || "").split(
+  //     "\n",
+  //   ).length;
+  //   console.log(
+  //     `Transcription cleanup succeeded.  Original lines: ${originalTranscriptionLines}, Cleaned up lines: ${cleanedUpTranscriptionLines}`,
+  //   );
+  //
+  //   // If our cleaned up transcription is less than 75% of the lines of the original, assume something went critically wrong
+  //   if (
+  //     cleanedUpTranscriptionLines <
+  //     originalTranscriptionLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
+  //   ) {
+  //     console.error("Transcription cleanup failed checks, returning original");
+  //
+  //     return TRANSCRIPTION_HEADER + transcription;
+  //   }
+  //
+  //   return TRANSCRIPTION_HEADER + cleanedUpTranscription;
+  // } catch (e) {
+  //   console.error("Transcription cleanup failed, returning original", e);
+  //
+  //   return TRANSCRIPTION_HEADER + transcription;
+  // }
 }
 
 export function openOutputFile(meeting: MeetingData) {

@@ -9,7 +9,9 @@ export async function generateAndSendNotes(meeting: MeetingData) {
   if (notes && notes.length) {
     await meeting.textChannel.send({
       embeds: [
-        new EmbedBuilder().setTitle("Meeting Notes").setDescription(notes),
+        new EmbedBuilder()
+          .setTitle("Meeting Notes (AI Generated)")
+          .setDescription(notes),
         // .setImage(image)
       ],
     });
