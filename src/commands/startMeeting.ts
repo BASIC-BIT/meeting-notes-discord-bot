@@ -25,6 +25,7 @@ import {
   MAXIMUM_MEETING_DURATION_PRETTY,
 } from "../constants";
 import { AudioSnippet } from "../types/audio";
+import { DiscordGatewayAdapterCreator } from "@discordjs/voice/dist";
 
 export async function handleRequestStartMeeting(
   interaction: CommandInteraction,
@@ -233,7 +234,9 @@ export async function handleStartMeeting(
   const connection = joinVoiceChannel({
     channelId: voiceChannel.id,
     guildId: interaction.guild.id,
-    adapterCreator: interaction.guild.voiceAdapterCreator,
+    // TODO: Remove this explicit typecasting - types were clashing causing failing build in CI
+    adapterCreator: interaction.guild
+      .voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
     selfDeaf: false,
     selfMute: true,
   });

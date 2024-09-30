@@ -11,11 +11,3 @@ export interface TranscriptionSegment {
   no_speech_prob: number;
   words?: string[];
 }
-
-export interface TranscriptionResponse {
-  task: "transcribe";
-  language: "english";
-  duration: number;
-  text: string;
-  segments: TranscriptionSegment[];
-}

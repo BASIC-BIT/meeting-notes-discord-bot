@@ -36,7 +36,7 @@ import {
 } from "cockatiel";
 import { MeetingData } from "./types/meeting-data";
 import Bottleneck from "bottleneck";
-import { TranscriptionResponse } from "./types/transcription";
+import { TranscriptionVerbose } from "openai/src/resources/audio/transcriptions";
 
 const openAIClient = new OpenAI({
   apiKey: OPENAI_API_KEY,
@@ -48,19 +48,23 @@ async function transcribeInternal(
   meeting: MeetingData,
   file: string,
 ): Promise<string> {
-  const transcription = (await openAIClient.audio.transcriptions.create({
+  const transcription = await openAIClient.audio.transcriptions.create({
     file: createReadStream(file),
     model: "whisper-1",
     language: "en",
     prompt: getTranscriptionKeywords(meeting),
     temperature: 0,
     response_format: "verbose_json",
-  })) as TranscriptionResponse;
+  });
 
   return cleanupTranscriptionResponse(transcription);
 }
 
-function cleanupTranscriptionResponse(response: TranscriptionResponse): string {
+function cleanupTranscriptionResponse(response: TranscriptionVerbose): string {
+  if (!response.segments) {
+    return "";
+  }
+
   return response.segments
     .filter(
       (segment) =>
