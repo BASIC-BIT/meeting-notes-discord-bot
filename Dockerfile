@@ -17,16 +17,16 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npx yarn install --frozen-lockfile
 
 # Copy the rest of the application code
 COPY . .
 
 # Build the project
-RUN npm run build
+RUN npx yarn build
 
 # Expose the port the app runs on
 EXPOSE 3000
 
 # Command to run the application
-CMD ["npm", "run", "serve"]
+CMD ["npx", "yarn", "serve"]
