@@ -235,7 +235,7 @@ export function getTranscriptionKeywords(meeting: MeetingData): string {
   const attendees = Array.from(meeting.attendance)
     .map((attendee) => `"${attendee}"`)
     .join(", ");
-  return `The transcript is a meeting held in a Discord server with the name "${serverName}", and attendees: ${attendees}.`;
+  return `${serverName}, ${attendees}`;
 }
 
 export async function getTranscriptionCleanupSystemPrompt(
