@@ -7,14 +7,13 @@ import {
   MINIMUM_TRANSCRIPTION_LENGTH,
   SAMPLE_RATE,
   SILENCE_THRESHOLD,
-  TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE,
 } from "./constants";
 import { AudioFileData, AudioSnippet, ChunkInfo } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType } from "@discordjs/voice";
 import prism from "prism-media";
 import { PassThrough } from "node:stream";
-import { cleanupTranscription, transcribeSnippet } from "./transcription";
+import { transcribeSnippet } from "./transcription";
 import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
 import * as fs from "node:fs";
@@ -61,7 +60,7 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
     timestamp: snippet.timestamp,
     userId: snippet.userId,
     processing: true,
-    audioOnlyProcessing: true,
+    // audioOnlyProcessing: true,
   };
 
   const promises: Promise<void>[] = [];
@@ -78,24 +77,24 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
     );
   }
 
-  const audioPromise = new Promise<void>((resolve, reject) => {
-    const buffer = Buffer.concat(snippet!.chunks);
-    if (meeting.audioData.audioPassThrough) {
-      meeting.audioData.audioPassThrough.write(buffer, (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          audioFileData.audioOnlyProcessing = false;
-          resolve();
-        }
-      });
-    } else {
-      reject(new Error("PassThrough stream is not available."));
-    }
-  });
-  promises.push(audioPromise);
+  // const audioPromise = new Promise<void>((resolve, reject) => {
+  //   const buffer = Buffer.concat(snippet!.chunks);
+  //   if (meeting.audioData.audioPassThrough) {
+  //     meeting.audioData.audioPassThrough.write(buffer, (err) => {
+  //       if (err) {
+  //         reject(err);
+  //       } else {
+  //         audioFileData.audioOnlyProcessing = false;
+  //         resolve();
+  //       }
+  //     });
+  //   } else {
+  //     reject(new Error("PassThrough stream is not available."));
+  //   }
+  // });
+  // promises.push(audioPromise);
 
-  audioFileData.audioOnlyProcessingPromise = audioPromise;
+  // audioFileData.audioOnlyProcessingPromise = audioPromise;
 
   audioFileData.processingPromise = Promise.all(promises).then(() => {
     audioFileData.processing = false;
@@ -120,6 +119,17 @@ function setSnippetTimer(meeting: MeetingData, userId: string) {
   }, SILENCE_THRESHOLD);
 
   currentTimers.set(userId, timer);
+  meeting.audioData.silenceTimers = currentTimers;
+}
+
+export function clearSnippetTimer(meeting: MeetingData, userId: string) {
+  const currentTimers =
+    meeting.audioData.silenceTimers || new Map<string, NodeJS.Timeout>();
+
+  if (currentTimers.has(userId)) {
+    clearTimeout(currentTimers.get(userId)!);
+  }
+
   meeting.audioData.silenceTimers = currentTimers;
 }
 
@@ -162,13 +172,13 @@ export async function waitForFinishProcessing(meeting: MeetingData) {
   );
 }
 
-export async function waitForAudioOnlyFinishProcessing(meeting: MeetingData) {
-  await Promise.all(
-    meeting.audioData.audioFiles.map(
-      (fileData) => fileData.audioOnlyProcessingPromise,
-    ),
-  );
-}
+// export async function waitForAudioOnlyFinishProcessing(meeting: MeetingData) {
+//   await Promise.all(
+//     meeting.audioData.audioFiles.map(
+//       (fileData) => fileData.audioOnlyProcessingPromise,
+//     ),
+//   );
+// }
 
 function getAudioDuration(audio: AudioSnippet): number {
   return (

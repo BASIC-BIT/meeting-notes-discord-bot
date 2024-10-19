@@ -11,7 +11,7 @@ import {
   compileTranscriptions,
   splitAudioIntoChunks,
   startProcessingSnippet,
-  waitForAudioOnlyFinishProcessing,
+  // waitForAudioOnlyFinishProcessing,
   waitForFinishProcessing,
 } from "../audio";
 import {
@@ -113,7 +113,7 @@ export async function handleEndMeetingButton(
       startProcessingSnippet(meeting, snippet.userId);
     });
 
-    await waitForAudioOnlyFinishProcessing(meeting);
+    // await waitForAudioOnlyFinishProcessing(meeting);
 
     await closeOutputFile(meeting);
 
@@ -258,7 +258,7 @@ export async function handleEndMeetingOther(
       startProcessingSnippet(meeting, snippet.userId);
     });
 
-    await waitForAudioOnlyFinishProcessing(meeting);
+    // await waitForAudioOnlyFinishProcessing(meeting);
 
     await closeOutputFile(meeting);
 

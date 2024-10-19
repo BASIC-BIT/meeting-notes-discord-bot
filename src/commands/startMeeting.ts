@@ -13,6 +13,7 @@ import { addMeeting, deleteMeeting, getMeeting, hasMeeting } from "../meetings";
 import { joinVoiceChannel } from "@discordjs/voice";
 import { MeetingData } from "../types/meeting-data";
 import {
+  clearSnippetTimer,
   openOutputFile,
   subscribeToUserVoice,
   updateSnippetsIfNecessary,
@@ -284,6 +285,7 @@ export async function handleStartMeeting(
   await subscribeToInitialMembersVoice(meeting);
 
   receiver.speaking.on("start", (userId) => {
+    clearSnippetTimer(meeting, userId);
     updateSnippetsIfNecessary(meeting, userId);
   });
 

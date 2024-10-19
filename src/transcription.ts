@@ -129,7 +129,6 @@ export async function transcribeSnippet(
       .inputOptions([`-f s16le`, `-ar ${SAMPLE_RATE}`, `-ac ${CHANNELS}`])
       .outputOptions([`-f wav`, `-c:a pcm_s16le`])
       .on("end", () => {
-        console.log("Finished converting PCM to WAV");
         resolve();
       })
       .on("error", (err) => {
