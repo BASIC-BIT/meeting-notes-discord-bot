@@ -1,5 +1,5 @@
 # Use an official Node.js runtime as a parent image
-FROM node:18-alpine
+FROM node:22-alpine
 
 # Install build tools necessary for node-gyp
 RUN apk add --no-cache \
@@ -15,6 +15,7 @@ WORKDIR /app
 
 # Copy package.json and package-lock.json
 COPY package*.json ./
+COPY yarn.lock ./
 
 # Install dependencies
 RUN npx yarn install --frozen-lockfile

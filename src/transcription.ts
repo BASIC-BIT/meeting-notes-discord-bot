@@ -50,7 +50,7 @@ async function transcribeInternal(
 ): Promise<string> {
   const transcription = await openAIClient.audio.transcriptions.create({
     file: createReadStream(file),
-    model: "whisper-1",
+    model: "gpt-4o-transcribe",
     language: "en",
     prompt: getTranscriptionKeywords(meeting),
     temperature: 0,
@@ -407,7 +407,7 @@ export async function getImage(meeting: MeetingData): Promise<string> {
     prompt: imagePrompt!,
   });
 
-  const output = response.data[0].url;
+  const output = response.data?.[0]?.url;
 
   return output || "";
 }

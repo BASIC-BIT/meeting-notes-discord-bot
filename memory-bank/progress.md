@@ -26,7 +26,7 @@
     *   Attaching audio recording(s) as `.mp3` file(s).
 *   **Transcription (Optional):**
     *   Converting individual audio snippets (PCM) to WAV format.
-    *   Sending WAV files to OpenAI Whisper-1 API for transcription (`src/transcription.ts`).
+    *   Sending WAV files to OpenAI GPT-4o-transcribe API for transcription (`src/transcription.ts`).
     *   Compiling individual snippet transcriptions into a single meeting transcript.
     *   Sending the full transcript as a `.txt` file.
     *   Implementing resilience patterns (retry, circuit breaker, rate limiting) for OpenAI API calls.
@@ -84,6 +84,7 @@
 
 *   **Initial Concept:** A tool to record Discord voice meetings and provide basic outputs (audio, chat log).
 *   **AI Integration:** Expanded to include OpenAI Whisper for transcription, significantly increasing utility.
+*   **GPT-4o Audio Migration (2025-05-29):** Upgraded from Whisper-1 to GPT-4o-transcribe for improved transcription accuracy and enhanced context understanding.
 *   **Further AI Enhancements:** Leveraged the transcript to provide more value-added features like summaries, notes, and to-do lists using GPT models, and image generation with DALL-E.
 *   **Operationalization:** Recognized the need for robust deployment, leading to Dockerization, Terraform for IaC on AWS, and a CI/CD pipeline.
 *   **Resilience for External APIs:** Implemented patterns like retries and circuit breakers for OpenAI calls, indicating experience with external service dependencies.
