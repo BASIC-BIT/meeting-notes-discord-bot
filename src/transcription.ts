@@ -54,30 +54,32 @@ async function transcribeInternal(
     language: "en",
     prompt: getTranscriptionKeywords(meeting),
     temperature: 0,
-    response_format: "verbose_json",
+    response_format: "json",
   });
 
-  return cleanupTranscriptionResponse(transcription);
+  return transcription.text;
+
+  // return cleanupTranscriptionResponse(transcription);
 }
 
-function cleanupTranscriptionResponse(response: TranscriptionVerbose): string {
-  if (!response.segments) {
-    return "";
-  }
+// function cleanupTranscriptionResponse(response: TranscriptionVerbose): string {
+//   if (!response.segments) {
+//     return "";
+//   }
 
-  return response.segments
-    .filter(
-      (segment) =>
-        // Only remove lines from transcription if no_speech_prob is very high AND logprob is very low, OR if logprob is insanely low, OR if compression ratio is insanely high
-        (segment.no_speech_prob < TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF ||
-          segment.avg_logprob > TRANSCRIPTION_LOGPROB_CUTOFF) &&
-        segment.avg_logprob > TRANSCRIPTION_LOGPROB_HARD_CUTOFF &&
-        segment.compression_ratio < TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF,
-    )
-    .map((segment) => segment.text)
-    .join("")
-    .trim();
-}
+//   return response.segments
+//     .filter(
+//       (segment) =>
+//         // Only remove lines from transcription if no_speech_prob is very high AND logprob is very low, OR if logprob is insanely low, OR if compression ratio is insanely high
+//         (segment.no_speech_prob < TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF ||
+//           segment.avg_logprob > TRANSCRIPTION_LOGPROB_CUTOFF) &&
+//         segment.avg_logprob > TRANSCRIPTION_LOGPROB_HARD_CUTOFF &&
+//         segment.compression_ratio < TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF,
+//     )
+//     .map((segment) => segment.text)
+//     .join("")
+//     .trim();
+// }
 
 const retryPolicy = retry(handleAll, {
   maxAttempts: TRANSCRIPTION_MAX_RETRIES,
