@@ -19,8 +19,7 @@
     "frontend:eject": "react-scripts eject"
   },
   "engines": {
-    "node": "~18.20.8",
-    "npm": "~10.8.2"
+    "node": "~18.20.4"
   },
   "author": "BASIC-BIT",
   "license": "AGPL-3.0-or-later",
