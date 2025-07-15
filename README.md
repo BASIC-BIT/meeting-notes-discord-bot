@@ -39,8 +39,11 @@ This project uses pre-commit hooks to ensure code quality. To set up the develop
 2. **Pre-commit Hook**:
 
    - Automatically runs ESLint and Prettier on staged files before each commit
+   - Auto-fixes code style issues and stages the changes
    - Ensures code style consistency across the project
    - To bypass the hook in emergency situations: `git commit --no-verify`
+
+   **Note**: The pre-commit hook will automatically stage any files modified by the linters, ensuring your commits include all formatting fixes.
 
 3. **Manual Linting**:
    ```bash
