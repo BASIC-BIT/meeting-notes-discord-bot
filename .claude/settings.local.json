@@ -5,7 +5,9 @@
       "Bash(npm install:*)",
       "Bash(npm view:*)",
       "Bash(npm run build:*)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(npx husky:*)",
+      "Bash(git add:*)"
     ],
     "deny": []
   }

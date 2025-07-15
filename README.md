@@ -20,6 +20,34 @@ Contributions are welcome! If you have ideas for new features or improvements, f
 - Copy `.env.example` to `.env`, and fill in your Discord Bot Client ID, Secret Token, and Open AI API key
 - Run `yarn start`
 
+### Development Setup
+
+This project uses pre-commit hooks to ensure code quality. To set up the development environment:
+
+1. **Initial Setup** (for new developers):
+
+   ```bash
+   npm run init
+   ```
+
+   This command will:
+
+   - Install dependencies with legacy peer deps support
+   - Initialize Husky for Git hooks
+   - Set up the pre-commit hook for linting
+
+2. **Pre-commit Hook**:
+
+   - Automatically runs ESLint and Prettier on staged files before each commit
+   - Ensures code style consistency across the project
+   - To bypass the hook in emergency situations: `git commit --no-verify`
+
+3. **Manual Linting**:
+   ```bash
+   npm run lint      # Run ESLint with auto-fix
+   npm run prettier  # Format all files with Prettier
+   ```
+
 ### CI/CD/Infrastructure
 
 This project uses GitHub actions for deployment, and AWS for hosting, managed by Terraform.

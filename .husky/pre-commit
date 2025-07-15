@@ -1,0 +1,19 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# Get staged files
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [ -z "$STAGED_FILES" ]; then
+  echo "No staged files to lint"
+  exit 0
+fi
+
+# Run linting based on OS
+if command -v cmd.exe >/dev/null 2>&1; then
+  # Windows - use Node directly to avoid shell issues
+  node scripts/lint-staged-win.js $STAGED_FILES
+else
+  # Unix-like systems - use lint-staged normally
+  npx lint-staged
+fi
