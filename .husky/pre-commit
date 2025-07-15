@@ -17,3 +17,13 @@ else
   # Unix-like systems - use lint-staged normally
   npx lint-staged
 fi
+
+# Check for any remaining unstaged changes
+UNSTAGED=$(git diff --name-only)
+if [ ! -z "$UNSTAGED" ]; then
+  echo "⚠️  Warning: The following files have unstaged changes after linting:"
+  echo "$UNSTAGED"
+  echo ""
+  echo "These changes were likely made by the linters but couldn't be auto-staged."
+  echo "Please review and stage them manually if needed."
+fi
