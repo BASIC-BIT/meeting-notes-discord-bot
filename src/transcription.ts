@@ -14,14 +14,10 @@ import {
   SAMPLE_RATE,
   TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
   TRANSCRIPTION_BREAK_DURATION,
-  TRANSCRIPTION_LOGPROB_CUTOFF,
   TRANSCRIPTION_MAX_CONCURRENT,
   TRANSCRIPTION_MAX_QUEUE,
   TRANSCRIPTION_MAX_RETRIES,
   TRANSCRIPTION_RATE_MIN_TIME,
-  TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF,
-  TRANSCRIPTION_LOGPROB_HARD_CUTOFF,
-  TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF,
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import { AudioSnippet } from "./types/audio";
@@ -36,7 +32,6 @@ import {
 } from "cockatiel";
 import { MeetingData } from "./types/meeting-data";
 import Bottleneck from "bottleneck";
-import { TranscriptionVerbose } from "openai/src/resources/audio/transcriptions";
 
 const openAIClient = new OpenAI({
   apiKey: OPENAI_API_KEY,
