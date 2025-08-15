@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { distance as levenshteinDistance } from "fastest-levenshtein";
 import {
   createReadStream,
   existsSync,
@@ -14,9 +15,14 @@ import {
   SAMPLE_RATE,
   TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
   TRANSCRIPTION_BREAK_DURATION,
+  // TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF,
+  // TRANSCRIPTION_LOGPROB_CUTOFF,
+  // TRANSCRIPTION_LOGPROB_HARD_CUTOFF,
   TRANSCRIPTION_MAX_CONCURRENT,
   TRANSCRIPTION_MAX_QUEUE,
   TRANSCRIPTION_MAX_RETRIES,
+  // TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF,
+  TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD,
   TRANSCRIPTION_RATE_MIN_TIME,
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
@@ -32,6 +38,7 @@ import {
 } from "cockatiel";
 import { MeetingData } from "./types/meeting-data";
 import Bottleneck from "bottleneck";
+// import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 const openAIClient = new OpenAI({
   apiKey: OPENAI_API_KEY,
@@ -39,18 +46,50 @@ const openAIClient = new OpenAI({
   project: OPENAI_PROJECT_ID,
 });
 
+// Check if transcription is too similar to the prompt or glossary content (likely verbatim output)
+function isTranscriptionLikelyPrompt(transcription: string, fullPrompt: string, glossaryContent: string): boolean {
+  // Normalize all strings for comparison
+  const normalizedTranscription = transcription.trim().toLowerCase();
+  const normalizedPrompt = fullPrompt.trim().toLowerCase();
+  const normalizedGlossary = glossaryContent.trim().toLowerCase();
+  
+  // Calculate similarity against both the full prompt and just the glossary content
+  const distanceFull = levenshteinDistance(normalizedTranscription, normalizedPrompt);
+  const distanceContent = levenshteinDistance(normalizedTranscription, normalizedGlossary);
+  
+  const maxLengthFull = Math.max(normalizedTranscription.length, normalizedPrompt.length);
+  const maxLengthContent = Math.max(normalizedTranscription.length, normalizedGlossary.length);
+  
+  const similarityFull = maxLengthFull > 0 ? distanceFull / maxLengthFull : 0;
+  const similarityContent = maxLengthContent > 0 ? distanceContent / maxLengthContent : 0;
+  
+  // If similarity is below threshold for either comparison, it's likely the prompt was output verbatim
+  return similarityFull < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD || 
+         similarityContent < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD;
+}
+
 async function transcribeInternal(
   meeting: MeetingData,
   file: string,
 ): Promise<string> {
+  const glossaryContent = getTranscriptionGlossaryContent(meeting);
+  const prompt = getTranscriptionKeywords(meeting);
+  
   const transcription = await openAIClient.audio.transcriptions.create({
     file: createReadStream(file),
     model: "gpt-4o-transcribe",
     language: "en",
-    prompt: getTranscriptionKeywords(meeting),
+    prompt: prompt,
     temperature: 0,
     response_format: "json",
+    // include: ["logprobs"],
   });
+
+  // Check if the transcription is suspiciously similar to the prompt or glossary content
+  if (isTranscriptionLikelyPrompt(transcription.text, prompt, glossaryContent)) {
+    console.warn("Transcription appears to be verbatim prompt output, likely no transcribable audio");
+    return ""; // Return empty string for segments with no actual speech
+  }
 
   return transcription.text;
 
@@ -225,13 +264,31 @@ async function chat(meeting: MeetingData, body: ChatInput): Promise<string> {
   return output;
 }
 
+// Generate the inner content of the glossary (without wrapper tags)
+function getTranscriptionGlossaryContent(meeting: MeetingData): string {
+  const serverName = meeting.voiceChannel.guild.name;
+  const channelName = meeting.voiceChannel.name;
+  const serverDescription = meeting.guild.description || "";
+  const attendees = Array.from(meeting.attendance).join(", ");
+  
+  let content = `Server Name: ${serverName}
+Channel: ${channelName}`;
+  
+  if (serverDescription) {
+    content += `\nServer Description: ${serverDescription}`;
+  }
+  
+  content += `\nAttendees: ${attendees}`;
+  
+  return content;
+}
+
 // Get keywords from the server that are likely to help the translation, such as server name, channel names, role names, and attendee names
 export function getTranscriptionKeywords(meeting: MeetingData): string {
-  const serverName = meeting.voiceChannel.guild.name;
-  const attendees = Array.from(meeting.attendance)
-    .map((attendee) => `"${attendee}"`)
-    .join(", ");
-  return `${serverName}, ${attendees}`;
+  const content = getTranscriptionGlossaryContent(meeting);
+  return `<glossary>(do not include in transcript):
+${content}
+</glossary>`;
 }
 
 export async function getTranscriptionCleanupSystemPrompt(
