@@ -7,7 +7,10 @@
       "Bash(npm run build:*)",
       "Bash(docker build:*)",
       "Bash(npx husky:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(yarn lint)",
+      "Bash(yarn prettier:*)",
+      "WebSearch"
     ],
     "deny": []
   }
