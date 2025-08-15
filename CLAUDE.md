@@ -9,19 +9,22 @@ This is a Discord bot that records and transcribes meetings from Discord voice c
 ## Architecture
 
 **Hybrid Application Structure:**
+
 - **Discord Bot Backend** (`src/bot.ts`, `src/audio.ts`, `src/transcription.ts`) - Main bot logic
-- **Web Server** (`src/webserver.ts`) - OAuth authentication and health checks  
+- **Web Server** (`src/webserver.ts`) - OAuth authentication and health checks
 - **Commands** (`src/commands/`) - Discord slash commands for meeting control
 - **Frontend** (`src/frontend/`) - Basic React app (minimal, mostly CRA template)
 - **Infrastructure** (`_infra/`) - Terraform for AWS deployment
 
 **Key Files:**
+
 - `src/index.ts` - Entry point, initializes bot and web server
 - `src/meetings.ts` - Core meeting management logic
 - `src/db.ts` - DynamoDB database interactions
 - `src/types/` - TypeScript type definitions
 
 **Audio Processing Flow:**
+
 1. Bot joins Discord voice channel via `/startmeeting`
 2. Records audio using @discordjs/voice and ffmpeg
 3. Transcribes with OpenAI API
@@ -30,12 +33,14 @@ This is a Discord bot that records and transcribes meetings from Discord voice c
 ## Development Commands
 
 **Development:**
+
 ```bash
 yarn start                 # Start bot with nodemon + ts-node
 yarn frontend:start        # Start React dev server (port 3000)
 ```
 
 **Building:**
+
 ```bash
 yarn build                 # Compile TypeScript to dist/
 yarn frontend:build        # Build React for production
@@ -43,6 +48,7 @@ yarn serve                 # Run compiled bot
 ```
 
 **Quality Assurance:**
+
 ```bash
 yarn test                  # Run Jest tests
 yarn lint                  # ESLint with auto-fix
@@ -50,6 +56,7 @@ yarn prettier              # Format code
 ```
 
 **Infrastructure:**
+
 ```bash
 yarn terraform:init       # Initialize Terraform
 yarn terraform:plan       # Plan infrastructure changes
@@ -74,6 +81,7 @@ yarn terraform:apply      # Deploy to AWS
 ## Testing
 
 Tests are in `test/` directory using Jest. Run individual tests:
+
 ```bash
 yarn test -- --testNamePattern="specific test name"
 ```

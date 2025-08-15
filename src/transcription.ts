@@ -47,25 +47,44 @@ const openAIClient = new OpenAI({
 });
 
 // Check if transcription is too similar to the prompt or glossary content (likely verbatim output)
-function isTranscriptionLikelyPrompt(transcription: string, fullPrompt: string, glossaryContent: string): boolean {
+function isTranscriptionLikelyPrompt(
+  transcription: string,
+  fullPrompt: string,
+  glossaryContent: string,
+): boolean {
   // Normalize all strings for comparison
   const normalizedTranscription = transcription.trim().toLowerCase();
   const normalizedPrompt = fullPrompt.trim().toLowerCase();
   const normalizedGlossary = glossaryContent.trim().toLowerCase();
-  
+
   // Calculate similarity against both the full prompt and just the glossary content
-  const distanceFull = levenshteinDistance(normalizedTranscription, normalizedPrompt);
-  const distanceContent = levenshteinDistance(normalizedTranscription, normalizedGlossary);
-  
-  const maxLengthFull = Math.max(normalizedTranscription.length, normalizedPrompt.length);
-  const maxLengthContent = Math.max(normalizedTranscription.length, normalizedGlossary.length);
-  
+  const distanceFull = levenshteinDistance(
+    normalizedTranscription,
+    normalizedPrompt,
+  );
+  const distanceContent = levenshteinDistance(
+    normalizedTranscription,
+    normalizedGlossary,
+  );
+
+  const maxLengthFull = Math.max(
+    normalizedTranscription.length,
+    normalizedPrompt.length,
+  );
+  const maxLengthContent = Math.max(
+    normalizedTranscription.length,
+    normalizedGlossary.length,
+  );
+
   const similarityFull = maxLengthFull > 0 ? distanceFull / maxLengthFull : 0;
-  const similarityContent = maxLengthContent > 0 ? distanceContent / maxLengthContent : 0;
-  
+  const similarityContent =
+    maxLengthContent > 0 ? distanceContent / maxLengthContent : 0;
+
   // If similarity is below threshold for either comparison, it's likely the prompt was output verbatim
-  return similarityFull < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD || 
-         similarityContent < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD;
+  return (
+    similarityFull < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD ||
+    similarityContent < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD
+  );
 }
 
 async function transcribeInternal(
@@ -74,7 +93,7 @@ async function transcribeInternal(
 ): Promise<string> {
   const glossaryContent = getTranscriptionGlossaryContent(meeting);
   const prompt = getTranscriptionKeywords(meeting);
-  
+
   const transcription = await openAIClient.audio.transcriptions.create({
     file: createReadStream(file),
     model: "gpt-4o-transcribe",
@@ -86,8 +105,12 @@ async function transcribeInternal(
   });
 
   // Check if the transcription is suspiciously similar to the prompt or glossary content
-  if (isTranscriptionLikelyPrompt(transcription.text, prompt, glossaryContent)) {
-    console.warn("Transcription appears to be verbatim prompt output, likely no transcribable audio");
+  if (
+    isTranscriptionLikelyPrompt(transcription.text, prompt, glossaryContent)
+  ) {
+    console.warn(
+      "Transcription appears to be verbatim prompt output, likely no transcribable audio",
+    );
     return ""; // Return empty string for segments with no actual speech
   }
 
@@ -270,16 +293,16 @@ function getTranscriptionGlossaryContent(meeting: MeetingData): string {
   const channelName = meeting.voiceChannel.name;
   const serverDescription = meeting.guild.description || "";
   const attendees = Array.from(meeting.attendance).join(", ");
-  
+
   let content = `Server Name: ${serverName}
 Channel: ${channelName}`;
-  
+
   if (serverDescription) {
     content += `\nServer Description: ${serverDescription}`;
   }
-  
+
   content += `\nAttendees: ${attendees}`;
-  
+
   return content;
 }
 

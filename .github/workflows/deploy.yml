@@ -19,8 +19,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19.2'
-          cache: 'npm'
+          node-version: "20.19.2"
+          cache: "npm"
 
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
@@ -32,7 +32,7 @@ jobs:
         id: run-tests
         run: |
           npm test -- --passWithNoTests --testPathIgnorePatterns="src/frontend" || echo "test_failed=true" >> $GITHUB_OUTPUT
-          
+
       - name: Report test results
         if: steps.run-tests.outputs.test_failed == 'true'
         run: |
@@ -84,14 +84,14 @@ jobs:
           # push it to ECR so that it can
           # be deployed to ECS.
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
-          
+
           # Verify the image contains the required files
           echo "Verifying Docker image contents..."
           docker run --rm $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ls -la dist/index.js || {
             echo "ERROR: dist/index.js not found in Docker image!"
             exit 1
           }
-          
+
           docker push $ECR_REGISTRY/$ECR_REPOSITORY --all-tags
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
@@ -136,12 +136,12 @@ jobs:
           AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
           echo "Waiting for ECS service to stabilize..."
-          
+
           # Wait up to 10 minutes for the service to stabilize
           TIMEOUT=600
           INTERVAL=30
           ELAPSED=0
-          
+
           while [ $ELAPSED -lt $TIMEOUT ]; do
             # Get service details
             SERVICE_STATUS=$(aws ecs describe-services --cluster meeting-notes-bot-cluster --services meeting-notes-bot-service --region $AWS_REGION)
@@ -193,7 +193,7 @@ jobs:
             sleep $INTERVAL
             ELAPSED=$((ELAPSED + INTERVAL))
           done
-          
+
           if [ $ELAPSED -ge $TIMEOUT ]; then
             echo "ERROR: Service failed to stabilize within $TIMEOUT seconds!"
             exit 1
@@ -204,28 +204,28 @@ jobs:
           AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
           echo "Verifying deployment health..."
-          
+
           # Get the running tasks
           RUNNING_TASKS=$(aws ecs list-tasks --cluster meeting-notes-bot-cluster --service-name meeting-notes-bot-service --desired-status RUNNING --region $AWS_REGION | jq -r '.taskArns[]')
-          
+
           if [ -z "$RUNNING_TASKS" ]; then
             echo "ERROR: No running tasks found!"
             exit 1
           fi
-          
+
           # Check CloudWatch logs for startup errors (if available)
           LOG_GROUP="/ecs/meeting-notes-bot"
           CURRENT_TIME=$(date +%s000)
           START_TIME=$((CURRENT_TIME - 300000)) # Last 5 minutes
-          
+
           echo "Checking recent logs for errors..."
           RECENT_LOGS=$(aws logs filter-log-events --log-group-name $LOG_GROUP --start-time $START_TIME --filter-pattern "ERROR" --region $AWS_REGION 2>/dev/null || echo "{}")
-          
+
           if [ $(echo "$RECENT_LOGS" | jq -r '.events | length') -gt 0 ]; then
             echo "WARNING: Found error logs in the last 5 minutes:"
             echo "$RECENT_LOGS" | jq -r '.events[] | .message' | head -10
           fi
-          
+
           echo "Deployment completed successfully!"
 
       - name: Rollback on failure
@@ -235,13 +235,13 @@ jobs:
           PREVIOUS_TASK_DEF: ${{ steps.current-task-def.outputs.current_task_def }}
         run: |
           echo "Deployment failed! Rolling back to previous task definition: $PREVIOUS_TASK_DEF"
-          
+
           aws ecs update-service \
             --cluster meeting-notes-bot-cluster \
             --service meeting-notes-bot-service \
             --task-definition $PREVIOUS_TASK_DEF \
             --region $AWS_REGION
-          
+
           echo "Rollback initiated. Previous deployment restored."
 
       - name: Create deployment summary
