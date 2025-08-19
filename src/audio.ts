@@ -60,7 +60,7 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
     timestamp: snippet.timestamp,
     userId: snippet.userId,
     processing: true,
-    audioOnlyProcessing: true,
+    audioOnlyProcessing: false, // Audio already written in real-time
   };
 
   const promises: Promise<void>[] = [];
@@ -77,24 +77,10 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
     );
   }
 
-  const audioPromise = new Promise<void>((resolve, reject) => {
-    const buffer = Buffer.concat(snippet!.chunks);
-    if (meeting.audioData.audioPassThrough) {
-      meeting.audioData.audioPassThrough.write(buffer, (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          audioFileData.audioOnlyProcessing = false;
-          resolve();
-        }
-      });
-    } else {
-      reject(new Error("PassThrough stream is not available."));
-    }
-  });
-  promises.push(audioPromise);
-
-  audioFileData.audioOnlyProcessingPromise = audioPromise;
+  // Audio is now written immediately as it arrives, so we don't need to write it here
+  // This prevents duplicate audio and memory buildup for long recordings
+  
+  audioFileData.audioOnlyProcessingPromise = Promise.resolve(); // Already processed in real-time
 
   audioFileData.processingPromise = Promise.all(promises).then(() => {
     audioFileData.processing = false;
@@ -153,6 +139,18 @@ export async function subscribeToUserVoice(
   );
 
   decodedStream.on("data", (chunk) => {
+    // Immediately write audio to the output stream to prevent memory buildup
+    // This ensures audio is saved even for very long recordings
+    if (meeting.audioData.audioPassThrough) {
+      meeting.audioData.audioPassThrough.write(chunk, (err) => {
+        if (err) {
+          console.error(`Error writing audio chunk from user ${userId}:`, err);
+        }
+      });
+    }
+
+    // Still maintain snippets for transcription purposes
+    // These will be processed and cleared when user stops speaking or after 60 seconds
     updateSnippetsIfNecessary(meeting, userId);
 
     const snippet = meeting.audioData.currentSnippets.get(userId);
@@ -173,9 +171,11 @@ export async function waitForFinishProcessing(meeting: MeetingData) {
 }
 
 export async function waitForAudioOnlyFinishProcessing(meeting: MeetingData) {
+  // Audio is now written in real-time, so this just ensures all metadata is updated
+  // Keeping this function for compatibility but it essentially returns immediately
   await Promise.all(
     meeting.audioData.audioFiles.map(
-      (fileData) => fileData.audioOnlyProcessingPromise,
+      (fileData) => fileData.audioOnlyProcessingPromise || Promise.resolve(),
     ),
   );
 }

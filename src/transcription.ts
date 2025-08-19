@@ -57,7 +57,13 @@ function isTranscriptionLikelyPrompt(
   const normalizedPrompt = fullPrompt.trim().toLowerCase();
   const normalizedGlossary = glossaryContent.trim().toLowerCase();
 
-  // Calculate similarity against both the full prompt and just the glossary content
+  // Extract just the first line of the glossary content (Server Name: ...)
+  const firstLineOfGlossary = glossaryContent
+    .split("\n")[0]
+    .trim()
+    .toLowerCase();
+
+  // Calculate similarity against the full prompt, just the glossary content, and just the first line
   const distanceFull = levenshteinDistance(
     normalizedTranscription,
     normalizedPrompt,
@@ -65,6 +71,10 @@ function isTranscriptionLikelyPrompt(
   const distanceContent = levenshteinDistance(
     normalizedTranscription,
     normalizedGlossary,
+  );
+  const distanceFirstLine = levenshteinDistance(
+    normalizedTranscription,
+    firstLineOfGlossary,
   );
 
   const maxLengthFull = Math.max(
@@ -75,15 +85,22 @@ function isTranscriptionLikelyPrompt(
     normalizedTranscription.length,
     normalizedGlossary.length,
   );
+  const maxLengthFirstLine = Math.max(
+    normalizedTranscription.length,
+    firstLineOfGlossary.length,
+  );
 
   const similarityFull = maxLengthFull > 0 ? distanceFull / maxLengthFull : 0;
   const similarityContent =
     maxLengthContent > 0 ? distanceContent / maxLengthContent : 0;
+  const similarityFirstLine =
+    maxLengthFirstLine > 0 ? distanceFirstLine / maxLengthFirstLine : 0;
 
-  // If similarity is below threshold for either comparison, it's likely the prompt was output verbatim
+  // If similarity is below threshold for any comparison, it's likely the prompt was output verbatim
   return (
     similarityFull < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD ||
-    similarityContent < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD
+    similarityContent < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD ||
+    similarityFirstLine < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD
   );
 }
 

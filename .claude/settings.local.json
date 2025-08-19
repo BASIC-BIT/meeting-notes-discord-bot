@@ -10,7 +10,9 @@
       "Bash(git add:*)",
       "Bash(yarn lint)",
       "Bash(yarn prettier:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(echo:*)",
+      "Bash(grep:*)"
     ],
     "deny": []
   }
