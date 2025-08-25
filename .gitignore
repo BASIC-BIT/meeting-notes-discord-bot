@@ -4,6 +4,7 @@ dist/
 .env
 logs/
 recordings/
+dynamodb-data/
 
 _infra/terraform.tfvars
 _infra/.terraform/

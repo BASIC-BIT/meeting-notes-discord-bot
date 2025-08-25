@@ -1,6 +1,7 @@
 import { CLIENT_ID, TOKEN } from "./constants";
 import {
   ButtonInteraction,
+  ChatInputCommandInteraction,
   Client,
   CommandInteraction,
   GatewayIntentBits,
@@ -8,6 +9,7 @@ import {
   RepliableInteraction,
   REST,
   SlashCommandBuilder,
+  TextChannel,
   VoiceState,
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
@@ -15,7 +17,10 @@ import { getAllMeetings, getMeeting } from "./meetings";
 import {
   handleRequestStartMeeting,
   handleStartMeeting,
+  handleAutoStartMeeting,
 } from "./commands/startMeeting";
+import { handleAutoRecordCommand } from "./commands/autorecord";
+import { getAutoRecordSetting } from "./db";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
@@ -65,6 +70,11 @@ export async function setupBot() {
 
         if (commandName === "startmeeting") {
           await handleRequestStartMeeting(commandInteraction);
+        }
+        if (commandName === "autorecord") {
+          await handleAutoRecordCommand(
+            commandInteraction as ChatInputCommandInteraction,
+          );
         }
       }
       if (interaction.isButton()) {
@@ -117,7 +127,19 @@ async function handleVoiceStateUpdate(
   oldState: VoiceState,
   newState: VoiceState,
 ) {
-  if (!oldState.channel && newState.channel && newState.member) {
+  // Check if the user switched channels
+  if (
+    oldState.channel &&
+    newState.channel &&
+    oldState.channelId !== newState.channelId
+  ) {
+    // Handle as leave from old channel
+    await handleUserLeave(oldState);
+    // Handle as join to new channel
+    await handleUserJoin(newState);
+  }
+  // Check if the user joined a voice channel
+  else if (!oldState.channel && newState.channel && newState.member) {
     await handleUserJoin(newState);
   }
   // Check if the user left a voice channel
@@ -128,6 +150,8 @@ async function handleVoiceStateUpdate(
 
 async function handleUserJoin(newState: VoiceState) {
   const meeting = getMeeting(newState.guild.id);
+
+  // Handle existing meeting attendance
   if (
     meeting &&
     newState.member &&
@@ -143,6 +167,51 @@ async function handleUserJoin(newState: VoiceState) {
     );
 
     await subscribeToUserVoice(meeting, newState.member!.user.id);
+    return; // Exit early if we're already recording
+  }
+
+  // Check if auto-record is enabled for this channel
+  if (
+    !meeting &&
+    newState.channel &&
+    newState.member &&
+    newState.member.user.id !== client.user!.id // Don't trigger for bot joining
+  ) {
+    try {
+      // Check for specific channel setting
+      let autoRecordSetting = await getAutoRecordSetting(
+        newState.guild.id,
+        newState.channelId!,
+      );
+
+      // If no specific setting, check for record-all setting
+      if (!autoRecordSetting) {
+        autoRecordSetting = await getAutoRecordSetting(
+          newState.guild.id,
+          "ALL",
+        );
+      }
+
+      // If auto-record is enabled, start recording
+      if (autoRecordSetting && autoRecordSetting.enabled) {
+        const textChannel = newState.guild.channels.cache.get(
+          autoRecordSetting.textChannelId,
+        ) as TextChannel;
+
+        if (textChannel && newState.channel) {
+          console.log(
+            `Auto-starting recording in ${newState.channel.name} due to auto-record settings`,
+          );
+          await handleAutoStartMeeting(client, newState.channel, textChannel);
+        } else {
+          console.error(
+            `Could not find text channel ${autoRecordSetting.textChannelId} for auto-recording`,
+          );
+        }
+      }
+    } catch (error) {
+      console.error("Error checking auto-record settings:", error);
+    }
   }
 }
 
@@ -177,6 +246,57 @@ async function setupApplicationCommands() {
     new SlashCommandBuilder()
       .setName("startmeeting")
       .setDescription("Record a meeting with voice and chat logs."),
+    new SlashCommandBuilder()
+      .setName("autorecord")
+      .setDescription("Configure automatic recording for voice channels")
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("enable")
+          .setDescription("Enable auto-recording for a specific voice channel")
+          .addChannelOption((option) =>
+            option
+              .setName("voice-channel")
+              .setDescription("The voice channel to auto-record")
+              .addChannelTypes(2) // Voice channel type
+              .setRequired(true),
+          )
+          .addChannelOption((option) =>
+            option
+              .setName("text-channel")
+              .setDescription("The text channel to send meeting notifications")
+              .addChannelTypes(0) // Text channel type
+              .setRequired(true),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("disable")
+          .setDescription("Disable auto-recording for a specific voice channel")
+          .addChannelOption((option) =>
+            option
+              .setName("voice-channel")
+              .setDescription("The voice channel to stop auto-recording")
+              .addChannelTypes(2) // Voice channel type
+              .setRequired(true),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("enable-all")
+          .setDescription("Enable auto-recording for all voice channels")
+          .addChannelOption((option) =>
+            option
+              .setName("text-channel")
+              .setDescription("The text channel to send meeting notifications")
+              .addChannelTypes(0) // Text channel type
+              .setRequired(true),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("list")
+          .setDescription("List all auto-record settings for this server"),
+      ),
   ].map((command) => command.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);

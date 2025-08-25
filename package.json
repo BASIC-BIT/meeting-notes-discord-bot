@@ -19,7 +19,15 @@
     "frontend:eject": "react-scripts eject",
     "prepare": "husky",
     "init": "npm install --legacy-peer-deps && npx husky init && npm run init:husky-hooks",
-    "init:husky-hooks": "echo 'npx lint-staged' > .husky/pre-commit"
+    "init:husky-hooks": "echo 'npx lint-staged' > .husky/pre-commit",
+    "docker:setup": "node scripts/setup-dynamodb-dir.js",
+    "docker:up": "npm run docker:setup && docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "docker:clean": "node scripts/clean-dynamodb.js",
+    "db:init": "node scripts/init-dynamodb.js",
+    "dev": "npm run docker:up && npm run db:init && npm run start",
+    "dev:clean": "npm run docker:down && npm run docker:clean && npm run dev"
   },
   "engines": {
     "node": "~20.19.2"

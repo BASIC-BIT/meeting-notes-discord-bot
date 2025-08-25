@@ -42,3 +42,14 @@ export interface RecordingTranscript {
   fileSize: number;
   expirationDate?: string;
 }
+
+// Auto Record Settings Type
+export interface AutoRecordSettings {
+  guildId: string; // Partition key
+  channelId: string; // Sort key - use "ALL" for record all channels
+  textChannelId: string; // Where to send meeting notifications
+  enabled: boolean; // Whether auto-recording is active
+  recordAll: boolean; // True if this is a guild-wide setting
+  createdBy: string; // User ID who created this setting
+  createdAt: string; // ISO timestamp
+}

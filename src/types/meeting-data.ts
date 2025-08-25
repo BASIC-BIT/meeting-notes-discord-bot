@@ -23,7 +23,7 @@ export interface MeetingData {
   timeoutTimer?: ReturnType<typeof setTimeout>;
   creator: User;
   guild: Guild;
-  initialInteraction: ButtonInteraction;
+  initialInteraction?: ButtonInteraction;
 
   finishing: boolean;
   // Used for functions that are waiting for the meeting to be completely over

@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-/* eslint-env node */
-/* eslint-disable @typescript-eslint/no-require-imports, no-undef */
 const { execSync } = require("child_process");
 
 // Get staged files

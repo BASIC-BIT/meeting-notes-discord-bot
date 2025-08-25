@@ -79,7 +79,7 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
 
   // Audio is now written immediately as it arrives, so we don't need to write it here
   // This prevents duplicate audio and memory buildup for long recordings
-  
+
   audioFileData.audioOnlyProcessingPromise = Promise.resolve(); // Already processed in real-time
 
   audioFileData.processingPromise = Promise.all(promises).then(() => {

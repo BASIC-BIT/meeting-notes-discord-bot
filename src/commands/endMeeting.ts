@@ -89,15 +89,17 @@ export async function handleEndMeetingButton(
     // Acknowledge the interaction immediately
     await interaction.deferReply();
 
-    try {
-      await meeting.initialInteraction.editReply({
-        components: [],
-      }); //Remove "End Meeting" button from initial reply if able
-    } catch (e) {
-      console.error(
-        "Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...",
-        e,
-      );
+    if (meeting.initialInteraction) {
+      try {
+        await meeting.initialInteraction.editReply({
+          components: [],
+        }); //Remove "End Meeting" button from initial reply if able
+      } catch (e) {
+        console.error(
+          "Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...",
+          e,
+        );
+      }
     }
 
     if (meeting.connection) {
@@ -234,15 +236,17 @@ export async function handleEndMeetingOther(
     meeting.finishing = true;
     meeting.endTime = new Date();
 
-    try {
-      await meeting.initialInteraction.editReply({
-        components: [],
-      }); //Remove "End Meeting" button from initial reply if able
-    } catch (e) {
-      console.error(
-        "Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...",
-        e,
-      );
+    if (meeting.initialInteraction) {
+      try {
+        await meeting.initialInteraction.editReply({
+          components: [],
+        }); //Remove "End Meeting" button from initial reply if able
+      } catch (e) {
+        console.error(
+          "Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...",
+          e,
+        );
+      }
     }
 
     if (meeting.connection) {

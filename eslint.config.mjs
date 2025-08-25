@@ -9,4 +9,12 @@ export default [
   pluginJs.configs.recommended,
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
+  // Special configuration for Node.js scripts
+  {
+    files: ["scripts/**/*.js"],
+    languageOptions: { globals: globals.node },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ];

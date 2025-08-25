@@ -20,6 +20,53 @@ Contributions are welcome! If you have ideas for new features or improvements, f
 - Copy `.env.example` to `.env`, and fill in your Discord Bot Client ID, Secret Token, and Open AI API key
 - Run `yarn start`
 
+### Local Development with DynamoDB
+
+For local development with DynamoDB, use Docker Compose to run a local instance:
+
+1. **Start DynamoDB Local and Admin UI**:
+
+   ```bash
+   yarn docker:up
+   ```
+
+2. **Initialize database tables**:
+
+   ```bash
+   yarn db:init
+   ```
+
+3. **Start the bot with local DynamoDB**:
+
+   ```bash
+   yarn dev
+   ```
+
+   This command runs `docker:up`, `db:init`, and `start` in sequence.
+
+4. **Access DynamoDB Admin UI**:
+
+   - Open http://localhost:8001 in your browser
+   - View and manage your local DynamoDB tables
+
+5. **Stop services**:
+
+   ```bash
+   yarn docker:down
+   ```
+
+6. **Clean restart** (removes all data):
+   ```bash
+   yarn dev:clean
+   ```
+
+**Note**: Make sure your `.env` file includes:
+
+```
+NODE_ENV=development
+USE_LOCAL_DYNAMODB=true
+```
+
 ### Development Setup
 
 This project uses pre-commit hooks to ensure code quality. To set up the development environment:

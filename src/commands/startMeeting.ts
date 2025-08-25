@@ -3,30 +3,23 @@ import {
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
+  Client,
   CommandInteraction,
   EmbedBuilder,
   GuildMember,
   PermissionsBitField,
   TextChannel,
+  VoiceBasedChannel,
 } from "discord.js";
-import { addMeeting, deleteMeeting, getMeeting, hasMeeting } from "../meetings";
-import { joinVoiceChannel } from "@discordjs/voice";
-import { MeetingData } from "../types/meeting-data";
 import {
-  clearSnippetTimer,
-  openOutputFile,
-  subscribeToUserVoice,
-  updateSnippetsIfNecessary,
-  userStopTalking,
-} from "../audio";
+  deleteMeeting,
+  getMeeting,
+  hasMeeting,
+  initializeMeeting,
+} from "../meetings";
 import { GuildChannel } from "discord.js/typings";
+import { checkBotPermissions } from "../utils/permissions";
 import { handleEndMeetingOther } from "./endMeeting";
-import {
-  MAXIMUM_MEETING_DURATION,
-  MAXIMUM_MEETING_DURATION_PRETTY,
-} from "../constants";
-import { AudioSnippet } from "../types/audio";
-import { DiscordGatewayAdapterCreator } from "@discordjs/voice/dist";
 
 export async function handleRequestStartMeeting(
   interaction: CommandInteraction,
@@ -144,17 +137,7 @@ export async function handleStartMeeting(
   transcribeMeeting: boolean,
   generateNotes: boolean,
 ) {
-  // TODO: Enable this code, using the meeting setup store to get the initial interaction to edit it.
-  // try {
-  //     await interaction.message.editReply({
-  //         components: [],
-  //     }); //Remove "End Meeting" button from initial reply if able
-  // } catch (e) {
-  //     console.log("Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...")
-  // }
-
   const guildId = interaction.guildId!;
-  const channelId = interaction.channelId;
 
   const channel = interaction.channel;
 
@@ -168,8 +151,6 @@ export async function handleStartMeeting(
     return;
   }
 
-  const guildChannel = channel as GuildChannel;
-
   // Check if the bot has permission to send messages in the channel
   const botMember = interaction.guild.members.cache.get(
     interaction.client.user!.id,
@@ -180,18 +161,7 @@ export async function handleStartMeeting(
     return;
   }
 
-  const chatChannelPermissions = guildChannel.permissionsFor(botMember);
-
-  if (
-    !chatChannelPermissions ||
-    !chatChannelPermissions.has(PermissionsBitField.Flags.SendMessages) ||
-    !chatChannelPermissions.has(PermissionsBitField.Flags.ViewChannel)
-  ) {
-    await interaction.reply(
-      "I do not have permission to send messages in this channel.",
-    );
-    return;
-  }
+  const textChannel = channel as TextChannel;
 
   if (hasMeeting(guildId)) {
     const meeting = getMeeting(guildId)!;
@@ -215,97 +185,30 @@ export async function handleStartMeeting(
     return;
   }
 
-  const voiceChannelPermissions = voiceChannel.permissionsFor(botMember);
+  // Check bot permissions
+  const permissionCheck = checkBotPermissions(
+    voiceChannel,
+    textChannel,
+    botMember,
+  );
 
-  if (
-    !voiceChannelPermissions ||
-    !voiceChannelPermissions.has(PermissionsBitField.Flags.ViewChannel) ||
-    !voiceChannelPermissions.has(PermissionsBitField.Flags.Connect)
-  ) {
-    await interaction.reply(
-      "I do not have permission to join your voice channel.",
-    );
+  if (!permissionCheck.success) {
+    await interaction.reply(permissionCheck.errorMessage!);
     return;
   }
 
-  const textChannel = interaction.channel as TextChannel;
-
-  // TODO: Set voice channel status to RECORDING
-
-  const connection = joinVoiceChannel({
-    channelId: voiceChannel.id,
-    guildId: interaction.guild.id,
-    // TODO: Remove this explicit typecasting - types were clashing causing failing build in CI
-    adapterCreator: interaction.guild
-      .voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
-    selfDeaf: false,
-    selfMute: true,
-  });
-
-  const receiver = connection.receiver;
-
-  const attendance: Set<string> = new Set<string>();
-
-  let setFinished: ((val?: void) => void) | undefined = undefined;
-  const isFinished = new Promise<void>((resolve) => {
-    setFinished = resolve;
-  });
-  const meeting: MeetingData = {
-    chatLog: [],
-    attendance,
-    connection,
-    textChannel,
-    audioData: {
-      audioFiles: [],
-      currentSnippets: new Map<string, AudioSnippet>(),
-    },
+  // Initialize the meeting using the core function
+  const meeting = await initializeMeeting({
     voiceChannel,
-    guildId,
-    channelId,
-    startTime: new Date(),
-    creator: interaction.user,
-    isFinished,
-    setFinished: () => setFinished && setFinished(),
-    finishing: false,
-    finished: false,
+    textChannel,
     guild: interaction.guild,
-    initialInteraction: interaction,
+    creator: interaction.user,
     transcribeMeeting,
     generateNotes,
-  };
-
-  openOutputFile(meeting);
-
-  connection.on("error", (error) => {
-    console.error("Voice connection error:", error);
-    interaction.reply("There was an error trying to join the voice channel.");
+    initialInteraction: interaction,
+    isAutoRecording: false,
+    onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
   });
-
-  recordInitialAttendance(meeting);
-  await subscribeToInitialMembersVoice(meeting);
-
-  receiver.speaking.on("start", (userId) => {
-    clearSnippetTimer(meeting, userId);
-    updateSnippetsIfNecessary(meeting, userId);
-  });
-
-  // Cleanup when user stops speaking
-  receiver.speaking.on("end", (userId) => {
-    // await onUserEndTalking(meeting, userId);
-    userStopTalking(meeting, userId);
-  });
-
-  await setupChatCollector(meeting);
-
-  addMeeting(meeting);
-
-  // Set a timer to automatically end the meeting after the specified duration
-  meeting.timeoutTimer = setTimeout(() => {
-    meeting.textChannel.send(
-      `Ending meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`,
-    );
-    handleEndMeetingOther(interaction.client, meeting);
-  }, MAXIMUM_MEETING_DURATION);
 
   const embed = new EmbedBuilder()
     .setTitle("Meeting Started")
@@ -327,29 +230,89 @@ export async function handleStartMeeting(
   await interaction.reply({ embeds: [embed], components: [row] });
 }
 
-function recordInitialAttendance(meeting: MeetingData) {
-  meeting.voiceChannel.members.forEach((member) =>
-    meeting.attendance.add(member.user.tag),
-  );
-}
+export async function handleAutoStartMeeting(
+  client: Client,
+  voiceChannel: VoiceBasedChannel,
+  textChannel: TextChannel,
+) {
+  const guildId = voiceChannel.guild.id;
 
-async function subscribeToInitialMembersVoice(meeting: MeetingData) {
-  await Promise.all(
-    meeting.voiceChannel.members.map((member) =>
-      subscribeToUserVoice(meeting, member.user.id),
-    ),
-  );
-}
+  // Check if a meeting is already active
+  if (hasMeeting(guildId)) {
+    const meeting = getMeeting(guildId)!;
+    if (!meeting.finished) {
+      // Meeting already active, send notification about conflict
+      await textChannel.send(
+        `Cannot start auto-recording in **${voiceChannel.name}** - the bot is already recording in another channel.`,
+      );
+      return false;
+    }
+    // Clean up finished meeting
+    deleteMeeting(guildId);
+  }
 
-async function setupChatCollector(meeting: MeetingData) {
-  // Save chat messages
-  const collector = meeting.voiceChannel.createMessageCollector();
-  collector.on("collect", (message) => {
-    if (message.author.bot) return;
-
-    meeting.chatLog.push(
-      `[${message.author.tag} @ ${new Date(message.createdTimestamp).toLocaleString()}]: ${message.content}`,
+  // Check if bot has necessary permissions
+  const botMember = voiceChannel.guild.members.cache.get(client.user!.id);
+  if (!botMember) {
+    await textChannel.send(
+      `Cannot start auto-recording - bot not found in server.`,
     );
-    meeting.attendance.add(message.author.tag);
+    return false;
+  }
+
+  // Check bot permissions
+  const permissionCheck = checkBotPermissions(
+    voiceChannel,
+    textChannel,
+    botMember,
+  );
+
+  if (!permissionCheck.success) {
+    // Try to send error message if we have text channel permissions
+    try {
+      await textChannel.send(
+        `Cannot start auto-recording - ${permissionCheck.errorMessage}`,
+      );
+    } catch {
+      console.error(
+        `No permissions to send messages in text channel ${textChannel.id}`,
+      );
+    }
+    return false;
+  }
+
+  // Initialize the meeting using the core function
+  const meeting = await initializeMeeting({
+    voiceChannel,
+    textChannel,
+    guild: voiceChannel.guild,
+    creator: client.user!,
+    transcribeMeeting: true, // Always transcribe for auto-recordings
+    generateNotes: true, // Always generate notes for auto-recordings
+    initialInteraction: undefined, // No interaction for auto-recordings
+    isAutoRecording: true,
+    onTimeout: (meeting) => handleEndMeetingOther(client, meeting),
   });
+
+  // Send notification that auto-recording has started
+  const embed = new EmbedBuilder()
+    .setTitle("🔴 Auto-Recording Started")
+    .setDescription(`Auto-recording has started in **${voiceChannel.name}**`)
+    .addFields({
+      name: "Start Time",
+      value: `<t:${Math.floor(meeting.startTime.getTime() / 1000)}:F>`,
+    })
+    .setColor(0xff0000)
+    .setTimestamp();
+
+  const endButton = new ButtonBuilder()
+    .setCustomId("end_meeting")
+    .setLabel("End Recording")
+    .setStyle(ButtonStyle.Danger);
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(endButton);
+
+  await textChannel.send({ embeds: [embed], components: [row] });
+
+  return true;
 }
