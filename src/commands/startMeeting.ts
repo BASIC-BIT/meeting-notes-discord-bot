@@ -25,6 +25,9 @@ export async function handleRequestStartMeeting(
   interaction: CommandInteraction,
 ) {
   const guildId = interaction.guildId!;
+  const meetingContext = interaction.isChatInputCommand()
+    ? interaction.options.getString("context") || undefined
+    : undefined;
 
   const channel = interaction.channel;
 
@@ -119,13 +122,27 @@ export async function handleRequestStartMeeting(
     withoutTranscription,
   );
 
+  // Store meeting context in button custom IDs if provided
+  if (meetingContext) {
+    // Encode context in button IDs to pass it through
+    const encodedContext = Buffer.from(meetingContext).toString("base64");
+    withTranscriptionAndNotes.setCustomId(
+      `with_transcription_and_notes:${encodedContext}`,
+    );
+    withTranscription.setCustomId(`with_transcription:${encodedContext}`);
+    withoutTranscription.setCustomId(`without_transcription:${encodedContext}`);
+  }
+
   await interaction.reply({
     embeds: [
       new EmbedBuilder()
         .setTitle("Meeting Setup")
         .setColor("#3498db")
         .setDescription(
-          "Would you like a transcription of your meeting? Please be aware that the transcription service I use is *not* free~ please consider [donating here](https://ko-fi.com/basicbit) if you use this feature regularly!",
+          "Would you like a transcription of your meeting? Please be aware that the transcription service I use is *not* free~ please consider [donating here](https://ko-fi.com/basicbit) if you use this feature regularly!" +
+            (meetingContext
+              ? `\n\n**Meeting Context:** ${meetingContext}`
+              : ""),
         ),
     ],
     components: [row],
@@ -136,6 +153,7 @@ export async function handleStartMeeting(
   interaction: ButtonInteraction,
   transcribeMeeting: boolean,
   generateNotes: boolean,
+  meetingContext?: string,
 ) {
   const guildId = interaction.guildId!;
 
@@ -205,6 +223,7 @@ export async function handleStartMeeting(
     creator: interaction.user,
     transcribeMeeting,
     generateNotes,
+    meetingContext,
     initialInteraction: interaction,
     isAutoRecording: false,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),

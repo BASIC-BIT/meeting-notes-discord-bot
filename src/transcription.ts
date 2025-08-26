@@ -38,6 +38,11 @@ import {
 } from "cockatiel";
 import { MeetingData } from "./types/meeting-data";
 import Bottleneck from "bottleneck";
+import {
+  buildMeetingContext,
+  formatContextForPrompt,
+  isMemoryEnabled,
+} from "./services/contextService";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 const openAIClient = new OpenAI({
@@ -325,7 +330,13 @@ Channel: ${channelName}`;
 
 // Get keywords from the server that are likely to help the translation, such as server name, channel names, role names, and attendee names
 export function getTranscriptionKeywords(meeting: MeetingData): string {
-  const content = getTranscriptionGlossaryContent(meeting);
+  let content = getTranscriptionGlossaryContent(meeting);
+
+  // Add meeting context if provided
+  if (meeting.meetingContext) {
+    content += `\nMeeting Context: ${meeting.meetingContext}`;
+  }
+
   return `<glossary>(do not include in transcript):
 ${content}
 </glossary>`;
@@ -334,6 +345,10 @@ ${content}
 export async function getTranscriptionCleanupSystemPrompt(
   meeting: MeetingData,
 ): Promise<string> {
+  // Build context data (without memory - too early in process)
+  const contextData = await buildMeetingContext(meeting, false);
+  const formattedContext = formatContextForPrompt(contextData, "transcription");
+
   const serverName = meeting.guild.name;
   const serverDescription = meeting.guild.description;
   const roles = meeting.guild.roles
@@ -348,14 +363,22 @@ export async function getTranscriptionCleanupSystemPrompt(
     .valueOf()
     .map((channel) => channel.name)
     .join(", ");
-  const prompt =
-    "You are a helpful Discord bot that records meetings and provides transcriptions. " +
-    "Your task is to correct any spelling discrepancies in the transcribed text, and to correct anything that could've been mis-transcribed. " +
+
+  let prompt =
+    "You are a helpful Discord bot that records meetings and provides transcriptions. ";
+
+  // Add context from context service if available
+  if (formattedContext) {
+    prompt += formattedContext;
+  }
+
+  prompt +=
+    "\nYour task is to correct any spelling discrepancies in the transcribed text, and to correct anything that could've been mis-transcribed. " +
     "Remove any lines that are likely mis-transcriptions due to the Whisper model being sent non-vocal audio like breathing or typing, but only if the certainty is high. " +
     "Only make changes if you are confident it would not alter the meaning of the transcription. " +
     "Output only the altered transcription, in the same format it was received in. " +
     "Make sure to output the entirety of the conversation, regardless of the length. " +
-    "The meeting attendees are: " +
+    "\nThe meeting attendees are: " +
     Array.from(meeting.attendance).join(", ") +
     ".\n" +
     `This meeting is happening in a discord named: "${serverName}", with a description of "${serverDescription}", in a voice channel named ${meeting.voiceChannel.name}.\n` +
@@ -366,122 +389,29 @@ export async function getTranscriptionCleanupSystemPrompt(
   return prompt;
 }
 
-export async function getTodoListSystemPrompt(
-  meeting: MeetingData,
-): Promise<string> {
-  const serverName = meeting.guild.name;
-  const serverDescription = meeting.guild.description;
-  const roles = meeting.guild.roles
-    .valueOf()
-    .map((role) => role.name)
-    .join(", ");
-  const events = meeting.guild.scheduledEvents
-    .valueOf()
-    .map((event) => event.name)
-    .join(", ");
-  const channelNames = meeting.guild.channels
-    .valueOf()
-    .map((channel) => channel.name)
-    .join(", ");
-  const prompt =
-    "You are a helpful Discord bot that records meetings and provides transcriptions. " +
-    "Your task is to create a list of todo items based upon the provided transcription. " +
-    'If there are no action items, return only the phrase "none". ' +
-    "Group tasks by name, grouping together names for tasks that are shared amongst multiple members. Display action items as \" - *name*:\\n\\t*Task*\".  The name may be omitted if the owner of the task is not clear, or use the speaker's name if it's likely the task is meant for them. " +
-    "The meeting attendees are: " +
-    Array.from(meeting.attendance).join(", ") +
-    ".\n" +
-    `This meeting is happening in a discord named: "${serverName}", with a description of ${serverDescription}, in a voice channel named ${meeting.voiceChannel.name}.\n` +
-    `The roles available to users in this server are: ${roles}.\n` +
-    `The upcoming events happening in this server are: ${events}.\n` +
-    `The channels in this server are: ${channelNames}.`;
+export async function getImage(meeting: MeetingData): Promise<string> {
+  // Build context data (without memory - visual generation doesn't need history)
+  const contextData = await buildMeetingContext(meeting, false);
+  const formattedContext = formatContextForPrompt(contextData, "image");
 
-  return prompt;
-}
+  let systemContent =
+    "Generate a concise, focused image prompt for DALL-E based on the main ideas from the meeting transcript. ";
 
-export async function getTodoList(meeting: MeetingData): Promise<string> {
-  const systemPrompt = await getTodoListSystemPrompt(meeting);
-  const output = await chat(meeting, {
-    messages: [
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-      {
-        role: "user",
-        content: meeting.finalTranscript!,
-      },
-    ],
-    temperature: 0,
-  });
-
-  // Extremely hacky way to return nothing. The system prompt seems to refuse to answer nothing at all, but will happily just return a certain phrase.
-  if (
-    !output ||
-    output.trim().toLowerCase() === "none" ||
-    output.trim().toLowerCase() === '"none"'
-  ) {
-    return "";
+  // Add context from context service if available
+  if (formattedContext) {
+    // Keep context brief for image generation to avoid confusing DALL-E
+    const briefContext = formattedContext.substring(0, 500);
+    systemContent += `Context: ${briefContext}. `;
   }
 
-  return output;
-}
+  systemContent +=
+    "Avoid any text, logos, or complex symbols, and limit the inclusion of characters to a single figure at most, if any. Instead, suggest a simple, clear visual concept or scene using objects, environments, or abstract shapes. Ensure the prompt guides DALL-E to produce a visually cohesive and refined image with attention to detail, while avoiding any elements that AI image generation commonly mishandles. Keep the description straightforward to ensure the final image remains polished and coherent. Ensure it generates no text.";
 
-export async function getSummarySystemPrompt(
-  meeting: MeetingData,
-): Promise<string> {
-  const serverName = meeting.guild.name;
-  const serverDescription = meeting.guild.description;
-  const roles = meeting.guild.roles
-    .valueOf()
-    .map((role) => role.name)
-    .join(", ");
-  const events = meeting.guild.scheduledEvents
-    .valueOf()
-    .map((event) => event.name)
-    .join(", ");
-  const channelNames = meeting.guild.channels
-    .valueOf()
-    .map((channel) => channel.name)
-    .join(", ");
-  const prompt =
-    "You are a helpful Discord bot that records meetings and provides transcriptions. " +
-    "Your task is to create a succinct summary of the meeting based upon the provided transcription, including Summary, Discussion Points, Action Items, and Next Steps sections if appropriate." +
-    "The meeting attendees are: " +
-    Array.from(meeting.attendance).join(", ") +
-    ".\n" +
-    `This meeting is happening in a discord named: "${serverName}", with a description of ${serverDescription}, in a voice channel named ${meeting.voiceChannel.name}.\n` +
-    `The roles available to users in this server are: ${roles}.\n` +
-    `The upcoming events happening in this server are: ${events}.\n` +
-    `The channels in this server are: ${channelNames}.`;
-
-  return prompt;
-}
-
-export async function getSummary(meeting: MeetingData): Promise<string> {
-  const systemPrompt = await getSummarySystemPrompt(meeting);
-  return await chat(meeting, {
-    messages: [
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-      {
-        role: "user",
-        content: meeting.finalTranscript!,
-      },
-    ],
-    temperature: 0,
-  });
-}
-
-export async function getImage(meeting: MeetingData): Promise<string> {
   const imagePrompt = await chat(meeting, {
     messages: [
       {
         role: "system",
-        content:
-          "Generate a concise, focused image prompt for DALL-E based on the main ideas from the meeting transcript. Avoid any text, logos, or complex symbols, and limit the inclusion of characters to a single figure at most, if any. Instead, suggest a simple, clear visual concept or scene using objects, environments, or abstract shapes. Ensure the prompt guides DALL-E to produce a visually cohesive and refined image with attention to detail, while avoiding any elements that AI image generation commonly mishandles. Keep the description straightforward to ensure the final image remains polished and coherent. Ensure it generates no text.",
+        content: systemContent,
       },
       {
         role: "user",
@@ -509,6 +439,10 @@ export async function getImage(meeting: MeetingData): Promise<string> {
 export async function getNotesSystemPrompt(
   meeting: MeetingData,
 ): Promise<string> {
+  // Build context data with memory if enabled
+  const contextData = await buildMeetingContext(meeting, isMemoryEnabled());
+  const formattedContext = formatContextForPrompt(contextData, "notes");
+
   const serverName = meeting.guild.name;
   const serverDescription = meeting.guild.description;
   const roles = meeting.guild.roles
@@ -524,7 +458,34 @@ export async function getNotesSystemPrompt(
     .map((channel) => channel.name)
     .join(", ");
 
-  const prompt = `"You are a highly versatile assistant that records and transcribes Discord conversations. Your task is to create concise and insightful notes from the provided transcription. Adapt the format based on the context of the conversation, whether it's a meeting, a TTRPG session, or a general discussion. Use the following guidelines:
+  let prompt = `"You are a highly versatile assistant that records and transcribes Discord conversations. `;
+
+  // Add context from context service if available
+  if (formattedContext) {
+    prompt += formattedContext;
+  }
+
+  prompt += `\nYour task is to create concise and insightful notes from the PROVIDED TRANSCRIPTION of THIS CURRENT MEETING. 
+
+CRITICAL INSTRUCTIONS ABOUT CONTEXT:
+- You have been provided with context that may include:
+  - Server context: The overall purpose of this Discord server
+  - Channel context: The specific purpose of this voice channel  
+  - Previous meetings: Notes from recent meetings in this same channel
+  
+- Previous meetings may be COMPLETELY UNRELATED to this meeting. This channel might be used for:
+  - Different topics each time (general discussion channel)
+  - Same recurring purpose (weekly staff meetings)
+  - Mixed purposes (sometimes gaming, sometimes work)
+  
+- Use the server and channel descriptions to judge whether previous meetings are likely related
+- NEVER conflate content between meetings. Be crystal clear about what happened in THIS meeting
+- You MAY reference previous meetings when clearly relevant (e.g., "This continues the discussion from [date] about...")
+- If previous context seems unrelated, simply ignore it and focus on this meeting alone
+
+Focus on creating accurate notes for THIS SPECIFIC MEETING while using context to enhance understanding where appropriate.
+
+Adapt the format based on the context of the conversation, whether it's a meeting, a TTRPG session, or a general discussion. Use the following guidelines:
 
 1. **For Meetings or Task-Oriented Discussions**:
    - Provide a **Summary** of key points discussed.

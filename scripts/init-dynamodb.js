@@ -60,6 +60,47 @@ const tables = [
     ],
     BillingMode: "PAY_PER_REQUEST",
   },
+  {
+    TableName: "ServerContextTable",
+    KeySchema: [{ AttributeName: "guildId", KeyType: "HASH" }],
+    AttributeDefinitions: [{ AttributeName: "guildId", AttributeType: "S" }],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "ChannelContextTable",
+    KeySchema: [
+      { AttributeName: "guildId", KeyType: "HASH" },
+      { AttributeName: "channelId", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "guildId", AttributeType: "S" },
+      { AttributeName: "channelId", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "MeetingHistoryTable",
+    KeySchema: [
+      { AttributeName: "guildId", KeyType: "HASH" },
+      { AttributeName: "channelId_timestamp", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "guildId", AttributeType: "S" },
+      { AttributeName: "channelId_timestamp", AttributeType: "S" },
+      { AttributeName: "timestamp", AttributeType: "S" },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: "GuildTimestampIndex",
+        KeySchema: [
+          { AttributeName: "guildId", KeyType: "HASH" },
+          { AttributeName: "timestamp", KeyType: "RANGE" },
+        ],
+        Projection: { ProjectionType: "ALL" },
+      },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
 ];
 
 async function waitForDynamoDB(maxRetries = 10, delay = 1000) {

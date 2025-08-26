@@ -53,3 +53,35 @@ export interface AutoRecordSettings {
   createdBy: string; // User ID who created this setting
   createdAt: string; // ISO timestamp
 }
+
+// Server Context Type
+export interface ServerContext {
+  guildId: string; // Partition key
+  context: string; // The context/instructions for the server
+  updatedAt: string; // ISO timestamp
+  updatedBy: string; // User ID who last updated
+}
+
+// Channel Context Type
+export interface ChannelContext {
+  guildId: string; // Partition key
+  channelId: string; // Sort key
+  context: string; // The context/instructions for the channel
+  updatedAt: string; // ISO timestamp
+  updatedBy: string; // User ID who last updated
+}
+
+// Meeting History Type
+export interface MeetingHistory {
+  guildId: string; // Partition key
+  channelId_timestamp: string; // Sort key (channelId#ISO-timestamp)
+  meetingId: string; // Unique meeting identifier
+  channelId: string; // Denormalized for easier queries
+  timestamp: string; // ISO timestamp (denormalized)
+  notes?: string; // AI-generated notes (comprehensive, includes everything)
+  context?: string; // Meeting-specific context if provided
+  attendees: string[]; // List of attendee user tags
+  duration: number; // Meeting duration in seconds
+  transcribeMeeting: boolean; // Whether transcription was enabled
+  generateNotes: boolean; // Whether notes were generated
+}

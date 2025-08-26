@@ -22,6 +22,7 @@ import {
 import { deleteDirectoryRecursively, deleteIfExists } from "../util";
 import { MeetingData } from "../types/meeting-data";
 import { generateAndSendNotes } from "./generateNotes";
+import { saveMeetingHistoryToDatabase } from "./saveMeetingHistory";
 
 function doesUserHavePermissionToEndMeeting(
   meeting: MeetingData,
@@ -169,6 +170,9 @@ export async function handleEndMeetingButton(
 
     deleteDirectoryRecursively(splitAudioDir);
 
+    // Save meeting history to database before cleanup
+    await saveMeetingHistoryToDatabase(meeting);
+
     meeting.setFinished();
     meeting.finished = true;
     deleteMeeting(meeting.guildId);
@@ -181,47 +185,6 @@ export async function handleEndMeetingButton(
     }
   }
 }
-
-// async function sendPostMeetingOptions(meeting: MeetingData) {
-//   const generateTodo = new ButtonBuilder()
-//     .setCustomId("generate_todo")
-//     .setLabel("Generate Todo List")
-//     .setStyle(ButtonStyle.Primary);
-//
-//   const generateSummary = new ButtonBuilder()
-//     .setCustomId("generate_summary")
-//     .setLabel("Generate Summary")
-//     .setStyle(ButtonStyle.Primary);
-//
-//   const generateNotes = new ButtonBuilder()
-//     .setCustomId("generate_notes")
-//     .setLabel("Generate Meeting Notes")
-//     .setStyle(ButtonStyle.Primary);
-//
-//   const generateImage = new ButtonBuilder()
-//     .setCustomId("generate_image")
-//     .setLabel("Generate Image")
-//     .setStyle(ButtonStyle.Primary);
-//
-//   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-//     generateSummary,
-//     generateNotes,
-//     generateTodo,
-//     generateImage,
-//   );
-//
-//   await meeting.textChannel.send({
-//     embeds: [
-//       new EmbedBuilder()
-//         .setTitle("Meeting Transcript Options")
-//         .setColor("#3498db")
-//         .setDescription(
-//           "Would you like any additional detection ran on your meeting?",
-//         ),
-//     ],
-//     components: [row],
-//   });
-// }
 
 export async function handleEndMeetingOther(
   client: Client,
@@ -315,6 +278,9 @@ export async function handleEndMeetingOther(
     }
 
     deleteDirectoryRecursively(splitAudioDir);
+
+    // Save meeting history to database before cleanup
+    await saveMeetingHistoryToDatabase(meeting);
 
     meeting.setFinished();
     meeting.finished = true;

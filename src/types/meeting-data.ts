@@ -33,6 +33,7 @@ export interface MeetingData {
 
   transcribeMeeting: boolean;
   generateNotes: boolean;
+  meetingContext?: string;
 
   finalTranscript?: string;
 }

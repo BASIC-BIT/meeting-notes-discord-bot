@@ -10,8 +10,11 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import {
   AccessLog,
   AutoRecordSettings,
+  ChannelContext,
+  MeetingHistory,
   PaymentTransaction,
   RecordingTranscript,
+  ServerContext,
   Subscription,
 } from "./types/db";
 
@@ -145,7 +148,7 @@ export async function writeAutoRecordSetting(
 ): Promise<void> {
   const params = {
     TableName: "AutoRecordSettingsTable",
-    Item: marshall(setting),
+    Item: marshall(setting, { removeUndefinedValues: true }),
   };
   const command = new PutItemCommand(params);
   await dynamoDbClient.send(command);
@@ -218,4 +221,172 @@ export async function scanAutoRecordSettingsForRecordAll(): Promise<
     return result.Items.map((item) => unmarshall(item) as AutoRecordSettings);
   }
   return [];
+}
+
+// Server Context operations
+export async function writeServerContext(
+  context: ServerContext,
+): Promise<void> {
+  const params = {
+    TableName: "ServerContextTable",
+    Item: marshall(context, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getServerContext(
+  guildId: string,
+): Promise<ServerContext | undefined> {
+  const params = {
+    TableName: "ServerContextTable",
+    Key: marshall({ guildId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as ServerContext;
+  }
+  return undefined;
+}
+
+export async function deleteServerContext(guildId: string): Promise<void> {
+  const params = {
+    TableName: "ServerContextTable",
+    Key: marshall({ guildId }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+// Channel Context operations
+export async function writeChannelContext(
+  context: ChannelContext,
+): Promise<void> {
+  const params = {
+    TableName: "ChannelContextTable",
+    Item: marshall(context, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getChannelContext(
+  guildId: string,
+  channelId: string,
+): Promise<ChannelContext | undefined> {
+  const params = {
+    TableName: "ChannelContextTable",
+    Key: marshall({ guildId, channelId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as ChannelContext;
+  }
+  return undefined;
+}
+
+export async function getAllChannelContexts(
+  guildId: string,
+): Promise<ChannelContext[]> {
+  const params = {
+    TableName: "ChannelContextTable",
+    KeyConditionExpression: "guildId = :guildId",
+    ExpressionAttributeValues: marshall({
+      ":guildId": guildId,
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as ChannelContext);
+  }
+  return [];
+}
+
+export async function deleteChannelContext(
+  guildId: string,
+  channelId: string,
+): Promise<void> {
+  const params = {
+    TableName: "ChannelContextTable",
+    Key: marshall({ guildId, channelId }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+// Meeting History operations
+export async function writeMeetingHistory(
+  history: MeetingHistory,
+): Promise<void> {
+  const params = {
+    TableName: "MeetingHistoryTable",
+    Item: marshall(history, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getRecentMeetingsForChannel(
+  guildId: string,
+  channelId: string,
+  limit: number = 5,
+): Promise<MeetingHistory[]> {
+  const params = {
+    TableName: "MeetingHistoryTable",
+    KeyConditionExpression:
+      "guildId = :guildId AND begins_with(channelId_timestamp, :channelId)",
+    ExpressionAttributeValues: marshall({
+      ":guildId": guildId,
+      ":channelId": `${channelId}#`,
+    }),
+    ScanIndexForward: false, // Get most recent first
+    Limit: limit,
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as MeetingHistory);
+  }
+  return [];
+}
+
+export async function getRecentMeetingsForGuild(
+  guildId: string,
+  limit: number = 10,
+): Promise<MeetingHistory[]> {
+  const params = {
+    TableName: "MeetingHistoryTable",
+    IndexName: "GuildTimestampIndex",
+    KeyConditionExpression: "guildId = :guildId",
+    ExpressionAttributeValues: marshall({
+      ":guildId": guildId,
+    }),
+    ScanIndexForward: false, // Get most recent first
+    Limit: limit,
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as MeetingHistory);
+  }
+  return [];
+}
+
+export async function getMeetingHistory(
+  guildId: string,
+  channelId_timestamp: string,
+): Promise<MeetingHistory | undefined> {
+  const params = {
+    TableName: "MeetingHistoryTable",
+    Key: marshall({ guildId, channelId_timestamp }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as MeetingHistory;
+  }
+  return undefined;
 }

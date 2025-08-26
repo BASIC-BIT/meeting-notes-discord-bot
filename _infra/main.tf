@@ -258,7 +258,11 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.access_logs_table.arn,
           aws_dynamodb_table.recording_transcript_table.arn,
           aws_dynamodb_table.auto_record_settings_table.arn,
-          "${aws_dynamodb_table.auto_record_settings_table.arn}/index/*"
+          "${aws_dynamodb_table.auto_record_settings_table.arn}/index/*",
+          aws_dynamodb_table.server_context_table.arn,
+          aws_dynamodb_table.channel_context_table.arn,
+          aws_dynamodb_table.meeting_history_table.arn,
+          "${aws_dynamodb_table.meeting_history_table.arn}/index/*"
         ]
       }
     ]
@@ -448,6 +452,79 @@ resource "aws_dynamodb_table" "auto_record_settings_table" {
 
   tags = {
     Name = "AutoRecordSettingsTable"
+  }
+}
+
+# Server Context Table
+resource "aws_dynamodb_table" "server_context_table" {
+  name           = "ServerContextTable"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "guildId"
+  
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+  
+  tags = {
+    Name = "ServerContextTable"
+  }
+}
+
+# Channel Context Table
+resource "aws_dynamodb_table" "channel_context_table" {
+  name           = "ChannelContextTable"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "guildId"
+  range_key      = "channelId"
+  
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+  
+  attribute {
+    name = "channelId"
+    type = "S"
+  }
+  
+  tags = {
+    Name = "ChannelContextTable"
+  }
+}
+
+# Meeting History Table
+resource "aws_dynamodb_table" "meeting_history_table" {
+  name           = "MeetingHistoryTable"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "guildId"
+  range_key      = "channelId_timestamp"
+  
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+  
+  attribute {
+    name = "channelId_timestamp"
+    type = "S"
+  }
+  
+  attribute {
+    name = "timestamp"
+    type = "S"
+  }
+  
+  # GSI for querying all meetings in a guild by time
+  global_secondary_index {
+    name            = "GuildTimestampIndex"
+    hash_key        = "guildId"
+    range_key       = "timestamp"
+    projection_type = "ALL"
+  }
+  
+  tags = {
+    Name = "MeetingHistoryTable"
   }
 }
 

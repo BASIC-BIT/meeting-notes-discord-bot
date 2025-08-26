@@ -20,14 +20,13 @@ import {
   handleAutoStartMeeting,
 } from "./commands/startMeeting";
 import { handleAutoRecordCommand } from "./commands/autorecord";
+import { handleContextCommand } from "./commands/context";
 import { getAutoRecordSetting } from "./db";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
 } from "./commands/endMeeting";
 import { subscribeToUserVoice, unsubscribeToVoiceUponLeaving } from "./audio";
-import { generateAndSendTodoList } from "./commands/generateTodoList";
-import { generateAndSendSummary } from "./commands/generateSummary";
 import { generateAndSendImage } from "./commands/generateImage";
 
 const client = new Client({
@@ -76,6 +75,11 @@ export async function setupBot() {
             commandInteraction as ChatInputCommandInteraction,
           );
         }
+        if (commandName === "context") {
+          await handleContextCommand(
+            commandInteraction as ChatInputCommandInteraction,
+          );
+        }
       }
       if (interaction.isButton()) {
         const buttonInteraction = interaction as ButtonInteraction;
@@ -83,26 +87,50 @@ export async function setupBot() {
         if (buttonInteraction.customId === "end_meeting") {
           await handleEndMeetingButton(client, buttonInteraction);
         }
-        if (buttonInteraction.customId === "with_transcription_and_notes") {
-          await handleStartMeeting(buttonInteraction, true, true);
-        }
-        if (buttonInteraction.customId === "with_transcription") {
-          await handleStartMeeting(buttonInteraction, true, false);
-        }
-        if (buttonInteraction.customId === "without_transcription") {
-          await handleStartMeeting(buttonInteraction, false, false);
-        }
-        if (buttonInteraction.customId === "generate_summary") {
-          await generateAndSendSummary(interaction);
-        }
-        if (buttonInteraction.customId === "generate_todo") {
-          await generateAndSendTodoList(interaction);
+
+        // Handle start meeting buttons with optional context
+        const customId = buttonInteraction.customId;
+        let meetingContext: string | undefined;
+
+        // Parse context from custom ID if present
+        if (customId.includes(":")) {
+          const [baseId, encodedContext] = customId.split(":");
+          meetingContext = Buffer.from(encodedContext, "base64").toString();
+
+          if (baseId === "with_transcription_and_notes") {
+            await handleStartMeeting(
+              buttonInteraction,
+              true,
+              true,
+              meetingContext,
+            );
+          } else if (baseId === "with_transcription") {
+            await handleStartMeeting(
+              buttonInteraction,
+              true,
+              false,
+              meetingContext,
+            );
+          } else if (baseId === "without_transcription") {
+            await handleStartMeeting(
+              buttonInteraction,
+              false,
+              false,
+              meetingContext,
+            );
+          }
+        } else {
+          // Handle buttons without context (backwards compatibility)
+          if (customId === "with_transcription_and_notes") {
+            await handleStartMeeting(buttonInteraction, true, true);
+          } else if (customId === "with_transcription") {
+            await handleStartMeeting(buttonInteraction, true, false);
+          } else if (customId === "without_transcription") {
+            await handleStartMeeting(buttonInteraction, false, false);
+          }
         }
         if (buttonInteraction.customId === "generate_image") {
           await generateAndSendImage(interaction);
-        }
-        if (buttonInteraction.customId === "generate_notes") {
-          // await generateAndSendNotes(interaction);
         }
       }
     } catch (e) {
@@ -245,7 +273,16 @@ async function setupApplicationCommands() {
   const commands = [
     new SlashCommandBuilder()
       .setName("startmeeting")
-      .setDescription("Record a meeting with voice and chat logs."),
+      .setDescription("Record a meeting with voice and chat logs.")
+      .addStringOption((option) =>
+        option
+          .setName("context")
+          .setDescription(
+            'Optional context about this meeting (e.g., "Sprint planning for Q1 features")',
+          )
+          .setRequired(false)
+          .setMaxLength(500),
+      ),
     new SlashCommandBuilder()
       .setName("autorecord")
       .setDescription("Configure automatic recording for voice channels")
@@ -296,6 +333,80 @@ async function setupApplicationCommands() {
         subcommand
           .setName("list")
           .setDescription("List all auto-record settings for this server"),
+      ),
+    new SlashCommandBuilder()
+      .setName("context")
+      .setDescription(
+        "Manage context settings for better meeting understanding",
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("set-server")
+          .setDescription("Set server-wide context for all meetings")
+          .addStringOption((option) =>
+            option
+              .setName("context")
+              .setDescription(
+                "Context/instructions for the server (max 2000 chars)",
+              )
+              .setRequired(true)
+              .setMaxLength(2000),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("set-channel")
+          .setDescription("Set context for a specific voice channel")
+          .addChannelOption((option) =>
+            option
+              .setName("channel")
+              .setDescription("The voice channel to set context for")
+              .addChannelTypes(2) // Voice channel type
+              .setRequired(true),
+          )
+          .addStringOption((option) =>
+            option
+              .setName("context")
+              .setDescription(
+                "Context/instructions for the channel (max 2000 chars)",
+              )
+              .setRequired(true)
+              .setMaxLength(2000),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("view")
+          .setDescription("View current context settings")
+          .addChannelOption((option) =>
+            option
+              .setName("channel")
+              .setDescription("Optional: View context for a specific channel")
+              .addChannelTypes(2) // Voice channel type
+              .setRequired(false),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("clear-server")
+          .setDescription("Clear server-wide context"),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("clear-channel")
+          .setDescription("Clear context for a specific channel")
+          .addChannelOption((option) =>
+            option
+              .setName("channel")
+              .setDescription("The voice channel to clear context for")
+              .addChannelTypes(2) // Voice channel type
+              .setRequired(true),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("list")
+          .setDescription("List all contexts in this server"),
       ),
   ].map((command) => command.toJSON());
 

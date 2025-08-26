@@ -62,6 +62,7 @@ export interface MeetingInitOptions {
   creator: User;
   transcribeMeeting: boolean;
   generateNotes: boolean;
+  meetingContext?: string;
   initialInteraction?: ButtonInteraction;
   isAutoRecording?: boolean;
   onTimeout?: (meeting: MeetingData) => void;
@@ -85,6 +86,7 @@ export async function initializeMeeting(
     creator,
     transcribeMeeting,
     generateNotes,
+    meetingContext,
     initialInteraction,
     isAutoRecording = false,
     onTimeout,
@@ -138,6 +140,7 @@ export async function initializeMeeting(
     initialInteraction,
     transcribeMeeting,
     generateNotes,
+    meetingContext,
   };
 
   // Open output file for audio recording
