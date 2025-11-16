@@ -3,10 +3,11 @@ import session from "express-session";
 import passport from "passport";
 import { Profile, Strategy as DiscordStrategy } from "passport-discord";
 import { User } from "discord.js";
+import { config } from "./services/configService";
 
 export function setupWebServer() {
   const app = express();
-  const PORT = process.env.PORT || 3001;
+  const PORT = config.server.port;
 
   // Health check endpoint
   app.get("/health", (_, res) => {
@@ -14,8 +15,8 @@ export function setupWebServer() {
       status: "healthy",
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
-      environment: process.env.NODE_ENV || "development",
-      version: process.env.npm_package_version || "unknown",
+      environment: config.server.nodeEnv,
+      version: config.server.npmPackageVersion,
     };
     res.status(200).json(healthCheck);
   });
@@ -23,7 +24,7 @@ export function setupWebServer() {
   // Configure session management
   app.use(
     session({
-      secret: process.env.OAUTH_SECRET!,
+      secret: config.server.oauthSecret,
       resave: false,
       saveUninitialized: false,
     }),
@@ -37,9 +38,9 @@ export function setupWebServer() {
   passport.use(
     new DiscordStrategy(
       {
-        clientID: process.env.DISCORD_CLIENT_ID!,
-        clientSecret: process.env.DISCORD_CLIENT_SECRET!,
-        callbackURL: process.env.DISCORD_CALLBACK_URL!,
+        clientID: config.discord.clientId,
+        clientSecret: config.discord.clientSecret,
+        callbackURL: config.discord.callbackUrl,
         scope: ["identify", "email", "guilds"],
       },
       (accessToken, refreshToken, profile, done) => {

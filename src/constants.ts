@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+import { config } from "./services/configService";
 
 export const SAMPLE_RATE = 16000; // 48kHz for audio recording and transcription
 export const CHANNELS = 2; // Stereo data
@@ -27,14 +27,13 @@ export const TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF = 4;
 
 export const MAX_DISCORD_UPLOAD_SIZE = 24_000_000; //24MB, to give safety margin from Discord's 25MB upload limit
 
-dotenv.config();
+// Re-export from config service for backwards compatibility
+export const TOKEN = config.discord.botToken;
+export const CLIENT_ID = config.discord.clientId;
 
-export const TOKEN = process.env.DISCORD_BOT_TOKEN!;
-export const CLIENT_ID = process.env.DISCORD_CLIENT_ID!;
-
-export const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
-export const OPENAI_ORGANIZATION_ID = process.env.OPENAI_ORGANIZATION_ID;
-export const OPENAI_PROJECT_ID = process.env.OPENAI_PROJECT_ID;
+export const OPENAI_API_KEY = config.openai.apiKey;
+export const OPENAI_ORGANIZATION_ID = config.openai.organizationId;
+export const OPENAI_PROJECT_ID = config.openai.projectId;
 
 export const GPT_MODEL_MAX_TOKENS = 128000;
 
