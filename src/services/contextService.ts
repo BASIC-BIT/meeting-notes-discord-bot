@@ -5,6 +5,7 @@ import {
   getChannelContext,
   getRecentMeetingsForChannel,
 } from "../db";
+import { config } from "./configService";
 
 export interface MeetingContextData {
   meetingContext?: string; // From /startmeeting command
@@ -48,7 +49,7 @@ export async function buildMeetingContext(
 
     // Fetch recent meetings if memory is enabled
     if (includeMemory) {
-      const memoryDepth = parseInt(process.env.MEMORY_DEPTH || "5", 10);
+      const memoryDepth = config.context.memoryDepth;
       const recentMeetings = await getRecentMeetingsForChannel(
         meeting.guildId,
         meeting.voiceChannel.id,
@@ -78,10 +79,7 @@ export function formatContextForPrompt(
   promptType: "transcription" | "notes" | "image",
 ): string {
   let formattedContext = "";
-  const maxContextLength = parseInt(
-    process.env.MAX_CONTEXT_LENGTH || "30000",
-    10,
-  );
+  const maxContextLength = config.context.maxContextLength;
 
   // Add server context
   if (context.serverContext) {
@@ -106,7 +104,7 @@ export function formatContextForPrompt(
   ) {
     formattedContext += "\n**Previous Meetings in This Channel:**\n";
     formattedContext +=
-      "*Note: These are provided for context. They may or may not be related to the current meeting.*\n";
+      "*These previous meetings provide context for understanding references and continuity.*\n";
 
     // Calculate available space for meeting history
     const remainingSpace = maxContextLength - formattedContext.length - 500; // Reserve 500 chars
@@ -150,6 +148,5 @@ export function formatContextForPrompt(
  * @returns Whether memory features should be used
  */
 export function isMemoryEnabled(): boolean {
-  // Default to true if not explicitly set to false
-  return process.env.ENABLE_CONTEXT_MEMORY !== "false";
+  return config.context.enableMemory;
 }
