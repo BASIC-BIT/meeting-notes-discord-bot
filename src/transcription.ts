@@ -43,7 +43,6 @@ import {
   formatContextForPrompt,
   isMemoryEnabled,
 } from "./services/contextService";
-import { config } from "./services/configService";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 const openAIClient = new OpenAI({
@@ -466,52 +465,27 @@ export async function getNotesSystemPrompt(
     prompt += formattedContext;
   }
 
-  // Check if we're in test mode for context debugging
-  const contextTestMode = config.context.testMode;
+  prompt += `\nYour task is to create concise and insightful notes from the PROVIDED TRANSCRIPTION of THIS CURRENT MEETING. 
 
-  if (contextTestMode) {
-    prompt += `\nTEST MODE - EXPLICIT CONTEXT USAGE:
-You MUST actively use ALL provided context in your notes. This is for testing purposes.
-
-REQUIRED ACTIONS:
-1. If previous meetings are provided, EXPLICITLY reference them at the start of your notes
-2. When someone refers to "last meeting" or "previously discussed", look up the EXACT details from previous meetings
-3. Create a "Context Connections" section that lists ALL connections to previous meetings
-4. If someone says "the thing I mentioned before", find what that was in previous meetings and NAME IT EXPLICITLY
-5. Start your notes with "Previous Context Applied: [list what you found from previous meetings]"
-
-Example: If someone says "I'll eat the thing I mentioned last meeting" and last meeting mentioned "watermelon", you MUST write "They will eat the watermelon (mentioned in previous meeting)"
-
-Your task is to create notes that PROVE the context system is working by explicitly using all available historical data.`;
-  } else {
-    prompt += `\nYour task is to create concise and insightful notes from the PROVIDED TRANSCRIPTION of THIS CURRENT MEETING. 
-
-CONTEXT USAGE INSTRUCTIONS:
+CRITICAL INSTRUCTIONS ABOUT CONTEXT:
 - You have been provided with context that may include:
   - Server context: The overall purpose of this Discord server
   - Channel context: The specific purpose of this voice channel  
   - Previous meetings: Notes from recent meetings in this same channel
   
-- ACTIVELY USE previous meeting context when:
-  - Someone explicitly references "last meeting", "previously", "as discussed before"
-  - Topics directly continue from previous meetings
-  - Understanding requires knowledge from previous discussions
-  - Action items or decisions reference earlier conversations
+- Previous meetings may be COMPLETELY UNRELATED to this meeting. This channel might be used for:
+  - Different topics each time (general discussion channel)
+  - Same recurring purpose (weekly staff meetings)
+  - Mixed purposes (sometimes gaming, sometimes work)
   
-- When referencing previous meetings:
-  - Be specific about what was previously discussed (e.g., "the watermelon mentioned in the previous meeting")
-  - Include relevant details from past meetings to provide continuity
-  - Help readers understand the full context without having to look up old notes
-  
-- Keep distinctions clear:
-  - Always specify what happened in THIS meeting vs previous meetings
-  - Use phrases like "continuing from last meeting where..." or "as previously discussed..."
-  - Don't mix up events between meetings, but DO connect related discussions
+- Use the server and channel descriptions to judge whether previous meetings are likely related
+- NEVER conflate content between meetings. Be crystal clear about what happened in THIS meeting
+- You MAY reference previous meetings when clearly relevant (e.g., "This continues the discussion from [date] about...")
+- If previous context seems unrelated, simply ignore it and focus on this meeting alone
 
-The goal is to create comprehensive notes that leverage historical context to provide better understanding and continuity.`;
-  }
+Focus on creating accurate notes for THIS SPECIFIC MEETING while using context to enhance understanding where appropriate.
 
-  prompt += `\n\nAdapt the format based on the context of the conversation, whether it's a meeting, a TTRPG session, or a general discussion. Use the following guidelines:
+Adapt the format based on the context of the conversation, whether it's a meeting, a TTRPG session, or a general discussion. Use the following guidelines:
 
 1. **For Meetings or Task-Oriented Discussions**:
    - Provide a **Summary** of key points discussed.
