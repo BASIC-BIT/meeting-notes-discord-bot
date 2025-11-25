@@ -1,6 +1,7 @@
 import {
   ActionRowBuilder,
   ButtonBuilder,
+  ButtonInteraction,
   ButtonStyle,
   Client,
   CommandInteraction,
@@ -41,7 +42,6 @@ export async function handleRequestStartMeeting(
   }
 
   const guildChannel = channel as GuildChannel;
-  const textChannel = channel as TextChannel;
 
   // Check if the bot has permission to send messages in the channel
   const botMember = interaction.guild.members.cache.get(
@@ -88,6 +88,121 @@ export async function handleRequestStartMeeting(
     return;
   }
 
+  const voiceChannelPermissions = voiceChannel.permissionsFor(botMember);
+
+  if (
+    !voiceChannelPermissions ||
+    !voiceChannelPermissions.has(PermissionsBitField.Flags.ViewChannel) ||
+    !voiceChannelPermissions.has(PermissionsBitField.Flags.Connect)
+  ) {
+    await interaction.reply(
+      "I do not have permission to join your voice channel.",
+    );
+    return;
+  }
+
+  const withTranscriptionAndNotes = new ButtonBuilder()
+    .setCustomId("with_transcription_and_notes")
+    .setLabel("With Transcription And Meeting Notes")
+    .setStyle(ButtonStyle.Primary);
+
+  const withTranscription = new ButtonBuilder()
+    .setCustomId("with_transcription")
+    .setLabel("With Just Transcription")
+    .setStyle(ButtonStyle.Primary);
+
+  const withoutTranscription = new ButtonBuilder()
+    .setCustomId("without_transcription")
+    .setLabel("NO Transcription")
+    .setStyle(ButtonStyle.Primary);
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    withTranscriptionAndNotes,
+    withTranscription,
+    withoutTranscription,
+  );
+
+  // Store meeting context in button custom IDs if provided
+  if (meetingContext) {
+    // Encode context in button IDs to pass it through
+    const encodedContext = Buffer.from(meetingContext).toString("base64");
+    withTranscriptionAndNotes.setCustomId(
+      `with_transcription_and_notes:${encodedContext}`,
+    );
+    withTranscription.setCustomId(`with_transcription:${encodedContext}`);
+    withoutTranscription.setCustomId(`without_transcription:${encodedContext}`);
+  }
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("Meeting Setup")
+        .setColor("#3498db")
+        .setDescription(
+          "Would you like a transcription of your meeting? Please be aware that the transcription service I use is *not* free~ please consider [donating here](https://ko-fi.com/basicbit) if you use this feature regularly!" +
+            (meetingContext
+              ? `\n\n**Meeting Context:** ${meetingContext}`
+              : ""),
+        ),
+    ],
+    components: [row],
+  });
+}
+
+export async function handleStartMeeting(
+  interaction: ButtonInteraction,
+  transcribeMeeting: boolean,
+  generateNotes: boolean,
+  meetingContext?: string,
+) {
+  const guildId = interaction.guildId!;
+
+  const channel = interaction.channel;
+
+  if (!channel || !interaction.guild) {
+    await interaction.reply("Unable to find the channel or guild.");
+    return;
+  }
+
+  if (channel.isDMBased()) {
+    await interaction.reply("Bot cannot be used within DMs.");
+    return;
+  }
+
+  // Check if the bot has permission to send messages in the channel
+  const botMember = interaction.guild.members.cache.get(
+    interaction.client.user!.id,
+  );
+
+  if (!botMember) {
+    await interaction.reply("Bot not found in guild.");
+    return;
+  }
+
+  const textChannel = channel as TextChannel;
+
+  if (hasMeeting(guildId)) {
+    const meeting = getMeeting(guildId)!;
+    if (meeting.finished) {
+      // Cleanup the old meeting in preparation for a new one
+      // TODO: Eventually, store meetings in a database and get rid of this, no need to remove data unnecessarily
+      deleteMeeting(guildId);
+    } else {
+      await interaction.reply("A meeting is already active in this server.");
+      return;
+    }
+  }
+
+  const untypedMember = interaction.member;
+  if (!untypedMember || !interaction.guild) return;
+  const member = untypedMember as GuildMember;
+
+  const voiceChannel = member.voice.channel;
+  if (!voiceChannel) {
+    await interaction.reply("You need to join a voice channel first!");
+    return;
+  }
+
   // Check bot permissions
   const permissionCheck = checkBotPermissions(
     voiceChannel,
@@ -106,10 +221,10 @@ export async function handleRequestStartMeeting(
     textChannel,
     guild: interaction.guild,
     creator: interaction.user,
-    transcribeMeeting: true,
-    generateNotes: true,
+    transcribeMeeting,
+    generateNotes,
     meetingContext,
-    initialInteraction: undefined,
+    initialInteraction: interaction,
     isAutoRecording: false,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
   });
@@ -123,13 +238,6 @@ export async function handleRequestStartMeeting(
     })
     .setColor(0x00ae86)
     .setTimestamp();
-
-  if (meetingContext) {
-    embed.addFields({
-      name: "Meeting Context",
-      value: meetingContext,
-    });
-  }
 
   const endButton = new ButtonBuilder()
     .setCustomId("end_meeting")

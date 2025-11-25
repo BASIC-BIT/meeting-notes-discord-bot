@@ -16,6 +16,7 @@ import { Routes } from "discord-api-types/v10";
 import { getAllMeetings, getMeeting } from "./meetings";
 import {
   handleRequestStartMeeting,
+  handleStartMeeting,
   handleAutoStartMeeting,
 } from "./commands/startMeeting";
 import { handleAutoRecordCommand } from "./commands/autorecord";
@@ -85,6 +86,48 @@ export async function setupBot() {
 
         if (buttonInteraction.customId === "end_meeting") {
           await handleEndMeetingButton(client, buttonInteraction);
+        }
+
+        // Handle start meeting buttons with optional context
+        const customId = buttonInteraction.customId;
+        let meetingContext: string | undefined;
+
+        // Parse context from custom ID if present
+        if (customId.includes(":")) {
+          const [baseId, encodedContext] = customId.split(":");
+          meetingContext = Buffer.from(encodedContext, "base64").toString();
+
+          if (baseId === "with_transcription_and_notes") {
+            await handleStartMeeting(
+              buttonInteraction,
+              true,
+              true,
+              meetingContext,
+            );
+          } else if (baseId === "with_transcription") {
+            await handleStartMeeting(
+              buttonInteraction,
+              true,
+              false,
+              meetingContext,
+            );
+          } else if (baseId === "without_transcription") {
+            await handleStartMeeting(
+              buttonInteraction,
+              false,
+              false,
+              meetingContext,
+            );
+          }
+        } else {
+          // Handle buttons without context (backwards compatibility)
+          if (customId === "with_transcription_and_notes") {
+            await handleStartMeeting(buttonInteraction, true, true);
+          } else if (customId === "with_transcription") {
+            await handleStartMeeting(buttonInteraction, true, false);
+          } else if (customId === "without_transcription") {
+            await handleStartMeeting(buttonInteraction, false, false);
+          }
         }
         if (buttonInteraction.customId === "generate_image") {
           await generateAndSendImage(interaction);

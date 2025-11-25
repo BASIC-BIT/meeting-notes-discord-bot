@@ -1,4 +1,3 @@
-import { config } from "./services/configService";
 import {
   DynamoDBClient,
   GetItemCommand,
@@ -20,7 +19,8 @@ import {
 } from "./types/db";
 
 const dynamoDbClient = new DynamoDBClient(
-  config.database.useLocalDynamoDB
+  process.env.NODE_ENV === "development" &&
+  process.env.USE_LOCAL_DYNAMODB === "true"
     ? {
         endpoint: "http://localhost:8000",
         region: "local",
