@@ -208,6 +208,11 @@ resource "aws_route_table_association" "public_subnet_2_assoc" {
 }
 
 resource "aws_security_group" "ecs_service_sg" {
+  revoke_rules_on_delete = true
+
+  lifecycle {
+    create_before_destroy = true
+  }
   description = "ECS service SG for meeting-notes-bot"
   vpc_id = aws_vpc.app_vpc.id
 
@@ -408,6 +413,40 @@ resource "aws_iam_role_policy_attachment" "ecs_task_dynamodb_policy_execution" {
   policy_arn = aws_iam_policy.dynamodb_access_policy.arn
 }
 
+# KMS permissions for app tasks (and execution role as backup)
+resource "aws_iam_policy" "kms_app_policy" {
+  name        = "meeting-notes-bot-kms-policy"
+  description = "Allow ECS tasks to use the app KMS key"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid      = "AllowKMSForApp"
+        Effect   = "Allow"
+        Action   = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+        ]
+        Resource = aws_kms_key.app_general.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_kms_policy" {
+  role       = aws_iam_role.ecs_task_app_role.name
+  policy_arn = aws_iam_policy.kms_app_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_exec_kms_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = aws_iam_policy.kms_app_policy.arn
+}
+
 # Update the ECS task definition to include the execution role ARN
 resource "aws_ecs_task_definition" "app_task" {
   family                   = "meeting-notes-bot-task"
@@ -509,6 +548,7 @@ resource "aws_ecs_service" "app_service" {
   name            = "meeting-notes-bot-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
+# COMMENT THIS OUT TO DEPLOY ANY CHNAGES TO THE TASK DEFINITION - SUPER JANK LOL
  lifecycle {
    ignore_changes = [
      task_definition

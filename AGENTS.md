@@ -72,7 +72,7 @@
 - Diff output is intentionally minimal (line diff, capped length); LLM output is stripped of code fences to avoid code-block embeds.
 - Meeting duration capped at 2h (`MAXIMUM_MEETING_DURATION`).
 - Auto-record will end meeting if channel empties.
-- **Current outbound network rules (ECS service SG)**: egress limited to TCP 443 to the internet plus TCP/UDP 53 to the VPC resolver `10.0.0.2`. No other outbound is allowed; default VPC SG is locked (no ingress/egress). If new integrations need non-443 ports or custom DNS, update the SG accordingly and document the change here.
+- **Current outbound network rules (ECS service SG)**: temporarily allowing all egress (UDP/TCP any port) for Discord voice debugging. Previously it was limited to TCP 443 and DNS (53) only. Remember to tighten this once voice is stable and update this note.
 
 ## Quick start (local)
 
