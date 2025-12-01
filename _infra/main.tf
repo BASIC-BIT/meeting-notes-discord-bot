@@ -75,7 +75,16 @@ provider "github" {
 
 resource "aws_ecr_repository" "app_ecr_repo" {
   name = "meeting-notes-bot-repo"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "KMS"
+    kms_key         = aws_kms_key.app_general.arn
+  }
 }
 
 resource "aws_ecr_lifecycle_policy" "app_ecr_repo_lifecycle_policy" {
@@ -193,9 +202,11 @@ resource "aws_route_table_association" "public_subnet_2_assoc" {
 }
 
 resource "aws_security_group" "ecs_service_sg" {
+  description = "ECS service SG for meeting-notes-bot"
   vpc_id = aws_vpc.app_vpc.id
 
   ingress {
+    description = "Allow app traffic from the internet to port 3001"
     from_port   = 3001
     to_port     = 3001
     protocol    = "tcp"
@@ -203,6 +214,7 @@ resource "aws_security_group" "ecs_service_sg" {
   }
 
   egress {
+    description = "Allow all outbound traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -216,11 +228,18 @@ resource "aws_security_group" "ecs_service_sg" {
 
 resource "aws_cloudwatch_log_group" "app_log_group" {
   name              = "/ecs/meeting-notes-bot"
-  retention_in_days = 7
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.app_general.arn
 
   tags = {
     Name = "app-log-group"
   }
+}
+
+resource "aws_kms_key" "app_general" {
+  description             = "KMS key for ECR, CloudWatch logs, and other app resources"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
 }
 
 resource "aws_ecs_cluster" "main" {
