@@ -84,4 +84,13 @@ export interface MeetingHistory {
   duration: number; // Meeting duration in seconds
   transcribeMeeting: boolean; // Whether transcription was enabled
   generateNotes: boolean; // Whether notes were generated
+  meetingCreatorId?: string; // User ID that started the meeting
+  isAutoRecording?: boolean; // Whether this meeting was auto-started
+  notesMessageId?: string; // Discord message id of the notes embed
+  notesChannelId?: string; // Channel id where notes were posted
+  notesVersion?: number; // Incremented on corrections
+  updatedAt?: string; // Last time notes were edited
+  notesLastEditedBy?: string; // User ID who last edited notes
+  notesLastEditedAt?: string; // Timestamp of last notes edit
+  transcript?: string; // Full meeting transcript
 }

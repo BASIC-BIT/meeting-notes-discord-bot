@@ -42,7 +42,8 @@ class ConfigService {
   readonly server = {
     port: parseInt(process.env.PORT || "3001", 10),
     nodeEnv: process.env.NODE_ENV || "development",
-    oauthSecret: process.env.OAUTH_SECRET!,
+    oauthSecret: process.env.OAUTH_SECRET,
+    oauthEnabled: process.env.ENABLE_OAUTH !== "false",
     npmPackageVersion: process.env.npm_package_version || "unknown",
   };
 
@@ -55,11 +56,17 @@ class ConfigService {
     const required = [
       { name: "DISCORD_BOT_TOKEN", value: this.discord.botToken },
       { name: "DISCORD_CLIENT_ID", value: this.discord.clientId },
-      { name: "DISCORD_CLIENT_SECRET", value: this.discord.clientSecret },
-      { name: "DISCORD_CALLBACK_URL", value: this.discord.callbackUrl },
       { name: "OPENAI_API_KEY", value: this.openai.apiKey },
-      { name: "OAUTH_SECRET", value: this.server.oauthSecret },
     ];
+
+    // Only require OAuth-related secrets if OAuth is enabled (default true)
+    if (this.server.oauthEnabled) {
+      required.push(
+        { name: "DISCORD_CLIENT_SECRET", value: this.discord.clientSecret },
+        { name: "DISCORD_CALLBACK_URL", value: this.discord.callbackUrl },
+        { name: "OAUTH_SECRET", value: this.server.oauthSecret },
+      );
+    }
 
     const missing = required.filter((item) => !item.value);
     if (missing.length > 0) {

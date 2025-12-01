@@ -36,9 +36,31 @@ variable OPENAI_API_KEY {
 }
 variable OPENAI_ORGANIZATION_ID {
   sensitive = true
+  default   = ""
 }
 variable OPENAI_PROJECT_ID {
   sensitive = true
+  default   = ""
+}
+
+variable ENABLE_OAUTH {
+  sensitive = false
+  default   = "false"
+}
+
+variable DISCORD_CLIENT_SECRET {
+  sensitive = true
+  default   = ""
+}
+
+variable DISCORD_CALLBACK_URL {
+  sensitive = true
+  default   = ""
+}
+
+variable OAUTH_SECRET {
+  sensitive = true
+  default   = ""
 }
 
 
@@ -312,6 +334,22 @@ resource "aws_ecs_task_definition" "app_task" {
           value = var.DISCORD_CLIENT_ID
         },
         {
+          name  = "DISCORD_CLIENT_SECRET"
+          value = var.DISCORD_CLIENT_SECRET
+        },
+        {
+          name  = "DISCORD_CALLBACK_URL"
+          value = var.DISCORD_CALLBACK_URL
+        },
+        {
+          name  = "OAUTH_SECRET"
+          value = var.OAUTH_SECRET
+        },
+        {
+          name  = "ENABLE_OAUTH"
+          value = var.ENABLE_OAUTH
+        },
+        {
           name  = "DISCORD_BOT_TOKEN"
           value = var.DISCORD_BOT_TOKEN
         },
@@ -326,7 +364,7 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name = "OPENAI_PROJECT_ID"
           value = var.OPENAI_PROJECT_ID
-        }
+        },
       ]
 #      healthCheck = {
 #        command     = ["CMD-SHELL", "curl -f http://127.0.0.1:3001/health || exit 1"]

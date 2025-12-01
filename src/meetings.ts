@@ -20,6 +20,7 @@ import {
   MAXIMUM_MEETING_DURATION,
   MAXIMUM_MEETING_DURATION_PRETTY,
 } from "./constants";
+import { v4 as uuidv4 } from "uuid";
 
 const meetings = new Map<string, MeetingData>();
 
@@ -119,6 +120,7 @@ export async function initializeMeeting(
   });
 
   const meeting: MeetingData = {
+    meetingId: uuidv4(),
     chatLog: [],
     attendance,
     connection,
@@ -141,6 +143,7 @@ export async function initializeMeeting(
     transcribeMeeting,
     generateNotes,
     meetingContext,
+    isAutoRecording,
   };
 
   // Open output file for audio recording

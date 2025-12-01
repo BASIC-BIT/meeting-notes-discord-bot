@@ -9,9 +9,6 @@ import {
 } from "node:fs";
 import {
   CHANNELS,
-  OPENAI_API_KEY,
-  OPENAI_ORGANIZATION_ID,
-  OPENAI_PROJECT_ID,
   SAMPLE_RATE,
   TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
   TRANSCRIPTION_BREAK_DURATION,
@@ -46,10 +43,12 @@ import {
 import { config } from "./services/configService";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
+import { config } from "./services/configService";
+
 const openAIClient = new OpenAI({
-  apiKey: OPENAI_API_KEY,
-  organization: OPENAI_ORGANIZATION_ID,
-  project: OPENAI_PROJECT_ID,
+  apiKey: config.openai.apiKey,
+  organization: config.openai.organizationId,
+  project: config.openai.projectId,
 });
 
 // Check if transcription is too similar to the prompt or glossary content (likely verbatim output)
@@ -290,7 +289,7 @@ async function chat(meeting: MeetingData, body: ChatInput): Promise<string> {
   let count = 0;
   while (!done) {
     const response = await openAIClient.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-5.1",
       user: meeting.creator.id,
       ...body,
     });

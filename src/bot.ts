@@ -1,4 +1,4 @@
-import { CLIENT_ID, TOKEN } from "./constants";
+import { config } from "./services/configService";
 import {
   ButtonInteraction,
   ChatInputCommandInteraction,
@@ -27,6 +27,16 @@ import {
 } from "./commands/endMeeting";
 import { subscribeToUserVoice, unsubscribeToVoiceUponLeaving } from "./audio";
 import { generateAndSendImage } from "./commands/generateImage";
+import {
+  handleNotesCorrectionButton,
+  handleNotesCorrectionModal,
+  isNotesCorrectionButton,
+  isNotesCorrectionAccept,
+  isNotesCorrectionReject,
+  handleNotesCorrectionAccept,
+  handleNotesCorrectionReject,
+  isNotesCorrectionModal,
+} from "./commands/notesCorrections";
 
 const client = new Client({
   intents: [
@@ -40,6 +50,9 @@ const client = new Client({
 });
 
 export async function setupBot() {
+  const TOKEN = config.discord.botToken;
+  const CLIENT_ID = config.discord.clientId;
+
   if (!TOKEN || !CLIENT_ID) {
     throw new Error(
       "Bot token or client ID is not defined in the environment variables",
@@ -80,8 +93,28 @@ export async function setupBot() {
           );
         }
       }
+      if (interaction.isModalSubmit()) {
+        if (isNotesCorrectionModal(interaction.customId)) {
+          await handleNotesCorrectionModal(interaction);
+        }
+        return;
+      }
       if (interaction.isButton()) {
         const buttonInteraction = interaction as ButtonInteraction;
+
+        if (isNotesCorrectionAccept(buttonInteraction.customId)) {
+          await handleNotesCorrectionAccept(buttonInteraction);
+          return;
+        }
+        if (isNotesCorrectionReject(buttonInteraction.customId)) {
+          await handleNotesCorrectionReject(buttonInteraction);
+          return;
+        }
+
+        if (isNotesCorrectionButton(buttonInteraction.customId)) {
+          await handleNotesCorrectionButton(buttonInteraction);
+          return;
+        }
 
         if (buttonInteraction.customId === "end_meeting") {
           await handleEndMeetingButton(client, buttonInteraction);

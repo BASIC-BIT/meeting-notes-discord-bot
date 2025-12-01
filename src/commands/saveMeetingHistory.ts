@@ -1,7 +1,6 @@
 import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
 import { writeMeetingHistory } from "../db";
-import { v4 as uuidv4 } from "uuid";
 import { getNotes } from "../transcription";
 
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
@@ -34,7 +33,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
     const history: MeetingHistory = {
       guildId: meeting.guildId,
       channelId_timestamp: `${meeting.voiceChannel.id}#${timestamp}`,
-      meetingId: uuidv4(),
+      meetingId: meeting.meetingId,
       channelId: meeting.voiceChannel.id,
       timestamp,
       notes,
@@ -43,6 +42,14 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       duration,
       transcribeMeeting: meeting.transcribeMeeting,
       generateNotes: meeting.generateNotes,
+      meetingCreatorId: meeting.creator.id,
+      isAutoRecording: meeting.isAutoRecording,
+      notesMessageId: meeting.notesMessageId,
+      notesChannelId: meeting.notesChannelId,
+      notesVersion: meeting.notesVersion,
+      notesLastEditedBy: meeting.notesLastEditedBy,
+      notesLastEditedAt: meeting.notesVersion ? timestamp : undefined,
+      transcript: meeting.finalTranscript,
     };
 
     await writeMeetingHistory(history);

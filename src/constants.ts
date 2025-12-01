@@ -1,5 +1,3 @@
-import { config } from "./services/configService";
-
 export const SAMPLE_RATE = 16000; // 48kHz for audio recording and transcription
 export const CHANNELS = 2; // Stereo data
 export const BYTES_PER_SAMPLE = 2; // 16 bit audio in this format
@@ -26,14 +24,6 @@ export const TRANSCRIPTION_LOGPROB_HARD_CUTOFF = -0.9;
 export const TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF = 4;
 
 export const MAX_DISCORD_UPLOAD_SIZE = 24_000_000; //24MB, to give safety margin from Discord's 25MB upload limit
-
-// Re-export from config service for backwards compatibility
-export const TOKEN = config.discord.botToken;
-export const CLIENT_ID = config.discord.clientId;
-
-export const OPENAI_API_KEY = config.openai.apiKey;
-export const OPENAI_ORGANIZATION_ID = config.openai.organizationId;
-export const OPENAI_PROJECT_ID = config.openai.projectId;
 
 export const GPT_MODEL_MAX_TOKENS = 128000;
 

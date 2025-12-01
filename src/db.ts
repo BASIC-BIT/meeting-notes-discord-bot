@@ -6,6 +6,7 @@ import {
   DeleteItemCommand,
   QueryCommand,
   ScanCommand,
+  UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import {
@@ -389,4 +390,39 @@ export async function getMeetingHistory(
     return unmarshall(result.Item) as MeetingHistory;
   }
   return undefined;
+}
+
+export async function updateMeetingNotes(
+  guildId: string,
+  channelId_timestamp: string,
+  notes: string,
+  notesVersion: number,
+  editedBy: string,
+): Promise<void> {
+  const params = {
+    TableName: "MeetingHistoryTable",
+    Key: marshall({ guildId, channelId_timestamp }),
+    UpdateExpression:
+      "SET #notes = :notes, #notesVersion = :notesVersion, #updatedAt = :updatedAt, #notesLastEditedBy = :editedBy, #notesLastEditedAt = :editedAt",
+    ExpressionAttributeNames: {
+      "#notes": "notes",
+      "#notesVersion": "notesVersion",
+      "#updatedAt": "updatedAt",
+      "#notesLastEditedBy": "notesLastEditedBy",
+      "#notesLastEditedAt": "notesLastEditedAt",
+    },
+    ExpressionAttributeValues: marshall(
+      {
+        ":notes": notes,
+        ":notesVersion": notesVersion,
+        ":updatedAt": new Date().toISOString(),
+        ":editedBy": editedBy,
+        ":editedAt": new Date().toISOString(),
+      },
+      { removeUndefinedValues: true },
+    ),
+  };
+
+  const command = new UpdateItemCommand(params);
+  await dynamoDbClient.send(command);
 }
