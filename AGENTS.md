@@ -13,6 +13,11 @@
 - Storage: AWS DynamoDB (tables: Subscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory).
 - Infra: Terraform -> AWS ECS Fargate, ECR, CloudWatch logs; local Dynamo via docker-compose.
 - IaC scanning: Checkov GitHub Action (`.github/workflows/checkov.yml`) scans `_infra/` on PRs and main pushes. Local: `npm run checkov` (uses `uvx --from checkov checkov`; install uv first: https://docs.astral.sh/uv/).
+- Known/suppressed infra choices:
+  - Public subnets + public ECS IPs retained temporarily to avoid NAT Gateway cost (see checkov skips on CKV_AWS_130/333 with rationale in `_infra/main.tf`).
+  - VPC flow logs enabled to CloudWatch (365d, KMS `app_general`).
+  - ECR hardened (immutable tags, scan on push, KMS).
+  - CloudWatch logs KMS + 365d, tightened SG egress (443 + DNS), split ECS execution/task roles, DynamoDB tables use PITR + KMS (app_general), default SG locked down.
 - Tooling: Jest, ESLint, Prettier, Husky, lint-staged; ts-node/nodemon for dev.
 
 ## Key flows (server code in `src/`)

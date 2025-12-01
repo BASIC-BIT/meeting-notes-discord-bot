@@ -43,8 +43,6 @@ import {
 import { config } from "./services/configService";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
-import { config } from "./services/configService";
-
 const openAIClient = new OpenAI({
   apiKey: config.openai.apiKey,
   organization: config.openai.organizationId,

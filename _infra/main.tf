@@ -68,6 +68,8 @@ provider "aws" {
   region = "us-east-1"
 }
 
+data "aws_caller_identity" "current" {}
+
 provider "github" {
   owner = "BASIC-BIT"
   token = var.GITHUB_TOKEN
@@ -148,7 +150,9 @@ resource "aws_vpc" "app_vpc" {
   }
 }
 
+#checkov:skip=CKV_AWS_130 reason: Public subnet kept (map_public_ip_on_launch=true) to avoid NAT cost; will move to private/NAT when budget allows.
 resource "aws_subnet" "app_public_subnet_1" {
+  #checkov:skip=CKV_AWS_130 reason: Public subnet kept (map_public_ip_on_launch=true) to avoid NAT cost; will move to private/NAT when budget allows.
   vpc_id                  = aws_vpc.app_vpc.id
   cidr_block              = "10.0.1.0/24"
   map_public_ip_on_launch = true
@@ -159,7 +163,9 @@ resource "aws_subnet" "app_public_subnet_1" {
   }
 }
 
+#checkov:skip=CKV_AWS_130 reason: Public subnet kept (map_public_ip_on_launch=true) to avoid NAT cost; will move to private/NAT when budget allows.
 resource "aws_subnet" "app_public_subnet_2" {
+  #checkov:skip=CKV_AWS_130 reason: Public subnet kept (map_public_ip_on_launch=true) to avoid NAT cost; will move to private/NAT when budget allows.
   vpc_id                  = aws_vpc.app_vpc.id
   cidr_block              = "10.0.2.0/24"
   map_public_ip_on_launch = true
@@ -213,12 +219,30 @@ resource "aws_security_group" "ecs_service_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Outbound HTTPS for Discord/OpenAI/AWS APIs
   egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "Allow outbound HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # DNS to VPC resolver (10.0.0.2 for this VPC)
+  egress {
+    description = "Allow DNS (UDP) to VPC resolver"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = ["10.0.0.2/32"]
+  }
+
+  egress {
+    description = "Allow DNS (TCP) to VPC resolver"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.2/32"]
   }
 
   tags = {
@@ -240,6 +264,49 @@ resource "aws_kms_key" "app_general" {
   description             = "KMS key for ECR, CloudWatch logs, and other app resources"
   deletion_window_in_days = 7
   enable_key_rotation     = true
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid       = "AllowRootAccount",
+        Effect    = "Allow",
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" },
+        Action    = "kms:*",
+        Resource  = "*"
+      },
+      {
+        Sid    = "AllowCloudWatchLogs",
+        Effect = "Allow",
+        Principal = {
+          Service = "logs.us-east-1.amazonaws.com"
+        },
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ],
+        Resource  = "*"
+      },
+      {
+        Sid    = "AllowDynamoDB",
+        Effect = "Allow",
+        Principal = {
+          Service = "dynamodb.us-east-1.amazonaws.com"
+        },
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ],
+        Resource  = "*"
+      }
+    ]
+  })
 }
 
 resource "aws_ecs_cluster" "main" {
@@ -273,6 +340,24 @@ resource "aws_iam_role" "ecs_task_execution_role" {
 resource "aws_iam_role_policy_attachment" "ecs_task_execution_policy" {
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# Define IAM role for the task (application) permissions
+resource "aws_iam_role" "ecs_task_app_role" {
+  name = "ecs_task_app_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
 }
 
 # Create IAM policy for DynamoDB access
@@ -312,7 +397,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
 
 # Attach DynamoDB policy to the task role
 resource "aws_iam_role_policy_attachment" "ecs_task_dynamodb_policy" {
-  role       = aws_iam_role.ecs_task_execution_role.name
+  role       = aws_iam_role.ecs_task_app_role.name
   policy_arn = aws_iam_policy.dynamodb_access_policy.arn
 }
 
@@ -324,7 +409,7 @@ resource "aws_ecs_task_definition" "app_task" {
   cpu                      = "512"
   memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_app_role.arn
 
   container_definitions = jsonencode([
     {
@@ -396,7 +481,9 @@ resource "aws_ecs_task_definition" "app_task" {
   ])
 }
 
+#checkov:skip=CKV_AWS_333 reason: Assigning public IP for now to avoid NAT Gateway cost; will migrate to private subnets with NAT when budget allows.
 resource "aws_ecs_service" "app_service" {
+  #checkov:skip=CKV_AWS_333 reason: Assigning public IP for now to avoid NAT Gateway cost; will migrate to private subnets with NAT when budget allows.
   name            = "meeting-notes-bot-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
@@ -435,6 +522,15 @@ resource "aws_dynamodb_table" "subscription_table" {
     type = "S"
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
   tags = {
     Name = "SubscriptionTable"
   }
@@ -448,6 +544,15 @@ resource "aws_dynamodb_table" "payment_transaction_table" {
   attribute {
     name = "TransactionID"
     type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
   }
 
   tags = {
@@ -465,6 +570,15 @@ resource "aws_dynamodb_table" "access_logs_table" {
     type = "S"
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
   tags = {
     Name = "AccessLogsTable"
   }
@@ -478,6 +592,15 @@ resource "aws_dynamodb_table" "recording_transcript_table" {
   attribute {
     name = "MeetingID"
     type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
   }
 
   tags = {
@@ -507,6 +630,15 @@ resource "aws_dynamodb_table" "auto_record_settings_table" {
     projection_type = "ALL"
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
   tags = {
     Name = "AutoRecordSettingsTable"
   }
@@ -521,6 +653,15 @@ resource "aws_dynamodb_table" "server_context_table" {
   attribute {
     name = "guildId"
     type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
   }
   
   tags = {
@@ -543,6 +684,15 @@ resource "aws_dynamodb_table" "channel_context_table" {
   attribute {
     name = "channelId"
     type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
   }
   
   tags = {
@@ -579,6 +729,15 @@ resource "aws_dynamodb_table" "meeting_history_table" {
     range_key       = "timestamp"
     projection_type = "ALL"
   }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
   
   tags = {
     Name = "MeetingHistoryTable"
@@ -598,4 +757,80 @@ output "public_subnet_ids" {
 # Output the Security Group ID
 output "ecs_service_sg_id" {
   value = aws_security_group.ecs_service_sg.id
+}
+# Flow logs IAM role
+resource "aws_iam_role" "vpc_flow_logs_role" {
+  name = "vpc_flow_logs_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = { Service = "vpc-flow-logs.amazonaws.com" },
+        Action   = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "vpc_flow_logs_policy" {
+  name = "vpc_flow_logs_policy"
+  role = aws_iam_role.vpc_flow_logs_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogGroup"
+        ],
+        Resource = "*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams",
+          "logs:DescribeLogGroups"
+        ],
+        Resource = [
+          aws_cloudwatch_log_group.vpc_flow_logs.arn,
+          "${aws_cloudwatch_log_group.vpc_flow_logs.arn}:*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
+  name              = "/vpc/flow/app-vpc"
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.app_general.arn
+
+  tags = {
+    Name = "app-vpc-flow-logs"
+  }
+}
+
+resource "aws_flow_log" "app_vpc_flow" {
+  log_destination_type = "cloud-watch-logs"
+  log_group_name       = aws_cloudwatch_log_group.vpc_flow_logs.name
+  iam_role_arn         = aws_iam_role.vpc_flow_logs_role.arn
+  traffic_type         = "ALL"
+  vpc_id               = aws_vpc.app_vpc.id
+}
+
+# Lock down default security group
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.app_vpc.id
+
+  ingress = []
+  egress  = []
+
+  tags = {
+    Name = "default-sg-locked"
+  }
 }

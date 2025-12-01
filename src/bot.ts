@@ -1,4 +1,3 @@
-import { config } from "./services/configService";
 import {
   ButtonInteraction,
   ChatInputCommandInteraction,
@@ -37,6 +36,10 @@ import {
   handleNotesCorrectionReject,
   isNotesCorrectionModal,
 } from "./commands/notesCorrections";
+import { config } from "./services/configService";
+
+const TOKEN = config.discord.botToken;
+const CLIENT_ID = config.discord.clientId;
 
 const client = new Client({
   intents: [
@@ -50,9 +53,6 @@ const client = new Client({
 });
 
 export async function setupBot() {
-  const TOKEN = config.discord.botToken;
-  const CLIENT_ID = config.discord.clientId;
-
   if (!TOKEN || !CLIENT_ID) {
     throw new Error(
       "Bot token or client ID is not defined in the environment variables",

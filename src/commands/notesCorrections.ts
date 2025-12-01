@@ -343,10 +343,10 @@ async function applyCorrection(
   );
 }
 
-function getPendingOrNotify(
+async function getPendingOrNotify(
   interaction: ButtonInteraction,
   token: string,
-): PendingCorrection | undefined {
+): Promise<PendingCorrection | undefined> {
   const pending = pendingCorrections.get(token);
 
   if (!pending) {
@@ -364,7 +364,7 @@ export async function handleNotesCorrectionAccept(
   interaction: ButtonInteraction,
 ) {
   const [, token] = interaction.customId.split(":");
-  const pending = getPendingOrNotify(interaction, token);
+  const pending = await getPendingOrNotify(interaction, token);
   if (!pending) return;
 
   if (!canApprove(interaction, pending)) {
@@ -389,7 +389,7 @@ export async function handleNotesCorrectionReject(
   interaction: ButtonInteraction,
 ) {
   const [, token] = interaction.customId.split(":");
-  const pending = getPendingOrNotify(interaction, token);
+  const pending = await getPendingOrNotify(interaction, token);
   if (!pending) return;
 
   const canReject =

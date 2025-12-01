@@ -42,7 +42,7 @@ class ConfigService {
   readonly server = {
     port: parseInt(process.env.PORT || "3001", 10),
     nodeEnv: process.env.NODE_ENV || "development",
-    oauthSecret: process.env.OAUTH_SECRET,
+    oauthSecret: process.env.OAUTH_SECRET || "",
     oauthEnabled: process.env.ENABLE_OAUTH !== "false",
     npmPackageVersion: process.env.npm_package_version || "unknown",
   };
