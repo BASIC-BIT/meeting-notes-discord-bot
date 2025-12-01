@@ -294,7 +294,7 @@ resource "aws_kms_key" "app_general" {
         Sid    = "AllowDynamoDB",
         Effect = "Allow",
         Principal = {
-          Service = "dynamodb.us-east-1.amazonaws.com"
+          Service = "dynamodb.amazonaws.com"
         },
         Action = [
           "kms:Encrypt",
@@ -401,6 +401,13 @@ resource "aws_iam_role_policy_attachment" "ecs_task_dynamodb_policy" {
   policy_arn = aws_iam_policy.dynamodb_access_policy.arn
 }
 
+# Temporary belt-and-suspenders: also attach DynamoDB policy to the execution role to avoid AccessDenied
+# if tasks start with the execution role due to misconfiguration. Remove once task_role is confirmed in use.
+resource "aws_iam_role_policy_attachment" "ecs_task_dynamodb_policy_execution" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = aws_iam_policy.dynamodb_access_policy.arn
+}
+
 # Update the ECS task definition to include the execution role ARN
 resource "aws_ecs_task_definition" "app_task" {
   family                   = "meeting-notes-bot-task"
@@ -422,7 +429,22 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           containerPort = 3001
           hostPort      = 3001
+        },
+      {
+        Action    = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+        ]
+        Effect    = "Allow"
+        Principal = {
+          Service = "ecr.amazonaws.com"
         }
+        Resource  = "*"
+        Sid       = "AllowECR"
+      },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -817,7 +839,7 @@ resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
 
 resource "aws_flow_log" "app_vpc_flow" {
   log_destination_type = "cloud-watch-logs"
-  log_group_name       = aws_cloudwatch_log_group.vpc_flow_logs.name
+  log_destination      = aws_cloudwatch_log_group.vpc_flow_logs.arn
   iam_role_arn         = aws_iam_role.vpc_flow_logs_role.arn
   traffic_type         = "ALL"
   vpc_id               = aws_vpc.app_vpc.id
