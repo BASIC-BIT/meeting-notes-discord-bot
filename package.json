@@ -27,7 +27,8 @@
     "docker:clean": "node scripts/clean-dynamodb.js",
     "db:init": "node scripts/init-dynamodb.js",
     "dev": "npm run docker:up && npm run db:init && npm run start",
-    "dev:clean": "npm run docker:down && npm run docker:clean && npm run dev"
+    "dev:clean": "npm run docker:down && npm run docker:clean && npm run dev",
+    "checkov": "uvx --from checkov checkov -d _infra"
   },
   "engines": {
     "node": "~20.19.2"

@@ -12,6 +12,7 @@
 - AI: openai SDK; gpt-4o-transcribe for transcription; gpt-5.1 for cleanup/notes/corrections; DALL-E 3 for images.
 - Storage: AWS DynamoDB (tables: Subscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory).
 - Infra: Terraform -> AWS ECS Fargate, ECR, CloudWatch logs; local Dynamo via docker-compose.
+- IaC scanning: Checkov GitHub Action (`.github/workflows/checkov.yml`) scans `_infra/` on PRs and main pushes. Local: `npm run checkov` (uses `uvx --from checkov checkov`; install uv first: https://docs.astral.sh/uv/).
 - Tooling: Jest, ESLint, Prettier, Husky, lint-staged; ts-node/nodemon for dev.
 
 ## Key flows (server code in `src/`)
