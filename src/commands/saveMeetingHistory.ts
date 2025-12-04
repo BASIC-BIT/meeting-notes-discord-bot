@@ -2,6 +2,7 @@ import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
 import { writeMeetingHistory } from "../db";
 import { getNotes } from "../transcription";
+import { uploadTranscriptToS3 } from "../services/storageService";
 
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   // Only save if transcription was enabled (we need something to save)
@@ -18,17 +19,53 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       : 0;
 
     // Generate notes if enabled
-    let notes: string | undefined;
+    let notes: string | undefined = meeting.notesText;
 
-    if (meeting.generateNotes) {
+    if (meeting.generateNotes && !notes) {
       try {
         // Notes now encompass everything (summary, action items, etc.)
         notes = await getNotes(meeting);
+        meeting.notesText = notes;
       } catch (error) {
         console.error("Error generating notes for meeting history:", error);
         // Continue saving history even if AI generation fails
       }
     }
+
+    // Upload full transcript to S3
+    let transcriptS3Key: string | undefined;
+
+    if (meeting.finalTranscript) {
+      transcriptS3Key = await uploadTranscriptToS3({
+        guildId: meeting.guildId,
+        channelId: meeting.voiceChannel.id,
+        timestamp,
+        transcript: meeting.finalTranscript,
+      });
+
+      meeting.transcriptS3Key = transcriptS3Key;
+    }
+
+    const notesVersion = meeting.notesVersion ?? (notes ? 1 : undefined);
+    const notesLastEditedBy =
+      meeting.notesLastEditedBy ?? (notes ? meeting.creator.id : undefined);
+    const notesLastEditedAt =
+      meeting.notesLastEditedAt ??
+      (notesVersion
+        ? (meeting.endTime?.toISOString() ?? timestamp)
+        : undefined);
+
+    const notesHistory =
+      notes && notesVersion
+        ? [
+            {
+              version: notesVersion,
+              notes,
+              editedBy: notesLastEditedBy ?? meeting.creator.id,
+              editedAt: notesLastEditedAt ?? timestamp,
+            },
+          ]
+        : undefined;
 
     const history: MeetingHistory = {
       guildId: meeting.guildId,
@@ -38,7 +75,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       timestamp,
       notes,
       context: meeting.meetingContext,
-      attendees: Array.from(meeting.attendance),
+      participants: Array.from(meeting.participants.values()),
       duration,
       transcribeMeeting: meeting.transcribeMeeting,
       generateNotes: meeting.generateNotes,
@@ -46,10 +83,13 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       isAutoRecording: meeting.isAutoRecording,
       notesMessageId: meeting.notesMessageId,
       notesChannelId: meeting.notesChannelId,
-      notesVersion: meeting.notesVersion,
-      notesLastEditedBy: meeting.notesLastEditedBy,
-      notesLastEditedAt: meeting.notesVersion ? timestamp : undefined,
-      transcript: meeting.finalTranscript,
+      notesVersion,
+      notesLastEditedBy,
+      notesLastEditedAt,
+      notesHistory,
+      transcriptS3Key,
+      audioS3Key: meeting.audioS3Key,
+      chatS3Key: meeting.chatS3Key,
     };
 
     await writeMeetingHistory(history);

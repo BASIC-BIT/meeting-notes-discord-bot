@@ -8,10 +8,12 @@ import {
   VoiceBasedChannel,
 } from "discord.js";
 import { AudioData } from "./audio";
+import { ChatEntry } from "./chat";
+import { Participant } from "./participants";
 
 export interface MeetingData {
   meetingId: string;
-  chatLog: string[];
+  chatLog: ChatEntry[];
   attendance: Set<string>;
   connection: VoiceConnection;
   textChannel: TextChannel;
@@ -38,10 +40,16 @@ export interface MeetingData {
   meetingContext?: string;
 
   finalTranscript?: string;
+  transcriptS3Key?: string;
   notesMessageId?: string;
   notesChannelId?: string;
   notesVersion?: number;
   notesLastEditedBy?: string;
+  notesLastEditedAt?: string;
+  notesText?: string;
+  participants: Map<string, Participant>;
+  audioS3Key?: string;
+  chatS3Key?: string;
 }
 
 export interface MeetingSetup {

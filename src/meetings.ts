@@ -21,6 +21,8 @@ import {
   MAXIMUM_MEETING_DURATION_PRETTY,
 } from "./constants";
 import { v4 as uuidv4 } from "uuid";
+import { ChatEntry } from "./types/chat";
+import { buildParticipantSnapshot } from "./utils/participants";
 
 const meetings = new Map<string, MeetingData>();
 
@@ -144,6 +146,7 @@ export async function initializeMeeting(
     generateNotes,
     meetingContext,
     isAutoRecording,
+    participants: new Map(),
   };
 
   // Open output file for audio recording
@@ -159,6 +162,18 @@ export async function initializeMeeting(
 
   // Record initial attendance
   voiceChannel.members.forEach((member) => attendance.add(member.user.tag));
+  // Snapshot participants for initial members
+  await Promise.all(
+    voiceChannel.members.map(async (member) => {
+      const participant = await buildParticipantSnapshot(
+        voiceChannel.guild,
+        member.user.id,
+      );
+      if (participant) {
+        meeting.participants.set(member.user.id, participant);
+      }
+    }),
+  );
 
   // Subscribe to initial members' voice
   await Promise.all(
@@ -182,9 +197,24 @@ export async function initializeMeeting(
   collector.on("collect", (message) => {
     if (message.author.bot) return;
 
-    meeting.chatLog.push(
-      `[${message.author.tag} @ ${new Date(message.createdTimestamp).toLocaleString()}]: ${message.content}`,
-    );
+    const participant = meeting.participants.get(message.author.id) || {
+      id: message.author.id,
+      tag: message.author.tag,
+      nickname: message.member?.displayName ?? undefined,
+      globalName: message.author.globalName ?? undefined,
+    };
+
+    meeting.participants.set(message.author.id, participant);
+
+    const entry: ChatEntry = {
+      type: "message",
+      user: participant,
+      channelId: message.channelId,
+      content: message.content,
+      timestamp: new Date(message.createdTimestamp).toISOString(),
+    };
+
+    meeting.chatLog.push(entry);
     meeting.attendance.add(message.author.tag);
   });
 

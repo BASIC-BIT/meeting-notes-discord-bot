@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     aws = {
-      source = "hashicorp/aws"
+      source  = "hashicorp/aws"
       version = "~> 5.0"
     }
     github = {
@@ -10,55 +10,67 @@ terraform {
     }
   }
   backend "s3" {
-    region = "us-east-1"
+    region         = "us-east-1"
     bucket         = "meeting-notes-terraform-state-bucket"
     key            = "meeting-notes-terraform/state"
     dynamodb_table = "meeting-notes-terraform-state-locks"
-    encrypt = true
+    encrypt        = true
   }
 }
 
 
-variable GITHUB_TOKEN {
+variable "GITHUB_TOKEN" {
   sensitive = true
 }
-variable AWS_TOKEN_KEY {
+variable "AWS_TOKEN_KEY" {
   sensitive = true
 }
-variable DISCORD_CLIENT_ID {
+variable "DISCORD_CLIENT_ID" {
   sensitive = true
 }
-variable DISCORD_BOT_TOKEN {
+variable "DISCORD_BOT_TOKEN" {
   sensitive = true
 }
-variable OPENAI_API_KEY {
+variable "OPENAI_API_KEY" {
   sensitive = true
 }
-variable OPENAI_ORGANIZATION_ID {
+variable "OPENAI_ORGANIZATION_ID" {
   sensitive = true
   default   = ""
 }
-variable OPENAI_PROJECT_ID {
+variable "OPENAI_PROJECT_ID" {
   sensitive = true
   default   = ""
 }
 
-variable ENABLE_OAUTH {
+variable "TRANSCRIPTS_BUCKET" {
+  description = "S3 bucket name for storing full meeting transcripts (leave blank to auto-generate)"
+  type        = string
+  default     = ""
+}
+
+variable "TRANSCRIPTS_PREFIX" {
+  description = "Optional prefix inside the transcripts bucket"
+  type        = string
+  default     = ""
+}
+
+variable "ENABLE_OAUTH" {
   sensitive = false
   default   = "false"
 }
 
-variable DISCORD_CLIENT_SECRET {
+variable "DISCORD_CLIENT_SECRET" {
   sensitive = true
   default   = ""
 }
 
-variable DISCORD_CALLBACK_URL {
+variable "DISCORD_CALLBACK_URL" {
   sensitive = true
   default   = ""
 }
 
-variable OAUTH_SECRET {
+variable "OAUTH_SECRET" {
   sensitive = true
   default   = ""
 }
@@ -75,8 +87,12 @@ provider "github" {
   token = var.GITHUB_TOKEN
 }
 
+locals {
+  transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "meeting-notes-transcripts-${data.aws_caller_identity.current.account_id}"
+}
+
 resource "aws_ecr_repository" "app_ecr_repo" {
-  name = "meeting-notes-bot-repo"
+  name                 = "meeting-notes-bot-repo"
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
@@ -117,29 +133,29 @@ data "github_repository" "repo" {
 }
 
 resource "github_repository_environment" "repo_sandbox_env" {
-  repository = data.github_repository.repo.name
+  repository  = data.github_repository.repo.name
   environment = "sandbox"
 }
 
 resource "github_actions_environment_variable" "envvar_aws_region" {
-  repository = data.github_repository.repo.name
-  environment = github_repository_environment.repo_sandbox_env.environment
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_sandbox_env.environment
   variable_name = "AWS_REGION"
-  value = "us-east-1"
+  value         = "us-east-1"
 }
 
 resource "github_actions_environment_variable" "envvar_ecr_repository" {
-  repository = data.github_repository.repo.name
-  environment = github_repository_environment.repo_sandbox_env.environment
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_sandbox_env.environment
   variable_name = "ECR_REPOSITORY"
-  value = aws_ecr_repository.app_ecr_repo.name
+  value         = aws_ecr_repository.app_ecr_repo.name
 }
 
 resource "github_actions_environment_variable" "envvar_aws_access_key_id" {
-  repository = data.github_repository.repo.name
-  environment = github_repository_environment.repo_sandbox_env.environment
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_sandbox_env.environment
   variable_name = "AWS_ACCESS_KEY_ID"
-  value = var.AWS_TOKEN_KEY
+  value         = var.AWS_TOKEN_KEY
 }
 
 resource "aws_vpc" "app_vpc" {
@@ -214,7 +230,7 @@ resource "aws_security_group" "ecs_service_sg" {
     create_before_destroy = true
   }
   description = "ECS service SG for meeting-notes-bot"
-  vpc_id = aws_vpc.app_vpc.id
+  vpc_id      = aws_vpc.app_vpc.id
 
   ingress {
     description = "Allow app traffic from the internet to port 3001"
@@ -293,7 +309,7 @@ resource "aws_kms_key" "app_general" {
           "kms:GenerateDataKey*",
           "kms:DescribeKey"
         ],
-        Resource  = "*"
+        Resource = "*"
       },
       {
         Sid    = "AllowDynamoDB",
@@ -308,10 +324,61 @@ resource "aws_kms_key" "app_general" {
           "kms:GenerateDataKey*",
           "kms:DescribeKey"
         ],
-        Resource  = "*"
+        Resource = "*"
       }
     ]
   })
+}
+
+resource "aws_s3_bucket" "transcripts" {
+  bucket = local.transcripts_bucket_name
+
+  tags = {
+    Name = "meeting-notes-transcripts"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "transcripts" {
+  bucket                  = aws_s3_bucket.transcripts.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "transcripts" {
+  bucket = aws_s3_bucket.transcripts.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.app_general.arn
+      sse_algorithm     = "aws:kms"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "transcripts" {
+  bucket = aws_s3_bucket.transcripts.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "transcripts" {
+  bucket = aws_s3_bucket.transcripts.id
+
+  rule {
+    id     = "abort-mpu"
+    status = "Enabled"
+    filter {
+      prefix = ""
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
 
 resource "aws_ecs_cluster" "main" {
@@ -422,9 +489,9 @@ resource "aws_iam_policy" "kms_app_policy" {
     Version = "2012-10-17",
     Statement = [
       {
-        Sid      = "AllowKMSForApp"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "AllowKMSForApp"
+        Effect = "Allow"
+        Action = [
           "kms:Encrypt",
           "kms:Decrypt",
           "kms:ReEncrypt*",
@@ -445,6 +512,40 @@ resource "aws_iam_role_policy_attachment" "ecs_task_kms_policy" {
 resource "aws_iam_role_policy_attachment" "ecs_task_exec_kms_policy" {
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = aws_iam_policy.kms_app_policy.arn
+}
+
+resource "aws_iam_policy" "transcripts_s3_policy" {
+  name        = "meeting-notes-bot-transcripts-s3-policy"
+  description = "Allow ECS tasks to upload and read transcripts in the transcripts bucket"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListBucket"
+        ],
+        Resource = [
+          aws_s3_bucket.transcripts.arn,
+          "${aws_s3_bucket.transcripts.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_transcripts_policy" {
+  role       = aws_iam_role.ecs_task_app_role.name
+  policy_arn = aws_iam_policy.transcripts_s3_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_exec_transcripts_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = aws_iam_policy.transcripts_s3_policy.arn
 }
 
 # Update the ECS task definition to include the execution role ARN
@@ -469,21 +570,21 @@ resource "aws_ecs_task_definition" "app_task" {
           containerPort = 3001
           hostPort      = 3001
         },
-      {
-        Action    = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-        ]
-        Effect    = "Allow"
-        Principal = {
-          Service = "ecr.amazonaws.com"
-        }
-        Resource  = "*"
-        Sid       = "AllowECR"
-      },
+        {
+          Action = [
+            "kms:Encrypt",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey",
+          ]
+          Effect = "Allow"
+          Principal = {
+            Service = "ecr.amazonaws.com"
+          }
+          Resource = "*"
+          Sid      = "AllowECR"
+        },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -523,21 +624,29 @@ resource "aws_ecs_task_definition" "app_task" {
           value = var.OPENAI_API_KEY
         },
         {
-          name = "OPENAI_ORGANIZATION_ID"
+          name  = "OPENAI_ORGANIZATION_ID"
           value = var.OPENAI_ORGANIZATION_ID
         },
         {
-          name = "OPENAI_PROJECT_ID"
+          name  = "OPENAI_PROJECT_ID"
           value = var.OPENAI_PROJECT_ID
         },
+        {
+          name  = "TRANSCRIPTS_BUCKET"
+          value = local.transcripts_bucket_name
+        },
+        {
+          name  = "TRANSCRIPTS_PREFIX"
+          value = var.TRANSCRIPTS_PREFIX
+        },
       ]
-#      healthCheck = {
-#        command     = ["CMD-SHELL", "curl -f http://127.0.0.1:3001/health || exit 1"]
-#        interval    = 30      # seconds
-#        timeout     = 5       # seconds
-#        retries     = 3
-#        startPeriod = 120      # seconds, grace period before health checks start
-#      }
+      #      healthCheck = {
+      #        command     = ["CMD-SHELL", "curl -f http://127.0.0.1:3001/health || exit 1"]
+      #        interval    = 30      # seconds
+      #        timeout     = 5       # seconds
+      #        retries     = 3
+      #        startPeriod = 120      # seconds, grace period before health checks start
+      #      }
     }
   ])
 }
@@ -548,36 +657,36 @@ resource "aws_ecs_service" "app_service" {
   name            = "meeting-notes-bot-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
-# COMMENT THIS OUT TO DEPLOY ANY CHNAGES TO THE TASK DEFINITION - SUPER JANK LOL
- lifecycle {
-   ignore_changes = [
-     task_definition
-   ]
- }
+  # COMMENT THIS OUT TO DEPLOY ANY CHNAGES TO THE TASK DEFINITION - SUPER JANK LOL
+  #lifecycle {
+  #  ignore_changes = [
+  #    task_definition
+  #  ]
+  #}
 
   enable_execute_command = true
 
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  desired_count = 1
+  launch_type   = "FARGATE"
 
   deployment_controller {
     type = "ECS"
   }
 
   deployment_minimum_healthy_percent = 50
-  deployment_maximum_percent = 200
+  deployment_maximum_percent         = 200
 
   network_configuration {
-    subnets         = [aws_subnet.app_public_subnet_1.id, aws_subnet.app_public_subnet_2.id]
-    security_groups = [aws_security_group.ecs_service_sg.id]
+    subnets          = [aws_subnet.app_public_subnet_1.id, aws_subnet.app_public_subnet_2.id]
+    security_groups  = [aws_security_group.ecs_service_sg.id]
     assign_public_ip = true
   }
 }
 
 resource "aws_dynamodb_table" "subscription_table" {
-  name           = "SubscriptionTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "UserID"
+  name         = "SubscriptionTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "UserID"
 
   attribute {
     name = "UserID"
@@ -599,9 +708,9 @@ resource "aws_dynamodb_table" "subscription_table" {
 }
 
 resource "aws_dynamodb_table" "payment_transaction_table" {
-  name           = "PaymentTransactionTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "TransactionID"
+  name         = "PaymentTransactionTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "TransactionID"
 
   attribute {
     name = "TransactionID"
@@ -623,9 +732,9 @@ resource "aws_dynamodb_table" "payment_transaction_table" {
 }
 
 resource "aws_dynamodb_table" "access_logs_table" {
-  name           = "AccessLogsTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "AccessLogID"
+  name         = "AccessLogsTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "AccessLogID"
 
   attribute {
     name = "AccessLogID"
@@ -647,9 +756,9 @@ resource "aws_dynamodb_table" "access_logs_table" {
 }
 
 resource "aws_dynamodb_table" "recording_transcript_table" {
-  name           = "RecordingTranscriptTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "MeetingID"
+  name         = "RecordingTranscriptTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "MeetingID"
 
   attribute {
     name = "MeetingID"
@@ -671,10 +780,10 @@ resource "aws_dynamodb_table" "recording_transcript_table" {
 }
 
 resource "aws_dynamodb_table" "auto_record_settings_table" {
-  name           = "AutoRecordSettingsTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "guildId"
-  range_key      = "channelId"
+  name         = "AutoRecordSettingsTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+  range_key    = "channelId"
 
   attribute {
     name = "guildId"
@@ -708,10 +817,10 @@ resource "aws_dynamodb_table" "auto_record_settings_table" {
 
 # Server Context Table
 resource "aws_dynamodb_table" "server_context_table" {
-  name           = "ServerContextTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "guildId"
-  
+  name         = "ServerContextTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+
   attribute {
     name = "guildId"
     type = "S"
@@ -725,7 +834,7 @@ resource "aws_dynamodb_table" "server_context_table" {
     enabled     = true
     kms_key_arn = aws_kms_key.app_general.arn
   }
-  
+
   tags = {
     Name = "ServerContextTable"
   }
@@ -733,16 +842,16 @@ resource "aws_dynamodb_table" "server_context_table" {
 
 # Channel Context Table
 resource "aws_dynamodb_table" "channel_context_table" {
-  name           = "ChannelContextTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "guildId"
-  range_key      = "channelId"
-  
+  name         = "ChannelContextTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+  range_key    = "channelId"
+
   attribute {
     name = "guildId"
     type = "S"
   }
-  
+
   attribute {
     name = "channelId"
     type = "S"
@@ -756,7 +865,7 @@ resource "aws_dynamodb_table" "channel_context_table" {
     enabled     = true
     kms_key_arn = aws_kms_key.app_general.arn
   }
-  
+
   tags = {
     Name = "ChannelContextTable"
   }
@@ -764,26 +873,26 @@ resource "aws_dynamodb_table" "channel_context_table" {
 
 # Meeting History Table
 resource "aws_dynamodb_table" "meeting_history_table" {
-  name           = "MeetingHistoryTable"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "guildId"
-  range_key      = "channelId_timestamp"
-  
+  name         = "MeetingHistoryTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+  range_key    = "channelId_timestamp"
+
   attribute {
     name = "guildId"
     type = "S"
   }
-  
+
   attribute {
     name = "channelId_timestamp"
     type = "S"
   }
-  
+
   attribute {
     name = "timestamp"
     type = "S"
   }
-  
+
   # GSI for querying all meetings in a guild by time
   global_secondary_index {
     name            = "GuildTimestampIndex"
@@ -800,7 +909,7 @@ resource "aws_dynamodb_table" "meeting_history_table" {
     enabled     = true
     kms_key_arn = aws_kms_key.app_general.arn
   }
-  
+
   tags = {
     Name = "MeetingHistoryTable"
   }
@@ -820,6 +929,10 @@ output "public_subnet_ids" {
 output "ecs_service_sg_id" {
   value = aws_security_group.ecs_service_sg.id
 }
+
+output "transcripts_bucket_name" {
+  value = aws_s3_bucket.transcripts.bucket
+}
 # Flow logs IAM role
 resource "aws_iam_role" "vpc_flow_logs_role" {
   name = "vpc_flow_logs_role"
@@ -828,9 +941,9 @@ resource "aws_iam_role" "vpc_flow_logs_role" {
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
+        Effect    = "Allow",
         Principal = { Service = "vpc-flow-logs.amazonaws.com" },
-        Action   = "sts:AssumeRole"
+        Action    = "sts:AssumeRole"
       }
     ]
   })

@@ -179,10 +179,19 @@ async function handleUserJoin(newState: VoiceState) {
     const userTag = newState.member!.user.tag;
     console.log(`${userTag} joined the voice channel.`);
     meeting.attendance.add(userTag);
-    // Optionally, log the time they joined
-    meeting.chatLog.push(
-      `[${userTag}] joined the channel at ${new Date().toLocaleTimeString()}`,
-    );
+    const participant = {
+      id: newState.member!.user.id,
+      tag: userTag,
+      nickname: newState.member?.displayName ?? undefined,
+      globalName: newState.member?.user.globalName ?? undefined,
+    };
+    meeting.participants.set(participant.id, participant);
+    meeting.chatLog.push({
+      type: "join",
+      user: participant,
+      channelId: newState.channelId!,
+      timestamp: new Date().toISOString(),
+    });
 
     await subscribeToUserVoice(meeting, newState.member!.user.id);
     return; // Exit early if we're already recording
@@ -243,10 +252,19 @@ async function handleUserLeave(oldState: VoiceState) {
   ) {
     const userTag = oldState.member!.user.tag;
     console.log(`${userTag} left the voice channel.`);
-    // Optionally, log the time they left
-    meeting.chatLog.push(
-      `[${userTag}] left the channel at ${new Date().toLocaleTimeString()}`,
-    );
+    const participant = {
+      id: oldState.member!.user.id,
+      tag: userTag,
+      nickname: oldState.member?.displayName ?? undefined,
+      globalName: oldState.member?.user.globalName ?? undefined,
+    };
+    meeting.participants.set(participant.id, participant);
+    meeting.chatLog.push({
+      type: "leave",
+      user: participant,
+      channelId: oldState.channelId!,
+      timestamp: new Date().toISOString(),
+    });
 
     unsubscribeToVoiceUponLeaving(meeting, oldState.member!.user.id);
 

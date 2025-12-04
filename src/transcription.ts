@@ -1,4 +1,6 @@
 import OpenAI from "openai";
+import { ChatEntry } from "./types/chat";
+import { renderChatEntryLine } from "./utils/chatLog";
 import { distance as levenshteinDistance } from "fastest-levenshtein";
 import {
   createReadStream,
@@ -434,6 +436,36 @@ export async function getImage(meeting: MeetingData): Promise<string> {
   return output || "";
 }
 
+const MAX_CHAT_LOG_PROMPT_LENGTH = 1500;
+const MAX_CHAT_LOG_LINES = 20;
+
+function formatChatLogForPrompt(
+  chatLog: ChatEntry[],
+  maxLength: number = MAX_CHAT_LOG_PROMPT_LENGTH,
+): string | undefined {
+  if (!chatLog || chatLog.length === 0) {
+    return undefined;
+  }
+
+  // Drop obvious noise so participant instructions stay visible
+  const filtered = chatLog.filter((entry) => entry.type === "message");
+
+  const relevant = filtered.length > 0 ? filtered : chatLog;
+  const recent = relevant.slice(-MAX_CHAT_LOG_LINES);
+  if (recent.length === 0) {
+    return undefined;
+  }
+
+  const combinedLines = recent.map((e) => renderChatEntryLine(e)).join("\n");
+
+  if (combinedLines.length > maxLength) {
+    const trimmed = combinedLines.slice(combinedLines.length - maxLength);
+    return "...(recent chat truncated)...\n" + trimmed;
+  }
+
+  return combinedLines;
+}
+
 export async function getNotesSystemPrompt(
   meeting: MeetingData,
 ): Promise<string> {
@@ -456,7 +488,15 @@ export async function getNotesSystemPrompt(
     .map((channel) => channel.name)
     .join(", ");
 
-  let prompt = `"You are a highly versatile assistant that records and transcribes Discord conversations. `;
+  const botDisplayName =
+    meeting.guild.members.me?.displayName ||
+    meeting.guild.members.me?.nickname ||
+    meeting.guild.members.me?.user.username ||
+    "Meeting Notes Bot";
+
+  const chatContext = formatChatLogForPrompt(meeting.chatLog);
+
+  let prompt = `You are Meeting Notes Bot (canonical name "Meeting Notes Bot"), a Discord assistant that records, transcribes, and summarizes conversations. In this server you currently appear as "${botDisplayName}". Follow explicit participant instructions about what to include or omit in the notes, even if they differ from your defaults. Keep the notes concise and proportional to the meeting length—favor clarity over exhaustive detail. Speaker order in the transcript may be imperfect because audio is batched until roughly 5 seconds of silence; avoid strong inferences from ordering or attribution when uncertain. `;
 
   // Add context from context service if available
   if (formattedContext) {
@@ -522,6 +562,21 @@ The goal is to create comprehensive notes that leverage historical context to pr
 3. **For All Types of Conversations**:
    - Summarize important **takeaways** or **insights** for people who missed the conversation, ensuring these are concise and offer a quick understanding of what was discussed.
    - List any **To-Do Items** or plans, with specific names if people were assigned tasks.
+
+### Additional Inputs:
+- **Participant chat/instructions**: ${
+    chatContext
+      ? "Use the raw chat provided below to honor any explicit include/omit requests."
+      : "No additional participant chat was captured; rely on transcript and provided context."
+  }
+- **Bot identity**: You are "${botDisplayName}" in this server; canonical name is "Meeting Notes Bot".
+- **Transcript ordering caution**: Speaker order can be unreliable because audio is batched until ~5 seconds of silence.
+
+${
+  chatContext
+    ? `Participant chat (recent, raw, chronological):\n${chatContext}`
+    : ""
+}
 
 ### Contextual Information:
 - **Discord Server**: "${serverName}" (${serverDescription}).

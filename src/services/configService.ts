@@ -38,6 +38,15 @@ class ConfigService {
       process.env.USE_LOCAL_DYNAMODB === "true",
   };
 
+  // Storage Configuration
+  readonly storage = {
+    transcriptBucket: process.env.TRANSCRIPTS_BUCKET,
+    transcriptPrefix: process.env.TRANSCRIPTS_PREFIX || "",
+    awsRegion: process.env.AWS_REGION || "us-east-1",
+    endpoint: process.env.STORAGE_ENDPOINT,
+    forcePathStyle: process.env.STORAGE_FORCE_PATH_STYLE === "true",
+  };
+
   // Server Configuration
   readonly server = {
     port: parseInt(process.env.PORT || "3001", 10),

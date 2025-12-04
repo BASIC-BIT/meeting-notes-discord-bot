@@ -20,3 +20,26 @@ services:
       - DYNAMO_ENDPOINT=http://dynamodb-local:8000
     depends_on:
       - dynamodb-local
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: meeting-notes-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin12345
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./minio-data:/data
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 admin admin12345 &&
+      mc mb -p local/local-transcripts || true
+      "

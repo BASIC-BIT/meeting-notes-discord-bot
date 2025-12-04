@@ -33,3 +33,5 @@ _infra_state_mgmt/.terraform
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+minio-data/

@@ -14,10 +14,12 @@ import {
   AutoRecordSettings,
   ChannelContext,
   MeetingHistory,
+  NotesHistoryEntry,
   PaymentTransaction,
   RecordingTranscript,
   ServerContext,
   Subscription,
+  SuggestionHistoryEntry,
 } from "./types/db";
 
 const dynamoDbClient = new DynamoDBClient(
@@ -398,31 +400,96 @@ export async function updateMeetingNotes(
   notes: string,
   notesVersion: number,
   editedBy: string,
-): Promise<void> {
-  const params = {
-    TableName: "MeetingHistoryTable",
-    Key: marshall({ guildId, channelId_timestamp }),
-    UpdateExpression:
-      "SET #notes = :notes, #notesVersion = :notesVersion, #updatedAt = :updatedAt, #notesLastEditedBy = :editedBy, #notesLastEditedAt = :editedAt",
-    ExpressionAttributeNames: {
-      "#notes": "notes",
-      "#notesVersion": "notesVersion",
-      "#updatedAt": "updatedAt",
-      "#notesLastEditedBy": "notesLastEditedBy",
-      "#notesLastEditedAt": "notesLastEditedAt",
-    },
-    ExpressionAttributeValues: marshall(
-      {
-        ":notes": notes,
-        ":notesVersion": notesVersion,
-        ":updatedAt": new Date().toISOString(),
-        ":editedBy": editedBy,
-        ":editedAt": new Date().toISOString(),
-      },
-      { removeUndefinedValues: true },
-    ),
+  suggestion?: SuggestionHistoryEntry,
+  expectedPreviousVersion?: number,
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const notesHistoryEntry: NotesHistoryEntry = {
+    version: notesVersion,
+    notes,
+    editedBy,
+    editedAt: now,
   };
 
+  const updateParts = [
+    "#notes = :notes",
+    "#notesVersion = :notesVersion",
+    "#updatedAt = :updatedAt",
+    "#notesLastEditedBy = :editedBy",
+    "#notesLastEditedAt = :editedAt",
+    "#notesHistory = list_append(if_not_exists(#notesHistory, :emptyList), :notesHistoryEntry)",
+  ];
+
+  if (suggestion) {
+    updateParts.push(
+      "#suggestionsHistory = list_append(if_not_exists(#suggestionsHistory, :emptyList), :suggestionEntry)",
+    );
+  }
+
+  const expressionAttributeNames: Record<string, string> = {
+    "#notes": "notes",
+    "#notesVersion": "notesVersion",
+    "#updatedAt": "updatedAt",
+    "#notesLastEditedBy": "notesLastEditedBy",
+    "#notesLastEditedAt": "notesLastEditedAt",
+    "#notesHistory": "notesHistory",
+  };
+
+  if (suggestion) {
+    expressionAttributeNames["#suggestionsHistory"] = "suggestionsHistory";
+  }
+
+  const values: Record<string, unknown> = {
+    ":notes": notes,
+    ":notesVersion": notesVersion,
+    ":updatedAt": now,
+    ":editedBy": editedBy,
+    ":editedAt": now,
+    ":notesHistoryEntry": [notesHistoryEntry],
+    ":emptyList": [],
+  };
+
+  if (suggestion) {
+    values[":suggestionEntry"] = [suggestion];
+  }
+
+  if (expectedPreviousVersion !== undefined) {
+    values[":expectedVersion"] = expectedPreviousVersion;
+  }
+
+  const params: {
+    TableName: string;
+    Key: Record<string, unknown>;
+    UpdateExpression: string;
+    ExpressionAttributeNames: Record<string, string>;
+    ExpressionAttributeValues: Record<string, unknown>;
+    ConditionExpression?: string;
+  } = {
+    TableName: "MeetingHistoryTable",
+    Key: marshall({ guildId, channelId_timestamp }),
+    UpdateExpression: `SET ${updateParts.join(", ")}`,
+    ExpressionAttributeNames: expressionAttributeNames,
+    ExpressionAttributeValues: marshall(values, {
+      removeUndefinedValues: true,
+    }),
+  };
+
+  if (expectedPreviousVersion !== undefined) {
+    params.ConditionExpression =
+      "attribute_not_exists(#notesVersion) OR #notesVersion = :expectedVersion";
+  }
+
   const command = new UpdateItemCommand(params);
-  await dynamoDbClient.send(command);
+  try {
+    await dynamoDbClient.send(command);
+    return true;
+  } catch (error) {
+    if (
+      (error as { name?: string }).name === "ConditionalCheckFailedException"
+    ) {
+      return false;
+    }
+    console.error("Failed to update meeting notes:", error);
+    return false;
+  }
 }

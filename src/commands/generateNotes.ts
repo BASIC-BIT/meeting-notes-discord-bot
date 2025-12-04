@@ -1,15 +1,12 @@
-import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  EmbedBuilder,
-} from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { getNotes } from "../transcription";
 import { MeetingData } from "../types/meeting-data";
+import { buildPaginatedEmbeds } from "../utils/embedPagination";
 
 export async function generateAndSendNotes(meeting: MeetingData) {
   // const [notes, image] = await Promise.all([getNotes(meeting), getImage(meeting)]);
   const notes = await getNotes(meeting);
+  meeting.notesText = notes;
 
   if (notes && notes.length) {
     const channelIdTimestamp = `${meeting.voiceChannel.id}#${meeting.startTime.toISOString()}`;
@@ -27,14 +24,15 @@ export async function generateAndSendNotes(meeting: MeetingData) {
       correctionButton,
     );
 
+    const footerText = `v1 • Posted by ${meeting.creator.tag}`;
+    const embeds = buildPaginatedEmbeds({
+      text: notes,
+      baseTitle: "Meeting Notes (AI Generated)",
+      footerText,
+    });
+
     const message = await meeting.textChannel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("Meeting Notes (AI Generated)")
-          .setDescription(notes)
-          .setFooter({ text: `v1 • Posted by ${meeting.creator.tag}` }),
-        // .setImage(image)
-      ],
+      embeds,
       components: [row],
     });
 
@@ -42,5 +40,6 @@ export async function generateAndSendNotes(meeting: MeetingData) {
     meeting.notesChannelId = message.channelId;
     meeting.notesVersion = 1;
     meeting.notesLastEditedBy = meeting.creator.id;
+    meeting.notesLastEditedAt = new Date().toISOString();
   }
 }

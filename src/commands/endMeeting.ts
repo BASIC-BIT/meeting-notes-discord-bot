@@ -23,6 +23,8 @@ import { deleteDirectoryRecursively, deleteIfExists } from "../util";
 import { MeetingData } from "../types/meeting-data";
 import { generateAndSendNotes } from "./generateNotes";
 import { saveMeetingHistoryToDatabase } from "./saveMeetingHistory";
+import { renderChatEntryLine } from "../utils/chatLog";
+import { uploadMeetingArtifacts } from "../services/uploadService";
 
 function doesUserHavePermissionToEndMeeting(
   meeting: MeetingData,
@@ -109,7 +111,10 @@ export async function handleEndMeetingButton(
     }
 
     const chatLogFilePath = `./chatlog-${guildId}-${channelId}-${Date.now()}.txt`;
-    writeFileSync(chatLogFilePath, meeting.chatLog.join("\n"));
+    writeFileSync(
+      chatLogFilePath,
+      meeting.chatLog.map((e) => renderChatEntryLine(e)).join("\n"),
+    );
 
     // checking if the current snippet exists should only matter when there was no audio recorded at all
     meeting.audioData.currentSnippets.forEach((snippet) => {
@@ -132,9 +137,6 @@ export async function handleEndMeetingButton(
       chatLogFilePath,
       splitFiles,
     );
-
-    deleteIfExists(chatLogFilePath);
-    deleteIfExists(meeting.audioData.outputFileName!);
 
     if (meeting.transcribeMeeting) {
       const waitingForTranscriptionsMessage = await meeting.textChannel.send(
@@ -167,6 +169,16 @@ export async function handleEndMeetingButton(
       //     await sendPostMeetingOptions(meeting);
       // }
     }
+
+    // Upload artifacts after transcript generation (or audio/chat only)
+    await uploadMeetingArtifacts(meeting, {
+      audioFilePath: meeting.audioData.outputFileName!,
+      chatFilePath: chatLogFilePath,
+      transcriptText: meeting.finalTranscript,
+    });
+
+    deleteIfExists(chatLogFilePath);
+    deleteIfExists(meeting.audioData.outputFileName!);
 
     deleteDirectoryRecursively(splitAudioDir);
 
@@ -218,7 +230,10 @@ export async function handleEndMeetingOther(
     }
 
     const chatLogFilePath = `./chatlog-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
-    writeFileSync(chatLogFilePath, meeting.chatLog.join("\n"));
+    writeFileSync(
+      chatLogFilePath,
+      meeting.chatLog.map((e) => renderChatEntryLine(e)).join("\n"),
+    );
 
     // checking if the current snippet exists should only matter when there was no audio recorded at all
     meeting.audioData.currentSnippets.forEach((snippet) => {
@@ -241,9 +256,6 @@ export async function handleEndMeetingOther(
       chatLogFilePath,
       splitFiles,
     );
-
-    deleteIfExists(chatLogFilePath);
-    deleteIfExists(meeting.audioData.outputFileName!);
 
     if (meeting.transcribeMeeting) {
       const waitingForTranscriptionsMessage = await meeting.textChannel.send(
@@ -276,6 +288,16 @@ export async function handleEndMeetingOther(
       //     await sendPostMeetingOptions(meeting);
       // }
     }
+
+    // Upload artifacts after transcript generation (or audio/chat only)
+    await uploadMeetingArtifacts(meeting, {
+      audioFilePath: meeting.audioData.outputFileName!,
+      chatFilePath: chatLogFilePath,
+      transcriptText: meeting.finalTranscript,
+    });
+
+    deleteIfExists(chatLogFilePath);
+    deleteIfExists(meeting.audioData.outputFileName!);
 
     deleteDirectoryRecursively(splitAudioDir);
 

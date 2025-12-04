@@ -28,6 +28,7 @@
     "db:init": "node scripts/init-dynamodb.js",
     "dev": "npm run docker:up && npm run db:init && npm run start",
     "dev:clean": "npm run docker:down && npm run docker:clean && npm run dev",
+    "docker:minio-init": "docker-compose run --rm minio-init",
     "checkov": "uvx --from checkov checkov -d _infra --quiet --compact"
   },
   "engines": {
@@ -37,6 +38,7 @@
   "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.830.0",
+    "@aws-sdk/client-s3": "^3.830.0",
     "@aws-sdk/util-dynamodb": "^3.830.0",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/rest": "^2.5.1",

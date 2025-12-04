@@ -1,3 +1,5 @@
+import { Participant } from "./participants";
+
 // Subscription Type
 export interface Subscription {
   userID: string;
@@ -43,6 +45,19 @@ export interface RecordingTranscript {
   expirationDate?: string;
 }
 
+export interface SuggestionHistoryEntry {
+  userId: string;
+  text: string;
+  createdAt: string; // ISO timestamp
+}
+
+export interface NotesHistoryEntry {
+  version: number;
+  notes: string;
+  editedBy: string;
+  editedAt: string; // ISO timestamp
+}
+
 // Auto Record Settings Type
 export interface AutoRecordSettings {
   guildId: string; // Partition key
@@ -80,7 +95,8 @@ export interface MeetingHistory {
   timestamp: string; // ISO timestamp (denormalized)
   notes?: string; // AI-generated notes (comprehensive, includes everything)
   context?: string; // Meeting-specific context if provided
-  attendees: string[]; // List of attendee user tags
+  participants: Participant[]; // Snapshot of participant identities
+  attendees?: string[]; // Legacy list of attendee user tags
   duration: number; // Meeting duration in seconds
   transcribeMeeting: boolean; // Whether transcription was enabled
   generateNotes: boolean; // Whether notes were generated
@@ -92,5 +108,10 @@ export interface MeetingHistory {
   updatedAt?: string; // Last time notes were edited
   notesLastEditedBy?: string; // User ID who last edited notes
   notesLastEditedAt?: string; // Timestamp of last notes edit
-  transcript?: string; // Full meeting transcript
+  transcript?: string; // Full meeting transcript (legacy/compat; generally omitted when using S3)
+  transcriptS3Key?: string; // S3 object key where full transcript is stored
+  suggestionsHistory?: SuggestionHistoryEntry[]; // Chronological list of suggestions applied
+  notesHistory?: NotesHistoryEntry[]; // Versions of notes as they change
+  audioS3Key?: string; // S3 key for combined audio
+  chatS3Key?: string; // S3 key for chat log/json
 }

@@ -3,7 +3,6 @@ import {
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
-  EmbedBuilder,
   ModalBuilder,
   ModalSubmitInteraction,
   PermissionFlagsBits,
@@ -16,6 +15,9 @@ import { getMeetingHistory, updateMeetingNotes } from "../db";
 import OpenAI from "openai";
 import { config } from "../services/configService";
 import { stripCodeFences } from "../utils/text";
+import { buildPaginatedEmbeds } from "../utils/embedPagination";
+import { MeetingHistory, SuggestionHistoryEntry } from "../types/db";
+import { fetchTranscriptFromS3 } from "../services/storageService";
 
 type PendingCorrection = {
   guildId: string;
@@ -27,8 +29,8 @@ type PendingCorrection = {
   originalNotes: string;
   newNotes: string;
   notesVersion: number;
-  approverTag?: string;
   requesterId: string;
+  suggestion: SuggestionHistoryEntry;
 };
 
 const pendingCorrections = new Map<string, PendingCorrection>();
@@ -92,6 +94,23 @@ interface CorrectionInput {
   transcript: string;
   suggestion: string;
   requesterTag: string;
+  previousSuggestions?: SuggestionHistoryEntry[];
+}
+
+function formatSuggestionsForPrompt(
+  suggestions?: SuggestionHistoryEntry[],
+): string {
+  if (!suggestions || suggestions.length === 0) {
+    return "None recorded yet.";
+  }
+
+  return suggestions
+    .slice(-10) // Keep it compact
+    .map(
+      (entry) =>
+        `- [${new Date(entry.createdAt).toLocaleString()}] ${entry.userId}: ${entry.text}`,
+    )
+    .join("\n");
 }
 
 async function generateCorrectedNotes({
@@ -99,12 +118,18 @@ async function generateCorrectedNotes({
   transcript,
   suggestion,
   requesterTag,
+  previousSuggestions,
 }: CorrectionInput): Promise<string> {
   const systemPrompt =
     "You are updating meeting notes. Given the current notes, the full transcript, and a user suggestion, make the smallest edits needed to satisfy the suggestion while preserving the existing structure and sections. Do NOT append or copy the transcript into the notes. Keep all other content unchanged. Return the full revised notes as markdown.";
 
+  const priorSuggestions = formatSuggestionsForPrompt(previousSuggestions);
+
   const userPrompt = `Current notes:
 ${currentNotes}
+
+Previously approved suggestions (most recent first):
+${priorSuggestions}
 
 Transcript:
 ${transcript}
@@ -231,11 +256,20 @@ export async function handleNotesCorrectionModal(
     "correction_suggestion",
   );
 
+  const suggestionEntry: SuggestionHistoryEntry = {
+    userId: interaction.user.id,
+    text: suggestion,
+    createdAt: new Date().toISOString(),
+  };
+
+  const transcript = await resolveTranscript(history);
+
   const newNotes = await generateCorrectedNotes({
     currentNotes: history.notes,
-    transcript: history.transcript || "",
+    transcript,
     suggestion,
     requesterTag: interaction.user.tag,
+    previousSuggestions: history.suggestionsHistory,
   });
 
   const diff = buildUnifiedDiff(history.notes, newNotes);
@@ -252,6 +286,7 @@ export async function handleNotesCorrectionModal(
     newNotes,
     notesVersion: history.notesVersion ?? 1,
     requesterId: interaction.user.id,
+    suggestion: suggestionEntry,
   });
 
   const accept = new ButtonBuilder()
@@ -278,28 +313,31 @@ export async function handleNotesCorrectionModal(
   });
 }
 
-function buildUpdatedEmbed(
-  currentEmbed: EmbedBuilder | undefined,
-  newNotes: string,
-  version: number,
-  editedByTag?: string,
-): EmbedBuilder {
-  const base = currentEmbed
-    ? EmbedBuilder.from(currentEmbed)
-    : new EmbedBuilder().setTitle("Meeting Notes (AI Generated)");
-
-  const footerText = editedByTag
-    ? `v${version} • Edited by ${editedByTag}`
-    : `v${version}`;
-
-  return base.setDescription(newNotes).setFooter({ text: footerText });
-}
-
 async function applyCorrection(
   interaction: ButtonInteraction,
   pending: PendingCorrection,
-) {
+): Promise<boolean> {
   const newVersion = (pending.notesVersion ?? 1) + 1;
+  const row = buildCorrectionRow(pending.guildId, pending.channelIdTimestamp);
+
+  const updateSucceeded = await updateMeetingNotes(
+    pending.guildId,
+    pending.channelIdTimestamp,
+    pending.newNotes,
+    newVersion,
+    interaction.user.id,
+    pending.suggestion,
+    pending.notesVersion,
+  );
+
+  if (!updateSucceeded) {
+    await interaction.update({
+      content:
+        "Could not apply this correction because the notes were updated elsewhere. Please reopen the correction request and try again.",
+      components: [],
+    });
+    return false;
+  }
 
   if (pending.notesChannelId && pending.notesMessageId) {
     const channel = await interaction.client.channels.fetch(
@@ -309,23 +347,16 @@ async function applyCorrection(
     if (channel && channel.isTextBased()) {
       try {
         const message = await channel.messages.fetch(pending.notesMessageId);
-        const firstEmbed = message.embeds[0]
-          ? EmbedBuilder.from(message.embeds[0])
-          : undefined;
-        const updatedEmbed = buildUpdatedEmbed(
-          firstEmbed,
+        const color = message.embeds[0]?.color ?? undefined;
+        const embeds = buildUpdatedEmbeds(
           pending.newNotes,
           newVersion,
           interaction.user.tag,
-        );
-
-        const row = buildCorrectionRow(
-          pending.guildId,
-          pending.channelIdTimestamp,
+          color,
         );
 
         await message.edit({
-          embeds: [updatedEmbed],
+          embeds,
           components: [row],
         });
       } catch (error) {
@@ -334,13 +365,7 @@ async function applyCorrection(
     }
   }
 
-  await updateMeetingNotes(
-    pending.guildId,
-    pending.channelIdTimestamp,
-    pending.newNotes,
-    newVersion,
-    interaction.user.id,
-  );
+  return true;
 }
 
 async function getPendingOrNotify(
@@ -360,6 +385,41 @@ async function getPendingOrNotify(
   return pending;
 }
 
+const NOTES_EMBED_TITLE = "Meeting Notes (AI Generated)";
+
+function buildUpdatedEmbeds(
+  newNotes: string,
+  version: number,
+  editedByTag?: string,
+  color?: number | null,
+) {
+  const footerText = editedByTag
+    ? `v${version} • Edited by ${editedByTag}`
+    : `v${version}`;
+
+  return buildPaginatedEmbeds({
+    text: newNotes,
+    baseTitle: NOTES_EMBED_TITLE,
+    footerText,
+    color: color ?? undefined,
+  });
+}
+
+async function resolveTranscript(history: MeetingHistory): Promise<string> {
+  if (history.transcriptS3Key) {
+    const fromS3 = await fetchTranscriptFromS3(history.transcriptS3Key);
+    if (fromS3) {
+      return fromS3;
+    }
+  }
+
+  if (history.transcript && history.transcript.length > 0) {
+    return history.transcript;
+  }
+
+  return "";
+}
+
 export async function handleNotesCorrectionAccept(
   interaction: ButtonInteraction,
 ) {
@@ -376,13 +436,15 @@ export async function handleNotesCorrectionAccept(
     return;
   }
 
-  await applyCorrection(interaction, pending);
-  pendingCorrections.delete(token);
+  const applied = await applyCorrection(interaction, pending);
+  if (applied) {
+    pendingCorrections.delete(token);
 
-  await interaction.update({
-    content: "Correction applied and notes updated.",
-    components: [],
-  });
+    await interaction.update({
+      content: "Correction applied and notes updated.",
+      components: [],
+    });
+  }
 }
 
 export async function handleNotesCorrectionReject(
