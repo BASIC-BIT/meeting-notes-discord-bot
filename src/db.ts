@@ -457,14 +457,7 @@ export async function updateMeetingNotes(
     values[":expectedVersion"] = expectedPreviousVersion;
   }
 
-  const params: {
-    TableName: string;
-    Key: Record<string, unknown>;
-    UpdateExpression: string;
-    ExpressionAttributeNames: Record<string, string>;
-    ExpressionAttributeValues: Record<string, unknown>;
-    ConditionExpression?: string;
-  } = {
+  const params: UpdateItemCommand["input"] = {
     TableName: "MeetingHistoryTable",
     Key: marshall({ guildId, channelId_timestamp }),
     UpdateExpression: `SET ${updateParts.join(", ")}`,
