@@ -1,7 +1,6 @@
 import { EmbedBuilder } from "discord.js";
 
 const EMBED_DESCRIPTION_LIMIT = 4096;
-const MAX_EMBEDS = 10;
 
 function splitTextForEmbeds(
   text: string,
@@ -32,18 +31,6 @@ function splitTextForEmbeds(
 
   if (remaining.length > 0 || segments.length === 0) {
     segments.push(remaining);
-  }
-
-  // Respect Discord's 10-embed limit
-  if (segments.length > MAX_EMBEDS) {
-    const keep = segments.slice(0, MAX_EMBEDS - 1);
-    const remainder = segments.slice(MAX_EMBEDS - 1).join("\n");
-    const trimmedRemainder =
-      remainder.length > limit
-        ? remainder.slice(0, limit - 20) + "\n...(truncated)"
-        : remainder;
-    keep.push(trimmedRemainder);
-    return keep;
   }
 
   return segments;

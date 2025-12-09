@@ -102,7 +102,7 @@ export interface MeetingHistory {
   generateNotes: boolean; // Whether notes were generated
   meetingCreatorId?: string; // User ID that started the meeting
   isAutoRecording?: boolean; // Whether this meeting was auto-started
-  notesMessageId?: string; // Discord message id of the notes embed
+  notesMessageIds?: string[]; // All message ids when notes span multiple messages
   notesChannelId?: string; // Channel id where notes were posted
   notesVersion?: number; // Incremented on corrections
   updatedAt?: string; // Last time notes were edited

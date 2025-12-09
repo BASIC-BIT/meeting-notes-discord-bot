@@ -22,7 +22,7 @@ import { fetchTranscriptFromS3 } from "../services/storageService";
 type PendingCorrection = {
   guildId: string;
   channelIdTimestamp: string;
-  notesMessageId?: string;
+  notesMessageIds?: string[];
   notesChannelId?: string;
   meetingCreatorId?: string;
   isAutoRecording?: boolean;
@@ -278,7 +278,7 @@ export async function handleNotesCorrectionModal(
   pendingCorrections.set(token, {
     guildId,
     channelIdTimestamp,
-    notesMessageId: history.notesMessageId,
+    notesMessageIds: history.notesMessageIds,
     notesChannelId: history.notesChannelId,
     meetingCreatorId: history.meetingCreatorId,
     isAutoRecording: history.isAutoRecording,
@@ -320,6 +320,49 @@ async function applyCorrection(
   const newVersion = (pending.notesVersion ?? 1) + 1;
   const row = buildCorrectionRow(pending.guildId, pending.channelIdTimestamp);
 
+  let newMessageIds: string[] | undefined;
+
+  if (pending.notesChannelId) {
+    const channel = await interaction.client.channels.fetch(
+      pending.notesChannelId,
+    );
+
+    if (channel && channel.isTextBased()) {
+      const existingIds = pending.notesMessageIds ?? [];
+
+      let color: number | undefined;
+      if (existingIds.length > 0) {
+        try {
+          const first = await channel.messages.fetch(existingIds[0]);
+          color = first.embeds[0]?.color ?? undefined;
+        } catch (error) {
+          console.error(
+            "Failed to fetch existing notes message for color:",
+            error,
+          );
+        }
+      }
+
+      const embeds = buildUpdatedEmbeds(
+        pending.newNotes,
+        newVersion,
+        interaction.user.tag,
+        color,
+      );
+
+      const sentIds: string[] = [];
+      for (let i = 0; i < embeds.length; i++) {
+        const msg = await channel.send({
+          embeds: [embeds[i]],
+          components: i === 0 ? [row] : [],
+        });
+        sentIds.push(msg.id);
+      }
+
+      newMessageIds = sentIds;
+    }
+  }
+
   const updateSucceeded = await updateMeetingNotes(
     pending.guildId,
     pending.channelIdTimestamp,
@@ -328,6 +371,10 @@ async function applyCorrection(
     interaction.user.id,
     pending.suggestion,
     pending.notesVersion,
+    {
+      notesMessageIds: newMessageIds,
+      notesChannelId: pending.notesChannelId,
+    },
   );
 
   if (!updateSucceeded) {
@@ -339,29 +386,32 @@ async function applyCorrection(
     return false;
   }
 
-  if (pending.notesChannelId && pending.notesMessageId) {
-    const channel = await interaction.client.channels.fetch(
-      pending.notesChannelId,
-    );
+  // Update succeeded — remove old messages if we posted replacements
+  if (pending.notesChannelId && newMessageIds?.length) {
+    try {
+      const channel = await interaction.client.channels.fetch(
+        pending.notesChannelId,
+      );
+      if (channel && channel.isTextBased()) {
+        const existingIds = pending.notesMessageIds ?? [];
 
-    if (channel && channel.isTextBased()) {
-      try {
-        const message = await channel.messages.fetch(pending.notesMessageId);
-        const color = message.embeds[0]?.color ?? undefined;
-        const embeds = buildUpdatedEmbeds(
-          pending.newNotes,
-          newVersion,
-          interaction.user.tag,
-          color,
-        );
-
-        await message.edit({
-          embeds,
-          components: [row],
-        });
-      } catch (error) {
-        console.error("Failed to edit notes message:", error);
+        for (const id of existingIds) {
+          try {
+            const msg = await channel.messages.fetch(id);
+            await msg.delete();
+          } catch (error) {
+            console.error(
+              "Failed to delete old notes message after update:",
+              error,
+            );
+          }
+        }
       }
+    } catch (error) {
+      console.error(
+        "Failed to clean up old notes messages after update:",
+        error,
+      );
     }
   }
 

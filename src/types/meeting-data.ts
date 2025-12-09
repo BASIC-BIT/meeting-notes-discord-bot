@@ -41,7 +41,7 @@ export interface MeetingData {
 
   finalTranscript?: string;
   transcriptS3Key?: string;
-  notesMessageId?: string;
+  notesMessageIds?: string[];
   notesChannelId?: string;
   notesVersion?: number;
   notesLastEditedBy?: string;

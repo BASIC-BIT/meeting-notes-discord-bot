@@ -1,4 +1,9 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  Message,
+} from "discord.js";
 import { getNotes } from "../transcription";
 import { MeetingData } from "../types/meeting-data";
 import { buildPaginatedEmbeds } from "../utils/embedPagination";
@@ -31,13 +36,18 @@ export async function generateAndSendNotes(meeting: MeetingData) {
       footerText,
     });
 
-    const message = await meeting.textChannel.send({
-      embeds,
-      components: [row],
-    });
+    const sentMessages: Message[] = [];
 
-    meeting.notesMessageId = message.id;
-    meeting.notesChannelId = message.channelId;
+    for (let i = 0; i < embeds.length; i++) {
+      const message = await meeting.textChannel.send({
+        embeds: [embeds[i]],
+        components: i === 0 ? [row] : [],
+      });
+      sentMessages.push(message);
+    }
+
+    meeting.notesMessageIds = sentMessages.map((m) => m.id);
+    meeting.notesChannelId = meeting.textChannel.id;
     meeting.notesVersion = 1;
     meeting.notesLastEditedBy = meeting.creator.id;
     meeting.notesLastEditedAt = new Date().toISOString();

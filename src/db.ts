@@ -402,6 +402,10 @@ export async function updateMeetingNotes(
   editedBy: string,
   suggestion?: SuggestionHistoryEntry,
   expectedPreviousVersion?: number,
+  metadata?: {
+    notesMessageIds?: string[];
+    notesChannelId?: string;
+  },
 ): Promise<boolean> {
   const now = new Date().toISOString();
   const notesHistoryEntry: NotesHistoryEntry = {
@@ -426,6 +430,14 @@ export async function updateMeetingNotes(
     );
   }
 
+  if (metadata?.notesMessageIds) {
+    updateParts.push("#notesMessageIds = :notesMessageIds");
+  }
+
+  if (metadata?.notesChannelId) {
+    updateParts.push("#notesChannelId = :notesChannelId");
+  }
+
   const expressionAttributeNames: Record<string, string> = {
     "#notes": "notes",
     "#notesVersion": "notesVersion",
@@ -437,6 +449,14 @@ export async function updateMeetingNotes(
 
   if (suggestion) {
     expressionAttributeNames["#suggestionsHistory"] = "suggestionsHistory";
+  }
+
+  if (metadata?.notesMessageIds) {
+    expressionAttributeNames["#notesMessageIds"] = "notesMessageIds";
+  }
+
+  if (metadata?.notesChannelId) {
+    expressionAttributeNames["#notesChannelId"] = "notesChannelId";
   }
 
   const values: Record<string, unknown> = {
@@ -451,6 +471,14 @@ export async function updateMeetingNotes(
 
   if (suggestion) {
     values[":suggestionEntry"] = [suggestion];
+  }
+
+  if (metadata?.notesMessageIds) {
+    values[":notesMessageIds"] = metadata.notesMessageIds;
+  }
+
+  if (metadata?.notesChannelId) {
+    values[":notesChannelId"] = metadata.notesChannelId;
   }
 
   if (expectedPreviousVersion !== undefined) {

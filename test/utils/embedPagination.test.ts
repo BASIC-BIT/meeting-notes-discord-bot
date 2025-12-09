@@ -78,16 +78,14 @@ describe("buildPaginatedEmbeds", () => {
     expect(descriptions[1]).toHaveLength(5000 - 4096);
   });
 
-  it("caps at 10 embeds and truncates the remainder", () => {
-    // Produce 12 chunks of size 4100 to force >10 embeds
+  it("splits into as many embeds as needed (one per message)", () => {
+    // Produce 12 chunks of size 4100
     const chunk = "y".repeat(4100);
     const text = Array(12).fill(chunk).join("");
 
     const embeds = buildPaginatedEmbeds({ text, baseTitle });
-    expect(embeds).toHaveLength(10);
+    expect(embeds).toHaveLength(12); // no truncation when sending per message
     const last = embeds[embeds.length - 1].toJSON().description;
-    expect(last?.includes("...(truncated)")).toBe(true);
-    // Ensure last embed respects the 4096 char limit
     expect((last ?? "").length).toBeLessThanOrEqual(4096);
   });
 });

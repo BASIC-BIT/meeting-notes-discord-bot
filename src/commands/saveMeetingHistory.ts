@@ -81,7 +81,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       generateNotes: meeting.generateNotes,
       meetingCreatorId: meeting.creator.id,
       isAutoRecording: meeting.isAutoRecording,
-      notesMessageId: meeting.notesMessageId,
+      notesMessageIds: meeting.notesMessageIds,
       notesChannelId: meeting.notesChannelId,
       notesVersion,
       notesLastEditedBy,
