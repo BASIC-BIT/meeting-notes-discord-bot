@@ -87,3 +87,7 @@
 ## Testing / lint
 
 - `npm run lint`, `npm run test` (Jest), `npm run build` (tsc).
+
+## Non-idiomatic typing
+
+If you find yourself using keywords like `tyepof`, `as`, etc. you should then pause and think about how you can improve that code. This might involve a web search to go search online for the idiomatic way of using the library/framework/etc. Look for a way that leverages typescript best practices, such as type narrowing, to write clean maintainable code

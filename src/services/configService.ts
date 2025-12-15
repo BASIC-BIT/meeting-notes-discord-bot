@@ -31,6 +31,14 @@ class ConfigService {
     testMode: process.env.CONTEXT_TEST_MODE === "true",
   };
 
+  // Notes generation / testing configuration
+  readonly notes = {
+    longStoryTestMode: process.env.NOTES_LONG_STORY_TEST_MODE === "true",
+    longStoryTargetChars:
+      parseInt(process.env.NOTES_LONG_STORY_TARGET_CHARS || "20000", 10) ||
+      20000,
+  };
+
   // Database Configuration
   readonly database = {
     useLocalDynamoDB:

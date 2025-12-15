@@ -327,7 +327,7 @@ async function applyCorrection(
       pending.notesChannelId,
     );
 
-    if (channel && channel.isTextBased()) {
+    if (channel?.isSendable()) {
       const existingIds = pending.notesMessageIds ?? [];
 
       let color: number | undefined;
@@ -392,7 +392,7 @@ async function applyCorrection(
       const channel = await interaction.client.channels.fetch(
         pending.notesChannelId,
       );
-      if (channel && channel.isTextBased()) {
+      if (channel?.isSendable()) {
         const existingIds = pending.notesMessageIds ?? [];
 
         for (const id of existingIds) {
