@@ -1,4 +1,4 @@
-import { VoiceConnection } from "@discordjs/voice";
+import { AudioPlayer, VoiceConnection } from "@discordjs/voice";
 import {
   ButtonInteraction,
   CommandInteraction,
@@ -28,6 +28,9 @@ export interface MeetingData {
   guild: Guild;
   initialInteraction?: ButtonInteraction;
   isAutoRecording: boolean;
+
+  liveAudioPlayer?: AudioPlayer;
+  liveVoiceEnabled?: boolean;
 
   finishing: boolean;
   // Used for functions that are waiting for the meeting to be completely over

@@ -6,7 +6,11 @@ import {
   User,
   VoiceBasedChannel,
 } from "discord.js";
-import { joinVoiceChannel } from "@discordjs/voice";
+import {
+  NoSubscriberBehavior,
+  createAudioPlayer,
+  joinVoiceChannel,
+} from "@discordjs/voice";
 import { DiscordGatewayAdapterCreator } from "@discordjs/voice/dist";
 import { AudioSnippet } from "./types/audio";
 import {
@@ -23,6 +27,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { ChatEntry } from "./types/chat";
 import { buildParticipantSnapshot } from "./utils/participants";
+import { config } from "./services/configService";
 
 const meetings = new Map<string, MeetingData>();
 
@@ -104,7 +109,7 @@ export async function initializeMeeting(
       adapterCreator:
         guild.voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
       selfDeaf: false,
-      selfMute: true,
+      selfMute: false, // must be unmuted to play TTS into the channel
     });
   } catch (error) {
     console.error("Failed to join voice channel:", error);
@@ -115,6 +120,18 @@ export async function initializeMeeting(
 
   const receiver = connection.receiver;
   const attendance: Set<string> = new Set<string>();
+  const liveVoiceEnabled = config.liveVoice.mode === "tts_gate";
+  const liveAudioPlayer = liveVoiceEnabled
+    ? createAudioPlayer({
+        behaviors: {
+          noSubscriber: NoSubscriberBehavior.Pause,
+        },
+      })
+    : undefined;
+
+  if (liveAudioPlayer) {
+    connection.subscribe(liveAudioPlayer);
+  }
 
   let setFinished: ((val?: void) => void) | undefined = undefined;
   const isFinished = new Promise<void>((resolve) => {
@@ -136,6 +153,8 @@ export async function initializeMeeting(
     channelId: textChannel.id,
     startTime: new Date(),
     creator,
+    liveAudioPlayer,
+    liveVoiceEnabled,
     isFinished,
     setFinished: () => setFinished && setFinished(),
     finishing: false,

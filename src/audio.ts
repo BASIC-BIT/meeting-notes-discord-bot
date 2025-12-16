@@ -18,6 +18,7 @@ import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
 import * as fs from "node:fs";
 import path from "node:path";
+import { maybeRespondLive } from "./liveVoice";
 
 const TRANSCRIPTION_HEADER =
   `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
@@ -69,6 +70,11 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
     promises.push(
       transcribeSnippet(meeting, snippet).then((transcription) => {
         audioFileData.transcript = transcription;
+        void maybeRespondLive(meeting, {
+          userId: snippet.userId,
+          text: transcription,
+          timestamp: snippet.timestamp,
+        });
       }),
     );
   } else {
@@ -130,13 +136,27 @@ export async function subscribeToUserVoice(
     },
   });
 
-  const decodedStream = opusStream.pipe(
-    new prism.opus.Decoder({
-      rate: SAMPLE_RATE,
-      channels: CHANNELS,
-      frameSize: FRAME_SIZE,
-    }),
-  );
+  const opusDecoder = new prism.opus.Decoder({
+    rate: SAMPLE_RATE,
+    channels: CHANNELS,
+    frameSize: FRAME_SIZE,
+  });
+
+  // Prevent decoder errors (often caused by malformed/partial packets) from crashing the process.
+  opusDecoder.on("error", (err: Error) => {
+    console.warn(
+      `Opus decoder error for user ${userId}: ${err.message}. Dropping corrupted frame.`,
+    );
+  });
+
+  // Prism's Opus stream can also emit errors; guard those too.
+  opusStream.on("error", (err: Error) => {
+    console.warn(
+      `Opus stream error for user ${userId}: ${err.message}. Continuing.`,
+    );
+  });
+
+  const decodedStream = opusStream.pipe(opusDecoder);
 
   decodedStream.on("data", (chunk) => {
     // Immediately write audio to the output stream to prevent memory buildup

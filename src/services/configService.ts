@@ -39,6 +39,24 @@ class ConfigService {
       20000,
   };
 
+  // Live voice configuration
+  readonly liveVoice = {
+    mode: process.env.LIVE_VOICE_MODE || "off",
+    gateModel: process.env.LIVE_VOICE_GATE_MODEL || "gpt-5-mini",
+    responderModel: process.env.LIVE_VOICE_RESPONDER_MODEL || "gpt-4o-mini",
+    ttsModel: process.env.LIVE_VOICE_TTS_MODEL || "gpt-4o-mini-tts",
+    ttsVoice: process.env.LIVE_VOICE_TTS_VOICE || "alloy",
+    gateMaxOutputTokens: parseInt(
+      process.env.LIVE_VOICE_GATE_MAX_OUTPUT_TOKENS || "256",
+      10,
+    ),
+    thinkingCue: process.env.LIVE_VOICE_THINKING_CUE !== "false", // default on
+    thinkingCueIntervalMs: parseInt(
+      process.env.LIVE_VOICE_THINKING_CUE_INTERVAL_MS || "500",
+      10,
+    ),
+  };
+
   // Database Configuration
   readonly database = {
     useLocalDynamoDB:
