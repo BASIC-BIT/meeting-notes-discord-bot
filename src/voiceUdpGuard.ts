@@ -1,4 +1,4 @@
-import { VoiceConnection } from "@discordjs/voice";
+import { VoiceConnection, type VoiceConnectionState } from "@discordjs/voice";
 
 // Patch Voice UDP sockets lazily (class is not exported). Attach once per connection and
 // wrap send to swallow ERR_SOCKET_DGRAM_NOT_RUNNING which surfaces after region hops / ENI teardown.
@@ -38,28 +38,24 @@ const originalConfigureNetworking =
 
 VoiceConnection.prototype.configureNetworking =
   function patchedConfigureNetworking(
+    this: VoiceConnection & { _udpGuardListenerAttached?: boolean },
     ...args: Parameters<VoiceConnection["configureNetworking"]>
   ) {
-    type GuardableConnection = VoiceConnection & {
-      _udpGuardListenerAttached?: boolean;
-    };
-
-    const self = this as GuardableConnection;
-
-    if (!self._udpGuardListenerAttached) {
+    if (!this._udpGuardListenerAttached) {
       this.on(
         "stateChange",
-        (
-          _oldState: unknown,
-          newState: { networking?: { state?: { udp?: GuardedUdp } } },
-        ) => {
-          const udp = newState?.networking?.state?.udp;
+        (_oldState: VoiceConnectionState, newState: VoiceConnectionState) => {
+          const udp = (
+            newState as {
+              networking?: { state?: { udp?: GuardedUdp } };
+            }
+          )?.networking?.state?.udp;
           if (udp && typeof udp.send === "function") {
             patchUdpSend(udp);
           }
         },
       );
-      self._udpGuardListenerAttached = true;
+      this._udpGuardListenerAttached = true;
     }
 
     return originalConfigureNetworking.apply(this, args);

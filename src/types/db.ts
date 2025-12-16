@@ -47,6 +47,8 @@ export interface RecordingTranscript {
 
 export interface SuggestionHistoryEntry {
   userId: string;
+  userTag?: string;
+  displayName?: string;
   text: string;
   createdAt: string; // ISO timestamp
 }

@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
+  GuildMember,
   ModalBuilder,
   ModalSubmitInteraction,
   PermissionFlagsBits,
@@ -105,10 +106,9 @@ function formatSuggestionsForPrompt(
   }
 
   return suggestions
-    .slice(-10) // Keep it compact
     .map(
       (entry) =>
-        `- [${new Date(entry.createdAt).toLocaleString()}] ${entry.userId}: ${entry.text}`,
+        `- [${new Date(entry.createdAt).toLocaleString()}] ${entry.displayName || entry.userTag || entry.userId}: ${entry.text}`,
     )
     .join("\n");
 }
@@ -256,8 +256,17 @@ export async function handleNotesCorrectionModal(
     "correction_suggestion",
   );
 
+  const memberDisplayName =
+    ("member" in interaction &&
+      interaction.member &&
+      (interaction.member as GuildMember).displayName) ||
+    interaction.user.globalName ||
+    interaction.user.username;
+
   const suggestionEntry: SuggestionHistoryEntry = {
     userId: interaction.user.id,
+    userTag: interaction.user.tag,
+    displayName: memberDisplayName,
     text: suggestion,
     createdAt: new Date().toISOString(),
   };
