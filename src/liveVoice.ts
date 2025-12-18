@@ -12,6 +12,7 @@ import { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
 import { AudioFileData } from "./types/audio";
 import { buildThinkingCueResource } from "./audio/thinkingCue";
+import { answerQuestion } from "./commands/ask";
 
 type GateDecision = {
   respond: boolean;
@@ -49,6 +50,17 @@ function collectRecentTranscripts(meeting: MeetingData): string[] {
       return `${speaker}: ${f.transcript}`;
     });
   return lines;
+}
+
+function isAddressed(text: string, meeting: MeetingData): boolean {
+  const lower = text.toLowerCase();
+  const botNames = [
+    meeting.guild.members.me?.displayName?.toLowerCase(),
+    meeting.guild.members.me?.user.username.toLowerCase(),
+    "meetingnotesbot",
+    "meeting notes bot",
+  ].filter(Boolean) as string[];
+  return botNames.some((n) => n && lower.includes(n));
 }
 
 async function shouldSpeak(
@@ -264,7 +276,14 @@ export async function maybeRespondLive(
     })();
   }
 
-  const reply = await generateReply(meeting, segment);
+  const reply = isAddressed(segment.text, meeting)
+    ? await answerQuestion({
+        guildId: meeting.guildId,
+        channelId: meeting.channelId,
+        question: segment.text,
+        scope: "guild",
+      })
+    : await generateReply(meeting, segment);
   stopCue = true;
   if (cueLoop) {
     await cueLoop;

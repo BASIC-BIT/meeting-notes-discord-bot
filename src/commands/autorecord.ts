@@ -13,6 +13,7 @@ import {
   deleteAutoRecordSetting,
 } from "../db";
 import { AutoRecordSettings } from "../types/db";
+import { parseTags } from "../utils/tags";
 
 export async function handleAutoRecordCommand(
   interaction: ChatInputCommandInteraction,
@@ -50,6 +51,9 @@ export async function handleAutoRecordCommand(
     case "enable-all":
       await handleEnableAllAutoRecord(interaction);
       break;
+    case "disable-all":
+      await handleDisableAutoRecordAll(interaction);
+      break;
     case "list":
       await handleListAutoRecord(interaction);
       break;
@@ -77,6 +81,7 @@ async function handleEnableAutoRecord(
 
   const voiceChannel = voiceChannelOption as VoiceBasedChannel;
   const textChannel = textChannelOption as TextChannel;
+  const tagsRaw = interaction.options.getString("tags") || undefined;
 
   if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
     await interaction.reply({
@@ -142,6 +147,7 @@ async function handleEnableAutoRecord(
     recordAll: false,
     createdBy: interaction.user.id,
     createdAt: new Date().toISOString(),
+    tags: parseTags(tagsRaw),
   };
 
   try {
@@ -226,10 +232,44 @@ async function handleDisableAutoRecord(
   }
 }
 
+async function handleDisableAutoRecordAll(
+  interaction: ChatInputCommandInteraction,
+) {
+  try {
+    const existing = await getAutoRecordSetting(interaction.guild!.id, "ALL");
+
+    if (!existing) {
+      await interaction.reply({
+        content: "Auto-recording for all channels is not enabled.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await deleteAutoRecordSetting(interaction.guild!.id, "ALL");
+
+    const embed = new EmbedBuilder()
+      .setTitle("Auto-Record Disabled for All Channels")
+      .setDescription("Auto-recording has been disabled for all voice channels")
+      .setColor(0xff0000)
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error("Error disabling auto-record for all:", error);
+    await interaction.reply({
+      content:
+        "Failed to disable auto-recording for all channels. Please try again later.",
+      ephemeral: true,
+    });
+  }
+}
+
 async function handleEnableAllAutoRecord(
   interaction: ChatInputCommandInteraction,
 ) {
   const textChannelOption = interaction.options.getChannel("text-channel");
+  const tagsRaw = interaction.options.getString("tags") || undefined;
 
   if (!textChannelOption) {
     await interaction.reply({
@@ -284,6 +324,7 @@ async function handleEnableAllAutoRecord(
     recordAll: true,
     createdBy: interaction.user.id,
     createdAt: new Date().toISOString(),
+    tags: parseTags(tagsRaw),
   };
 
   try {

@@ -16,9 +16,11 @@ import {
   hasMeeting,
   initializeMeeting,
 } from "../meetings";
+import { getAutoRecordSetting } from "../db";
 import { GuildChannel } from "discord.js/typings";
 import { checkBotPermissions } from "../utils/permissions";
 import { handleEndMeetingOther } from "./endMeeting";
+import { parseTags } from "../utils/tags";
 
 export async function handleRequestStartMeeting(
   interaction: CommandInteraction,
@@ -26,6 +28,9 @@ export async function handleRequestStartMeeting(
   const guildId = interaction.guildId!;
   const meetingContext = interaction.isChatInputCommand()
     ? interaction.options.getString("context") || undefined
+    : undefined;
+  const tags = interaction.isChatInputCommand()
+    ? interaction.options.getString("tags")
     : undefined;
 
   const channel = interaction.channel;
@@ -111,6 +116,7 @@ export async function handleRequestStartMeeting(
     meetingContext,
     initialInteraction: undefined,
     isAutoRecording: false,
+    tags: tags ? parseTags(tags) : undefined,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
   });
 
@@ -136,9 +142,22 @@ export async function handleRequestStartMeeting(
     .setLabel("End Meeting")
     .setStyle(ButtonStyle.Danger);
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(endButton);
+  const editTagsButton = new ButtonBuilder()
+    .setCustomId("edit_tags")
+    .setLabel("Edit Tags")
+    .setStyle(ButtonStyle.Secondary);
 
-  await interaction.reply({ embeds: [embed], components: [row] });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    endButton,
+    editTagsButton,
+  );
+
+  const reply = await interaction.reply({
+    embeds: [embed],
+    components: [row],
+    fetchReply: true,
+  });
+  meeting.startMessageId = reply.id;
 }
 
 export async function handleAutoStartMeeting(
@@ -146,6 +165,10 @@ export async function handleAutoStartMeeting(
   voiceChannel: VoiceBasedChannel,
   textChannel: TextChannel,
 ) {
+  const autoSetting =
+    (await getAutoRecordSetting(voiceChannel.guild.id, voiceChannel.id)) ||
+    (await getAutoRecordSetting(voiceChannel.guild.id, "ALL"));
+
   const guildId = voiceChannel.guild.id;
 
   // Check if a meeting is already active
@@ -202,6 +225,7 @@ export async function handleAutoStartMeeting(
     generateNotes: true, // Always generate notes for auto-recordings
     initialInteraction: undefined, // No interaction for auto-recordings
     isAutoRecording: true,
+    tags: autoSetting?.tags,
     onTimeout: (meeting) => handleEndMeetingOther(client, meeting),
   });
 
@@ -221,9 +245,21 @@ export async function handleAutoStartMeeting(
     .setLabel("End Recording")
     .setStyle(ButtonStyle.Danger);
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(endButton);
+  const editTagsButton = new ButtonBuilder()
+    .setCustomId("edit_tags")
+    .setLabel("Edit Tags")
+    .setStyle(ButtonStyle.Secondary);
 
-  await textChannel.send({ embeds: [embed], components: [row] });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    endButton,
+    editTagsButton,
+  );
+
+  const message = await textChannel.send({
+    embeds: [embed],
+    components: [row],
+  });
+  meeting.startMessageId = message.id;
 
   return true;
 }

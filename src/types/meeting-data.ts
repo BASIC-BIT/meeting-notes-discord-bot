@@ -53,6 +53,8 @@ export interface MeetingData {
   participants: Map<string, Participant>;
   audioS3Key?: string;
   chatS3Key?: string;
+  tags?: string[];
+  startMessageId?: string;
 }
 
 export interface MeetingSetup {

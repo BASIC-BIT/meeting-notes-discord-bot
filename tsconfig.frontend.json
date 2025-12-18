@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "allowImportingTsExtensions": false,
+    "noEmit": true
+  },
+  "include": ["src/frontend/**/*", "src/frontend/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "build"]
+}

@@ -514,3 +514,27 @@ export async function updateMeetingNotes(
     return false;
   }
 }
+
+export async function updateMeetingTags(
+  guildId: string,
+  channelId_timestamp: string,
+  tags?: string[],
+): Promise<void> {
+  const params: UpdateItemCommand["input"] = {
+    TableName: "MeetingHistoryTable",
+    Key: marshall({ guildId, channelId_timestamp }),
+    UpdateExpression: "SET #tags = :tags",
+    ExpressionAttributeNames: {
+      "#tags": "tags",
+    },
+    ExpressionAttributeValues: marshall(
+      {
+        ":tags": tags ?? [],
+      },
+      { removeUndefinedValues: false },
+    ),
+  };
+
+  const command = new UpdateItemCommand(params);
+  await dynamoDbClient.send(command);
+}

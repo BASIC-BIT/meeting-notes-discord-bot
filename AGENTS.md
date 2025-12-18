@@ -77,6 +77,7 @@
 - Avoid `in`/`instanceof`/`typeof` hedging for core platform APIs; we target a known Node/SDK set. Prefer simple, direct calls with minimal branching.
 - Comment hygiene: don’t leave transient or change-log style comments (e.g., “SDK v3 exposes transformToString”). Use comments only to clarify non-obvious logic, constraints, or intent.
 - “Remember that …” shorthand: when the user says “remember that <rule>”, add it to AGENTS.md under the relevant section as a standing rule.
+- Do not suppress runtime warnings by monkey-patching globals (e.g., overriding console.error). Fix the underlying issue or accept the warning; never silence it via code hacks.
 
 ## Quick start (local)
 
@@ -86,7 +87,8 @@
 
 ## Testing / lint
 
-- `npm run lint`, `npm run test` (Jest), `npm run build` (tsc).
+- Local: `npm run check` / `yarn run check` (lint --fix, prettier --write, test, build). CI-safe: `npm run check:ci` / `yarn run check:ci` (no auto-fix, uses prettier:check + lint:check). Avoid `yarn check` (built-in Yarn integrity command).
+- AI coding agents: after making code changes, prefer `yarn run check`; if you must avoid auto-fix (e.g., reviewing only), run `yarn run check:ci`. Report the command outcomes in your handoff. If you reformat, re-run the checks.
 
 ## Non-idiomatic typing
 

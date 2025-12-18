@@ -25,8 +25,14 @@ export async function generateAndSendNotes(meeting: MeetingData) {
       .setLabel("Suggest correction")
       .setStyle(ButtonStyle.Secondary);
 
+    const editTagsHistoryButton = new ButtonBuilder()
+      .setCustomId(`edit_tags_history:${meeting.guildId}:${encodedKey}`)
+      .setLabel("Edit Tags")
+      .setStyle(ButtonStyle.Secondary);
+
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       correctionButton,
+      editTagsHistoryButton,
     );
 
     const footerText = `v1 • Posted by ${meeting.creator.tag}`;

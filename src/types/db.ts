@@ -69,6 +69,7 @@ export interface AutoRecordSettings {
   recordAll: boolean; // True if this is a guild-wide setting
   createdBy: string; // User ID who created this setting
   createdAt: string; // ISO timestamp
+  tags?: string[]; // Default tags to apply to meetings started by this rule
 }
 
 // Server Context Type
@@ -95,6 +96,7 @@ export interface MeetingHistory {
   meetingId: string; // Unique meeting identifier
   channelId: string; // Denormalized for easier queries
   timestamp: string; // ISO timestamp (denormalized)
+  tags?: string[]; // Freeform tags for filtering / search
   notes?: string; // AI-generated notes (comprehensive, includes everything)
   context?: string; // Meeting-specific context if provided
   participants: Participant[]; // Snapshot of participant identities

@@ -14,13 +14,9 @@ import {
   SAMPLE_RATE,
   TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
   TRANSCRIPTION_BREAK_DURATION,
-  // TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF,
-  // TRANSCRIPTION_LOGPROB_CUTOFF,
-  // TRANSCRIPTION_LOGPROB_HARD_CUTOFF,
   TRANSCRIPTION_MAX_CONCURRENT,
   TRANSCRIPTION_MAX_QUEUE,
   TRANSCRIPTION_MAX_RETRIES,
-  // TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF,
   TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD,
   TRANSCRIPTION_RATE_MIN_TIME,
 } from "./constants";
@@ -137,28 +133,7 @@ async function transcribeInternal(
   }
 
   return transcription.text;
-
-  // return cleanupTranscriptionResponse(transcription);
 }
-
-// function cleanupTranscriptionResponse(response: TranscriptionVerbose): string {
-//   if (!response.segments) {
-//     return "";
-//   }
-
-//   return response.segments
-//     .filter(
-//       (segment) =>
-//         // Only remove lines from transcription if no_speech_prob is very high AND logprob is very low, OR if logprob is insanely low, OR if compression ratio is insanely high
-//         (segment.no_speech_prob < TRANSCRIPTION_NO_SPEECH_PROBABILITY_CUTOFF ||
-//           segment.avg_logprob > TRANSCRIPTION_LOGPROB_CUTOFF) &&
-//         segment.avg_logprob > TRANSCRIPTION_LOGPROB_HARD_CUTOFF &&
-//         segment.compression_ratio < TRANSCRIPTION_COMPRESSION_RATIO_CUTOFF,
-//     )
-//     .map((segment) => segment.text)
-//     .join("")
-//     .trim();
-// }
 
 const retryPolicy = retry(handleAll, {
   maxAttempts: TRANSCRIPTION_MAX_RETRIES,

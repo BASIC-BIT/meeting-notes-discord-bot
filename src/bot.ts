@@ -37,6 +37,17 @@ import {
   isNotesCorrectionModal,
 } from "./commands/notesCorrections";
 import { config } from "./services/configService";
+import {
+  handleEditTagsButton,
+  handleEditTagsModal,
+  isEditTagsButton,
+  isEditTagsModal,
+  handleEditTagsHistoryButton,
+  handleEditTagsHistoryModal,
+  isEditTagsHistoryButton,
+  isEditTagsHistoryModal,
+} from "./commands/tags";
+import { handleAskCommand } from "./commands/ask";
 
 const TOKEN = config.discord.botToken;
 const CLIENT_ID = config.discord.clientId;
@@ -87,6 +98,11 @@ export async function setupBot() {
             commandInteraction as ChatInputCommandInteraction,
           );
         }
+        if (commandName === "ask") {
+          await handleAskCommand(
+            commandInteraction as ChatInputCommandInteraction,
+          );
+        }
         if (commandName === "context") {
           await handleContextCommand(
             commandInteraction as ChatInputCommandInteraction,
@@ -96,6 +112,12 @@ export async function setupBot() {
       if (interaction.isModalSubmit()) {
         if (isNotesCorrectionModal(interaction.customId)) {
           await handleNotesCorrectionModal(interaction);
+        }
+        if (isEditTagsModal(interaction.customId)) {
+          await handleEditTagsModal(interaction);
+        }
+        if (isEditTagsHistoryModal(interaction.customId)) {
+          await handleEditTagsHistoryModal(interaction);
         }
         return;
       }
@@ -113,6 +135,14 @@ export async function setupBot() {
 
         if (isNotesCorrectionButton(buttonInteraction.customId)) {
           await handleNotesCorrectionButton(buttonInteraction);
+          return;
+        }
+        if (isEditTagsButton(buttonInteraction.customId)) {
+          await handleEditTagsButton(buttonInteraction);
+          return;
+        }
+        if (isEditTagsHistoryButton(buttonInteraction.customId)) {
+          await handleEditTagsHistoryButton(buttonInteraction);
           return;
         }
 
@@ -290,6 +320,13 @@ async function setupApplicationCommands() {
           )
           .setRequired(false)
           .setMaxLength(500),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("tags")
+          .setDescription("Optional comma-separated tags for this meeting")
+          .setRequired(false)
+          .setMaxLength(500),
       ),
     new SlashCommandBuilder()
       .setName("autorecord")
@@ -302,15 +339,22 @@ async function setupApplicationCommands() {
             option
               .setName("voice-channel")
               .setDescription("The voice channel to auto-record")
-              .addChannelTypes(2) // Voice channel type
+              .addChannelTypes(2)
               .setRequired(true),
           )
           .addChannelOption((option) =>
             option
               .setName("text-channel")
               .setDescription("The text channel to send meeting notifications")
-              .addChannelTypes(0) // Text channel type
+              .addChannelTypes(0)
               .setRequired(true),
+          )
+          .addStringOption((option) =>
+            option
+              .setName("tags")
+              .setDescription("Optional comma-separated tags to apply")
+              .setRequired(false)
+              .setMaxLength(500),
           ),
       )
       .addSubcommand((subcommand) =>
@@ -321,7 +365,7 @@ async function setupApplicationCommands() {
             option
               .setName("voice-channel")
               .setDescription("The voice channel to stop auto-recording")
-              .addChannelTypes(2) // Voice channel type
+              .addChannelTypes(2)
               .setRequired(true),
           ),
       )
@@ -333,14 +377,52 @@ async function setupApplicationCommands() {
             option
               .setName("text-channel")
               .setDescription("The text channel to send meeting notifications")
-              .addChannelTypes(0) // Text channel type
+              .addChannelTypes(0)
               .setRequired(true),
+          )
+          .addStringOption((option) =>
+            option
+              .setName("tags")
+              .setDescription("Optional comma-separated tags to apply")
+              .setRequired(false)
+              .setMaxLength(500),
           ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("disable-all")
+          .setDescription("Disable auto-recording for all voice channels"),
       )
       .addSubcommand((subcommand) =>
         subcommand
           .setName("list")
           .setDescription("List all auto-record settings for this server"),
+      ),
+    new SlashCommandBuilder()
+      .setName("ask")
+      .setDescription("Ask about past meetings")
+      .addStringOption((option) =>
+        option
+          .setName("question")
+          .setDescription("Your question")
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("tags")
+          .setDescription("Optional comma-separated tags to filter meetings")
+          .setRequired(false)
+          .setMaxLength(500),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("scope")
+          .setDescription("Search scope")
+          .addChoices(
+            { name: "Guild (default)", value: "guild" },
+            { name: "Channel only", value: "channel" },
+          )
+          .setRequired(false),
       ),
     new SlashCommandBuilder()
       .setName("context")

@@ -1,5 +1,23 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 import { TextDecoder, TextEncoder } from "util";
 import {
+  ReadableStream as WebReadableStream,
+  TransformStream as WebTransformStream,
+  WritableStream as WebWritableStream,
+} from "node:stream/web";
+
+// Ensure encoders/streams/fetch globals for discord.js expectations
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const g = global as any;
+g.TextEncoder = g.TextEncoder || TextEncoder;
+g.TextDecoder = g.TextDecoder || TextDecoder;
+g.ReadableStream = g.ReadableStream || WebReadableStream;
+g.WritableStream = g.WritableStream || WebWritableStream;
+g.TransformStream = g.TransformStream || WebTransformStream;
+
+// Load undici after polyfilling encoders so its internals see them.
+
+const {
   Headers,
   Request,
   Response,
@@ -7,14 +25,8 @@ import {
   TransformStream,
   WritableStream,
   fetch,
-} from "undici";
-import { buildPaginatedEmbeds } from "../../src/utils/embedPagination";
+} = require("undici");
 
-// Ensure encoders/streams/fetch globals for discord.js expectations
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const g = global as any;
-g.TextEncoder = g.TextEncoder || TextEncoder;
-g.TextDecoder = g.TextDecoder || TextDecoder;
 g.ReadableStream = g.ReadableStream || ReadableStream;
 g.WritableStream = g.WritableStream || WritableStream;
 g.TransformStream = g.TransformStream || TransformStream;
@@ -22,6 +34,13 @@ g.fetch = g.fetch || fetch;
 g.Headers = g.Headers || Headers;
 g.Request = g.Request || Request;
 g.Response = g.Response || Response;
+
+// Load the module under test after env polyfills are in place so discord.js
+// (which expects fetch/streams globals) can initialize safely.
+
+const {
+  buildPaginatedEmbeds,
+}: typeof import("../../src/utils/embedPagination") = require("../../src/utils/embedPagination");
 
 function toDescriptions(embeds: ReturnType<typeof buildPaginatedEmbeds>) {
   return embeds.map((e) => e.toJSON().description);
@@ -84,7 +103,8 @@ describe("buildPaginatedEmbeds", () => {
     const text = Array(12).fill(chunk).join("");
 
     const embeds = buildPaginatedEmbeds({ text, baseTitle });
-    expect(embeds).toHaveLength(12); // no truncation when sending per message
+    // 12 * 4100 chars -> 49,200 chars; at 4,096 per embed that's 13 embeds
+    expect(embeds).toHaveLength(13);
     const last = embeds[embeds.length - 1].toJSON().description;
     expect((last ?? "").length).toBeLessThanOrEqual(4096);
   });

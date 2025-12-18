@@ -74,6 +74,7 @@ export interface MeetingInitOptions {
   initialInteraction?: ButtonInteraction;
   isAutoRecording?: boolean;
   onTimeout?: (meeting: MeetingData) => void;
+  tags?: string[];
 }
 
 /**
@@ -98,6 +99,7 @@ export async function initializeMeeting(
     initialInteraction,
     isAutoRecording = false,
     onTimeout,
+    tags,
   } = options;
 
   // Join the voice channel
@@ -166,6 +168,7 @@ export async function initializeMeeting(
     meetingContext,
     isAutoRecording,
     participants: new Map(),
+    tags,
   };
 
   // Open output file for audio recording

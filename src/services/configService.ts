@@ -57,6 +57,11 @@ class ConfigService {
     ),
   };
 
+  // Ask/Recall configuration
+  readonly ask = {
+    maxMeetings: parseInt(process.env.ASK_MAX_MEETINGS || "25", 10),
+  };
+
   // Database Configuration
   readonly database = {
     useLocalDynamoDB:

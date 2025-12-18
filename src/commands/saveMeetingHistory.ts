@@ -73,6 +73,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       meetingId: meeting.meetingId,
       channelId: meeting.voiceChannel.id,
       timestamp,
+      tags: meeting.tags,
       notes,
       context: meeting.meetingContext,
       participants: Array.from(meeting.participants.values()),

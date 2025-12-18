@@ -55,6 +55,24 @@ variable "TRANSCRIPTS_PREFIX" {
   default     = ""
 }
 
+variable "FRONTEND_BUCKET" {
+  description = "Optional bucket name for static frontend (leave blank to auto-generate)"
+  type        = string
+  default     = ""
+}
+
+variable "FRONTEND_DOMAIN" {
+  description = "Optional custom domain for CloudFront; leave blank to use default distribution domain"
+  type        = string
+  default     = ""
+}
+
+variable "FRONTEND_CERT_ARN" {
+  description = "ACM cert ARN in us-east-1 for the frontend CloudFront (required if FRONTEND_DOMAIN set)"
+  type        = string
+  default     = ""
+}
+
 variable "ENABLE_OAUTH" {
   sensitive = false
   default   = "false"
@@ -89,6 +107,7 @@ provider "github" {
 
 locals {
   transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "meeting-notes-transcripts-${data.aws_caller_identity.current.account_id}"
+  frontend_bucket_name    = var.FRONTEND_BUCKET != "" ? var.FRONTEND_BUCKET : "meeting-notes-frontend-${data.aws_caller_identity.current.account_id}"
 }
 
 resource "aws_ecr_repository" "app_ecr_repo" {
@@ -249,6 +268,15 @@ resource "aws_security_group" "ecs_service_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # TEMP: allow all egress while voice debugging is in progress
+  egress {
+    description = "TEMP allow all egress (voice debugging) - tighten later"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   # DNS to VPC resolver (10.0.0.2 for this VPC)
   egress {
     description = "Allow DNS (UDP) to VPC resolver"
@@ -338,6 +366,41 @@ resource "aws_s3_bucket" "transcripts" {
   }
 }
 
+resource "aws_s3_bucket" "frontend" {
+  bucket = local.frontend_bucket_name
+
+  tags = {
+    Name = "meeting-notes-frontend"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "frontend" {
+  bucket                  = aws_s3_bucket.frontend.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "aws:kms"
+      kms_master_key_id = aws_kms_key.app_general.arn
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 resource "aws_s3_bucket_public_access_block" "transcripts" {
   bucket                  = aws_s3_bucket.transcripts.id
   block_public_acls       = true
@@ -363,6 +426,122 @@ resource "aws_s3_bucket_versioning" "transcripts" {
   versioning_configuration {
     status = "Enabled"
   }
+}
+
+resource "aws_cloudfront_origin_access_control" "frontend_oac" {
+  name                              = "meeting-notes-frontend-oac"
+  description                       = "OAC for frontend bucket"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+resource "aws_cloudfront_distribution" "frontend" {
+  enabled             = true
+  default_root_object = "index.html"
+
+  origin {
+    domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
+    origin_id                = "frontend-s3"
+    origin_access_control_id = aws_cloudfront_origin_access_control.frontend_oac.id
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "frontend-s3"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+
+    compress     = true
+    min_ttl      = 0
+    default_ttl  = 600
+    max_ttl      = 3600
+  }
+
+  ordered_cache_behavior {
+    path_pattern           = "/assets/*"
+    target_origin_id       = "frontend-s3"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+
+    compress     = true
+    min_ttl      = 3600
+    default_ttl  = 86400
+    max_ttl      = 31536000
+  }
+
+  price_class = "PriceClass_100"
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  custom_error_response {
+    error_caching_min_ttl = 0
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+  }
+
+  custom_error_response {
+    error_caching_min_ttl = 0
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+  }
+
+  viewer_certificate {
+    acm_certificate_arn            = var.FRONTEND_DOMAIN != "" ? var.FRONTEND_CERT_ARN : null
+    cloudfront_default_certificate = var.FRONTEND_DOMAIN == ""
+    minimum_protocol_version       = "TLSv1.2_2021"
+    ssl_support_method             = var.FRONTEND_DOMAIN != "" ? "sni-only" : null
+  }
+
+  aliases = var.FRONTEND_DOMAIN != "" ? [var.FRONTEND_DOMAIN] : []
+}
+
+resource "aws_s3_bucket_policy" "frontend_oac_policy" {
+  bucket = aws_s3_bucket.frontend.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action = ["s3:GetObject"]
+        Resource = [
+          "${aws_s3_bucket.frontend.arn}/*"
+        ]
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = "arn:aws:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/${aws_cloudfront_distribution.frontend.id}"
+          }
+        }
+      }
+    ]
+  })
+
+  depends_on = [aws_cloudfront_distribution.frontend]
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "transcripts" {
@@ -658,11 +837,11 @@ resource "aws_ecs_service" "app_service" {
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
   # COMMENT THIS OUT TO DEPLOY ANY CHNAGES TO THE TASK DEFINITION - SUPER JANK LOL
-  #lifecycle {
-  #  ignore_changes = [
-  #    task_definition
-  #  ]
-  #}
+  lifecycle {
+    ignore_changes = [
+      task_definition
+    ]
+  }
 
   enable_execute_command = true
 
@@ -932,6 +1111,18 @@ output "ecs_service_sg_id" {
 
 output "transcripts_bucket_name" {
   value = aws_s3_bucket.transcripts.bucket
+}
+
+output "frontend_bucket_name" {
+  value = aws_s3_bucket.frontend.bucket
+}
+
+output "frontend_distribution_domain_name" {
+  value = aws_cloudfront_distribution.frontend.domain_name
+}
+
+output "frontend_distribution_id" {
+  value = aws_cloudfront_distribution.frontend.id
 }
 # Flow logs IAM role
 resource "aws_iam_role" "vpc_flow_logs_role" {

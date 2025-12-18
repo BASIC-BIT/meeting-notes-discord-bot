@@ -105,6 +105,8 @@ export async function handleEndMeetingButton(
       }
     }
 
+    await clearStartMessageComponents(meeting);
+
     if (meeting.connection) {
       meeting.connection.disconnect();
       meeting.connection.destroy();
@@ -198,6 +200,18 @@ export async function handleEndMeetingButton(
   }
 }
 
+async function clearStartMessageComponents(meeting: MeetingData) {
+  if (!meeting.startMessageId) return;
+  try {
+    const message = await meeting.textChannel.messages.fetch(
+      meeting.startMessageId,
+    );
+    await message.edit({ components: [] });
+  } catch (e) {
+    console.warn("Could not clear start message buttons", e);
+  }
+}
+
 export async function handleEndMeetingOther(
   client: Client,
   meeting: MeetingData,
@@ -223,6 +237,8 @@ export async function handleEndMeetingOther(
         );
       }
     }
+
+    await clearStartMessageComponents(meeting);
 
     if (meeting.connection) {
       meeting.connection.disconnect();
