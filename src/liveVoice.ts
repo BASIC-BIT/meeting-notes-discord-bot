@@ -12,7 +12,11 @@ import { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
 import { AudioFileData } from "./types/audio";
 import { buildThinkingCueResource } from "./audio/thinkingCue";
-import { answerQuestion } from "./commands/ask";
+import { answerQuestionService } from "./services/askService";
+import {
+  buildLiveResponderContext,
+  LatestUtterance,
+} from "./services/liveResponderContextService";
 
 type GateDecision = {
   respond: boolean;
@@ -67,6 +71,9 @@ async function shouldSpeak(
   meeting: MeetingData,
   segment: LiveSegment,
 ): Promise<GateDecision> {
+  if (!meeting.liveVoiceEnabled) {
+    return { respond: false };
+  }
   const recent = collectRecentTranscripts(meeting);
   const speaker = getSpeakerLabel(meeting, segment.userId);
 
@@ -128,21 +135,21 @@ async function generateReply(
   meeting: MeetingData,
   segment: LiveSegment,
 ): Promise<string | undefined> {
-  const recent = collectRecentTranscripts(meeting);
   const speaker = getSpeakerLabel(meeting, segment.userId);
+  const latest: LatestUtterance = {
+    speaker,
+    text: segment.text,
+    timestamp: segment.timestamp,
+  };
+
+  const { userPrompt, debug } = await buildLiveResponderContext(
+    meeting,
+    latest,
+  );
 
   const systemPrompt =
     "You are Meeting Notes Bot. Respond out loud to the speaker in a concise, friendly way (1–3 sentences). " +
-    "Keep it directly relevant to the latest line. Do not add markdown or code fences.";
-
-  const userPrompt = [
-    `Latest line: ${speaker}: ${segment.text}`,
-    recent.length > 0 ? `Recent context:\n${recent.join("\n")}` : "",
-    `Server: ${meeting.guild.name}`,
-    `Channel: ${meeting.voiceChannel.name}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    "Use the supplied context sections; stay on-topic to the latest line. Do not add markdown or code fences.";
 
   try {
     const completion = await openAIClient.chat.completions.create({
@@ -155,6 +162,12 @@ async function generateReply(
     });
 
     const content = completion.choices[0].message.content ?? "";
+    console.log(
+      `[live-voice][responder] model=${config.liveVoice.responderModel} ` +
+        `windowLines=${debug.windowLines} pastMeetings=${
+          debug.pastMeetings.map((m) => m.meetingId).join(",") || "none"
+        }`,
+    );
     if (!content.trim()) return undefined;
     return content.trim();
   } catch (error) {
@@ -277,12 +290,14 @@ export async function maybeRespondLive(
   }
 
   const reply = isAddressed(segment.text, meeting)
-    ? await answerQuestion({
-        guildId: meeting.guildId,
-        channelId: meeting.channelId,
-        question: segment.text,
-        scope: "guild",
-      })
+    ? (
+        await answerQuestionService({
+          guildId: meeting.guildId,
+          channelId: meeting.channelId,
+          question: segment.text,
+          scope: "guild",
+        })
+      ).answer
     : await generateReply(meeting, segment);
   stopCue = true;
   if (cueLoop) {

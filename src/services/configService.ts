@@ -46,6 +46,16 @@ class ConfigService {
     responderModel: process.env.LIVE_VOICE_RESPONDER_MODEL || "gpt-4o-mini",
     ttsModel: process.env.LIVE_VOICE_TTS_MODEL || "gpt-4o-mini-tts",
     ttsVoice: process.env.LIVE_VOICE_TTS_VOICE || "alloy",
+    windowSeconds: parseInt(process.env.LIVE_VOICE_WINDOW_SECONDS || "90", 10),
+    windowLines: parseInt(process.env.LIVE_VOICE_WINDOW_LINES || "40", 10),
+    pastMeetingsMax: parseInt(
+      process.env.LIVE_VOICE_PAST_MEETINGS_MAX || "3",
+      10,
+    ),
+    pastMeetingsMaxChars: parseInt(
+      process.env.LIVE_VOICE_PAST_MEETINGS_MAX_CHARS || "400",
+      10,
+    ),
     gateMaxOutputTokens: parseInt(
       process.env.LIVE_VOICE_GATE_MAX_OUTPUT_TOKENS || "256",
       10,
@@ -60,6 +70,12 @@ class ConfigService {
   // Ask/Recall configuration
   readonly ask = {
     maxMeetings: parseInt(process.env.ASK_MAX_MEETINGS || "25", 10),
+  };
+
+  // Subscription / tier overrides
+  readonly subscription = {
+    forceTier: process.env.FORCE_TIER || "",
+    stripeMode: process.env.STRIPE_MODE || "live",
   };
 
   // Database Configuration
@@ -84,7 +100,40 @@ class ConfigService {
     nodeEnv: process.env.NODE_ENV || "development",
     oauthSecret: process.env.OAUTH_SECRET || "",
     oauthEnabled: process.env.ENABLE_OAUTH !== "false",
+    onboardingEnabled: process.env.ENABLE_ONBOARDING === "true",
     npmPackageVersion: process.env.npm_package_version || "unknown",
+    sessionTtlSeconds: parseInt(
+      process.env.SESSION_TTL_SECONDS || `${60 * 60 * 24 * 7}`,
+      10,
+    ),
+    // future: rate limit/budget configs per API route can live here
+  };
+
+  readonly stripe = {
+    secretKey: process.env.STRIPE_SECRET_KEY || "",
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
+    priceBasic: process.env.STRIPE_PRICE_BASIC || "",
+    successUrl: process.env.STRIPE_SUCCESS_URL || "",
+    cancelUrl: process.env.STRIPE_CANCEL_URL || "",
+    portalReturnUrl: process.env.STRIPE_PORTAL_RETURN_URL || "",
+    billingLandingUrl:
+      process.env.BILLING_LANDING_URL ||
+      process.env.STRIPE_SUCCESS_URL ||
+      process.env.STRIPE_CANCEL_URL ||
+      "",
+  };
+
+  // Frontend / CORS
+  readonly frontend = {
+    allowedOrigins: (process.env.FRONTEND_ALLOWED_ORIGINS || "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0)
+      .map((origin) => origin.replace(/\/$/, "")),
+    siteUrl:
+      process.env.FRONTEND_SITE_URL ||
+      (process.env.FRONTEND_ALLOWED_ORIGINS || "").split(",")[0]?.trim() ||
+      "",
   };
 
   constructor() {
@@ -105,6 +154,15 @@ class ConfigService {
         { name: "DISCORD_CLIENT_SECRET", value: this.discord.clientSecret },
         { name: "DISCORD_CALLBACK_URL", value: this.discord.callbackUrl },
         { name: "OAUTH_SECRET", value: this.server.oauthSecret },
+      );
+    }
+
+    // Stripe validation (optional unless key provided)
+    if (this.stripe.secretKey) {
+      required.push(
+        { name: "STRIPE_PRICE_BASIC", value: this.stripe.priceBasic },
+        { name: "STRIPE_SUCCESS_URL", value: this.stripe.successUrl },
+        { name: "STRIPE_CANCEL_URL", value: this.stripe.cancelUrl },
       );
     }
 

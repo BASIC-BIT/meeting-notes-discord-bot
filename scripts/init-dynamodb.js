@@ -14,12 +14,6 @@ const client = new DynamoDBClient({
 
 const tables = [
   {
-    TableName: "SubscriptionTable",
-    KeySchema: [{ AttributeName: "UserID", KeyType: "HASH" }],
-    AttributeDefinitions: [{ AttributeName: "UserID", AttributeType: "S" }],
-    BillingMode: "PAY_PER_REQUEST",
-  },
-  {
     TableName: "PaymentTransactionTable",
     KeySchema: [{ AttributeName: "TransactionID", KeyType: "HASH" }],
     AttributeDefinitions: [
@@ -61,6 +55,12 @@ const tables = [
     BillingMode: "PAY_PER_REQUEST",
   },
   {
+    TableName: "SessionTable",
+    KeySchema: [{ AttributeName: "sid", KeyType: "HASH" }],
+    AttributeDefinitions: [{ AttributeName: "sid", AttributeType: "S" }],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
     TableName: "ServerContextTable",
     KeySchema: [{ AttributeName: "guildId", KeyType: "HASH" }],
     AttributeDefinitions: [{ AttributeName: "guildId", AttributeType: "S" }],
@@ -98,6 +98,30 @@ const tables = [
         ],
         Projection: { ProjectionType: "ALL" },
       },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "GuildSubscriptionTable",
+    KeySchema: [{ AttributeName: "guildId", KeyType: "HASH" }],
+    AttributeDefinitions: [{ AttributeName: "guildId", AttributeType: "S" }],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "InstallerTable",
+    KeySchema: [{ AttributeName: "guildId", KeyType: "HASH" }],
+    AttributeDefinitions: [{ AttributeName: "guildId", AttributeType: "S" }],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "OnboardingStateTable",
+    KeySchema: [
+      { AttributeName: "guildId", KeyType: "HASH" },
+      { AttributeName: "userId", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "guildId", AttributeType: "S" },
+      { AttributeName: "userId", AttributeType: "S" },
     ],
     BillingMode: "PAY_PER_REQUEST",
   },

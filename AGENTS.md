@@ -9,9 +9,9 @@
 
 - Runtime: Node.js 20, TypeScript.
 - Discord: discord.js v14, discord-api-types, @discordjs/voice for audio capture, @discordjs/opus, prism-media.
-- AI: openai SDK; gpt-4o-transcribe for transcription; gpt-5.1 for cleanup/notes/corrections; DALL-E 3 for images.
-- Storage: AWS DynamoDB (tables: Subscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory).
-- Infra: Terraform -> AWS ECS Fargate, ECR, CloudWatch logs; local Dynamo via docker-compose.
+- AI: openai SDK; gpt-4o-transcribe for transcription; gpt-5.1 for cleanup/notes/corrections; gpt-5-mini for live gate; DALL-E 3 for images.
+- Storage: AWS DynamoDB (tables: GuildSubscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, SessionTable), S3 for transcripts/audio.
+- Infra: Terraform -> AWS ECS Fargate, ECR, CloudWatch logs; static frontend on S3 + CloudFront with OAC; local Dynamo via docker-compose.
 - IaC scanning: Checkov GitHub Action (`.github/workflows/checkov.yml`) scans `_infra/` on PRs and main pushes. Local: `npm run checkov` (uses `uvx --from checkov checkov`; install uv first: https://docs.astral.sh/uv/).
 - Known/suppressed infra choices:
   - Public subnets + public ECS IPs retained temporarily to avoid NAT Gateway cost (see checkov skips on CKV_AWS_130/333 with rationale in `_infra/main.tf`).
@@ -27,9 +27,9 @@
   - Slash commands: `/startmeeting`, `/autorecord`, `/context`.
   - Buttons: end meeting, generate image, suggest correction.
   - Auto-record on voice join if configured.
-- Web server: `webserver.ts` (health check; optional Discord OAuth scaffolding).
-- Frontend: `src/frontend/` (CRA boilerplate; currently unused).
-- Dev/QA commands: `yarn start` (bot via nodemon+ts-node), `yarn frontend:start`, `yarn build`, `yarn serve`, `yarn test`, `yarn lint`, `yarn prettier`, `yarn terraform:init|plan|apply`.
+- Web server: `webserver.ts` (health check; optional Discord OAuth scaffolding). API routes are modularized under `src/api/` (billing, guilds) and share services with bot commands (ask/context/autorecord/billing).
+- Frontend: `src/frontend/` (Vite + React 19), builds to `build/frontend/`, deployed to S3/CloudFront. Express only handles API/health; static assets served via CDN.
+- Dev/QA commands: `yarn start` (bot via nodemon+ts-node), `yarn dev` (starts local Dynamo + init + bot), `yarn frontend:dev`, `yarn build`, `yarn build:web`, `yarn build:all`, `yarn test`, `yarn lint`, `yarn prettier`, `yarn terraform:init|plan|apply`.
 - Meeting lifecycle: `meetings.ts`, `commands/startMeeting.ts`, `commands/endMeeting.ts`.
   - Records audio, chat log, attendance; splits audio; transcribes; generates notes; saves MeetingHistory (with transcript, notes versioning).
 - Transcription & notes: `transcription.ts`
@@ -59,7 +59,7 @@
 
 ## Frontend
 
-- `src/frontend/` is CRA boilerplate, currently unused in main flow.
+- Vite + React 19 lives in `src/frontend/`; production build is static assets in `build/frontend/` served via S3/CloudFront (see deploy workflow). Use `yarn frontend:dev` for local HMR.
 
 ## Infra (Terraform)
 
@@ -78,6 +78,8 @@
 - Comment hygiene: don’t leave transient or change-log style comments (e.g., “SDK v3 exposes transformToString”). Use comments only to clarify non-obvious logic, constraints, or intent.
 - “Remember that …” shorthand: when the user says “remember that <rule>”, add it to AGENTS.md under the relevant section as a standing rule.
 - Do not suppress runtime warnings by monkey-patching globals (e.g., overriding console.error). Fix the underlying issue or accept the warning; never silence it via code hacks.
+- Stripe webhook parsing: keep a single `express.raw({ type: "application/json" })` at app-level in `webserver.ts`; do not add per-route raw parsers elsewhere.
+- React tests: when a test triggers state updates (e.g., data-fetching effects), wrap renders/updates in `act` (from `react`/RTL helpers) to avoid act warnings instead of silencing console errors.
 
 ## Quick start (local)
 

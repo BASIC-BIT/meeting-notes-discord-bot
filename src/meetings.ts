@@ -75,6 +75,9 @@ export interface MeetingInitOptions {
   isAutoRecording?: boolean;
   onTimeout?: (meeting: MeetingData) => void;
   tags?: string[];
+  liveVoiceEnabled?: boolean;
+  maxMeetingDurationMs?: number;
+  maxMeetingDurationPretty?: string;
 }
 
 /**
@@ -100,6 +103,9 @@ export async function initializeMeeting(
     isAutoRecording = false,
     onTimeout,
     tags,
+    liveVoiceEnabled: liveVoiceOverride,
+    maxMeetingDurationMs,
+    maxMeetingDurationPretty,
   } = options;
 
   // Join the voice channel
@@ -122,7 +128,8 @@ export async function initializeMeeting(
 
   const receiver = connection.receiver;
   const attendance: Set<string> = new Set<string>();
-  const liveVoiceEnabled = config.liveVoice.mode === "tts_gate";
+  const liveVoiceEnabled =
+    config.liveVoice.mode === "tts_gate" && liveVoiceOverride !== false;
   const liveAudioPlayer = liveVoiceEnabled
     ? createAudioPlayer({
         behaviors: {
@@ -245,12 +252,15 @@ export async function initializeMeeting(
 
   // Set a timer to automatically end the meeting after the specified duration
   if (onTimeout) {
+    const durationLimitMs = maxMeetingDurationMs ?? MAXIMUM_MEETING_DURATION;
+    const durationPretty =
+      maxMeetingDurationPretty ?? MAXIMUM_MEETING_DURATION_PRETTY;
     meeting.timeoutTimer = setTimeout(() => {
       textChannel.send(
-        `Ending ${isAutoRecording ? "auto-recorded " : ""}meeting due to maximum meeting time of ${MAXIMUM_MEETING_DURATION_PRETTY} having been reached.`,
+        `Ending ${isAutoRecording ? "auto-recorded " : ""}meeting due to maximum meeting time of ${durationPretty} having been reached.`,
       );
       onTimeout(meeting);
-    }, MAXIMUM_MEETING_DURATION);
+    }, durationLimitMs);
   }
 
   return meeting;

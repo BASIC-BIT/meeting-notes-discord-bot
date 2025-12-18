@@ -5,6 +5,7 @@ import path from "node:path";
 
 export default defineConfig({
   root: path.resolve(__dirname, "src", "frontend"),
+  envDir: path.resolve(__dirname),
   publicDir: path.resolve(__dirname, "public"),
   plugins: [
     tsconfigPaths({
@@ -18,6 +19,14 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    proxy: {
+      "/auth": "http://localhost:3001",
+      "/user": "http://localhost:3001",
+      "/api": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port: 4173,

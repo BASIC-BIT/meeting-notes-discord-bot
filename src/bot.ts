@@ -10,6 +10,7 @@ import {
   SlashCommandBuilder,
   TextChannel,
   VoiceState,
+  ChannelSelectMenuInteraction,
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
 import { getAllMeetings, getMeeting } from "./meetings";
@@ -48,6 +49,18 @@ import {
   isEditTagsHistoryModal,
 } from "./commands/tags";
 import { handleAskCommand } from "./commands/ask";
+import { billingCommand, handleBillingCommand } from "./commands/billing";
+import {
+  handleOnboardButtonInteraction,
+  handleOnboardChannelSelect,
+  handleOnboardCommand,
+  handleOnboardModalSubmit,
+  isOnboardButton,
+  isOnboardChannelSelect,
+  isOnboardModal,
+  onboardCommand,
+} from "./commands/onboard";
+import { getGuildInstaller } from "./db";
 
 const TOKEN = config.discord.botToken;
 const CLIENT_ID = config.discord.clientId;
@@ -74,6 +87,27 @@ export async function setupBot() {
     console.log(`Logged in as ${client.user?.tag}!`);
 
     client.on("voiceStateUpdate", handleVoiceStateUpdate);
+  });
+
+  client.on("guildCreate", async (guild) => {
+    if (!config.server.onboardingEnabled) {
+      return;
+    }
+    try {
+      const installer = await getGuildInstaller(guild.id);
+      const dmTarget =
+        installer?.installerId &&
+        (await client.users.fetch(installer.installerId).catch(() => null));
+      const recipient = dmTarget ?? (await guild.fetchOwner());
+      if (recipient) {
+        const targetUser = "user" in recipient ? recipient.user : recipient;
+        await targetUser.send(
+          "Thanks for adding Meeting Notes Bot! Run `/onboard` in your server (Manage Guild required) for a 1-minute setup.",
+        );
+      }
+    } catch (err) {
+      console.warn("Could not DM installer/owner on join", err);
+    }
   });
 
   client.on("interactionCreate", async (interaction) => {
@@ -108,6 +142,23 @@ export async function setupBot() {
             commandInteraction as ChatInputCommandInteraction,
           );
         }
+        if (commandName === "billing") {
+          await handleBillingCommand(
+            commandInteraction as ChatInputCommandInteraction,
+          );
+        }
+        if (commandName === "onboard") {
+          if (!config.server.onboardingEnabled) {
+            await commandInteraction.reply({
+              content: "Onboarding is currently disabled for this bot.",
+              ephemeral: true,
+            });
+            return;
+          }
+          await handleOnboardCommand(
+            commandInteraction as ChatInputCommandInteraction,
+          );
+        }
       }
       if (interaction.isModalSubmit()) {
         if (isNotesCorrectionModal(interaction.customId)) {
@@ -118,6 +169,16 @@ export async function setupBot() {
         }
         if (isEditTagsHistoryModal(interaction.customId)) {
           await handleEditTagsHistoryModal(interaction);
+        }
+        if (isOnboardModal(interaction.customId)) {
+          if (!config.server.onboardingEnabled) {
+            await interaction.reply({
+              content: "Onboarding is currently disabled for this bot.",
+              ephemeral: true,
+            });
+            return;
+          }
+          await handleOnboardModalSubmit(interaction);
         }
         return;
       }
@@ -145,12 +206,39 @@ export async function setupBot() {
           await handleEditTagsHistoryButton(buttonInteraction);
           return;
         }
+        if (isOnboardButton(buttonInteraction.customId)) {
+          if (!config.server.onboardingEnabled) {
+            await buttonInteraction.reply({
+              content: "Onboarding is currently disabled for this bot.",
+              ephemeral: true,
+            });
+            return;
+          }
+          await handleOnboardButtonInteraction(buttonInteraction);
+          return;
+        }
 
         if (buttonInteraction.customId === "end_meeting") {
           await handleEndMeetingButton(client, buttonInteraction);
         }
         if (buttonInteraction.customId === "generate_image") {
           await generateAndSendImage(interaction);
+        }
+      }
+      if (
+        interaction.isChannelSelectMenu &&
+        interaction.isChannelSelectMenu()
+      ) {
+        const channelSelect = interaction as ChannelSelectMenuInteraction;
+        if (isOnboardChannelSelect(channelSelect.customId)) {
+          if (!config.server.onboardingEnabled) {
+            await channelSelect.reply({
+              content: "Onboarding is currently disabled for this bot.",
+              ephemeral: true,
+            });
+            return;
+          }
+          await handleOnboardChannelSelect(channelSelect);
         }
       }
     } catch (e) {
@@ -424,6 +512,7 @@ async function setupApplicationCommands() {
           )
           .setRequired(false),
       ),
+    billingCommand,
     new SlashCommandBuilder()
       .setName("context")
       .setDescription(
@@ -498,14 +587,22 @@ async function setupApplicationCommands() {
           .setName("list")
           .setDescription("List all contexts in this server"),
       ),
-  ].map((command) => command.toJSON());
+  ];
+
+  if (config.server.onboardingEnabled) {
+    commands.push(onboardCommand);
+  }
+
+  const commandPayload = commands.map((command) => command.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
 
   try {
     console.log("Started refreshing application (/) commands.");
 
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    await rest.put(Routes.applicationCommands(CLIENT_ID), {
+      body: commandPayload,
+    });
 
     console.log("Successfully reloaded application (/) commands.");
   } catch (error) {

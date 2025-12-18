@@ -13,12 +13,14 @@ import {
   AccessLog,
   AutoRecordSettings,
   ChannelContext,
+  GuildSubscription,
   MeetingHistory,
   NotesHistoryEntry,
+  GuildInstaller,
+  OnboardingState,
   PaymentTransaction,
   RecordingTranscript,
   ServerContext,
-  Subscription,
   SuggestionHistoryEntry,
 } from "./types/db";
 
@@ -35,30 +37,29 @@ const dynamoDbClient = new DynamoDBClient(
     : { region: "us-east-1" },
 );
 
-// Write to Subscription Table
-export async function writeSubscription(
-  subscription: Subscription,
+// Guild Subscription Table
+export async function writeGuildSubscription(
+  subscription: GuildSubscription,
 ): Promise<void> {
   const params = {
-    TableName: "SubscriptionTable",
-    Item: marshall(subscription),
+    TableName: "GuildSubscriptionTable",
+    Item: marshall(subscription, { removeUndefinedValues: true }),
   };
   const command = new PutItemCommand(params);
   await dynamoDbClient.send(command);
 }
 
-// Read from Subscription Table
-export async function getSubscription(
-  userID: string,
-): Promise<Subscription | undefined> {
+export async function getGuildSubscription(
+  guildId: string,
+): Promise<GuildSubscription | undefined> {
   const params = {
-    TableName: "SubscriptionTable",
-    Key: marshall({ UserID: userID }),
+    TableName: "GuildSubscriptionTable",
+    Key: marshall({ guildId }),
   };
   const command = new GetItemCommand(params);
   const result = await dynamoDbClient.send(command);
   if (result.Item) {
-    return unmarshall(result.Item) as Subscription;
+    return unmarshall(result.Item) as GuildSubscription;
   }
   return undefined;
 }
@@ -315,6 +316,73 @@ export async function deleteChannelContext(
   const params = {
     TableName: "ChannelContextTable",
     Key: marshall({ guildId, channelId }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+// Guild installer mapping
+export async function writeGuildInstaller(
+  installer: GuildInstaller,
+): Promise<void> {
+  const params = {
+    TableName: "InstallerTable",
+    Item: marshall(installer),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getGuildInstaller(
+  guildId: string,
+): Promise<GuildInstaller | undefined> {
+  const params = {
+    TableName: "InstallerTable",
+    Key: marshall({ guildId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as GuildInstaller;
+  }
+  return undefined;
+}
+
+// Onboarding state helpers
+export async function writeOnboardingState(
+  state: OnboardingState,
+): Promise<void> {
+  const params = {
+    TableName: "OnboardingStateTable",
+    Item: marshall(state, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getOnboardingState(
+  guildId: string,
+  userId: string,
+): Promise<OnboardingState | undefined> {
+  const params = {
+    TableName: "OnboardingStateTable",
+    Key: marshall({ guildId, userId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as OnboardingState;
+  }
+  return undefined;
+}
+
+export async function deleteOnboardingState(
+  guildId: string,
+  userId: string,
+): Promise<void> {
+  const params = {
+    TableName: "OnboardingStateTable",
+    Key: marshall({ guildId, userId }),
   };
   const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);

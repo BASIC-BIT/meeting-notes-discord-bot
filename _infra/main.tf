@@ -8,6 +8,14 @@ terraform {
       source  = "integrations/github"
       version = "~> 6.0"
     }
+    grafana = {
+      source  = "grafana/grafana"
+      version = "~> 2.7"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
   backend "s3" {
     region         = "us-east-1"
@@ -73,6 +81,12 @@ variable "FRONTEND_CERT_ARN" {
   default     = ""
 }
 
+variable "HOSTED_ZONE_NAME" {
+  description = "Route53 hosted zone name (e.g., basicbit.net.) required if you want Terraform to create cert + DNS for FRONTEND_DOMAIN"
+  type        = string
+  default     = ""
+}
+
 variable "ENABLE_OAUTH" {
   sensitive = false
   default   = "false"
@@ -108,6 +122,9 @@ provider "github" {
 locals {
   transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "meeting-notes-transcripts-${data.aws_caller_identity.current.account_id}"
   frontend_bucket_name    = var.FRONTEND_BUCKET != "" ? var.FRONTEND_BUCKET : "meeting-notes-frontend-${data.aws_caller_identity.current.account_id}"
+  frontend_cert_arn = var.FRONTEND_CERT_ARN != "" ? var.FRONTEND_CERT_ARN : (
+    length(aws_acm_certificate_validation.frontend_cert) > 0 ? aws_acm_certificate_validation.frontend_cert[0].certificate_arn : ""
+  )
 }
 
 resource "aws_ecr_repository" "app_ecr_repo" {
@@ -508,7 +525,7 @@ resource "aws_cloudfront_distribution" "frontend" {
   }
 
   viewer_certificate {
-    acm_certificate_arn            = var.FRONTEND_DOMAIN != "" ? var.FRONTEND_CERT_ARN : null
+    acm_certificate_arn            = var.FRONTEND_DOMAIN != "" ? local.frontend_cert_arn : null
     cloudfront_default_certificate = var.FRONTEND_DOMAIN == ""
     minimum_protocol_version       = "TLSv1.2_2021"
     ssl_support_method             = var.FRONTEND_DOMAIN != "" ? "sni-only" : null
@@ -630,7 +647,6 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           "dynamodb:Scan"
         ],
         Resource = [
-          aws_dynamodb_table.subscription_table.arn,
           aws_dynamodb_table.payment_transaction_table.arn,
           aws_dynamodb_table.access_logs_table.arn,
           aws_dynamodb_table.recording_transcript_table.arn,
@@ -639,7 +655,10 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.server_context_table.arn,
           aws_dynamodb_table.channel_context_table.arn,
           aws_dynamodb_table.meeting_history_table.arn,
-          "${aws_dynamodb_table.meeting_history_table.arn}/index/*"
+          "${aws_dynamodb_table.meeting_history_table.arn}/index/*",
+          aws_dynamodb_table.installer_table.arn,
+          aws_dynamodb_table.onboarding_state_table.arn,
+          aws_dynamodb_table.guild_subscription_table.arn
         ]
       }
     ]
@@ -862,13 +881,13 @@ resource "aws_ecs_service" "app_service" {
   }
 }
 
-resource "aws_dynamodb_table" "subscription_table" {
-  name         = "SubscriptionTable"
+resource "aws_dynamodb_table" "guild_subscription_table" {
+  name         = "GuildSubscriptionTable"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "UserID"
+  hash_key     = "guildId"
 
   attribute {
-    name = "UserID"
+    name = "guildId"
     type = "S"
   }
 
@@ -882,7 +901,7 @@ resource "aws_dynamodb_table" "subscription_table" {
   }
 
   tags = {
-    Name = "SubscriptionTable"
+    Name = "GuildSubscriptionTable"
   }
 }
 
@@ -991,6 +1010,94 @@ resource "aws_dynamodb_table" "auto_record_settings_table" {
 
   tags = {
     Name = "AutoRecordSettingsTable"
+  }
+}
+
+resource "aws_dynamodb_table" "session_table" {
+  name         = "SessionTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "sid"
+
+  attribute {
+    name = "sid"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "SessionTable"
+  }
+}
+
+resource "aws_dynamodb_table" "installer_table" {
+  name         = "InstallerTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "InstallerTable"
+  }
+}
+
+resource "aws_dynamodb_table" "onboarding_state_table" {
+  name         = "OnboardingStateTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+  range_key    = "userId"
+
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+
+  attribute {
+    name = "userId"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "OnboardingStateTable"
   }
 }
 
@@ -1124,6 +1231,7 @@ output "frontend_distribution_domain_name" {
 output "frontend_distribution_id" {
   value = aws_cloudfront_distribution.frontend.id
 }
+
 # Flow logs IAM role
 resource "aws_iam_role" "vpc_flow_logs_role" {
   name = "vpc_flow_logs_role"

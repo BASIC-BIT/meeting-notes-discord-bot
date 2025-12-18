@@ -21,6 +21,11 @@ import { GuildChannel } from "discord.js/typings";
 import { checkBotPermissions } from "../utils/permissions";
 import { handleEndMeetingOther } from "./endMeeting";
 import { parseTags } from "../utils/tags";
+import {
+  getTodayMeetingCount,
+  getGuildLimits,
+} from "../services/subscriptionService";
+import { buildUpgradePrompt } from "../utils/upgradePrompt";
 
 export async function handleRequestStartMeeting(
   interaction: CommandInteraction,
@@ -93,6 +98,30 @@ export async function handleRequestStartMeeting(
     return;
   }
 
+  // Tier and limits
+  const { limits } = await getGuildLimits(guildId);
+  if (limits.maxMeetingsPerDayPerGuild) {
+    const todayCount = await getTodayMeetingCount(
+      guildId,
+      limits.maxMeetingsPerDayPerGuild + 5,
+    );
+    if (todayCount >= limits.maxMeetingsPerDayPerGuild) {
+      await interaction.reply(
+        buildUpgradePrompt(
+          "Daily meeting limit reached for the free tier. Upgrade to keep recording.",
+        ),
+      );
+      return;
+    }
+    if (todayCount < limits.maxMeetingsPerDayPerGuild) {
+      const remaining = limits.maxMeetingsPerDayPerGuild - todayCount;
+      await interaction.followUp({
+        content: `You have ${remaining} free meeting(s) left today on the free tier.`,
+        ephemeral: true,
+      });
+    }
+  }
+
   // Check bot permissions
   const permissionCheck = checkBotPermissions(
     voiceChannel,
@@ -118,6 +147,9 @@ export async function handleRequestStartMeeting(
     isAutoRecording: false,
     tags: tags ? parseTags(tags) : undefined,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
+    liveVoiceEnabled: limits.liveVoiceEnabled,
+    maxMeetingDurationMs: limits.maxMeetingDurationMs,
+    maxMeetingDurationPretty: limits.maxMeetingDurationPretty,
   });
 
   const embed = new EmbedBuilder()

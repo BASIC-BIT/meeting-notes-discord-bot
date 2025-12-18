@@ -1,8 +1,7 @@
 import { Participant } from "./participants";
 
-// Subscription Type
-export interface Subscription {
-  userID: string;
+export interface GuildSubscription {
+  guildId: string;
   status: string;
   tier: string;
   startDate: string;
@@ -10,7 +9,12 @@ export interface Subscription {
   nextBillingDate?: string;
   paymentMethod?: string;
   subscriptionType: string;
-  serverID: string;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  priceId?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  mode?: "live" | "test";
 }
 
 // Payment Transaction Type
@@ -24,6 +28,7 @@ export interface PaymentTransaction {
   paymentMethod: string;
   discountCode?: string;
   subscriptionID: string;
+  customerId?: string;
 }
 
 // Access Logs Type
@@ -87,6 +92,32 @@ export interface ChannelContext {
   context: string; // The context/instructions for the channel
   updatedAt: string; // ISO timestamp
   updatedBy: string; // User ID who last updated
+}
+
+export interface GuildInstaller {
+  guildId: string; // Partition key
+  installerId: string;
+  installedAt: string; // ISO timestamp
+}
+
+export type OnboardingStep =
+  | "context"
+  | "autorecord"
+  | "tour"
+  | "upgrade"
+  | "complete";
+
+export interface OnboardingState {
+  guildId: string; // Partition key
+  userId: string; // Sort key
+  step: OnboardingStep;
+  contextDescription?: string;
+  toneNotes?: string;
+  autorecordMode?: "off" | "one" | "all";
+  autorecordVoiceChannelId?: string;
+  autorecordTextChannelId?: string;
+  updatedAt: string; // ISO timestamp
+  ttl: number; // epoch seconds for Dynamo TTL
 }
 
 // Meeting History Type

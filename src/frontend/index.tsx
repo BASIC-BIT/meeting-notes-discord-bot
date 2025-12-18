@@ -3,13 +3,27 @@ import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App";
 import reportWebVitals from "./reportWebVitals";
+import "@mantine/core/styles.css";
+import "@mantine/notifications/styles.css";
+import { MantineProvider, createTheme } from "@mantine/core";
+import { Notifications } from "@mantine/notifications";
 
 const root = ReactDOM.createRoot(
   document.getElementById("root") as HTMLElement,
 );
+
+const theme = createTheme({
+  fontFamily: "Inter, system-ui, -apple-system, Segoe UI, sans-serif",
+  primaryColor: "indigo",
+  defaultRadius: "md",
+});
+
 root.render(
   <React.StrictMode>
-    <App />
+    <MantineProvider theme={theme} defaultColorScheme="light">
+      <Notifications />
+      <App />
+    </MantineProvider>
   </React.StrictMode>,
 );
 
