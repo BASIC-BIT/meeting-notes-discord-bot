@@ -6,20 +6,22 @@ export function AuthBanner({ message }: { message?: string }) {
   const { loginUrl, loading } = useAuth();
   return (
     <Alert
-      color="yellow"
+      color="brand"
       icon={<IconAlertTriangle size={18} />}
-      title="Sign in with Discord"
+      title="Connect Discord"
+      variant="light"
+      radius="md"
     >
-      <Group justify="space-between">
+      <Group justify="space-between" align="center" wrap="wrap">
         <span>
           {message ||
-            "Please connect your Discord account to load your servers and billing data."}
+            "Connect your Discord account to load servers, billing, and the Chronote library."}
         </span>
         <Button
           component="a"
           href={loginUrl}
           variant="filled"
-          color="indigo"
+          color="brand"
           disabled={loading}
         >
           Connect Discord

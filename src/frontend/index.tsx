@@ -5,24 +5,22 @@ import App from "./App";
 import reportWebVitals from "./reportWebVitals";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
-import { MantineProvider, createTheme } from "@mantine/core";
+import { MantineProvider } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
+import { AuthProvider } from "./contexts/AuthContext";
+import { theme } from "./theme";
 
 const root = ReactDOM.createRoot(
   document.getElementById("root") as HTMLElement,
 );
 
-const theme = createTheme({
-  fontFamily: "Inter, system-ui, -apple-system, Segoe UI, sans-serif",
-  primaryColor: "indigo",
-  defaultRadius: "md",
-});
-
 root.render(
   <React.StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="light">
-      <Notifications />
-      <App />
+    <MantineProvider theme={theme} defaultColorScheme="dark">
+      <AuthProvider>
+        <App />
+        <Notifications position="top-right" />
+      </AuthProvider>
     </MantineProvider>
   </React.StrictMode>,
 );

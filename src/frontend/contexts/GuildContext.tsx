@@ -42,16 +42,13 @@ export function GuildProvider({ children }: { children: React.ReactNode }) {
     try {
       const data = await fetchGuilds();
       setGuilds(data);
-      if (!selectedGuildId && data.length > 0) {
-        setSelectedGuildId(data[0].id);
-        localStorage.setItem(STORAGE_KEY, data[0].id);
-      } else if (
+      if (
         selectedGuildId &&
         data.length > 0 &&
         !data.find((g) => g.id === selectedGuildId)
       ) {
-        setSelectedGuildId(data[0].id);
-        localStorage.setItem(STORAGE_KEY, data[0].id);
+        setSelectedGuildId(null);
+        localStorage.removeItem(STORAGE_KEY);
       }
     } catch (err) {
       if (err instanceof AuthNeededError) {

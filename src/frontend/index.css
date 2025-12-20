@@ -1,4 +1,7 @@
 body {
   margin: 0;
-  background: #f6f8fb;
+  background-color: var(--mantine-color-body);
+  color: var(--mantine-color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }

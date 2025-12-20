@@ -1,64 +1,460 @@
-import { Button, Card, Grid, Group, Stack, Text, Title } from "@mantine/core";
-import { IconMicrophone, IconFileText, IconRobot } from "@tabler/icons-react";
+import {
+  Badge,
+  Button,
+  Divider,
+  Group,
+  List,
+  SimpleGrid,
+  Stack,
+  Text,
+  ThemeIcon,
+  Title,
+  useComputedColorScheme,
+} from "@mantine/core";
+import {
+  IconBolt,
+  IconDownload,
+  IconFileText,
+  IconMicrophone,
+  IconQuote,
+  IconSearch,
+  IconSparkles,
+  IconTags,
+  IconTimeline,
+  IconWaveSine,
+} from "@tabler/icons-react";
+import FeatureCard from "../components/FeatureCard";
+import PricingCard from "../components/PricingCard";
+import Section from "../components/Section";
+import Surface from "../components/Surface";
+import EvidenceCard from "../components/EvidenceCard";
 
 const features = [
   {
-    title: "Record & Transcribe",
-    desc: "Capture multi-speaker voice channels and get high-quality transcripts automatically.",
-    icon: <IconMicrophone size={24} />,
+    title: "Automatic capture",
+    description:
+      "Join on demand or auto-record a channel. Chronote captures audio, chat, and attendance.",
+    icon: <IconMicrophone size={22} />,
   },
   {
-    title: "AI Notes & Search",
-    desc: "Summaries, corrections, and `/ask` over recent meetings with tag filtering.",
-    icon: <IconFileText size={24} />,
+    title: "Transcript + summary",
+    description:
+      "Structured notes with decisions and action items are posted back to Discord.",
+    icon: <IconFileText size={22} />,
   },
   {
-    title: "Live Voice Agent",
-    desc: "Optional live responder that speaks in channel with thinking cues and context.",
-    icon: <IconRobot size={24} />,
+    title: "Search with receipts",
+    description:
+      "Ask questions across recent sessions and get answers with quotes and timestamps.",
+    icon: <IconSearch size={22} />,
+  },
+  {
+    title: "Tags and filters",
+    description:
+      "Add lightweight tags so meetings stay grouped by project, team, or campaign.",
+    icon: <IconTags size={22} />,
+  },
+  {
+    title: "Live voice mode",
+    description:
+      "A live mode where Chronote can speak back in voice for quick confirmations.",
+    icon: <IconWaveSine size={22} />,
+  },
+  {
+    title: "Exports + retention",
+    description: "Download audio, transcript, and notes from the web library.",
+    icon: <IconDownload size={22} />,
+  },
+  {
+    title: "Built for speed",
+    description: "Fast onboarding, minimal setup, and sensible defaults.",
+    icon: <IconBolt size={22} />,
+  },
+];
+
+const howItWorks = [
+  {
+    step: "01",
+    title: "Start recording",
+    description: "Use a command or enable auto-recording for a voice channel.",
+  },
+  {
+    step: "02",
+    title: "Notes land in Discord",
+    description: "Transcript + structured summary post to your chosen channel.",
+  },
+  {
+    step: "03",
+    title: "Search it later",
+    description: "Ask questions across recent meetings, with receipts.",
+  },
+];
+
+const useCases = [
+  {
+    title: "Communities",
+    description:
+      "Keep volunteer staff aligned across weekly syncs, moderation meetings, and event planning.",
+    bullets: ["Catch-up summaries", "Attendance + decisions", "Action items"],
+  },
+  {
+    title: "Tabletop campaigns",
+    description:
+      "Recall lore, NPC names, and plot threads without digging through audio.",
+    bullets: ["Session recaps", "Character tracking", "Campaign memory"],
+  },
+  {
+    title: "Product teams",
+    description:
+      "Capture decisions, tasks, and questions across standups, planning, and retros.",
+    bullets: ["Action items", "Decision logs", "Cross-team context"],
   },
 ];
 
 export default function Home() {
-  return (
-    <Stack gap="lg">
-      <Card padding="lg" shadow="sm" radius="md" withBorder>
-        <Stack gap="sm">
-          <Title order={2}>Meeting Notes Bot</Title>
-          <Text c="dimmed">
-            AI-powered meeting recorder for Discord: capture audio, generate
-            notes, answer questions, and even speak back in voice.
-          </Text>
-          <Group gap="sm">
-            <Button
-              component="a"
-              href="https://discord.com/oauth2/authorize?client_id=1278729036528619633&scope=bot%20applications.commands"
-              color="indigo"
-            >
-              Add to Discord
-            </Button>
-            <Button variant="outline" component="a" href="https://github.com/">
-              View Docs
-            </Button>
-          </Group>
-        </Stack>
-      </Card>
+  const scheme = useComputedColorScheme("dark");
+  const isDark = scheme === "dark";
 
-      <Grid>
-        {features.map((f) => (
-          <Grid.Col span={{ base: 12, sm: 4 }} key={f.title}>
-            <Card withBorder shadow="xs" padding="md" radius="md">
-              <Group gap="sm">
-                {f.icon}
-                <Title order={4}>{f.title}</Title>
+  const heroBackground = isDark
+    ? "radial-gradient(900px 360px at 10% -10%, rgba(34, 211, 238, 0.24), transparent 60%), radial-gradient(900px 380px at 90% -20%, rgba(168, 85, 247, 0.26), transparent 60%), linear-gradient(135deg, rgba(94, 100, 242, 0.42), rgba(12, 15, 24, 0.22))"
+    : "radial-gradient(900px 360px at 10% -10%, rgba(34, 211, 238, 0.14), transparent 60%), radial-gradient(900px 380px at 90% -20%, rgba(168, 85, 247, 0.14), transparent 60%), linear-gradient(135deg, rgba(94, 100, 242, 0.16), rgba(255, 255, 255, 0.6))";
+
+  return (
+    <Stack gap="xl">
+      <Surface
+        tone="raised"
+        p={{ base: "lg", md: "xl" }}
+        style={{ backgroundImage: heroBackground }}
+      >
+        <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
+          <Stack gap="md">
+            <Text
+              size="xs"
+              tt="uppercase"
+              fw={700}
+              c={isDark ? "cyan.3" : "cyan.7"}
+              style={{ letterSpacing: "0.14em" }}
+            >
+              Discord voice logbook
+            </Text>
+            <Title order={1} fw={750}>
+              Transcripts and summaries
+              <br />
+              for Discord voice.
+            </Title>
+            <Text size="lg" c="dimmed">
+              Chronote records the session, posts structured notes back to your
+              server, and builds a searchable logbook on the web.
+            </Text>
+            <Group gap="sm">
+              <Button
+                size="md"
+                variant="gradient"
+                gradient={{ from: "brand", to: "violet" }}
+                component="a"
+                href="https://discord.com/oauth2/authorize?client_id=1278729036528619633&scope=bot%20applications.commands"
+              >
+                Add to Discord
+              </Button>
+              <Button
+                size="md"
+                variant="outline"
+                component="a"
+                href="https://meetingnotes.basicbit.net"
+              >
+                View Docs
+              </Button>
+            </Group>
+            <Group gap="lg" wrap="wrap">
+              <Group gap={8} wrap="nowrap">
+                <ThemeIcon variant="light" color="cyan" radius="md" size={26}>
+                  <IconMicrophone size={14} />
+                </ThemeIcon>
+                <Stack gap={0}>
+                  <Text size="sm" fw={600}>
+                    Auto-recording
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Set it once per server
+                  </Text>
+                </Stack>
               </Group>
-              <Text mt="xs" c="dimmed">
-                {f.desc}
+              <Group gap={8} wrap="nowrap">
+                <ThemeIcon variant="light" color="cyan" radius="md" size={26}>
+                  <IconQuote size={14} />
+                </ThemeIcon>
+                <Stack gap={0}>
+                  <Text size="sm" fw={600}>
+                    Receipts
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Know who said what
+                  </Text>
+                </Stack>
+              </Group>
+              <Group gap={8} wrap="nowrap">
+                <ThemeIcon variant="light" color="cyan" radius="md" size={26}>
+                  <IconTimeline size={14} />
+                </ThemeIcon>
+                <Stack gap={0}>
+                  <Text size="sm" fw={600}>
+                    Server library
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Browse sessions on the web
+                  </Text>
+                </Stack>
+              </Group>
+            </Group>
+          </Stack>
+          <Stack gap="md">
+            <Surface p="md">
+              <Stack gap="sm">
+                <Group gap="sm">
+                  <ThemeIcon color="cyan" variant="light" radius="md">
+                    <IconTimeline size={18} />
+                  </ThemeIcon>
+                  <Text fw={600}>Notes in Discord</Text>
+                </Group>
+                <Surface
+                  p="md"
+                  tone="soft"
+                  style={{
+                    borderLeftWidth: 4,
+                    borderLeftStyle: "solid",
+                    borderLeftColor: "var(--mantine-color-cyan-5)",
+                  }}
+                >
+                  <Stack gap={6}>
+                    <Text size="xs" c="dimmed">
+                      #session-notes
+                    </Text>
+                    <Text fw={600}>D&D session - recap</Text>
+                    <List spacing="xs" size="sm">
+                      <List.Item>
+                        Decision: take the mountain pass instead of the swamp
+                      </List.Item>
+                      <List.Item>
+                        Action: Rin posts the map + loot sheet in #campaign-info
+                      </List.Item>
+                      <List.Item>Next time: Sunday 7pm (voice)</List.Item>
+                      <List.Item>Highlights + attendance included</List.Item>
+                    </List>
+                  </Stack>
+                </Surface>
+              </Stack>
+            </Surface>
+            <Surface p="md">
+              <Stack gap="xs">
+                <Group gap="sm">
+                  <ThemeIcon color="brand" variant="light" radius="md">
+                    <IconSparkles size={18} />
+                  </ThemeIcon>
+                  <Text fw={600}>Quote + context</Text>
+                </Group>
+                <Text size="sm" c="dimmed">
+                  Receipts tie back to the exact moment in the conversation.
+                </Text>
+                <Group gap="xs" wrap="wrap">
+                  <Text size="xs" c="dimmed" fw={600}>
+                    Tags:
+                  </Text>
+                  {["campaign", "heist", "npc"].map((tag) => (
+                    <Badge key={tag} variant="light" color="gray">
+                      {tag}
+                    </Badge>
+                  ))}
+                </Group>
+                <EvidenceCard
+                  quote="If we hit the vault before midnight, the ward doesn't reset."
+                  speaker="Rin"
+                  time="01:12:44"
+                  channel="#tabletop-voice"
+                />
+              </Stack>
+            </Surface>
+          </Stack>
+        </SimpleGrid>
+      </Surface>
+
+      <Section
+        eyebrow="Built for"
+        title="Work and play alike"
+        description="Designed for teams, communities, and campaigns that need memory."
+      >
+        <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
+          {useCases.map((useCase) => (
+            <Surface key={useCase.title} p="lg">
+              <Stack gap="xs">
+                <Title order={4}>{useCase.title}</Title>
+                <Text c="dimmed">{useCase.description}</Text>
+                <Divider />
+                <List spacing="xs" size="sm">
+                  {useCase.bullets.map((bullet) => (
+                    <List.Item key={bullet}>{bullet}</List.Item>
+                  ))}
+                </List>
+              </Stack>
+            </Surface>
+          ))}
+        </SimpleGrid>
+      </Section>
+
+      <Section
+        eyebrow="Features"
+        title="Everything you need to remember the meeting"
+        description="Capture, compress, and recall your meetings without leaving Discord."
+      >
+        <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg">
+          {features.map((feature) => (
+            <FeatureCard
+              key={feature.title}
+              title={feature.title}
+              description={feature.description}
+              icon={feature.icon}
+            />
+          ))}
+        </SimpleGrid>
+      </Section>
+
+      <Section
+        eyebrow="Workflow"
+        title="From voice channel to logbook in minutes"
+        description="A quiet pipeline from live voice to a usable record."
+      >
+        <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
+          {howItWorks.map((step) => (
+            <Surface key={step.step} p="lg" tone="soft">
+              <Stack gap="xs">
+                <Text size="xs" fw={700} c="cyan.3" tt="uppercase">
+                  {step.step}
+                </Text>
+                <Title order={4}>{step.title}</Title>
+                <Text c="dimmed">{step.description}</Text>
+              </Stack>
+            </Surface>
+          ))}
+        </SimpleGrid>
+      </Section>
+
+      <Section
+        eyebrow="Evidence-first"
+        title="Answers come with receipts"
+        description="Chronote does not guess. Every answer is grounded in quotes, speakers, and timestamps."
+      >
+        <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+          <Surface p="lg" tone="soft">
+            <Stack gap="sm">
+              <Group gap="sm">
+                <ThemeIcon variant="light" color="cyan" radius="md">
+                  <IconSearch size={18} />
+                </ThemeIcon>
+                <Text fw={600}>Search across sessions</Text>
+              </Group>
+              <Text c="dimmed">
+                Ask about decisions, blockers, or campaign lore. Results point
+                back to the exact moment it was said.
               </Text>
-            </Card>
-          </Grid.Col>
-        ))}
-      </Grid>
+              <EvidenceCard
+                quote="The outage root cause was the cache eviction policy."
+                speaker="Sam"
+                meeting="Weekly ops sync"
+              />
+            </Stack>
+          </Surface>
+          <Surface p="lg" tone="soft">
+            <Stack gap="sm">
+              <Group gap="sm">
+                <ThemeIcon variant="light" color="brand" radius="md">
+                  <IconSparkles size={18} />
+                </ThemeIcon>
+                <Text fw={600}>Structured summaries</Text>
+              </Group>
+              <Text c="dimmed">
+                Notes are organized as decisions, action items, and highlights
+                so teams can scan quickly.
+              </Text>
+              <List spacing="xs" size="sm">
+                <List.Item>Decision log with owners</List.Item>
+                <List.Item>Action items ready to copy</List.Item>
+                <List.Item>Speaker timeline with timestamps</List.Item>
+              </List>
+            </Stack>
+          </Surface>
+        </SimpleGrid>
+      </Section>
+
+      <Section
+        eyebrow="Pricing"
+        title="Memory power, server-based pricing"
+        description="Start free, upgrade when you need deeper recall and longer retention."
+      >
+        <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
+          <PricingCard
+            name="Free"
+            price="$0"
+            description="Great for lightweight teams and one-off sessions."
+            features={[
+              "Up to 4 hours per week",
+              "Up to 90 minutes per meeting",
+              "Ask across recent meetings",
+              "Notes, tags, and summary embeds",
+            ]}
+            cta="Get started"
+          />
+          <PricingCard
+            name="Basic"
+            price="$12 / mo"
+            description="Unlock longer sessions and deeper recall."
+            features={[
+              "Up to 20 hours per week",
+              "Up to 2 hours per meeting (8 hours coming soon)",
+              "Ask across longer history",
+              "Live voice mode",
+            ]}
+            cta="Upgrade to Basic"
+            highlighted
+          />
+          <PricingCard
+            name="Pro"
+            price="$29 / mo"
+            description="Unlimited retention and deep server memory."
+            features={[
+              "Unlimited retention",
+              "Unlimited recording time",
+              "Ask across full retention",
+              "Up to 2 hours per meeting (8 hours coming soon)",
+              "Priority features + support",
+            ]}
+            cta="Upgrade to Pro"
+            ctaDisabled
+            badge="Unlimited meetings"
+            tone="raised"
+            borderColor="var(--mantine-color-cyan-5)"
+            borderWidth={2}
+          />
+        </SimpleGrid>
+      </Section>
+
+      <Surface p={{ base: "lg", md: "xl" }}>
+        <Group justify="space-between" align="center" wrap="wrap">
+          <Stack gap={6}>
+            <Title order={3}>Ready to keep the record?</Title>
+            <Text c="dimmed">
+              Add Chronote, run your first meeting, and get notes in minutes.
+            </Text>
+          </Stack>
+          <Button
+            size="md"
+            variant="gradient"
+            gradient={{ from: "brand", to: "violet" }}
+            component="a"
+            href="https://discord.com/oauth2/authorize?client_id=1278729036528619633&scope=bot%20applications.commands"
+          >
+            Add to Discord
+          </Button>
+        </Group>
+      </Surface>
     </Stack>
   );
 }

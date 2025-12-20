@@ -55,6 +55,11 @@
     "@mantine/hooks": "^8.3.0",
     "@mantine/notifications": "^8.3.0",
     "@tabler/icons-react": "^3.36.0",
+    "@tanstack/react-query": "^5.90.12",
+    "@tanstack/react-router": "^1.141.8",
+    "@trpc/client": "^11.8.0",
+    "@trpc/react-query": "^11.8.0",
+    "@trpc/server": "^11.8.0",
     "aws-sdk": "^2.1640.0",
     "bottleneck": "^2.19.5",
     "cockatiel": "^3.2.1",
@@ -79,7 +84,9 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "stripe": "^14.24.0",
-    "web-vitals": "^4.2.4"
+    "web-vitals": "^4.2.4",
+    "zod": "^4.2.1",
+    "zustand": "^5.0.9"
   },
   "devDependencies": {
     "@babel/core": "^7.27.4",

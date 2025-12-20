@@ -2,6 +2,7 @@ import React from "react";
 import { render, waitFor } from "@testing-library/react";
 import App from "./App";
 import { MantineProvider } from "@mantine/core";
+import { AuthProvider } from "./contexts/AuthContext";
 
 // Basic fetch mock for guilds + billing
 global.fetch = jest.fn((input: RequestInfo) => {
@@ -42,7 +43,9 @@ global.fetch = jest.fn((input: RequestInfo) => {
 
 test("renders app shell without crashing", async () => {
   const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <MantineProvider>{children}</MantineProvider>
+    <MantineProvider>
+      <AuthProvider>{children}</AuthProvider>
+    </MantineProvider>
   );
 
   try {
