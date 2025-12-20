@@ -26,6 +26,11 @@ export default defineConfig({
         target: "http://localhost:3001",
         changeOrigin: true,
       },
+      // Proxy backend tRPC calls during local frontend dev.
+      "/trpc": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
     },
   },
   preview: {

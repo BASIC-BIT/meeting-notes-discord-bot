@@ -14,37 +14,27 @@ import {
   IconBook2,
   IconChevronRight,
   IconCreditCard,
-  IconHome2,
   IconMessageCircle,
   IconSettings,
   IconServer,
   IconSparkles,
 } from "@tabler/icons-react";
 import type { ComponentType } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { useAuth } from "../contexts/AuthContext";
 import { useGuildContext } from "../contexts/GuildContext";
 
-type PageKey =
-  | "home"
-  | "library"
-  | "ask"
-  | "billing"
-  | "settings"
-  | "select-server";
-
 type SiteNavbarProps = {
-  activePage: PageKey;
-  onNavigate: (page: PageKey) => void;
   onClose?: () => void;
+  pathname: string;
 };
 
 const NAV_ITEMS: Array<{
   label: string;
-  value: Exclude<PageKey, "select-server">;
+  value: "library" | "ask" | "billing" | "settings";
   icon: ComponentType<{ size?: number }>;
   requiresAuth: boolean;
 }> = [
-  { label: "Home", value: "home", icon: IconHome2, requiresAuth: false },
   { label: "Library", value: "library", icon: IconBook2, requiresAuth: true },
   { label: "Ask", value: "ask", icon: IconSparkles, requiresAuth: true },
   {
@@ -61,25 +51,22 @@ const NAV_ITEMS: Array<{
   },
 ];
 
-export function SiteNavbar({
-  activePage,
-  onNavigate,
-  onClose,
-}: SiteNavbarProps) {
+export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
   const theme = useMantineTheme();
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
   const { state: authState } = useAuth();
   const { selectedGuildId, guilds } = useGuildContext();
+  const navigate = useNavigate();
 
   const selectedServerName = selectedGuildId
     ? guilds.find((g) => g.id === selectedGuildId)?.name
     : null;
 
-  const handleNavigate = (page: PageKey) => {
-    onNavigate(page);
-    onClose?.();
-  };
+  const resolveServerPath = (page: string) =>
+    selectedGuildId
+      ? `/portal/server/${selectedGuildId}/${page}`
+      : "/portal/select-server";
 
   return (
     <ScrollArea h="100%" offsetScrollbars>
@@ -95,7 +82,10 @@ export function SiteNavbar({
               styles={{
                 section: { marginInlineStart: 8, marginInlineEnd: 0 },
               }}
-              onClick={() => handleNavigate("select-server")}
+              onClick={() => {
+                navigate({ to: "/portal/select-server" });
+                onClose?.();
+              }}
             >
               <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
                 <Text
@@ -120,7 +110,7 @@ export function SiteNavbar({
         <Stack gap={4}>
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const isActive = activePage === item.value;
+            const isActive = pathname.includes(`/${item.value}`);
             const disabled = item.requiresAuth && authState !== "authenticated";
             return (
               <NavLink
@@ -138,7 +128,10 @@ export function SiteNavbar({
                 }
                 active={isActive}
                 disabled={disabled}
-                onClick={() => handleNavigate(item.value)}
+                onClick={() => {
+                  navigate({ to: resolveServerPath(item.value) });
+                  onClose?.();
+                }}
                 style={{
                   borderRadius: 12,
                 }}

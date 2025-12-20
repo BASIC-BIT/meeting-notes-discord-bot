@@ -22,28 +22,56 @@ import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
 import FormSelect from "../components/FormSelect";
-import type { AutoRecordSettings } from "../../types/db";
+import { trpc } from "../services/trpc";
 
 type ChannelOption = { value: string; label: string };
 
 export default function Settings() {
-  const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
-  const [autoRecordRules, setAutoRecordRules] = useState<AutoRecordSettings[]>(
-    [],
-  );
+  const { selectedGuildId, loading: guildLoading } = useGuildContext();
   const [autoRecordMode, setAutoRecordMode] = useState<"one" | "all">("one");
   const [voiceChannelId, setVoiceChannelId] = useState<string | null>(null);
   const [textChannelId, setTextChannelId] = useState<string | null>(null);
-  const [loadingRules, setLoadingRules] = useState(false);
-  const [savingRules, setSavingRules] = useState(false);
-  const [voiceChannels, setVoiceChannels] = useState<ChannelOption[]>([]);
-  const [textChannels, setTextChannels] = useState<ChannelOption[]>([]);
+  const trpcUtils = trpc.useUtils();
+  const rulesQuery = trpc.autorecord.list.useQuery(
+    { serverId: selectedGuildId ?? "" },
+    { enabled: Boolean(selectedGuildId) && !guildLoading },
+  );
+  const channelsQuery = trpc.servers.channels.useQuery(
+    { serverId: selectedGuildId ?? "" },
+    { enabled: Boolean(selectedGuildId) && !guildLoading },
+  );
+  const addRuleMutation = trpc.autorecord.add.useMutation();
+  const removeRuleMutation = trpc.autorecord.remove.useMutation();
+  const contextQuery = trpc.context.get.useQuery(
+    { serverId: selectedGuildId ?? "" },
+    { enabled: Boolean(selectedGuildId) && !guildLoading },
+  );
+  const saveContextMutation = trpc.context.set.useMutation();
+  const clearContextMutation = trpc.context.clear.useMutation();
   const [context, setContext] = useState(
     "Weekly product sync focused on launches, roadmap, and blockers.",
   );
+  const [contextDirty, setContextDirty] = useState(false);
   const [tags, setTags] = useState("product, weekly");
   const [retention, setRetention] = useState("30");
 
+  const autoRecordRules = rulesQuery.data?.rules ?? [];
+  const voiceChannels = useMemo<ChannelOption[]>(
+    () =>
+      (channelsQuery.data?.voiceChannels ?? []).map((channel) => ({
+        value: channel.id,
+        label: channel.name,
+      })),
+    [channelsQuery.data],
+  );
+  const textChannels = useMemo<ChannelOption[]>(
+    () =>
+      (channelsQuery.data?.textChannels ?? []).map((channel) => ({
+        value: channel.id,
+        label: channel.name.startsWith("#") ? channel.name : `#${channel.name}`,
+      })),
+    [channelsQuery.data],
+  );
   const voiceChannelMap = useMemo(
     () =>
       new Map(voiceChannels.map((channel) => [channel.value, channel.label])),
@@ -79,7 +107,13 @@ export default function Settings() {
       ),
     [voiceChannels, usedVoiceChannelIds],
   );
+  const loadingRules = rulesQuery.isLoading || channelsQuery.isLoading;
+  const savingRules = addRuleMutation.isPending || removeRuleMutation.isPending;
   const isAutoRecordBusy = loadingRules || savingRules;
+  const contextLoading = contextQuery.isLoading;
+  const contextSaving =
+    saveContextMutation.isPending || clearContextMutation.isPending;
+  const contextDisabled = !selectedGuildId || contextLoading || contextSaving;
   const textChannelMap = useMemo(
     () =>
       new Map(textChannels.map((channel) => [channel.value, channel.label])),
@@ -87,119 +121,85 @@ export default function Settings() {
   );
 
   useEffect(() => {
-    let mounted = true;
-    const loadRules = async () => {
-      if (!selectedGuildId || guildLoading) {
-        setAutoRecordRules([]);
-        setVoiceChannels([]);
-        setTextChannels([]);
-        return;
-      }
-      if (guilds.length > 0 && !guilds.some((g) => g.id === selectedGuildId)) {
-        setAutoRecordRules([]);
-        setVoiceChannels([]);
-        setTextChannels([]);
-        return;
-      }
-      setLoadingRules(true);
-      try {
-        const [rulesRes, channelsRes] = await Promise.all([
-          fetch(`/api/guilds/${selectedGuildId}/autorecord`, {
-            credentials: "include",
-          }),
-          fetch(`/api/guilds/${selectedGuildId}/channels`, {
-            credentials: "include",
-          }),
-        ]);
-        if (!rulesRes.ok || !channelsRes.ok) {
-          throw new Error("Unable to load autorecord settings");
-        }
-        const rulesBody = (await rulesRes.json()) as {
-          rules: AutoRecordSettings[];
-        };
-        const channelsBody = (await channelsRes.json()) as {
-          voiceChannels: Array<{ id: string; name: string }>;
-          textChannels: Array<{ id: string; name: string }>;
-        };
-        if (!mounted) return;
-        setAutoRecordRules(rulesBody.rules ?? []);
-        setVoiceChannels(
-          channelsBody.voiceChannels.map((channel) => ({
-            value: channel.id,
-            label: channel.name,
-          })),
-        );
-        setTextChannels(
-          channelsBody.textChannels.map((channel) => ({
-            value: channel.id,
-            label: channel.name.startsWith("#")
-              ? channel.name
-              : `#${channel.name}`,
-          })),
-        );
-      } catch (err) {
-        console.error("Failed to load autorecord settings", err);
-      } finally {
-        if (mounted) {
-          setLoadingRules(false);
-        }
-      }
-    };
+    setAutoRecordMode("one");
+    setVoiceChannelId(null);
+    setTextChannelId(null);
+    setContextDirty(false);
+  }, [selectedGuildId]);
 
-    void loadRules();
-    return () => {
-      mounted = false;
-    };
-  }, [selectedGuildId, guilds, guildLoading]);
+  useEffect(() => {
+    if (!selectedGuildId) {
+      setContext("");
+      setContextDirty(false);
+      return;
+    }
+    if (contextQuery.data && !contextDirty) {
+      setContext(contextQuery.data.context ?? "");
+    }
+  }, [selectedGuildId, contextQuery.data, contextDirty]);
 
   const handleAddRule = async () => {
     if (!selectedGuildId || !textChannelId) return;
     if (autoRecordMode === "one" && !voiceChannelId) return;
     try {
-      setSavingRules(true);
-      const res = await fetch(`/api/guilds/${selectedGuildId}/autorecord`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: autoRecordMode,
-          voiceChannelId: autoRecordMode === "one" ? voiceChannelId : undefined,
-          textChannelId,
-        }),
+      await addRuleMutation.mutateAsync({
+        serverId: selectedGuildId,
+        mode: autoRecordMode,
+        voiceChannelId:
+          autoRecordMode === "one" ? (voiceChannelId ?? undefined) : undefined,
+        textChannelId,
       });
-      if (!res.ok) {
-        throw new Error("Unable to add rule");
-      }
-      const body = (await res.json()) as { rule: AutoRecordSettings };
-      setAutoRecordRules((prev) => [body.rule, ...prev]);
+      await trpcUtils.autorecord.list.invalidate({
+        serverId: selectedGuildId,
+      });
       setVoiceChannelId(null);
       setTextChannelId(null);
       setAutoRecordMode("one");
     } catch (err) {
       console.error("Failed to add autorecord rule", err);
-    } finally {
-      setSavingRules(false);
     }
   };
 
   const handleRemoveRule = async (channelId: string) => {
     if (!selectedGuildId) return;
     try {
-      setSavingRules(true);
-      const res = await fetch(`/api/guilds/${selectedGuildId}/autorecord`, {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channelId }),
+      await removeRuleMutation.mutateAsync({
+        serverId: selectedGuildId,
+        channelId,
       });
-      if (!res.ok) throw new Error("Unable to remove rule");
-      setAutoRecordRules((prev) =>
-        prev.filter((rule) => rule.channelId !== channelId),
-      );
+      await trpcUtils.autorecord.list.invalidate({
+        serverId: selectedGuildId,
+      });
     } catch (err) {
       console.error("Failed to remove autorecord rule", err);
-    } finally {
-      setSavingRules(false);
+    }
+  };
+
+  const handleSaveContext = async () => {
+    if (!selectedGuildId) return;
+    const trimmed = context.trim();
+    if (!trimmed) return;
+    try {
+      await saveContextMutation.mutateAsync({
+        serverId: selectedGuildId,
+        context: trimmed,
+      });
+      setContextDirty(false);
+      await trpcUtils.context.get.invalidate({ serverId: selectedGuildId });
+    } catch (err) {
+      console.error("Failed to save context", err);
+    }
+  };
+
+  const handleClearContext = async () => {
+    if (!selectedGuildId) return;
+    try {
+      await clearContextMutation.mutateAsync({ serverId: selectedGuildId });
+      setContext("");
+      setContextDirty(false);
+      await trpcUtils.context.get.invalidate({ serverId: selectedGuildId });
+    } catch (err) {
+      console.error("Failed to clear context", err);
     }
   };
 
@@ -214,7 +214,7 @@ export default function Settings() {
         <Surface p="lg" style={{ position: "relative", overflow: "hidden" }}>
           <LoadingOverlay
             visible={isAutoRecordBusy}
-            overlayProps={{ blur: 2 }}
+            overlayProps={{ blur: 2, radius: "xl" }}
             loaderProps={{ size: "md" }}
           />
           <Stack gap="sm">
@@ -346,7 +346,11 @@ export default function Settings() {
               label="Server context"
               minRows={5}
               value={context}
-              onChange={(event) => setContext(event.currentTarget.value)}
+              onChange={(event) => {
+                setContext(event.currentTarget.value);
+                setContextDirty(true);
+              }}
+              disabled={contextDisabled}
             />
             <TextInput
               label="Default tags"
@@ -364,6 +368,32 @@ export default function Settings() {
                 { value: "365", label: "1 year" },
               ]}
             />
+            <Group justify="flex-end">
+              <Button
+                variant="subtle"
+                color="gray"
+                onClick={handleClearContext}
+                disabled={
+                  contextDisabled ||
+                  context.trim().length === 0 ||
+                  contextSaving
+                }
+              >
+                Clear
+              </Button>
+              <Button
+                variant="light"
+                onClick={handleSaveContext}
+                disabled={
+                  contextDisabled ||
+                  !contextDirty ||
+                  context.trim().length === 0
+                }
+                loading={saveContextMutation.isPending}
+              >
+                Save context
+              </Button>
+            </Group>
           </Stack>
         </Surface>
       </SimpleGrid>
@@ -378,7 +408,6 @@ export default function Settings() {
           </Group>
           <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
             <Switch label="Live voice responder" defaultChecked />
-            <Switch label="Image generation" defaultChecked />
             <Switch label="Ask answers in DMs" />
           </SimpleGrid>
           <Group justify="flex-end">

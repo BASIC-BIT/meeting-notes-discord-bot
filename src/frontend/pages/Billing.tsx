@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -19,23 +19,10 @@ import {
 import { IconCheck, IconCreditCard } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
 import { useGuildContext } from "../contexts/GuildContext";
-import { useAuth } from "../contexts/AuthContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
 import PricingCard from "../components/PricingCard";
-
-type BillingMe = {
-  billingEnabled: boolean;
-  stripeMode: string;
-  tier: "free" | "basic" | "pro";
-  status: string;
-  nextBillingDate: string | null;
-  subscriptionId: string | null;
-  customerId: string | null;
-  upgradeUrl: string | null;
-  portalUrl: string | null;
-  guildId?: string;
-};
+import { trpc } from "../services/trpc";
 
 type PlanTier = "free" | "basic" | "pro";
 
@@ -46,7 +33,7 @@ type Benefit = {
 
 const BENEFITS: Benefit[] = [
   {
-    label: "Recording time per week (per server)",
+    label: "Recording time per week",
     values: { free: "4 hours", basic: "20 hours", pro: "Unlimited" },
   },
   {
@@ -79,72 +66,30 @@ const BENEFITS: Benefit[] = [
   },
 ];
 
-export function Billing({ onRequireAuth }: { onRequireAuth?: () => void }) {
-  const [data, setData] = useState<BillingMe | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
   const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
-  const { state: authState } = useAuth();
+  const billingQuery = trpc.billing.me.useQuery(
+    { serverId: selectedGuildId ?? undefined },
+    { enabled: Boolean(selectedGuildId) },
+  );
+  const checkoutMutation = trpc.billing.checkout.useMutation();
+  const portalMutation = trpc.billing.portal.useMutation();
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
-
-  useEffect(() => {
-    let mounted = true;
-    const loadBilling = async () => {
-      try {
-        if (!selectedGuildId) {
-          setData(null);
-          setLoading(false);
-          return;
-        }
-        const res = await fetch(`/api/billing/me?guildId=${selectedGuildId}`, {
-          credentials: "include",
-        });
-        if (res.status === 401) {
-          setError("auth");
-          setLoading(false);
-          return;
-        }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = (await res.json()) as BillingMe;
-        if (mounted) {
-          setData(body);
-          setLoading(false);
-        }
-      } catch (err) {
-        console.error("Billing fetch error", err);
-        if (mounted) {
-          setError("Unable to load billing status.");
-          setLoading(false);
-        }
-      }
-    };
-
-    void loadBilling();
-    return () => {
-      mounted = false;
-    };
-  }, [selectedGuildId]);
 
   const serverName = useMemo(
     () =>
       guilds.find((g) => g.id === selectedGuildId)?.name || "Unknown server",
     [guilds, selectedGuildId],
   );
+  const data = billingQuery.data ?? null;
+  const loading = billingQuery.isLoading || guildLoading;
+  const error = billingQuery.error ? "Unable to load billing status." : null;
+  const isCheckoutPending = checkoutMutation.isPending;
+  const isPortalPending = portalMutation.isPending;
 
-  const isUnauthenticated = authState === "unauthenticated" || error === "auth";
-  useEffect(() => {
-    if (isUnauthenticated && onRequireAuth) {
-      onRequireAuth();
-    }
-  }, [isUnauthenticated, onRequireAuth]);
-
-  if (isUnauthenticated) {
-    return null;
-  }
-
-  if (loading || guildLoading) {
+  if (loading) {
     return (
       <Center py="xl">
         <Stack gap="xs" align="center">
@@ -176,8 +121,7 @@ export function Billing({ onRequireAuth }: { onRequireAuth?: () => void }) {
           description="Billing is disabled in this environment."
         />
         <Alert title="Billing disabled" color="yellow">
-          Billing is not enabled in this environment. Stripe mode:{" "}
-          {data.stripeMode}
+          Billing is not enabled in this environment.
         </Alert>
       </Stack>
     );
@@ -197,20 +141,11 @@ export function Billing({ onRequireAuth }: { onRequireAuth?: () => void }) {
 
   const handleCheckout = async () => {
     try {
-      const res = await fetch(
-        `/api/billing/checkout?guildId=${selectedGuildId}`,
-        {
-          method: "POST",
-          credentials: "include",
-        },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { url?: string };
-      if (body.url) {
-        window.location.href = body.url;
-      } else {
-        throw new Error("No checkout url returned");
-      }
+      if (!selectedGuildId) return;
+      const body = await checkoutMutation.mutateAsync({
+        serverId: selectedGuildId,
+      });
+      window.location.href = body.url;
     } catch (err) {
       console.error(err);
       notifications.show({
@@ -223,20 +158,11 @@ export function Billing({ onRequireAuth }: { onRequireAuth?: () => void }) {
 
   const handlePortal = async () => {
     try {
-      const res = await fetch(
-        `/api/billing/portal?guildId=${selectedGuildId}`,
-        {
-          method: "POST",
-          credentials: "include",
-        },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { url?: string };
-      if (body.url) {
-        window.location.href = body.url;
-      } else {
-        throw new Error("No portal url returned");
-      }
+      if (!selectedGuildId) return;
+      const body = await portalMutation.mutateAsync({
+        serverId: selectedGuildId,
+      });
+      window.location.href = body.url;
     } catch (err) {
       console.error(err);
       notifications.show({
@@ -251,7 +177,7 @@ export function Billing({ onRequireAuth }: { onRequireAuth?: () => void }) {
     <Stack gap="xl">
       <PageHeader
         title="Billing"
-        description="Manage subscriptions for the current server. Billing is per server."
+        description="Manage subscriptions for the current server."
       />
 
       <Surface
@@ -300,13 +226,16 @@ export function Billing({ onRequireAuth }: { onRequireAuth?: () => void }) {
                   variant="gradient"
                   gradient={{ from: "brand", to: "violet" }}
                   disabled={!selectedGuildId}
+                  loading={
+                    data.tier === "free" ? isCheckoutPending : isPortalPending
+                  }
                   onClick={data.tier === "free" ? handleCheckout : handlePortal}
                 >
                   {data.tier === "free" ? "Upgrade to Basic" : "Manage billing"}
                 </Button>
               </Group>
               <Text size="xs" c="dimmed">
-                Billing is per server. Changes apply immediately.
+                Changes apply immediately.
               </Text>
             </Stack>
           </Stack>

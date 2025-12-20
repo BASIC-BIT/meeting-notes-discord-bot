@@ -138,9 +138,7 @@ export default function Home() {
               Discord voice logbook
             </Text>
             <Title order={1} fw={750}>
-              Transcripts and summaries
-              <br />
-              for Discord voice.
+              Transcripts and summaries for Discord voice.
             </Title>
             <Text size="lg" c="dimmed">
               Chronote records the session, posts structured notes back to your
@@ -175,7 +173,7 @@ export default function Home() {
                     Auto-recording
                   </Text>
                   <Text size="xs" c="dimmed">
-                    Set it once per server
+                    Set it once, keep it running
                   </Text>
                 </Stack>
               </Group>

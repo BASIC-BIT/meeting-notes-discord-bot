@@ -102,7 +102,7 @@ export function PricingCard({
             {price}
           </Text>
           <Text size="sm" c="dimmed">
-            Per server, billed monthly
+            Billed monthly
           </Text>
         </Stack>
         <List

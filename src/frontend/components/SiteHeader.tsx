@@ -17,6 +17,7 @@ import {
   IconSun,
   IconTimeline,
 } from "@tabler/icons-react";
+import { Link } from "@tanstack/react-router";
 import { useAuth } from "../contexts/AuthContext";
 
 type SiteHeaderProps = {
@@ -53,25 +54,29 @@ export function SiteHeader({
               <IconMenu2 size={18} />
             </ActionIcon>
           ) : null}
-          <ThemeIcon
-            variant="gradient"
-            gradient={{ from: "brand", to: "violet" }}
-            radius="md"
-            size={34}
-          >
-            <IconTimeline size={18} />
-          </ThemeIcon>
-          <Text
-            fw={850}
-            size={isMobile ? "lg" : "xl"}
-            style={{
-              letterSpacing: "-0.02em",
-              color: isDark ? theme.white : theme.colors.dark[9],
-              lineHeight: 1,
-            }}
-          >
-            Chronote
-          </Text>
+          <Link to="/" style={{ textDecoration: "none" }}>
+            <Group gap="sm" align="center" wrap="nowrap">
+              <ThemeIcon
+                variant="gradient"
+                gradient={{ from: "brand", to: "violet" }}
+                radius="md"
+                size={34}
+              >
+                <IconTimeline size={18} />
+              </ThemeIcon>
+              <Text
+                fw={850}
+                size={isMobile ? "lg" : "xl"}
+                style={{
+                  letterSpacing: "-0.02em",
+                  color: isDark ? theme.white : theme.colors.dark[9],
+                  lineHeight: 1,
+                }}
+              >
+                Chronote
+              </Text>
+            </Group>
+          </Link>
         </Group>
 
         <Group gap="sm" align="center" wrap="nowrap">

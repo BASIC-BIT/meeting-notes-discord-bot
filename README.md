@@ -35,13 +35,17 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 ## Frontend
 
 - Vite + React 19 + Mantine 8 UI under `src/frontend/`, builds to `build/frontend/`.
-- Billing/status page lives at `/billing` (static SPA); styling via Mantine components.
+- Routing/data/state: TanStack Router + TanStack Query + tRPC + Zustand.
+- Marketing site is public at `/`; the authenticated portal lives under `/portal/*`:
+  - `/portal/select-server`
+  - `/portal/server/:serverId/{library|ask|billing|settings}`
 - Deployed via GitHub Actions to S3 + CloudFront (see `_infra/` and `.github/workflows/deploy.yml`).
 - Static hosting variables: `FRONTEND_BUCKET`, `FRONTEND_DOMAIN` (optional), `FRONTEND_CERT_ARN` (when custom domain is set). Allow the SPA to call the API by setting `FRONTEND_ALLOWED_ORIGINS` (comma-separated, e.g., CloudFront domain). CloudFront distribution outputs are emitted by Terraform.
+- Local dev uses Vite proxying for `/auth`, `/user`, `/api`, and `/trpc` (tRPC).
 
 ## Backend / services
 
-- Bot + API: Node 20, Express 5. API routes are modularized under `src/api/` (billing, guilds) and reuse shared services for ask/context/autorecord/billing.
+- Bot + API: Node 20, Express 5. API routes are modularized under `src/api/` (billing, guilds). New typed API surface is tRPC at `/trpc` (routers in `src/trpc/`).
 - Voice capture: discord.js v14, @discordjs/voice/opus, prism-media.
 - OpenAI: gpt-4o-transcribe for ASR, gpt-5.1 for notes/corrections, gpt-5-mini for live gate, DALL-E 3 for images.
 - Billing: Stripe Checkout + Billing Portal; webhook handler persists GuildSubscription and PaymentTransaction in DynamoDB and handles payment_failed / subscription_deleted to downgrade appropriately (guild-scoped billing only).

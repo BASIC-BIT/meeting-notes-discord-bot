@@ -5,7 +5,7 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import { apiFetch, AuthNeededError } from "../services/apiClient";
+import { trpc } from "../services/trpc";
 import { useAuth } from "./AuthContext";
 
 export type Guild = { id: string; name: string; icon?: string | null };
@@ -22,25 +22,45 @@ type GuildContextValue = {
 const GuildContext = createContext<GuildContextValue | undefined>(undefined);
 const STORAGE_KEY = "mn-selected-guild";
 
-async function fetchGuilds(): Promise<Guild[]> {
-  const body = (await apiFetch<{ guilds?: Guild[] }>("/api/guilds")) || {};
-  return Array.isArray(body.guilds) ? body.guilds : [];
-}
-
 export function GuildProvider({ children }: { children: React.ReactNode }) {
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedGuildId, setSelectedGuildId] = useState<string | null>(() =>
     localStorage.getItem(STORAGE_KEY),
   );
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { state: authState } = useAuth();
+  const guildQuery = trpc.servers.listEligible.useQuery(undefined, {
+    retry: false,
+    enabled: authState === "authenticated",
+  });
+  const loading =
+    authState === "authenticated"
+      ? guildQuery.isLoading
+      : authState === "unknown";
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await fetchGuilds();
+  useEffect(() => {
+    if (authState === "unauthenticated") {
+      setGuilds([]);
+      setSelectedGuildId(null);
+      localStorage.removeItem(STORAGE_KEY);
+      setError("auth");
+      return;
+    }
+    if (guildQuery.error) {
+      if (guildQuery.error.data?.code === "UNAUTHORIZED") {
+        setError("auth");
+      } else {
+        console.error("Guild fetch error", guildQuery.error);
+        setError(
+          "Unable to load your servers. Please re-login with the guilds scope.",
+        );
+      }
+      return;
+    }
+    if (guildQuery.data) {
+      const data = Array.isArray(guildQuery.data.guilds)
+        ? guildQuery.data.guilds
+        : [];
       setGuilds(data);
       if (
         selectedGuildId &&
@@ -50,28 +70,9 @@ export function GuildProvider({ children }: { children: React.ReactNode }) {
         setSelectedGuildId(null);
         localStorage.removeItem(STORAGE_KEY);
       }
-    } catch (err) {
-      if (err instanceof AuthNeededError) {
-        setError("auth");
-      } else {
-        console.error("Guild fetch error", err);
-        setError(
-          "Unable to load your servers. Please re-login with the guilds scope.",
-        );
-      }
-    } finally {
-      setLoading(false);
+      setError(null);
     }
-  };
-
-  useEffect(() => {
-    if (authState === "authenticated") {
-      void load();
-    } else if (authState === "unauthenticated") {
-      setError("auth");
-      setLoading(false);
-    }
-  }, [authState]);
+  }, [authState, guildQuery.data, guildQuery.error, selectedGuildId]);
 
   const value = useMemo(
     () => ({
@@ -87,9 +88,11 @@ export function GuildProvider({ children }: { children: React.ReactNode }) {
       },
       loading,
       error,
-      refresh: load,
+      refresh: async () => {
+        await guildQuery.refetch();
+      },
     }),
-    [guilds, selectedGuildId, loading, error],
+    [guilds, selectedGuildId, loading, error, guildQuery],
   );
 
   return (

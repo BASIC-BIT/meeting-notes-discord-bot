@@ -9,6 +9,11 @@ import { MantineProvider } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import { AuthProvider } from "./contexts/AuthContext";
 import { theme } from "./theme";
+import { GuildProvider } from "./contexts/GuildContext";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { trpc } from "./services/trpc";
+import { trpcClient } from "./services/trpcClient";
+import { queryClient } from "./queryClient";
 
 const root = ReactDOM.createRoot(
   document.getElementById("root") as HTMLElement,
@@ -17,10 +22,16 @@ const root = ReactDOM.createRoot(
 root.render(
   <React.StrictMode>
     <MantineProvider theme={theme} defaultColorScheme="dark">
-      <AuthProvider>
-        <App />
-        <Notifications position="top-right" />
-      </AuthProvider>
+      <trpc.Provider client={trpcClient} queryClient={queryClient}>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <GuildProvider>
+              <App />
+            </GuildProvider>
+            <Notifications position="top-right" />
+          </AuthProvider>
+        </QueryClientProvider>
+      </trpc.Provider>
     </MantineProvider>
   </React.StrictMode>,
 );

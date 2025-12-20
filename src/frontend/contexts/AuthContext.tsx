@@ -1,11 +1,6 @@
-import React, {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-import { apiFetch, AuthNeededError, API_BASE } from "../services/apiClient";
+import React, { createContext, useContext, useMemo } from "react";
+import { API_BASE } from "../services/apiClient";
+import { trpc } from "../services/trpc";
 
 type AuthState = "unknown" | "authenticated" | "unauthenticated";
 
@@ -18,43 +13,32 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-async function probeAuth(): Promise<boolean> {
-  try {
-    await apiFetch("/user");
-    return true;
-  } catch (err) {
-    if (err instanceof AuthNeededError) return false;
-    return false;
-  }
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AuthState>("unknown");
-  const [loading, setLoading] = useState(true);
-
-  const refresh = async () => {
-    setLoading(true);
-    const authed = await probeAuth();
-    setState(authed ? "authenticated" : "unauthenticated");
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    void refresh();
-  }, []);
+  const authQuery = trpc.auth.me.useQuery(undefined, {
+    retry: false,
+  });
+  const loading = authQuery.isLoading;
+  const state: AuthState = loading
+    ? "unknown"
+    : authQuery.data
+      ? "authenticated"
+      : "unauthenticated";
 
   const loginUrl = `${API_BASE}/auth/discord?redirect=${encodeURIComponent(
     typeof window !== "undefined" ? window.location.href : "/",
   )}`;
 
+  const refetch = authQuery.refetch;
   const value = useMemo(
     () => ({
       state,
       loading,
       loginUrl,
-      refresh,
+      refresh: async () => {
+        await refetch();
+      },
     }),
-    [state, loading, loginUrl],
+    [state, loading, loginUrl, refetch],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

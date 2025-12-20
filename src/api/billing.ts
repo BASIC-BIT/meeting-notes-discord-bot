@@ -1,10 +1,12 @@
 import express from "express";
 import Stripe from "stripe";
+import { writeGuildSubscription, writePaymentTransaction } from "../db";
 import {
-  getGuildSubscription,
-  writeGuildSubscription,
-  writePaymentTransaction,
-} from "../db";
+  buildBillingDisabledSnapshot,
+  createCheckoutSession,
+  createPortalSession,
+  getBillingSnapshot,
+} from "../services/billingService";
 import { config } from "../services/configService";
 
 type AuthedUser = {
@@ -34,31 +36,12 @@ export function registerBillingRoutes(
           res.status(400).json({ error: "guildId is required" });
           return;
         }
-        if (!config.stripe.priceBasic?.startsWith("price_")) {
-          console.error(
-            "Stripe price not configured: expected STRIPE_PRICE_BASIC to be a price_ id, got",
-            config.stripe.priceBasic,
-          );
-          res
-            .status(500)
-            .json({ error: "Stripe price not configured. Contact admin." });
-          return;
-        }
-        const customerId = await ensureStripeCustomer(stripe, user);
-        const session = await stripe.checkout.sessions.create({
-          mode: "subscription",
-          line_items: [{ price: config.stripe.priceBasic, quantity: 1 }],
-          success_url: config.stripe.successUrl,
-          cancel_url: config.stripe.cancelUrl,
-          customer: customerId,
-          client_reference_id: user.id,
-          metadata: {
-            discord_id: user.id,
-            discord_username: user.username ?? "",
-            guild_id: guildId,
-          },
+        const url = await createCheckoutSession({
+          stripe,
+          user,
+          guildId,
         });
-        res.json({ url: session.url });
+        res.json({ url });
       } catch (err) {
         console.error("Stripe checkout error", err);
         res.status(500).json({ error: "Unable to create checkout session" });
@@ -69,44 +52,21 @@ export function registerBillingRoutes(
   app.get("/api/billing/me", requireAuth, async (req, res): Promise<void> => {
     const guildId = (req.query.guildId as string) || "";
     if (!guildId) {
-      res.json({
-        tier: "free",
-        status: "free",
-        upgradeUrl: config.stripe.billingLandingUrl || null,
-        portalUrl: null,
-        billingEnabled: false,
-        stripeMode: config.subscription.stripeMode || "disabled",
-      });
+      res.json(buildBillingDisabledSnapshot());
       return;
     }
     try {
       if (!stripe || !config.stripe.secretKey) {
-        res.json({
-          tier: "free",
-          status: "free",
-          upgradeUrl: config.stripe.billingLandingUrl || null,
-          portalUrl: null,
-          billingEnabled: false,
-          stripeMode: config.subscription.stripeMode || "disabled",
-        });
+        res.json(buildBillingDisabledSnapshot());
         return;
       }
-
-      const subscription = await getGuildSubscription(guildId);
-      const status = subscription?.status || "free";
-      const nextBillingDate = subscription?.nextBillingDate || null;
-
-      res.json({
-        tier: status === "free" ? "free" : "basic",
-        status,
-        nextBillingDate,
-        subscriptionId: subscription?.stripeSubscriptionId || null,
-        customerId: subscription?.stripeCustomerId || null,
-        upgradeUrl: config.stripe.billingLandingUrl || null,
-        portalUrl: `${req.protocol}://${req.get("host")}/api/billing/portal?guildId=${guildId}`,
-        billingEnabled: true,
-        stripeMode: config.subscription.stripeMode || "live",
+      const snapshot = await getBillingSnapshot({
+        stripe,
+        guildId,
+        host: req.get("host") ?? "",
+        protocol: req.protocol,
       });
+      res.json(snapshot);
     } catch (err) {
       console.error("Stripe me endpoint error", err);
       res.status(500).json({ error: "Unable to fetch billing status" });
@@ -128,28 +88,12 @@ export function registerBillingRoutes(
         return;
       }
       try {
-        const subscription = await getGuildSubscription(guildId);
-        let customerId =
-          subscription?.stripeCustomerId ||
-          (typeof subscription?.stripeSubscriptionId === "string"
-            ? (
-                await stripe.subscriptions.retrieve(
-                  subscription.stripeSubscriptionId,
-                )
-              ).customer?.toString()
-            : undefined);
-        if (!customerId) {
-          customerId = await ensureStripeCustomer(stripe, user);
-        }
-        if (!customerId) {
-          res.status(404).json({ error: "No Stripe customer found for guild" });
-          return;
-        }
-        const portal = await stripe.billingPortal.sessions.create({
-          customer: customerId,
-          return_url: config.stripe.portalReturnUrl || config.stripe.successUrl,
+        const url = await createPortalSession({
+          stripe,
+          user,
+          guildId,
         });
-        res.json({ url: portal.url });
+        res.json({ url });
       } catch (err) {
         console.error("Stripe portal error", err);
         res.status(500).json({ error: "Unable to create portal session" });
@@ -321,25 +265,3 @@ const requireAuth: express.RequestHandler = (req, res, next): void => {
   }
   res.status(401).json({ error: "Not authenticated" });
 };
-
-async function ensureStripeCustomer(
-  stripe: Stripe,
-  user: { id: string; email?: string; username?: string },
-): Promise<string> {
-  const searchEmail = user.email;
-  if (searchEmail) {
-    const found = await stripe.customers.list({
-      email: searchEmail,
-      limit: 1,
-    });
-    if (found.data.length) return found.data[0].id;
-  }
-  const created = await stripe.customers.create({
-    ...(searchEmail ? { email: searchEmail } : {}),
-    metadata: {
-      discord_id: user.id,
-      discord_username: user.username ?? "",
-    },
-  });
-  return created.id;
-}

@@ -7,11 +7,11 @@
 - **Audio**: fluent-ffmpeg + ffmpeg-static; libsodium-wrappers; PCM/Opus handling; silence detection; MP3 splitting for Discord limits.
 - **AI**: openai 5.x; gpt-4o-transcribe for ASR; gpt-5.1 for notes/corrections; gpt-5-mini for live gate; responder model configurable; DALL-E 3 for images; TTS via `gpt-4o-mini-tts`.
 - **Backend web**: Express 5; express-session (Dynamo SessionTable); passport + passport-discord (optional OAuth).
-- **Billing**: Stripe 14.24; checkout + billing portal; webhook verifies signature and now handles payment_failed + subscription_deleted; stores Subscription/PaymentTransaction in Dynamo.
-- **Storage/Data**: DynamoDB tables (Subscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, SessionTable with TTL on `expiresAt`); S3 bucket for transcripts/audio.
+- **Billing**: Stripe 14.24; checkout + billing portal; webhook verifies signature and now handles payment_failed + subscription_deleted; stores GuildSubscription/PaymentTransaction in Dynamo.
+- **Storage/Data**: DynamoDB tables (GuildSubscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, SessionTable with TTL on `expiresAt`, InstallerTable, OnboardingStateTable); S3 bucket for transcripts/audio.
 - **Resilience**: cockatiel (retry/circuit breaker), bottleneck (rate limiting).
 - **Infra/IaC**: Terraform (AWS: VPC, ECS/Fargate, ECR, Dynamo tables, KMS, CloudWatch logs, transcripts bucket, frontend bucket + CloudFront w/ OAC, SPA fallback). Checkov for IaC scanning.
-- **Frontend**: Vite + React 19 + Mantine 8 UI; billing page at `/billing`; static deploy to S3/CloudFront; testing via RTL/Jest.
+- **Frontend**: Vite + React 19 + Mantine 8 UI; TanStack Router/Query + tRPC + Zustand; marketing at `/` and authenticated portal under `/portal/*`; static deploy to S3/CloudFront; testing via RTL/Jest.
 
 ## Tooling & commands
 

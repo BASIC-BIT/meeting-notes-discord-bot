@@ -4,13 +4,16 @@ import session from "express-session";
 import passport from "passport";
 import { Profile, Strategy as DiscordStrategy } from "passport-discord";
 import { User } from "discord.js";
-import Stripe from "stripe";
+import * as trpcExpress from "@trpc/server/adapters/express";
 import { registerBillingRoutes } from "./api/billing";
 import { registerGuildRoutes } from "./api/guilds";
 import { config } from "./services/configService";
 import { DynamoSessionStore } from "./services/sessionStore";
+import { getStripeClient } from "./services/stripeClient";
 import { writeGuildInstaller } from "./db";
 import { metricsMiddleware, metricsRegistry } from "./metrics";
+import { appRouter } from "./trpc/router";
+import { createContext } from "./trpc/context";
 
 export function setupWebServer() {
   const app = express();
@@ -159,11 +162,17 @@ export function setupWebServer() {
       res.status(401).json({ error: "User not authenticated" });
     }
   });
+
+  // tRPC API
+  app.use(
+    "/trpc",
+    trpcExpress.createExpressMiddleware({
+      router: appRouter,
+      createContext,
+    }),
+  );
   // Stripe integration (shared routes live in src/api)
-  const stripe =
-    config.stripe.secretKey && config.stripe.secretKey.length
-      ? new Stripe(config.stripe.secretKey, { apiVersion: "2023-10-16" })
-      : null;
+  const stripe = getStripeClient();
 
   registerBillingRoutes(app, stripe);
   registerGuildRoutes(app);

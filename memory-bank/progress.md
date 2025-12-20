@@ -8,7 +8,7 @@
 - **Tagging**: freeform tags on meetings; edit buttons on start/summary embeds; tags displayed on summary; tag suggestions from history.
 - **Recall**: `/ask` uses recent meetings (guild default, optional channel) with configurable meeting count.
 - **Billing**: Stripe checkout + billing portal; webhook writes GuildSubscription/PaymentTransaction; handles payment_failed and subscription_deleted; guild-scoped billing only; sessions in Dynamo-backed Express sessions; single app-level raw middleware for the webhook.
-- **Frontend**: Vite + React 19 + Mantine 8 UI; billing page at `/billing`; static deploy to S3 + CloudFront (SPA fallback, OAC).
+- **Frontend**: Vite + React 19 + Mantine 8 UI; TanStack Router/Query + tRPC + Zustand; marketing at `/` and authenticated portal under `/portal/*`; static deploy to S3 + CloudFront (SPA fallback, OAC).
 - **Infra**: Terraform provisions ECS/Fargate bot, Dynamo tables (incl. SessionTable with TTL), transcripts bucket, frontend bucket + CloudFront; GitHub Actions deploy backend/frontend; Checkov in CI.
 - **Quality gates**: `yarn run check` (fixing) and `yarn run check:ci` (non-fixing); Jest unit tests (tags, embed pagination, transcribe, frontend smoke); lint/prettier enforced.
 - **Onboarding**: `/onboard` wizard (context, autorecord prompt, feature tour, upgrade CTA); installer captured; state TTL 24h; DM installer/owner on join.
@@ -19,7 +19,7 @@
 - Bot speech recorded/logged only after successful playback.
 - Tag UX: edit buttons during/after; tags shown on summary; history-based suggestions; edit posted summaries.
 - Stripe webhook now handles payment_failed and subscription_deleted; SessionTable added; config/env updated; billing is guild-scoped and API routes modularized under `src/api/`.
-- Frontend migrated to Vite + React 19 + Mantine 8; billing page shipped; deploy workflow syncs to S3/CloudFront.
+- Frontend migrated to Vite + React 19 + Mantine 8; portal scaffolded with TanStack Router/Query + tRPC + Zustand; deploy workflow syncs to S3/CloudFront.
 - Upgrade prompts added for free-tier limits (daily meetings, image gen, `/ask` depth); startmeeting shows remaining free meetings.
 - Docs refreshed (README, AGENTS); rule to wrap React tests with act instead of silencing console.
 

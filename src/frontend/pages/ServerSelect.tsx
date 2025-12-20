@@ -1,16 +1,16 @@
 import { Button, Group, Loader, SimpleGrid, Stack, Text } from "@mantine/core";
 import { IconArrowRight } from "@tabler/icons-react";
+import { useNavigate } from "@tanstack/react-router";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
+import { usePortalStore } from "../stores/portalStore";
 
-type ServerSelectProps = {
-  onContinue: () => void;
-};
-
-export default function ServerSelect({ onContinue }: ServerSelectProps) {
+export default function ServerSelect() {
   const { guilds, loading, selectedGuildId, setSelectedGuildId } =
     useGuildContext();
+  const navigate = useNavigate();
+  const setLastServerId = usePortalStore((state) => state.setLastServerId);
 
   if (loading) {
     return (
@@ -56,7 +56,11 @@ export default function ServerSelect({ onContinue }: ServerSelectProps) {
                 rightSection={<IconArrowRight size={16} />}
                 onClick={() => {
                   setSelectedGuildId(guild.id);
-                  onContinue();
+                  setLastServerId(guild.id);
+                  navigate({
+                    to: "/portal/server/$serverId/library",
+                    params: { serverId: guild.id },
+                  });
                 }}
               >
                 Open server
