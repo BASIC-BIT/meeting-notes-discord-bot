@@ -5,6 +5,8 @@ import {
   createCheckoutSession,
   createPortalSession,
   getBillingSnapshot,
+  getMockBillingSnapshot,
+  seedMockSubscription,
 } from "../../services/billingService";
 import { getStripeClient } from "../../services/stripeClient";
 import { config } from "../../services/configService";
@@ -15,6 +17,9 @@ const me = authedProcedure
   .query(async ({ ctx, input }) => {
     if (!input.serverId) {
       return buildBillingDisabledSnapshot();
+    }
+    if (config.mock.enabled) {
+      return getMockBillingSnapshot(input.serverId);
     }
     const stripe = getStripeClient();
     if (!stripe || !config.stripe.secretKey) {
@@ -31,6 +36,10 @@ const me = authedProcedure
 const checkout = authedProcedure
   .input(z.object({ serverId: z.string() }))
   .mutation(async ({ ctx, input }) => {
+    if (config.mock.enabled) {
+      await seedMockSubscription(input.serverId);
+      return { url: `/portal/server/${input.serverId}/billing?mock=checkout` };
+    }
     const stripe = getStripeClient();
     if (!stripe) {
       throw new TRPCError({
@@ -61,6 +70,9 @@ const checkout = authedProcedure
 const portal = authedProcedure
   .input(z.object({ serverId: z.string() }))
   .mutation(async ({ ctx, input }) => {
+    if (config.mock.enabled) {
+      return { url: `/portal/server/${input.serverId}/billing?mock=portal` };
+    }
     const stripe = getStripeClient();
     if (!stripe) {
       throw new TRPCError({

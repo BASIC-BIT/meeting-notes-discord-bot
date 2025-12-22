@@ -31,7 +31,7 @@ const add = authedProcedure
       serverId: z.string(),
       mode: z.enum(["one", "all"]),
       voiceChannelId: z.string().optional(),
-      textChannelId: z.string(),
+      textChannelId: z.string().nullable().optional(),
       tags: z.array(z.string()).optional(),
     }),
   )
@@ -55,7 +55,7 @@ const add = authedProcedure
     const rule = await saveAutoRecordSetting({
       guildId: input.serverId,
       channelId: input.mode === "all" ? "ALL" : input.voiceChannelId!,
-      textChannelId: input.textChannelId,
+      textChannelId: input.textChannelId ?? undefined,
       enabled: true,
       recordAll: input.mode === "all",
       createdBy: ctx.user.id,

@@ -1,8 +1,7 @@
 import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
-import { writeMeetingHistory } from "../db";
+import { writeMeetingHistoryService } from "../services/meetingHistoryService";
 import { getNotes } from "../transcription";
-import { uploadTranscriptToS3 } from "../services/storageService";
 
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   // Only save if transcription was enabled (we need something to save)
@@ -32,19 +31,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       }
     }
 
-    // Upload full transcript to S3
-    let transcriptS3Key: string | undefined;
-
-    if (meeting.finalTranscript) {
-      transcriptS3Key = await uploadTranscriptToS3({
-        guildId: meeting.guildId,
-        channelId: meeting.voiceChannel.id,
-        timestamp,
-        transcript: meeting.finalTranscript,
-      });
-
-      meeting.transcriptS3Key = transcriptS3Key;
-    }
+    const transcriptS3Key = meeting.transcriptS3Key;
 
     const notesVersion = meeting.notesVersion ?? (notes ? 1 : undefined);
     const notesLastEditedBy =
@@ -93,7 +80,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       chatS3Key: meeting.chatS3Key,
     };
 
-    await writeMeetingHistory(history);
+    await writeMeetingHistoryService(history);
     console.log(
       `Meeting history saved for guild ${meeting.guildId}, channel ${meeting.voiceChannel.id}`,
     );

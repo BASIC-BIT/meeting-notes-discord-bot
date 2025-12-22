@@ -1,6 +1,9 @@
 import Stripe from "stripe";
-import { getGuildSubscription } from "../db";
+import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
+import { getPaymentTransactionRepository } from "../repositories/paymentTransactionRepository";
 import { config } from "./configService";
+import { nowIso } from "../utils/time";
+import type { GuildSubscription, PaymentTransaction } from "../types/db";
 
 export type BillingSnapshot = {
   billingEnabled: boolean;
@@ -45,10 +48,12 @@ export async function getBillingSnapshot(params: {
     return buildBillingDisabledSnapshot();
   }
 
-  const subscription = await getGuildSubscription(guildId);
+  const subscription = await getSubscriptionRepository().get(guildId);
   const status = subscription?.status || "free";
   const nextBillingDate = subscription?.nextBillingDate || null;
-  const tier = status === "free" ? "free" : "basic";
+  const tier =
+    (subscription?.tier as BillingSnapshot["tier"] | undefined) ??
+    (status === "free" ? "free" : "basic");
 
   return {
     tier,
@@ -61,6 +66,55 @@ export async function getBillingSnapshot(params: {
     billingEnabled: true,
     stripeMode: config.subscription.stripeMode || "live",
   };
+}
+
+export async function getMockBillingSnapshot(
+  guildId: string,
+): Promise<BillingSnapshot> {
+  const subscription = await getSubscriptionRepository().get(guildId);
+  const status = subscription?.status || "free";
+  const tier =
+    (subscription?.tier as BillingSnapshot["tier"] | undefined) ??
+    (status === "free" ? "free" : "basic");
+  return {
+    tier,
+    status,
+    nextBillingDate: subscription?.nextBillingDate || null,
+    subscriptionId: subscription?.stripeSubscriptionId || null,
+    customerId: subscription?.stripeCustomerId || null,
+    upgradeUrl: `/portal/server/${guildId}/billing?mock=checkout`,
+    portalUrl: `/portal/server/${guildId}/billing?mock=portal`,
+    billingEnabled: true,
+    stripeMode: "mock",
+  };
+}
+
+export async function seedMockSubscription(guildId: string) {
+  const repo = getSubscriptionRepository();
+  const existing = await repo.get(guildId);
+  await repo.write({
+    guildId,
+    status: "active",
+    tier: "basic",
+    subscriptionType: "mock",
+    startDate: existing?.startDate ?? nowIso(),
+    nextBillingDate:
+      existing?.nextBillingDate ??
+      new Date(Date.now() + 1000 * 60 * 60 * 24 * 25).toISOString(),
+    stripeCustomerId: existing?.stripeCustomerId ?? "cus_mock_basic",
+    stripeSubscriptionId: existing?.stripeSubscriptionId ?? "sub_mock_basic",
+    mode: "test",
+  });
+}
+
+export async function saveGuildSubscription(subscription: GuildSubscription) {
+  await getSubscriptionRepository().write(subscription);
+}
+
+export async function recordPaymentTransaction(
+  transaction: PaymentTransaction,
+) {
+  await getPaymentTransactionRepository().write(transaction);
 }
 
 export async function ensureStripeCustomer(
@@ -120,7 +174,7 @@ export async function createPortalSession(params: {
   guildId: string;
 }): Promise<string> {
   const { stripe, user, guildId } = params;
-  const subscription = await getGuildSubscription(guildId);
+  const subscription = await getSubscriptionRepository().get(guildId);
   let customerId =
     subscription?.stripeCustomerId ||
     (typeof subscription?.stripeSubscriptionId === "string"

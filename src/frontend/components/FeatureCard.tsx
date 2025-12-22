@@ -18,7 +18,7 @@ export function FeatureCard({
   return (
     <Surface p="lg">
       <Stack gap="sm">
-        <ThemeIcon size={44} radius="md" variant="light" color={color}>
+        <ThemeIcon size={44} variant="light" color={color}>
           {icon}
         </ThemeIcon>
         <Title order={4}>{title}</Title>

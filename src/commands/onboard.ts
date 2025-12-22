@@ -17,16 +17,18 @@ import {
   TextInputStyle,
 } from "discord.js";
 import {
-  deleteOnboardingState,
-  getGuildInstaller,
-  getOnboardingState,
-  writeAutoRecordSetting,
-  writeOnboardingState,
-  writeServerContext,
-  writeGuildInstaller,
-} from "../db";
+  fetchOnboardingState,
+  removeOnboardingState,
+  saveOnboardingState,
+} from "../services/onboardingService";
 import { AutoRecordSettings } from "../types/db";
 import { config } from "../services/configService";
+import {
+  fetchGuildInstaller,
+  saveGuildInstaller,
+} from "../services/guildInstallerService";
+import { setServerContext } from "../services/appContextService";
+import { saveAutoRecordSetting } from "../services/autorecordService";
 
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24; // 24h
 
@@ -67,9 +69,9 @@ async function saveState(
     autorecordTextChannelId?: string;
   }>,
 ) {
-  const current = await getOnboardingState(guildId, userId);
+  const current = await fetchOnboardingState(guildId, userId);
   const ttl = Math.floor(Date.now() / 1000) + DEFAULT_TTL_SECONDS;
-  await writeOnboardingState({
+  await saveOnboardingState({
     guildId,
     userId,
     step: updates.step ?? current?.step ?? "context",
@@ -227,7 +229,7 @@ export async function handleOnboardCommand(
   const hasManageGuild =
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ??
     false;
-  const installer = await getGuildInstaller(guild.id);
+  const installer = await fetchGuildInstaller(guild.id);
   const isInstaller = installer?.installerId === interaction.user.id;
 
   if (!hasManageGuild && !isInstaller) {
@@ -239,14 +241,14 @@ export async function handleOnboardCommand(
   }
 
   if (!installer) {
-    await writeGuildInstaller({
+    await saveGuildInstaller({
       guildId: guild.id,
       installerId: interaction.user.id,
       installedAt: nowIso(),
     });
   }
 
-  const state = await getOnboardingState(guild.id, interaction.user.id);
+  const state = await fetchOnboardingState(guild.id, interaction.user.id);
   const step = state?.step ?? "context";
 
   if (step === "complete") {
@@ -330,12 +332,7 @@ export async function handleOnboardModalSubmit(
   const tone = interaction.fields.getTextInputValue("tone_notes");
   const combined = tone ? `${description}\n\nTone: ${tone}` : description;
 
-  await writeServerContext({
-    guildId: guild.id,
-    context: combined,
-    updatedAt: nowIso(),
-    updatedBy: interaction.user.id,
-  });
+  await setServerContext(guild.id, interaction.user.id, { context: combined });
 
   await saveState(guild.id, interaction.user.id, {
     step: "autorecord",
@@ -392,7 +389,7 @@ export async function handleOnboardButtonInteraction(
   }
 
   if (customId === "onboard_auto_one" || customId === "onboard_auto_all") {
-    const state = await getOnboardingState(guildId, userId);
+    const state = await fetchOnboardingState(guildId, userId);
     const voiceId = state?.autorecordVoiceChannelId;
     const textId = state?.autorecordTextChannelId;
     if (!textId || (customId === "onboard_auto_one" && !voiceId)) {
@@ -423,7 +420,15 @@ export async function handleOnboardButtonInteraction(
             createdBy: userId,
             createdAt: nowIso(),
           };
-    await writeAutoRecordSetting(setting);
+    await saveAutoRecordSetting({
+      guildId: setting.guildId,
+      channelId: setting.channelId,
+      textChannelId: setting.textChannelId,
+      enabled: setting.enabled,
+      recordAll: setting.recordAll,
+      createdBy: setting.createdBy,
+      tags: setting.tags,
+    });
     await saveState(guildId, userId, {
       step: "tour",
       autorecordMode: customId === "onboard_auto_all" ? "all" : "one",
@@ -466,7 +471,7 @@ export async function handleOnboardButtonInteraction(
 
   if (customId === "onboard_skip_upgrade") {
     await saveState(guildId, userId, { step: "complete" });
-    await deleteOnboardingState(guildId, userId);
+    await removeOnboardingState(guildId, userId);
     await interaction.update({
       content: "Onboarding finished. You can rerun `/onboard` anytime.",
       components: [],

@@ -16,6 +16,8 @@ import {
   GuildSubscription,
   MeetingHistory,
   NotesHistoryEntry,
+  AskConversationRecord,
+  AskMessageRecord,
   GuildInstaller,
   OnboardingState,
   PaymentTransaction,
@@ -578,9 +580,98 @@ export async function updateMeetingNotes(
     ) {
       return false;
     }
+
     console.error("Failed to update meeting notes:", error);
     return false;
   }
+}
+
+function buildAskPartitionKey(userId: string, guildId: string) {
+  return `USER#${userId}#GUILD#${guildId}`;
+}
+
+export async function listAskConversations(
+  userId: string,
+  guildId: string,
+): Promise<AskConversationRecord[]> {
+  const pk = buildAskPartitionKey(userId, guildId);
+  const params = {
+    TableName: "AskConversationTable",
+    KeyConditionExpression: "pk = :pk and begins_with(sk, :prefix)",
+    ExpressionAttributeValues: marshall({
+      ":pk": pk,
+      ":prefix": "CONV#",
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map(
+      (item) => unmarshall(item) as AskConversationRecord,
+    );
+  }
+  return [];
+}
+
+export async function getAskConversation(
+  userId: string,
+  guildId: string,
+  conversationId: string,
+): Promise<AskConversationRecord | undefined> {
+  const pk = buildAskPartitionKey(userId, guildId);
+  const sk = `CONV#${conversationId}`;
+  const params = {
+    TableName: "AskConversationTable",
+    Key: marshall({ pk, sk }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as AskConversationRecord;
+  }
+  return undefined;
+}
+
+export async function listAskMessages(
+  userId: string,
+  guildId: string,
+  conversationId: string,
+): Promise<AskMessageRecord[]> {
+  const pk = buildAskPartitionKey(userId, guildId);
+  const params = {
+    TableName: "AskConversationTable",
+    KeyConditionExpression: "pk = :pk and begins_with(sk, :prefix)",
+    ExpressionAttributeValues: marshall({
+      ":pk": pk,
+      ":prefix": `MSG#${conversationId}#`,
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as AskMessageRecord);
+  }
+  return [];
+}
+
+export async function writeAskConversation(
+  record: AskConversationRecord,
+): Promise<void> {
+  const params = {
+    TableName: "AskConversationTable",
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function writeAskMessage(record: AskMessageRecord): Promise<void> {
+  const params = {
+    TableName: "AskConversationTable",
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
 }
 
 export async function updateMeetingTags(

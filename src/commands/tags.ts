@@ -9,10 +9,10 @@ import {
 import { getMeeting } from "../meetings";
 import { normalizeTags, parseTags, topTags } from "../utils/tags";
 import {
-  getMeetingHistory,
-  getRecentMeetingsForGuild,
-  updateMeetingTags,
-} from "../db";
+  getMeetingHistoryService,
+  listRecentMeetingsForGuildService,
+  updateMeetingTagsService,
+} from "../services/meetingHistoryService";
 
 const TAG_MODAL_ID = "edit_tags_modal";
 const TAG_INPUT_ID = "tags_input";
@@ -41,7 +41,10 @@ export async function handleEditTagsButton(interaction: ButtonInteraction) {
   let suggested = "";
   if (interaction.guildId) {
     try {
-      const recent = await getRecentMeetingsForGuild(interaction.guildId, 50);
+      const recent = await listRecentMeetingsForGuildService(
+        interaction.guildId,
+        50,
+      );
       const top = topTags(recent, 8);
       if (top.length) {
         suggested = `Common tags: ${top.join(", ")}`;
@@ -113,7 +116,7 @@ export async function handleEditTagsHistoryButton(
   const encoded = parts[2];
   const channelIdTimestamp = Buffer.from(encoded, "base64").toString("utf-8");
 
-  const history = await getMeetingHistory(
+  const history = await getMeetingHistoryService(
     interaction.guildId!,
     channelIdTimestamp,
   );
@@ -149,7 +152,7 @@ export async function handleEditTagsHistoryModal(
   const raw = interaction.fields.getTextInputValue(TAG_INPUT_ID);
   const tags = normalizeTags(parseTags(raw)) || [];
 
-  await updateMeetingTags(
+  await updateMeetingTagsService(
     interaction.guildId!,
     channelIdTimestamp,
     tags.length ? tags : [],

@@ -1,6 +1,5 @@
 import {
   AppShell,
-  Box,
   Center,
   Container,
   Loader,
@@ -16,6 +15,18 @@ import SiteHeader from "../components/SiteHeader";
 import SiteNavbar from "../components/SiteNavbar";
 import { useAuth } from "../contexts/AuthContext";
 import { useGuildContext } from "../contexts/GuildContext";
+import {
+  appBackground,
+  pagePaddingX,
+  pagePaddingY,
+  pagePaddingYCompact,
+  portalBackground,
+  shellBorder,
+  shellFooterBackground,
+  shellHeaderBackground,
+  shellHeights,
+  shellShadow,
+} from "../uiTokens";
 
 export default function PortalLayout() {
   const [navbarOpened, navbarHandlers] = useDisclosure(false);
@@ -24,9 +35,13 @@ export default function PortalLayout() {
   const theme = useMantineTheme();
   const colorScheme = useComputedColorScheme("dark");
   const isDark = colorScheme === "dark";
+  const portalBackgroundImage = portalBackground(isDark);
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
+  const showNavbar = !pathname.startsWith("/portal/select-server");
+  const useInnerScroll =
+    pathname.startsWith("/portal/server/") && pathname.endsWith("/ask");
 
   if (authState === "unauthenticated") {
     return <Navigate to="/" />;
@@ -36,22 +51,30 @@ export default function PortalLayout() {
     return (
       <AppShell
         padding={0}
-        header={{ height: 72 }}
+        header={{ height: shellHeights.header }}
+        footer={{ height: shellHeights.footer }}
+        style={{
+          height: "100vh",
+          overflow: "hidden",
+          backgroundColor: appBackground(theme, isDark),
+          backgroundImage: portalBackgroundImage,
+        }}
         styles={{
           header: {
-            borderBottom: `1px solid ${
-              isDark ? theme.colors.dark[4] : theme.colors.gray[2]
-            }`,
-            backgroundColor: isDark
-              ? "rgba(12, 15, 24, 0.92)"
-              : "rgba(255, 255, 255, 0.92)",
+            borderBottom: shellBorder(theme, isDark),
+            backgroundColor: shellHeaderBackground(isDark),
             backdropFilter: "blur(16px)",
-            boxShadow: isDark
-              ? "0 12px 40px rgba(0,0,0,0.35)"
-              : "0 12px 40px rgba(15,23,42,0.08)",
+            boxShadow: shellShadow(isDark),
           },
           main: {
-            backgroundColor: isDark ? "#0b1020" : theme.colors.gray[0],
+            overflow: useInnerScroll ? "hidden" : "auto",
+            height:
+              "calc(100dvh - var(--app-shell-header-offset) - var(--app-shell-footer-offset))",
+          },
+          footer: {
+            borderTop: shellBorder(theme, isDark),
+            backgroundColor: shellFooterBackground(isDark),
+            backdropFilter: "blur(16px)",
           },
         }}
       >
@@ -60,27 +83,38 @@ export default function PortalLayout() {
             showNavbarToggle={false}
             navbarOpened={false}
             onNavbarToggle={() => {}}
+            context={showNavbar ? "portal" : "portal-select"}
           />
         </AppShell.Header>
         <AppShell.Main>
-          <Box
-            py={{ base: "xl", md: "xl" }}
+          <Container
+            size="xl"
+            px={pagePaddingX}
+            pt={pagePaddingY}
+            pb={{
+              base: useInnerScroll
+                ? pagePaddingYCompact.base
+                : pagePaddingY.base,
+              md: useInnerScroll ? pagePaddingYCompact.md : pagePaddingY.md,
+            }}
             style={{
-              backgroundImage: isDark
-                ? "radial-gradient(920px 420px at 12% -12%, rgba(99, 102, 241, 0.32), transparent 60%), radial-gradient(820px 380px at 85% -18%, rgba(168, 85, 247, 0.24), transparent 60%), radial-gradient(600px 240px at 55% 0%, rgba(34, 211, 238, 0.18), transparent 60%)"
-                : "radial-gradient(920px 420px at 12% -12%, rgba(99, 102, 241, 0.14), transparent 60%), radial-gradient(820px 380px at 85% -18%, rgba(168, 85, 247, 0.12), transparent 60%), radial-gradient(600px 240px at 55% 0%, rgba(34, 211, 238, 0.1), transparent 60%)",
+              display: useInnerScroll ? "flex" : "block",
+              flexDirection: useInnerScroll ? "column" : undefined,
+              minHeight: 0,
+              height: useInnerScroll ? "100%" : undefined,
             }}
           >
-            <Container size="xl" px={{ base: "md", md: "lg" }}>
-              <Center py="xl">
-                <Stack gap="xs" align="center">
-                  <Loader color="brand" />
-                  <Text c="dimmed">Loading your portal...</Text>
-                </Stack>
-              </Center>
-            </Container>
-          </Box>
+            <Center py="xl">
+              <Stack gap="xs" align="center">
+                <Loader color="brand" />
+                <Text c="dimmed">Loading your portal...</Text>
+              </Stack>
+            </Center>
+          </Container>
         </AppShell.Main>
+        <AppShell.Footer>
+          <SiteFooter variant="compact" />
+        </AppShell.Footer>
       </AppShell>
     );
   }
@@ -88,55 +122,77 @@ export default function PortalLayout() {
   return (
     <AppShell
       padding={0}
-      header={{ height: 72 }}
-      navbar={{
-        width: 300,
-        breakpoint: "sm",
-        collapsed: { mobile: !navbarOpened },
+      header={{ height: shellHeights.header }}
+      footer={{ height: shellHeights.footer }}
+      style={{
+        height: "100vh",
+        overflow: "hidden",
+        backgroundColor: appBackground(theme, isDark),
+        backgroundImage: portalBackgroundImage,
       }}
+      navbar={
+        showNavbar
+          ? {
+              width: 300,
+              breakpoint: "sm",
+              collapsed: { mobile: !navbarOpened },
+            }
+          : undefined
+      }
       styles={{
         header: {
-          borderBottom: `1px solid ${
-            isDark ? theme.colors.dark[4] : theme.colors.gray[2]
-          }`,
-          backgroundColor: isDark
-            ? "rgba(12, 15, 24, 0.92)"
-            : "rgba(255, 255, 255, 0.92)",
+          borderBottom: shellBorder(theme, isDark),
+          backgroundColor: shellHeaderBackground(isDark),
           backdropFilter: "blur(16px)",
-          boxShadow: isDark
-            ? "0 12px 40px rgba(0,0,0,0.35)"
-            : "0 12px 40px rgba(15,23,42,0.08)",
+          boxShadow: shellShadow(isDark),
         },
         main: {
-          backgroundColor: isDark ? "#0b1020" : theme.colors.gray[0],
+          overflow: useInnerScroll ? "hidden" : "auto",
+          height:
+            "calc(100dvh - var(--app-shell-header-offset) - var(--app-shell-footer-offset))",
+        },
+        footer: {
+          borderTop: shellBorder(theme, isDark),
+          backgroundColor: shellFooterBackground(isDark),
+          backdropFilter: "blur(16px)",
         },
       }}
     >
       <AppShell.Header p="md">
         <SiteHeader
-          showNavbarToggle
+          showNavbarToggle={showNavbar}
           navbarOpened={navbarOpened}
           onNavbarToggle={navbarHandlers.toggle}
+          context={showNavbar ? "portal" : "portal-select"}
         />
       </AppShell.Header>
-      <AppShell.Navbar p={0}>
-        <SiteNavbar onClose={navbarHandlers.close} pathname={pathname} />
-      </AppShell.Navbar>
+      {showNavbar ? (
+        <AppShell.Navbar p={0}>
+          <SiteNavbar onClose={navbarHandlers.close} pathname={pathname} />
+        </AppShell.Navbar>
+      ) : null}
       <AppShell.Main>
-        <Box
-          py={{ base: "xl", md: "xl" }}
+        <Container
+          size="xl"
+          px={pagePaddingX}
+          pt={pagePaddingY}
+          pb={{
+            base: useInnerScroll ? pagePaddingYCompact.base : pagePaddingY.base,
+            md: useInnerScroll ? pagePaddingYCompact.md : pagePaddingY.md,
+          }}
           style={{
-            backgroundImage: isDark
-              ? "radial-gradient(920px 420px at 12% -12%, rgba(99, 102, 241, 0.32), transparent 60%), radial-gradient(820px 380px at 85% -18%, rgba(168, 85, 247, 0.24), transparent 60%), radial-gradient(600px 240px at 55% 0%, rgba(34, 211, 238, 0.18), transparent 60%)"
-              : "radial-gradient(920px 420px at 12% -12%, rgba(99, 102, 241, 0.14), transparent 60%), radial-gradient(820px 380px at 85% -18%, rgba(168, 85, 247, 0.12), transparent 60%), radial-gradient(600px 240px at 55% 0%, rgba(34, 211, 238, 0.1), transparent 60%)",
+            display: useInnerScroll ? "flex" : "block",
+            flexDirection: useInnerScroll ? "column" : undefined,
+            minHeight: 0,
+            height: useInnerScroll ? "100%" : undefined,
           }}
         >
-          <Container size="xl" px={{ base: "md", md: "lg" }}>
-            <Outlet />
-          </Container>
-          <SiteFooter />
-        </Box>
+          <Outlet />
+        </Container>
       </AppShell.Main>
+      <AppShell.Footer>
+        <SiteFooter variant="compact" />
+      </AppShell.Footer>
     </AppShell>
   );
 }

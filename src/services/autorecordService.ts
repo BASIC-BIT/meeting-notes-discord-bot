@@ -1,19 +1,22 @@
-import {
-  deleteAutoRecordSetting,
-  getAllAutoRecordSettings,
-  writeAutoRecordSetting,
-} from "../db";
+import { getAutoRecordRepository } from "../repositories/autoRecordRepository";
 import { nowIso } from "../utils/time";
 import { AutoRecordSettings } from "../types/db";
 
 export async function listAutoRecordSettings(guildId: string) {
-  return getAllAutoRecordSettings(guildId);
+  return getAutoRecordRepository().listByGuild(guildId);
+}
+
+export async function getAutoRecordSettingByChannel(
+  guildId: string,
+  channelId: string,
+) {
+  return getAutoRecordRepository().getByGuildChannel(guildId, channelId);
 }
 
 export async function saveAutoRecordSetting(params: {
   guildId: string;
   channelId: string;
-  textChannelId: string;
+  textChannelId?: string;
   enabled: boolean;
   recordAll: boolean;
   createdBy: string;
@@ -23,7 +26,7 @@ export async function saveAutoRecordSetting(params: {
     ...params,
     createdAt: nowIso(),
   };
-  await writeAutoRecordSetting(setting);
+  await getAutoRecordRepository().write(setting);
   return setting;
 }
 
@@ -31,5 +34,5 @@ export async function removeAutoRecordSetting(
   guildId: string,
   channelId: string,
 ) {
-  await deleteAutoRecordSetting(guildId, channelId);
+  await getAutoRecordRepository().remove(guildId, channelId);
 }

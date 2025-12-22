@@ -9,15 +9,21 @@ type PageHeaderProps = {
 export function PageHeader({ title, description, badge }: PageHeaderProps) {
   return (
     <Stack gap="xs">
-      <Group align="center" gap="sm">
-        <Title order={2}>{title}</Title>
-        {badge ? (
-          <Badge variant="light" color="cyan">
-            {badge}
-          </Badge>
+      <Group justify="space-between" align="baseline" gap="sm" wrap="wrap">
+        <Group align="center" gap="sm">
+          <Title order={2}>{title}</Title>
+          {badge ? (
+            <Badge variant="light" color="cyan">
+              {badge}
+            </Badge>
+          ) : null}
+        </Group>
+        {description ? (
+          <Text size="sm" c="dimmed" ta="right" lineClamp={1} truncate="end">
+            {description}
+          </Text>
         ) : null}
       </Group>
-      {description ? <Text c="dimmed">{description}</Text> : null}
     </Stack>
   );
 }

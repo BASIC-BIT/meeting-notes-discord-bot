@@ -45,6 +45,8 @@ const config: Config.InitialOptions = {
   moduleNameMapper: {
     "\\.(css|less|scss|sass)$": "identity-obj-proxy",
     "\\.(jpg|jpeg|png|gif|svg)$": "<rootDir>/test/__mocks__/fileMock.js",
+    "^react-markdown$": "<rootDir>/test/__mocks__/reactMarkdown.tsx",
+    "^remark-gfm$": "<rootDir>/test/__mocks__/remarkGfm.ts",
   },
 
   // A map from regular expressions to paths to transformers

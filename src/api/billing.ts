@@ -1,11 +1,12 @@
 import express from "express";
 import Stripe from "stripe";
-import { writeGuildSubscription, writePaymentTransaction } from "../db";
 import {
   buildBillingDisabledSnapshot,
   createCheckoutSession,
   createPortalSession,
   getBillingSnapshot,
+  recordPaymentTransaction,
+  saveGuildSubscription,
 } from "../services/billingService";
 import { config } from "../services/configService";
 
@@ -131,7 +132,7 @@ export function registerBillingRoutes(
             const sub = await stripe.subscriptions.retrieve(
               session.subscription as string,
             );
-            await writeGuildSubscription({
+            await saveGuildSubscription({
               guildId,
               status: sub.status,
               tier: "basic",
@@ -170,7 +171,7 @@ export function registerBillingRoutes(
             (invoice.metadata as Record<string, string> | undefined)
               ?.guild_id || "";
           if (guildId) {
-            await writeGuildSubscription({
+            await saveGuildSubscription({
               guildId,
               status: "past_due",
               tier: "basic",
@@ -198,7 +199,7 @@ export function registerBillingRoutes(
             (subscription.metadata as Record<string, string> | undefined)
               ?.guild_id || "";
           if (guildId) {
-            await writeGuildSubscription({
+            await saveGuildSubscription({
               guildId,
               status: "canceled",
               tier: "free",
@@ -224,7 +225,7 @@ export function registerBillingRoutes(
           const guildId =
             (invoice.metadata as Record<string, string> | undefined)
               ?.guild_id || "";
-          await writePaymentTransaction({
+          await recordPaymentTransaction({
             transactionID: invoice.id,
             userID: guildId || "",
             amount: (invoice.amount_paid || 0) / 100,

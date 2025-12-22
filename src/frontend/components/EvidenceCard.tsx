@@ -21,7 +21,7 @@ export function EvidenceCard({
   return (
     <Surface p="md">
       <Group align="flex-start" gap="sm" wrap="nowrap">
-        <ThemeIcon variant="light" color="gray" radius="md" size={34}>
+        <ThemeIcon variant="light" color="gray" size={34}>
           <IconQuote size={16} />
         </ThemeIcon>
         <Stack gap={6} style={{ flex: 1 }}>

@@ -1,5 +1,5 @@
 import { MeetingData } from "../types/meeting-data";
-import { getRecentMeetingsForGuild } from "../db";
+import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
 import { config } from "./configService";
 import { normalizeTags } from "../utils/tags";
 
@@ -60,7 +60,7 @@ export async function buildLiveResponderContext(
 
   // Past meetings: filter by tags if present, then by same channel, then recency
   const maxPast = config.liveVoice.pastMeetingsMax;
-  let pastMeetings = await getRecentMeetingsForGuild(
+  let pastMeetings = await listRecentMeetingsForGuildService(
     meeting.guildId,
     maxPast * 2, // overfetch a bit then trim
   );
@@ -82,9 +82,8 @@ export async function buildLiveResponderContext(
     const date = new Date(m.timestamp).toLocaleDateString();
     const tagText = m.tags?.length ? `Tags: ${m.tags.join(", ")}` : "";
     const summary =
-      (m.notes || m.transcript || "")
-        .trim()
-        .slice(0, config.liveVoice.pastMeetingsMaxChars) || "(no notes)";
+      (m.notes || "").trim().slice(0, config.liveVoice.pastMeetingsMaxChars) ||
+      "(no notes)";
     const sourceLink =
       m.notesChannelId && m.notesMessageIds?.length
         ? `https://discord.com/channels/${meeting.guildId}/${m.notesChannelId}/${m.notesMessageIds[0]}`

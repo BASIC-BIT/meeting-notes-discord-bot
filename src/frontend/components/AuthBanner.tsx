@@ -10,7 +10,6 @@ export function AuthBanner({ message }: { message?: string }) {
       icon={<IconAlertTriangle size={18} />}
       title="Connect Discord"
       variant="light"
-      radius="md"
     >
       <Group justify="space-between" align="center" wrap="wrap">
         <span>

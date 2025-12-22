@@ -1,4 +1,5 @@
-import { getRecentMeetingsForGuild, getGuildSubscription } from "../db";
+import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
+import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
 import { config } from "./configService";
 
 export type Tier = "free" | "basic";
@@ -74,7 +75,7 @@ export async function resolveGuildSubscription(
     return sub;
   }
 
-  const subscription = await getGuildSubscription(guildId);
+  const subscription = await getSubscriptionRepository().get(guildId);
   const status = subscription?.status || "free";
   const paidStatuses = new Set(["active", "trialing", "past_due"]);
   const tier: Tier = paidStatuses.has(status) ? "basic" : "free";
@@ -107,7 +108,7 @@ export async function getTodayMeetingCount(
   guildId: string,
   lookback: number,
 ): Promise<number> {
-  const recent = await getRecentMeetingsForGuild(
+  const recent = await listRecentMeetingsForGuildService(
     guildId,
     Math.max(lookback, 10),
   );

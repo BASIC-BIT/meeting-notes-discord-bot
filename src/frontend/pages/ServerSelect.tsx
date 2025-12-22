@@ -1,6 +1,16 @@
-import { Button, Group, Loader, SimpleGrid, Stack, Text } from "@mantine/core";
-import { IconArrowRight } from "@tabler/icons-react";
+import {
+  Button,
+  Group,
+  Loader,
+  ScrollArea,
+  SimpleGrid,
+  Stack,
+  Text,
+  TextInput,
+} from "@mantine/core";
+import { IconArrowRight, IconSearch } from "@tabler/icons-react";
 import { useNavigate } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
@@ -11,6 +21,19 @@ export default function ServerSelect() {
     useGuildContext();
   const navigate = useNavigate();
   const setLastServerId = usePortalStore((state) => state.setLastServerId);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    if (selectedGuildId) {
+      setSelectedGuildId(null);
+    }
+  }, [selectedGuildId, setSelectedGuildId]);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return guilds;
+    const needle = query.toLowerCase();
+    return guilds.filter((guild) => guild.name.toLowerCase().includes(needle));
+  }, [guilds, query]);
 
   if (loading) {
     return (
@@ -42,33 +65,49 @@ export default function ServerSelect() {
         title="Choose a server"
         description="Pick the server you want to manage and explore in the Chronote library."
       />
-      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-        {guilds.map((guild) => (
-          <Surface key={guild.id} p="lg" tone="soft">
-            <Stack gap="sm">
-              <Text fw={600}>{guild.name}</Text>
-              <Text size="sm" c="dimmed">
-                Manage notes, search, and billing for this server.
-              </Text>
-              <Button
-                variant={selectedGuildId === guild.id ? "light" : "outline"}
-                color="brand"
-                rightSection={<IconArrowRight size={16} />}
-                onClick={() => {
-                  setSelectedGuildId(guild.id);
-                  setLastServerId(guild.id);
-                  navigate({
-                    to: "/portal/server/$serverId/library",
-                    params: { serverId: guild.id },
-                  });
-                }}
-              >
-                Open server
-              </Button>
-            </Stack>
+      <TextInput
+        placeholder="Search servers"
+        value={query}
+        onChange={(event) => setQuery(event.currentTarget.value)}
+        leftSection={<IconSearch size={14} />}
+      />
+      <ScrollArea offsetScrollbars type="auto" style={{ maxHeight: "60vh" }}>
+        {filtered.length === 0 ? (
+          <Surface p="lg" tone="soft">
+            <Text size="sm" c="dimmed">
+              No servers match that search.
+            </Text>
           </Surface>
-        ))}
-      </SimpleGrid>
+        ) : (
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+            {filtered.map((guild) => (
+              <Surface key={guild.id} p="lg" tone="soft">
+                <Stack gap="sm">
+                  <Text fw={600}>{guild.name}</Text>
+                  <Text size="sm" c="dimmed">
+                    Manage notes, search, and billing for this server.
+                  </Text>
+                  <Button
+                    variant={selectedGuildId === guild.id ? "light" : "outline"}
+                    color="brand"
+                    rightSection={<IconArrowRight size={16} />}
+                    onClick={() => {
+                      setSelectedGuildId(guild.id);
+                      setLastServerId(guild.id);
+                      navigate({
+                        to: "/portal/server/$serverId/library",
+                        params: { serverId: guild.id },
+                      });
+                    }}
+                  >
+                    Open server
+                  </Button>
+                </Stack>
+              </Surface>
+            ))}
+          </SimpleGrid>
+        )}
+      </ScrollArea>
     </Stack>
   );
 }

@@ -28,6 +28,13 @@ import PricingCard from "../components/PricingCard";
 import Section from "../components/Section";
 import Surface from "../components/Surface";
 import EvidenceCard from "../components/EvidenceCard";
+import {
+  heroBackground,
+  uiBorders,
+  uiColors,
+  uiEffects,
+  uiTypography,
+} from "../uiTokens";
 
 const features = [
   {
@@ -115,25 +122,21 @@ export default function Home() {
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
 
-  const heroBackground = isDark
-    ? "radial-gradient(900px 360px at 10% -10%, rgba(34, 211, 238, 0.24), transparent 60%), radial-gradient(900px 380px at 90% -20%, rgba(168, 85, 247, 0.26), transparent 60%), linear-gradient(135deg, rgba(94, 100, 242, 0.42), rgba(12, 15, 24, 0.22))"
-    : "radial-gradient(900px 360px at 10% -10%, rgba(34, 211, 238, 0.14), transparent 60%), radial-gradient(900px 380px at 90% -20%, rgba(168, 85, 247, 0.14), transparent 60%), linear-gradient(135deg, rgba(94, 100, 242, 0.16), rgba(255, 255, 255, 0.6))";
+  const heroBackgroundImage = heroBackground(isDark);
 
   return (
     <Stack gap="xl">
       <Surface
         tone="raised"
         p={{ base: "lg", md: "xl" }}
-        style={{ backgroundImage: heroBackground }}
+        style={{ backgroundImage: heroBackgroundImage }}
       >
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
           <Stack gap="md">
             <Text
               size="xs"
-              tt="uppercase"
-              fw={700}
               c={isDark ? "cyan.3" : "cyan.7"}
-              style={{ letterSpacing: "0.14em" }}
+              style={uiTypography.heroKicker}
             >
               Discord voice logbook
             </Text>
@@ -165,7 +168,7 @@ export default function Home() {
             </Group>
             <Group gap="lg" wrap="wrap">
               <Group gap={8} wrap="nowrap">
-                <ThemeIcon variant="light" color="cyan" radius="md" size={26}>
+                <ThemeIcon variant="light" color="cyan" size={26}>
                   <IconMicrophone size={14} />
                 </ThemeIcon>
                 <Stack gap={0}>
@@ -178,7 +181,7 @@ export default function Home() {
                 </Stack>
               </Group>
               <Group gap={8} wrap="nowrap">
-                <ThemeIcon variant="light" color="cyan" radius="md" size={26}>
+                <ThemeIcon variant="light" color="cyan" size={26}>
                   <IconQuote size={14} />
                 </ThemeIcon>
                 <Stack gap={0}>
@@ -191,7 +194,7 @@ export default function Home() {
                 </Stack>
               </Group>
               <Group gap={8} wrap="nowrap">
-                <ThemeIcon variant="light" color="cyan" radius="md" size={26}>
+                <ThemeIcon variant="light" color="cyan" size={26}>
                   <IconTimeline size={14} />
                 </ThemeIcon>
                 <Stack gap={0}>
@@ -209,7 +212,7 @@ export default function Home() {
             <Surface p="md">
               <Stack gap="sm">
                 <Group gap="sm">
-                  <ThemeIcon color="cyan" variant="light" radius="md">
+                  <ThemeIcon color="cyan" variant="light">
                     <IconTimeline size={18} />
                   </ThemeIcon>
                   <Text fw={600}>Notes in Discord</Text>
@@ -218,9 +221,7 @@ export default function Home() {
                   p="md"
                   tone="soft"
                   style={{
-                    borderLeftWidth: 4,
-                    borderLeftStyle: "solid",
-                    borderLeftColor: "var(--mantine-color-cyan-5)",
+                    boxShadow: uiEffects.accentInset,
                   }}
                 >
                   <Stack gap={6}>
@@ -245,7 +246,7 @@ export default function Home() {
             <Surface p="md">
               <Stack gap="xs">
                 <Group gap="sm">
-                  <ThemeIcon color="brand" variant="light" radius="md">
+                  <ThemeIcon color="brand" variant="light">
                     <IconSparkles size={18} />
                   </ThemeIcon>
                   <Text fw={600}>Quote + context</Text>
@@ -324,7 +325,7 @@ export default function Home() {
           {howItWorks.map((step) => (
             <Surface key={step.step} p="lg" tone="soft">
               <Stack gap="xs">
-                <Text size="xs" fw={700} c="cyan.3" tt="uppercase">
+                <Text size="xs" c="cyan.3" style={uiTypography.stepKicker}>
                   {step.step}
                 </Text>
                 <Title order={4}>{step.title}</Title>
@@ -344,7 +345,7 @@ export default function Home() {
           <Surface p="lg" tone="soft">
             <Stack gap="sm">
               <Group gap="sm">
-                <ThemeIcon variant="light" color="cyan" radius="md">
+                <ThemeIcon variant="light" color="cyan">
                   <IconSearch size={18} />
                 </ThemeIcon>
                 <Text fw={600}>Search across sessions</Text>
@@ -363,7 +364,7 @@ export default function Home() {
           <Surface p="lg" tone="soft">
             <Stack gap="sm">
               <Group gap="sm">
-                <ThemeIcon variant="light" color="brand" radius="md">
+                <ThemeIcon variant="light" color="brand">
                   <IconSparkles size={18} />
                 </ThemeIcon>
                 <Text fw={600}>Structured summaries</Text>
@@ -392,6 +393,7 @@ export default function Home() {
             name="Free"
             price="$0"
             description="Great for lightweight teams and one-off sessions."
+            badge="Free forever"
             features={[
               "Up to 4 hours per week",
               "Up to 90 minutes per meeting",
@@ -428,8 +430,8 @@ export default function Home() {
             ctaDisabled
             badge="Unlimited meetings"
             tone="raised"
-            borderColor="var(--mantine-color-cyan-5)"
-            borderWidth={2}
+            borderColor={uiColors.accentBorder}
+            borderWidth={uiBorders.accentWidth}
           />
         </SimpleGrid>
       </Section>

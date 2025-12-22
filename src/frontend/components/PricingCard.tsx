@@ -12,6 +12,7 @@ import {
 import { IconCheck } from "@tabler/icons-react";
 import type { MouseEventHandler } from "react";
 import Surface from "./Surface";
+import { uiBorders, uiColors } from "../uiTokens";
 
 type ButtonVariant =
   | "filled"
@@ -67,9 +68,11 @@ export function PricingCard({
     (highlighted ? { from: "brand", to: "violet" } : undefined);
   const buttonDisabled = ctaDisabled ?? ctaProps?.disabled ?? false;
   const computedTone = tone ?? (highlighted ? "raised" : "default");
-  const computedBorderWidth = borderWidth ?? (highlighted ? 2 : 1);
+  const computedBorderWidth =
+    borderWidth ??
+    (highlighted ? uiBorders.highlightWidth : uiBorders.defaultWidth);
   const computedBorderColor =
-    borderColor ?? (highlighted ? "var(--mantine-color-brand-6)" : undefined);
+    borderColor ?? (highlighted ? uiColors.highlightBorder : undefined);
   const badgeColor = highlighted ? "brand" : "cyan";
   return (
     <Surface
@@ -85,15 +88,15 @@ export function PricingCard({
     >
       <Stack gap="md" style={{ flex: 1 }}>
         <Stack gap={6}>
-          {badgeLabel ? (
-            <Badge
-              variant={highlighted ? "filled" : "light"}
-              color={badgeColor}
-              w="fit-content"
-            >
-              {badgeLabel}
-            </Badge>
-          ) : null}
+          <Badge
+            variant={highlighted ? "filled" : "light"}
+            color={badgeColor}
+            w="fit-content"
+            style={{ visibility: badgeLabel ? "visible" : "hidden" }}
+            aria-hidden={!badgeLabel}
+          >
+            {badgeLabel ?? "placeholder"}
+          </Badge>
           <Title order={3}>{name}</Title>
           <Text c="dimmed">{description}</Text>
         </Stack>
@@ -109,11 +112,7 @@ export function PricingCard({
           spacing="xs"
           size="sm"
           icon={
-            <ThemeIcon
-              color={highlighted ? "brand" : "gray"}
-              radius="xl"
-              size={20}
-            >
+            <ThemeIcon color={highlighted ? "brand" : "gray"} size={20}>
               <IconCheck size={12} />
             </ThemeIcon>
           }

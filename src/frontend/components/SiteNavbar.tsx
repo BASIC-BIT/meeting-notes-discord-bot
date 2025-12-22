@@ -23,6 +23,7 @@ import type { ComponentType } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAuth } from "../contexts/AuthContext";
 import { useGuildContext } from "../contexts/GuildContext";
+import { uiRadii } from "../uiTokens";
 
 type SiteNavbarProps = {
   onClose?: () => void;
@@ -112,6 +113,7 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
             const Icon = item.icon;
             const isActive = pathname.includes(`/${item.value}`);
             const disabled = item.requiresAuth && authState !== "authenticated";
+            const navRadius = theme.radius[uiRadii.control];
             return (
               <NavLink
                 key={item.value}
@@ -120,7 +122,6 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
                   <ThemeIcon
                     variant={isActive ? "light" : "transparent"}
                     color={isActive ? "brand" : "gray"}
-                    radius="md"
                     size={34}
                   >
                     <Icon size={18} />
@@ -133,7 +134,7 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
                   onClose?.();
                 }}
                 style={{
-                  borderRadius: 12,
+                  borderRadius: navRadius,
                 }}
               />
             );
@@ -147,19 +148,14 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
             label="Support"
             description="Docs and quick help"
             leftSection={
-              <ThemeIcon
-                variant="transparent"
-                color="gray"
-                radius="md"
-                size={34}
-              >
+              <ThemeIcon variant="transparent" color="gray" size={34}>
                 <IconMessageCircle size={18} />
               </ThemeIcon>
             }
             onClick={() =>
               window.open("https://meetingnotes.basicbit.net", "_blank")
             }
-            style={{ borderRadius: 12 }}
+            style={{ borderRadius: theme.radius[uiRadii.control] }}
           />
         </Stack>
       </Stack>

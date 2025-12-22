@@ -3,11 +3,18 @@ import dotenv from "dotenv";
 // Load environment variables once
 dotenv.config();
 
+const isMockMode =
+  process.env.MOCK_MODE === "true" || process.argv.includes("--mock");
+
 /**
  * Centralized configuration service
  * All environment variable access should go through this service
  */
 class ConfigService {
+  readonly mock = {
+    enabled: isMockMode,
+  };
+
   // Discord Configuration
   readonly discord = {
     botToken: process.env.DISCORD_BOT_TOKEN!,
@@ -99,7 +106,7 @@ class ConfigService {
     port: parseInt(process.env.PORT || "3001", 10),
     nodeEnv: process.env.NODE_ENV || "development",
     oauthSecret: process.env.OAUTH_SECRET || "",
-    oauthEnabled: process.env.ENABLE_OAUTH !== "false",
+    oauthEnabled: process.env.ENABLE_OAUTH !== "false" && !this.mock.enabled,
     onboardingEnabled: process.env.ENABLE_ONBOARDING === "true",
     npmPackageVersion: process.env.npm_package_version || "unknown",
     sessionTtlSeconds: parseInt(
@@ -142,11 +149,13 @@ class ConfigService {
   }
 
   private validateConfig() {
-    const required = [
-      { name: "DISCORD_BOT_TOKEN", value: this.discord.botToken },
-      { name: "DISCORD_CLIENT_ID", value: this.discord.clientId },
-      { name: "OPENAI_API_KEY", value: this.openai.apiKey },
-    ];
+    const required = this.mock.enabled
+      ? []
+      : [
+          { name: "DISCORD_BOT_TOKEN", value: this.discord.botToken },
+          { name: "DISCORD_CLIENT_ID", value: this.discord.clientId },
+          { name: "OPENAI_API_KEY", value: this.openai.apiKey },
+        ];
 
     // Only require OAuth-related secrets if OAuth is enabled (default true)
     if (this.server.oauthEnabled) {

@@ -140,14 +140,7 @@ export async function uploadMeetingArtifacts(
 
   // Transcript
   if (opts.transcriptText) {
-    const transcriptTxtKey = `${folder}transcript.txt`;
     const transcriptJsonKey = `${folder}transcript.json`;
-
-    await uploadObjectToS3(
-      transcriptTxtKey,
-      opts.transcriptText,
-      "text/plain; charset=utf-8",
-    );
 
     await uploadObjectToS3(
       transcriptJsonKey,
@@ -159,6 +152,6 @@ export async function uploadMeetingArtifacts(
       "application/json",
     );
 
-    meeting.transcriptS3Key = transcriptTxtKey;
+    meeting.transcriptS3Key = transcriptJsonKey;
   }
 }

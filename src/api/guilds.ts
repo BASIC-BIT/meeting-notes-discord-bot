@@ -80,7 +80,11 @@ export function registerGuildRoutes(app: express.Express) {
         return;
       }
       const ctx = await fetchServerContext(guildId);
-      res.json({ context: ctx?.context ?? "" });
+      res.json({
+        context: ctx?.context ?? "",
+        defaultNotesChannelId: ctx?.defaultNotesChannelId ?? null,
+        defaultTags: ctx?.defaultTags ?? [],
+      });
     },
   );
 
@@ -97,12 +101,23 @@ export function registerGuildRoutes(app: express.Express) {
       if (!(await ensureBotPresence(req, res, guildId))) {
         return;
       }
-      const { context } = req.body as { context?: string };
-      if (!context) {
-        res.status(400).json({ error: "context is required" });
+      const { context, defaultNotesChannelId, defaultTags } = req.body as {
+        context?: string;
+        defaultNotesChannelId?: string | null;
+        defaultTags?: string[];
+      };
+      const update = {
+        ...(context !== undefined ? { context } : {}),
+        ...(defaultNotesChannelId !== undefined
+          ? { defaultNotesChannelId }
+          : {}),
+        ...(defaultTags !== undefined ? { defaultTags } : {}),
+      };
+      if (Object.keys(update).length === 0) {
+        res.status(400).json({ error: "No updates provided" });
         return;
       }
-      await setServerContext(guildId, user.id, context);
+      await setServerContext(guildId, user.id, update);
       res.json({ ok: true });
     },
   );
@@ -157,10 +172,6 @@ export function registerGuildRoutes(app: express.Express) {
         textChannelId?: string;
         tags?: string[];
       };
-      if (!textChannelId) {
-        res.status(400).json({ error: "textChannelId is required" });
-        return;
-      }
       if (mode === "one" && !voiceChannelId) {
         res.status(400).json({ error: "voiceChannelId required for mode=one" });
         return;

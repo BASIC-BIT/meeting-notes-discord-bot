@@ -125,6 +125,18 @@ const tables = [
     ],
     BillingMode: "PAY_PER_REQUEST",
   },
+  {
+    TableName: "AskConversationTable",
+    KeySchema: [
+      { AttributeName: "pk", KeyType: "HASH" },
+      { AttributeName: "sk", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "pk", AttributeType: "S" },
+      { AttributeName: "sk", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
 ];
 
 async function waitForDynamoDB(maxRetries = 10, delay = 1000) {

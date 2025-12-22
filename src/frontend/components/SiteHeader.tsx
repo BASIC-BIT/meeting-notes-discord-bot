@@ -19,17 +19,20 @@ import {
 } from "@tabler/icons-react";
 import { Link } from "@tanstack/react-router";
 import { useAuth } from "../contexts/AuthContext";
+import { uiLinks, uiTypography } from "../uiTokens";
 
 type SiteHeaderProps = {
   showNavbarToggle?: boolean;
   navbarOpened: boolean;
   onNavbarToggle: () => void;
+  context?: "marketing" | "portal" | "portal-select";
 };
 
 export function SiteHeader({
   showNavbarToggle = true,
   navbarOpened,
   onNavbarToggle,
+  context = "marketing",
 }: SiteHeaderProps) {
   const theme = useMantineTheme();
   const isMobile = useMediaQuery(`(max-width: ${theme.breakpoints.sm})`);
@@ -37,6 +40,12 @@ export function SiteHeader({
   const computedScheme = useComputedColorScheme("dark");
   const isDark = computedScheme === "dark";
   const { state: authState, loginUrl, loading } = useAuth();
+
+  const showPortalCta = context !== "portal-select";
+  const portalLabel =
+    authState === "authenticated" && context === "portal"
+      ? "Switch server"
+      : "Open portal";
 
   return (
     <Container size="xl" h="100%">
@@ -54,24 +63,19 @@ export function SiteHeader({
               <IconMenu2 size={18} />
             </ActionIcon>
           ) : null}
-          <Link to="/" style={{ textDecoration: "none" }}>
+          <Link to="/" style={uiLinks.plain}>
             <Group gap="sm" align="center" wrap="nowrap">
               <ThemeIcon
                 variant="gradient"
                 gradient={{ from: "brand", to: "violet" }}
-                radius="md"
                 size={34}
               >
                 <IconTimeline size={18} />
               </ThemeIcon>
               <Text
-                fw={850}
                 size={isMobile ? "lg" : "xl"}
-                style={{
-                  letterSpacing: "-0.02em",
-                  color: isDark ? theme.white : theme.colors.dark[9],
-                  lineHeight: 1,
-                }}
+                c={isDark ? "white" : "dark.9"}
+                style={uiTypography.logo}
               >
                 Chronote
               </Text>
@@ -80,24 +84,35 @@ export function SiteHeader({
         </Group>
 
         <Group gap="sm" align="center" wrap="nowrap">
-          {authState === "unauthenticated" ? (
-            <Button
-              component="a"
-              href={loginUrl}
-              variant="light"
-              color="brand"
-              size={isMobile ? "xs" : "sm"}
-              disabled={loading}
-            >
-              Connect Discord
-            </Button>
+          {showPortalCta ? (
+            authState === "authenticated" ? (
+              <Button
+                component={Link}
+                to="/portal/select-server"
+                variant="light"
+                color="brand"
+                size={isMobile ? "xs" : "sm"}
+              >
+                {portalLabel}
+              </Button>
+            ) : (
+              <Button
+                component="a"
+                href={loginUrl}
+                variant="light"
+                color="brand"
+                size={isMobile ? "xs" : "sm"}
+                disabled={loading}
+              >
+                {portalLabel}
+              </Button>
+            )
           ) : null}
           <Tooltip
             label={isDark ? "Switch to light mode" : "Switch to dark mode"}
           >
             <ActionIcon
               variant="outline"
-              radius="md"
               size="lg"
               onClick={() => toggleColorScheme()}
               aria-label="Toggle color scheme"

@@ -7,12 +7,12 @@ import {
   VoiceBasedChannel,
 } from "discord.js";
 import {
-  writeAutoRecordSetting,
-  getAutoRecordSetting,
-  getAllAutoRecordSettings,
-  deleteAutoRecordSetting,
-} from "../db";
-import { AutoRecordSettings } from "../types/db";
+  getAutoRecordSettingByChannel,
+  listAutoRecordSettings,
+  removeAutoRecordSetting,
+  saveAutoRecordSetting,
+} from "../services/autorecordService";
+import { fetchServerContext } from "../services/appContextService";
 import { parseTags } from "../utils/tags";
 
 export async function handleAutoRecordCommand(
@@ -139,19 +139,16 @@ async function handleEnableAutoRecord(
     return;
   }
 
-  const setting: AutoRecordSettings = {
-    guildId: interaction.guild!.id,
-    channelId: voiceChannel.id,
-    textChannelId: textChannel.id,
-    enabled: true,
-    recordAll: false,
-    createdBy: interaction.user.id,
-    createdAt: new Date().toISOString(),
-    tags: parseTags(tagsRaw),
-  };
-
   try {
-    await writeAutoRecordSetting(setting);
+    await saveAutoRecordSetting({
+      guildId: interaction.guild!.id,
+      channelId: voiceChannel.id,
+      textChannelId: textChannel.id,
+      enabled: true,
+      recordAll: false,
+      createdBy: interaction.user.id,
+      tags: parseTags(tagsRaw),
+    });
 
     const embed = new EmbedBuilder()
       .setTitle("Auto-Record Enabled")
@@ -199,7 +196,7 @@ async function handleDisableAutoRecord(
   }
 
   try {
-    const existing = await getAutoRecordSetting(
+    const existing = await getAutoRecordSettingByChannel(
       interaction.guild!.id,
       voiceChannel.id,
     );
@@ -212,7 +209,7 @@ async function handleDisableAutoRecord(
       return;
     }
 
-    await deleteAutoRecordSetting(interaction.guild!.id, voiceChannel.id);
+    await removeAutoRecordSetting(interaction.guild!.id, voiceChannel.id);
 
     const embed = new EmbedBuilder()
       .setTitle("Auto-Record Disabled")
@@ -236,7 +233,10 @@ async function handleDisableAutoRecordAll(
   interaction: ChatInputCommandInteraction,
 ) {
   try {
-    const existing = await getAutoRecordSetting(interaction.guild!.id, "ALL");
+    const existing = await getAutoRecordSettingByChannel(
+      interaction.guild!.id,
+      "ALL",
+    );
 
     if (!existing) {
       await interaction.reply({
@@ -246,7 +246,7 @@ async function handleDisableAutoRecordAll(
       return;
     }
 
-    await deleteAutoRecordSetting(interaction.guild!.id, "ALL");
+    await removeAutoRecordSetting(interaction.guild!.id, "ALL");
 
     const embed = new EmbedBuilder()
       .setTitle("Auto-Record Disabled for All Channels")
@@ -316,20 +316,12 @@ async function handleEnableAllAutoRecord(
     return;
   }
 
-  const setting: AutoRecordSettings = {
-    guildId: interaction.guild!.id,
-    channelId: "ALL",
-    textChannelId: textChannel.id,
-    enabled: true,
-    recordAll: true,
-    createdBy: interaction.user.id,
-    createdAt: new Date().toISOString(),
-    tags: parseTags(tagsRaw),
-  };
-
   try {
     // Check if there's already a record-all setting
-    const existing = await getAutoRecordSetting(interaction.guild!.id, "ALL");
+    const existing = await getAutoRecordSettingByChannel(
+      interaction.guild!.id,
+      "ALL",
+    );
     if (existing) {
       await interaction.reply({
         content:
@@ -339,7 +331,15 @@ async function handleEnableAllAutoRecord(
       return;
     }
 
-    await writeAutoRecordSetting(setting);
+    await saveAutoRecordSetting({
+      guildId: interaction.guild!.id,
+      channelId: "ALL",
+      textChannelId: textChannel.id,
+      enabled: true,
+      recordAll: true,
+      createdBy: interaction.user.id,
+      tags: parseTags(tagsRaw),
+    });
 
     const embed = new EmbedBuilder()
       .setTitle("Auto-Record Enabled for All Channels")
@@ -367,7 +367,9 @@ async function handleEnableAllAutoRecord(
 
 async function handleListAutoRecord(interaction: ChatInputCommandInteraction) {
   try {
-    const settings = await getAllAutoRecordSettings(interaction.guild!.id);
+    const settings = await listAutoRecordSettings(interaction.guild!.id);
+    const serverContext = await fetchServerContext(interaction.guild!.id);
+    const defaultNotesChannelId = serverContext?.defaultNotesChannelId;
 
     if (settings.length === 0) {
       await interaction.reply({
@@ -386,13 +388,15 @@ async function handleListAutoRecord(interaction: ChatInputCommandInteraction) {
       .setTimestamp();
 
     for (const setting of settings) {
+      const resolvedTextChannelId =
+        setting.textChannelId ?? defaultNotesChannelId;
       if (setting.recordAll) {
         const textChannel = interaction.guild!.channels.cache.get(
-          setting.textChannelId,
+          resolvedTextChannelId ?? "",
         );
         embed.addFields({
           name: "📹 All Voice Channels",
-          value: `Text Channel: ${textChannel ? textChannel.name : "Unknown"}\nStatus: ${setting.enabled ? "✅ Enabled" : "❌ Disabled"}`,
+          value: `Text Channel: ${textChannel ? textChannel.name : "Default notes channel"}\nStatus: ${setting.enabled ? "✅ Enabled" : "❌ Disabled"}`,
           inline: false,
         });
       } else {
@@ -400,11 +404,11 @@ async function handleListAutoRecord(interaction: ChatInputCommandInteraction) {
           setting.channelId,
         );
         const textChannel = interaction.guild!.channels.cache.get(
-          setting.textChannelId,
+          resolvedTextChannelId ?? "",
         );
         embed.addFields({
           name: `🎤 ${voiceChannel ? voiceChannel.name : "Unknown Channel"}`,
-          value: `Text Channel: ${textChannel ? textChannel.name : "Unknown"}\nStatus: ${setting.enabled ? "✅ Enabled" : "❌ Disabled"}`,
+          value: `Text Channel: ${textChannel ? textChannel.name : "Default notes channel"}\nStatus: ${setting.enabled ? "✅ Enabled" : "❌ Disabled"}`,
           inline: true,
         });
       }

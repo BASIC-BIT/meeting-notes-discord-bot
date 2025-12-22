@@ -1,5 +1,6 @@
 import { Group, Stack, Text } from "@mantine/core";
 import Surface from "./Surface";
+import { uiTypography } from "../uiTokens";
 
 type MetricCardProps = {
   label: string;
@@ -13,7 +14,7 @@ export function MetricCard({ label, value, helper, trend }: MetricCardProps) {
     <Surface p="md" tone="soft">
       <Stack gap={4}>
         <Group justify="space-between" align="center">
-          <Text size="xs" c="dimmed" tt="uppercase" fw={600}>
+          <Text size="xs" c="dimmed" style={uiTypography.metricLabel}>
             {label}
           </Text>
           {trend ? (

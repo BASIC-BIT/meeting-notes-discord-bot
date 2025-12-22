@@ -10,10 +10,11 @@ import { registerGuildRoutes } from "./api/guilds";
 import { config } from "./services/configService";
 import { DynamoSessionStore } from "./services/sessionStore";
 import { getStripeClient } from "./services/stripeClient";
-import { writeGuildInstaller } from "./db";
+import { saveGuildInstaller } from "./services/guildInstallerService";
 import { metricsMiddleware, metricsRegistry } from "./metrics";
 import { appRouter } from "./trpc/router";
 import { createContext } from "./trpc/context";
+import { getMockUser } from "./repositories/mockStore";
 
 export function setupWebServer() {
   const app = express();
@@ -21,6 +22,15 @@ export function setupWebServer() {
 
   // Trust first proxy (needed for secure cookies behind ALB/CloudFront)
   app.set("trust proxy", 1);
+
+  if (config.mock.enabled) {
+    app.use((req, _res, next) => {
+      (req as typeof req & { user?: unknown }).user = getMockUser();
+      (req as unknown as { isAuthenticated?: () => boolean }).isAuthenticated =
+        () => true;
+      next();
+    });
+  }
 
   // CORS (allow static frontend domain to call API with credentials)
   app.use(
@@ -84,75 +94,111 @@ export function setupWebServer() {
     }),
   );
 
-  // Initialize Passport
-  app.use(passport.initialize());
-  app.use(passport.session());
+  if (config.server.oauthEnabled) {
+    // Initialize Passport
+    app.use(passport.initialize());
+    app.use(passport.session());
 
-  // Configure Passport with Discord strategy
-  passport.use(
-    new DiscordStrategy(
-      {
-        clientID: config.discord.clientId,
-        clientSecret: config.discord.clientSecret,
-        callbackURL: config.discord.callbackUrl,
-        scope: ["identify", "email", "guilds"],
+    // Configure Passport with Discord strategy
+    passport.use(
+      new DiscordStrategy(
+        {
+          clientID: config.discord.clientId,
+          clientSecret: config.discord.clientSecret,
+          callbackURL: config.discord.callbackUrl,
+          scope: ["identify", "email", "guilds"],
+        },
+        (accessToken, refreshToken, profile, done) => {
+          // Preserve access token for API calls (e.g., guild listing)
+          (profile as Profile & { accessToken?: string }).accessToken =
+            accessToken;
+          // Here you can save the profile information to your database if needed
+          return done(null, profile);
+        },
+      ),
+    );
+
+    // Serialize and deserialize user
+    passport.serializeUser((user, done) => {
+      done(null, user);
+    });
+
+    passport.deserializeUser((obj, done) => {
+      done(null, obj as User);
+    });
+
+    // Discord OAuth routes
+    app.get("/auth/discord", passport.authenticate("discord"));
+
+    app.get(
+      "/auth/discord/callback",
+      passport.authenticate("discord", {
+        failureRedirect: "/",
+      }),
+      (req, res) => {
+        const guildId = req.query.guild_id as string | undefined;
+        const profile = req.user as Profile;
+        const redirectParam =
+          typeof req.query.redirect === "string"
+            ? req.query.redirect
+            : undefined;
+        if (guildId) {
+          saveGuildInstaller({
+            guildId,
+            installerId: profile.id,
+            installedAt: new Date().toISOString(),
+          }).catch((err) =>
+            console.error("Failed to persist installer mapping", err),
+          );
+        }
+        const fallback =
+          config.frontend.siteUrl && config.frontend.siteUrl.length > 0
+            ? config.frontend.siteUrl
+            : "/";
+        res.redirect(redirectParam || fallback);
       },
-      (accessToken, refreshToken, profile, done) => {
-        // Preserve access token for API calls (e.g., guild listing)
-        (profile as Profile & { accessToken?: string }).accessToken =
-          accessToken;
-        // Here you can save the profile information to your database if needed
-        return done(null, profile);
-      },
-    ),
-  );
-
-  // Serialize and deserialize user
-  passport.serializeUser((user, done) => {
-    done(null, user);
-  });
-
-  passport.deserializeUser((obj, done) => {
-    done(null, obj as User);
-  });
-
-  // Discord OAuth routes
-  app.get("/auth/discord", passport.authenticate("discord"));
-
-  app.get(
-    "/auth/discord/callback",
-    passport.authenticate("discord", {
-      failureRedirect: "/",
-    }),
-    (req, res) => {
-      const guildId = req.query.guild_id as string | undefined;
-      const profile = req.user as Profile;
+    );
+  } else {
+    app.get("/auth/discord", (req, res) => {
       const redirectParam =
         typeof req.query.redirect === "string" ? req.query.redirect : undefined;
-      if (guildId) {
-        writeGuildInstaller({
-          guildId,
-          installerId: profile.id,
-          installedAt: new Date().toISOString(),
-        }).catch((err) =>
-          console.error("Failed to persist installer mapping", err),
-        );
-      }
       const fallback =
         config.frontend.siteUrl && config.frontend.siteUrl.length > 0
           ? config.frontend.siteUrl
           : "/";
       res.redirect(redirectParam || fallback);
-    },
-  );
+    });
+    app.get("/auth/discord/callback", (req, res) => {
+      const redirectParam =
+        typeof req.query.redirect === "string" ? req.query.redirect : undefined;
+      const fallback =
+        config.frontend.siteUrl && config.frontend.siteUrl.length > 0
+          ? config.frontend.siteUrl
+          : "/";
+      res.redirect(redirectParam || fallback);
+    });
+  }
 
   app.get("/logout", (req, res) => {
-    req.logout((err) => {
-      if (err) {
-        console.error(err);
-      }
-      res.redirect("/");
-    });
+    if (typeof req.logout === "function") {
+      req.logout((err) => {
+        if (err) {
+          console.error(err);
+        }
+        res.redirect("/");
+      });
+      return;
+    }
+    if (req.session) {
+      req.session.destroy((err) => {
+        if (err) {
+          console.error(err);
+        }
+        res.redirect("/");
+      });
+      return;
+    }
+    res.redirect("/");
   });
 
   app.get("/user", (req, res) => {

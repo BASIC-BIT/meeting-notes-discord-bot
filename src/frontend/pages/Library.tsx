@@ -4,9 +4,12 @@ import {
   Badge,
   Box,
   Button,
+  Center,
   Divider,
   Drawer,
   Group,
+  Loader,
+  LoadingOverlay,
   MultiSelect,
   ScrollArea,
   SimpleGrid,
@@ -25,15 +28,19 @@ import {
   IconMessageCircle,
   IconMicrophone,
   IconNote,
+  IconRefresh,
   IconSearch,
   IconSparkles,
   IconUsers,
 } from "@tabler/icons-react";
+import { format } from "date-fns";
 import Surface from "../components/Surface";
 import EvidenceCard from "../components/EvidenceCard";
-import MetricCard from "../components/MetricCard";
 import PageHeader from "../components/PageHeader";
 import FormSelect from "../components/FormSelect";
+import { trpc } from "../services/trpc";
+import { useGuildContext } from "../contexts/GuildContext";
+import { uiOverlays } from "../uiTokens";
 
 type MeetingEvent = {
   id: string;
@@ -59,156 +66,43 @@ type MeetingDetails = {
   events: MeetingEvent[];
 };
 
-const MEETINGS: MeetingDetails[] = [
-  {
-    id: "m1",
-    title: "Staff sync — moderation + events",
-    summary:
-      "Reviewed the mod queue, planned the weekend event, and assigned follow-ups.",
-    notes:
-      "Highlights\n- Mod queue triage\n- Weekend event plan\n\nDecisions\n- Pin updated rules in #welcome\n- Host the event in #stage\n\nAction items\n- Kai: post signup form\n- Rin: draft announcement\n\nOpen questions\n- Confirm co-host availability",
-    dateLabel: "Nov 18, 2025",
-    durationLabel: "54 min",
-    tags: ["staff", "mods", "events"],
-    channel: "#staff-voice",
-    audioUrl: null,
-    attendees: ["Rin", "Jules", "Kai", "Rowan"],
-    decisions: ["Pin updated rules in #welcome", "Host the event in #stage"],
-    actions: ["Kai to post signup form", "Rin to draft announcement"],
-    events: [
-      {
-        id: "e1",
-        type: "presence",
-        time: "00:00",
-        speaker: "Rin",
-        text: "joined the channel",
-      },
-      {
-        id: "e2",
-        type: "voice",
-        time: "00:03",
-        speaker: "Rin",
-        text: "Mod queue is up again — let's split triage by timezone and close out the easy ones.",
-      },
-      {
-        id: "e3",
-        type: "voice",
-        time: "05:12",
-        speaker: "Jules",
-        text: "If we pin the rules in #welcome, we can stop repeating them every day.",
-      },
-      {
-        id: "e4",
-        type: "chat",
-        time: "12:10",
-        speaker: "Kai",
-        text: "Posting the signup form here.",
-      },
-      {
-        id: "e5",
-        type: "voice",
-        time: "19:44",
-        speaker: "Rowan",
-        text: "Let's keep the event to 90 minutes and do Q&A at the end.",
-      },
-      {
-        id: "e6",
-        type: "bot",
-        time: "52:30",
-        text: "Meeting summary posted to #session-notes.",
-      },
-    ],
-  },
-  {
-    id: "m2",
-    title: "Campaign session - The Obsidian Gate",
-    summary: "The party negotiated safe passage and uncovered the vault map.",
-    notes:
-      "Recap\n- Negotiated safe passage through the ridge\n- Uncovered the vault map and learned the gate glyphs match the monastery symbol\n\nDecisions\n- Return to the ridge at dawn\n\nAction items\n- Theo: summarize NPC names\n- Nyx: track loot",
-    dateLabel: "Nov 16, 2025",
-    durationLabel: "2h 08m",
-    tags: ["rpg", "campaign", "session"],
-    channel: "#tabletop-voice",
-    audioUrl: null,
-    attendees: ["Mira", "Theo", "Nyx", "Sage"],
-    decisions: ["Return to the ridge at dawn."],
-    actions: ["Theo to summarize NPC names", "Nyx to track loot"],
-    events: [
-      {
-        id: "e7",
-        type: "presence",
-        time: "00:00",
-        speaker: "Mira",
-        text: "joined the channel",
-      },
-      {
-        id: "e8",
-        type: "voice",
-        time: "12:08",
-        speaker: "Mira",
-        text: "We should trade the relic for the map, not the key.",
-      },
-      {
-        id: "e9",
-        type: "chat",
-        time: "12:30",
-        speaker: "Theo",
-        text: "Rolling persuasion...",
-      },
-      {
-        id: "e10",
-        type: "voice",
-        time: "41:22",
-        speaker: "Sage",
-        text: "The gate glyphs match the symbol from the monastery.",
-      },
-    ],
-  },
-  {
-    id: "m3",
-    title: "Raid night — progression",
-    summary: "Cleared two bosses, planned Phase 2 strategy, and tracked loot.",
-    notes:
-      "Highlights\n- Cleared Gatekeeper + Archivist\n- Phase 2 needs tighter stack timing\n\nDecisions\n- Run two healers for Phase 2\n- Bring frost resist potions\n\nAction items\n- Rin: update loot sheet\n- Mira: post strat notes",
-    dateLabel: "Nov 14, 2025",
-    durationLabel: "1h 38m",
-    tags: ["raid", "strats", "loot"],
-    channel: "#raid-voice",
-    audioUrl: null,
-    attendees: ["Mira", "Rin", "Bryce"],
-    decisions: ["Run two healers for Phase 2", "Bring frost resist potions"],
-    actions: ["Rin to update loot sheet", "Mira to post strat notes"],
-    events: [
-      {
-        id: "e11",
-        type: "voice",
-        time: "04:10",
-        speaker: "Mira",
-        text: "Phase 2: stack on blue, then spread on the call. Don't chase the add.",
-      },
-      {
-        id: "e12",
-        type: "chat",
-        time: "30:12",
-        speaker: "Bryce",
-        text: "Posting the build + consumables list.",
-      },
-      {
-        id: "e13",
-        type: "bot",
-        time: "96:40",
-        text: "Meeting summary posted to #session-notes.",
-      },
-    ],
-  },
-];
+type MeetingExport = {
+  meeting: {
+    id: string;
+    meetingId: string;
+    channelId: string;
+    timestamp: string;
+    duration: number;
+    tags: string[];
+    notes: string;
+    notesChannelId?: string;
+    notesMessageId?: string;
+    transcript: string;
+    audioUrl?: string;
+    attendees: string[];
+    events: MeetingEvent[];
+    title: string;
+    summary: string;
+    dateLabel: string;
+    durationLabel: string;
+    channel: string;
+  };
+};
 
-const TAG_OPTIONS = Array.from(
-  new Set(MEETINGS.flatMap((meeting) => meeting.tags)),
-);
-const CHANNEL_OPTIONS = Array.from(
-  new Set(MEETINGS.map((meeting) => meeting.channel)),
-);
+type MeetingSummaryRow = {
+  id: string;
+  meetingId: string;
+  channelId: string;
+  channelName: string;
+  timestamp: string;
+  duration: number;
+  tags: string[];
+  notes: string;
+  notesChannelId?: string;
+  notesMessageId?: string;
+  audioAvailable: boolean;
+  transcriptAvailable: boolean;
+};
 
 const FILTER_OPTIONS = [
   { value: "voice", label: "Voice" },
@@ -231,6 +125,7 @@ export default function Library() {
   const theme = useMantineTheme();
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
+  const trpcUtils = trpc.useUtils();
 
   const [query, setQuery] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -244,52 +139,265 @@ export default function Library() {
   );
   const [fullScreen, setFullScreen] = useState(false);
 
-  const meeting = useMemo(
-    () => MEETINGS.find((m) => m.id === selectedMeetingId) || null,
-    [selectedMeetingId],
+  const { selectedGuildId } = useGuildContext();
+  const meetingsQuery = trpc.meetings.list.useQuery(
+    {
+      serverId: selectedGuildId ?? "",
+      limit: 50,
+    },
+    { enabled: Boolean(selectedGuildId) },
+  );
+  const channelsQuery = trpc.servers.channels.useQuery(
+    { serverId: selectedGuildId ?? "" },
+    { enabled: Boolean(selectedGuildId) },
+  );
+  const detailQuery = trpc.meetings.detail.useQuery(
+    {
+      serverId: selectedGuildId ?? "",
+      meetingId: selectedMeetingId ?? "",
+    },
+    { enabled: Boolean(selectedGuildId && selectedMeetingId) },
   );
 
+  const channelNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const voiceChannels = channelsQuery.data?.voiceChannels ?? [];
+    const textChannels = channelsQuery.data?.textChannels ?? [];
+    [...voiceChannels, ...textChannels].forEach((channel) => {
+      map.set(channel.id, channel.name);
+    });
+    return map;
+  }, [channelsQuery.data]);
+
+  const formatChannelLabel = (name?: string, fallback?: string) => {
+    const raw = name ?? fallback ?? "Unknown channel";
+    return raw.startsWith("#") ? raw : `#${raw}`;
+  };
+
+  const formatDurationLabel = (seconds: number) => {
+    const safe = Math.max(0, Math.floor(seconds));
+    const hours = Math.floor(safe / 3600);
+    const minutes = Math.floor((safe % 3600) / 60);
+    if (hours > 0) {
+      return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+    }
+    return `${minutes}m`;
+  };
+
+  const formatDateLabel = (timestamp: string) => {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+      return "Unknown date";
+    }
+    return format(date, "MMM d, yyyy");
+  };
+
+  const normalizeNotes = (notes: string) => notes.replace(/\r/g, "").trim();
+
+  const deriveTitle = (notes: string, channelLabel: string) => {
+    const lines = normalizeNotes(notes)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const skip = new Set([
+      "highlights",
+      "decisions",
+      "action items",
+      "actions",
+      "recap",
+      "summary",
+    ]);
+    const candidate = lines.find((line) => !skip.has(line.toLowerCase()));
+    if (candidate) {
+      return candidate.replace(/^[-*#]\s*/, "");
+    }
+    return `Meeting in ${channelLabel.replace(/^#/, "")}`;
+  };
+
+  const deriveSummary = (notes: string) => {
+    const clean = normalizeNotes(notes);
+    if (!clean) return "Notes will appear after the meeting is processed.";
+    const flattened = clean.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+    return flattened.length > 180 ? `${flattened.slice(0, 180)}...` : flattened;
+  };
+
+  const meetingRows = useMemo<MeetingSummaryRow[]>(
+    () => meetingsQuery.data?.meetings ?? [],
+    [meetingsQuery.data],
+  );
+
+  const meetingItems = useMemo(() => {
+    return meetingRows.map((meetingRow) => {
+      const channelLabel = formatChannelLabel(
+        channelNameMap.get(meetingRow.channelId) ?? meetingRow.channelName,
+        meetingRow.channelId,
+      );
+      const dateLabel = formatDateLabel(meetingRow.timestamp);
+      const durationLabel = formatDurationLabel(meetingRow.duration);
+      const title = deriveTitle(meetingRow.notes, channelLabel);
+      const summary = deriveSummary(meetingRow.notes);
+      return {
+        ...meetingRow,
+        title,
+        summary,
+        dateLabel,
+        durationLabel,
+        channelLabel,
+      };
+    });
+  }, [meetingRows, channelNameMap]);
+
+  const tagOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(meetingRows.flatMap((meeting) => meeting.tags)),
+      ).sort(),
+    [meetingRows],
+  );
+
+  const channelOptions = useMemo(() => {
+    const ids = new Set(
+      meetingRows.map((meeting) => meeting.channelId).filter(Boolean),
+    );
+    return Array.from(ids).map((id) => ({
+      value: id,
+      label: formatChannelLabel(channelNameMap.get(id), id),
+    }));
+  }, [meetingRows, channelNameMap]);
+
   const filtered = useMemo(() => {
-    return MEETINGS.filter((m) => {
-      if (query && !m.title.toLowerCase().includes(query.toLowerCase())) {
-        return false;
+    const rangeDays =
+      selectedRange === "all" ? null : Number.parseInt(selectedRange, 10);
+    const now = Date.now();
+    return meetingItems.filter((meetingItem) => {
+      if (query) {
+        const text =
+          `${meetingItem.title} ${meetingItem.summary}`.toLowerCase();
+        if (!text.includes(query.toLowerCase())) return false;
       }
       if (selectedTags.length) {
-        return selectedTags.every((tag) => m.tags.includes(tag));
+        if (!selectedTags.every((tag) => meetingItem.tags.includes(tag))) {
+          return false;
+        }
       }
-      if (selectedChannel && m.channel !== selectedChannel) {
+      if (selectedChannel && meetingItem.channelId !== selectedChannel) {
         return false;
+      }
+      if (rangeDays) {
+        const ts = Date.parse(meetingItem.timestamp);
+        if (Number.isFinite(ts)) {
+          const diffDays = (now - ts) / (1000 * 60 * 60 * 24);
+          if (diffDays > rangeDays) return false;
+        }
       }
       return true;
     });
-  }, [query, selectedTags, selectedChannel]);
+  }, [meetingItems, query, selectedTags, selectedChannel, selectedRange]);
+
+  const meeting = useMemo(() => {
+    const detail = detailQuery.data?.meeting;
+    if (!detail) return null;
+    const channelLabel = formatChannelLabel(
+      channelNameMap.get(detail.channelId),
+      detail.channelId,
+    );
+    const dateLabel = formatDateLabel(detail.timestamp);
+    const durationLabel = formatDurationLabel(detail.duration);
+    const title = deriveTitle(detail.notes ?? "", channelLabel);
+    const summary = deriveSummary(detail.notes ?? "");
+    return {
+      id: detail.id,
+      title,
+      summary,
+      notes: detail.notes || "No notes recorded.",
+      dateLabel,
+      durationLabel,
+      tags: detail.tags ?? [],
+      channel: channelLabel,
+      audioUrl: detail.audioUrl ?? null,
+      attendees:
+        detail.attendees && detail.attendees.length > 0
+          ? detail.attendees
+          : ["Unknown"],
+      decisions: [],
+      actions: [],
+      events: detail.events ?? [],
+    } satisfies MeetingDetails;
+  }, [detailQuery.data, channelNameMap]);
 
   const visibleEvents = useMemo(() => {
     if (!meeting) return [];
     return meeting.events.filter((event) => activeFilters.includes(event.type));
   }, [meeting, activeFilters]);
 
+  const listLoading =
+    meetingsQuery.isLoading ||
+    channelsQuery.isLoading ||
+    meetingsQuery.isFetching ||
+    channelsQuery.isFetching;
+  const listError = meetingsQuery.error ?? channelsQuery.error;
+  const detailLoading = detailQuery.isLoading || detailQuery.isFetching;
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    if (!selectedGuildId) return;
+    try {
+      setRefreshing(true);
+      await Promise.all([
+        trpcUtils.meetings.list.invalidate({ serverId: selectedGuildId }),
+        trpcUtils.meetings.detail.invalidate(),
+        trpcUtils.servers.channels.invalidate({ serverId: selectedGuildId }),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleDownload = () => {
+    const detail = detailQuery.data?.meeting;
+    if (!detail || !meeting) return;
+    const payload: MeetingExport = {
+      meeting: {
+        id: detail.id,
+        meetingId: detail.meetingId,
+        channelId: detail.channelId,
+        timestamp: detail.timestamp,
+        duration: detail.duration,
+        tags: detail.tags ?? [],
+        notes: detail.notes ?? "",
+        notesChannelId: detail.notesChannelId,
+        notesMessageId: detail.notesMessageId,
+        transcript: detail.transcript ?? "",
+        audioUrl: detail.audioUrl,
+        attendees: detail.attendees ?? [],
+        events: detail.events ?? [],
+        title: meeting.title,
+        summary: meeting.summary,
+        dateLabel: meeting.dateLabel,
+        durationLabel: meeting.durationLabel,
+        channel: meeting.channel,
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${meeting.title.replace(/[^\w-]+/g, "_") || "meeting"}-${meeting.dateLabel.replace(
+      /\s+/g,
+      "_",
+    )}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
-    <Stack gap="xl">
+    <Stack gap="lg">
       <PageHeader
         title="Library"
         description="Every session, indexed by tags, channel, and timeline."
       />
-
-      <SimpleGrid cols={{ base: 1, md: 4 }} spacing="lg">
-        <MetricCard
-          label="Meetings (30d)"
-          value="38"
-          helper="Across 5 channels"
-        />
-        <MetricCard
-          label="Minutes captured"
-          value="1,124"
-          helper="Last 30 days"
-        />
-        <MetricCard label="Active tags" value="14" helper="Across teams" />
-        <MetricCard label="Live responses" value="21" helper="This week" />
-      </SimpleGrid>
 
       <Surface p="lg" tone="soft">
         <SimpleGrid cols={{ base: 1, md: 4 }} spacing="md">
@@ -300,7 +408,7 @@ export default function Library() {
             leftSection={<IconSearch size={16} />}
           />
           <MultiSelect
-            data={TAG_OPTIONS}
+            data={tagOptions}
             placeholder="Tags"
             value={selectedTags}
             onChange={setSelectedTags}
@@ -321,10 +429,7 @@ export default function Library() {
             placeholder="Channel"
             value={selectedChannel}
             onChange={setSelectedChannel}
-            data={CHANNEL_OPTIONS.map((channel) => ({
-              value: channel,
-              label: channel,
-            }))}
+            data={channelOptions}
             clearable
           />
         </SimpleGrid>
@@ -334,268 +439,330 @@ export default function Library() {
         <Text c="dimmed" size="sm">
           {filtered.length} meetings
         </Text>
-        <Text size="xs" c="dimmed">
-          Sorted by recency •{" "}
-          {selectedRange === "all"
-            ? "All time"
-            : `Range: ${selectedRange} days`}
-        </Text>
+        <Group gap="sm" align="center">
+          <Text size="xs" c="dimmed">
+            Sorted by recency •{" "}
+            {selectedRange === "all"
+              ? "All time"
+              : `Range: ${selectedRange} days`}
+          </Text>
+          <Button
+            size="xs"
+            variant="subtle"
+            leftSection={<IconRefresh size={14} />}
+            loading={refreshing || meetingsQuery.isFetching}
+            onClick={handleRefresh}
+          >
+            Refresh
+          </Button>
+        </Group>
       </Group>
 
-      <Surface p={0}>
-        <Stack gap={0}>
-          {filtered.map((meetingItem, index) => (
-            <Box
-              key={meetingItem.id}
-              px={{ base: "md", md: "lg" }}
-              py="md"
-              onClick={() => setSelectedMeetingId(meetingItem.id)}
-              style={{
-                cursor: "pointer",
-                borderBottom:
-                  index === filtered.length - 1
-                    ? undefined
-                    : `1px solid ${isDark ? theme.colors.dark[5] : theme.colors.gray[2]}`,
-              }}
-            >
-              <Group justify="space-between" align="flex-start" wrap="nowrap">
-                <Stack gap={6} style={{ flex: 1 }}>
-                  <Text fw={650}>{meetingItem.title}</Text>
-                  <Text size="sm" c="dimmed">
-                    {meetingItem.summary}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    {meetingItem.dateLabel} • {meetingItem.durationLabel} •{" "}
-                    {meetingItem.channel}
-                  </Text>
-                  <Group gap="xs" wrap="wrap">
-                    {meetingItem.tags.map((tag) => (
-                      <Badge key={tag} variant="light" color="gray">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </Group>
-                </Stack>
-                <ActionIcon
-                  variant="light"
-                  color="gray"
-                  aria-label="Open meeting"
-                >
-                  <IconChevronRight size={18} />
-                </ActionIcon>
-              </Group>
-            </Box>
-          ))}
-        </Stack>
+      <Surface p={0} style={{ position: "relative" }}>
+        <LoadingOverlay
+          visible={listLoading}
+          overlayProps={uiOverlays.loading}
+          loaderProps={{ size: "md" }}
+        />
+        {listError ? (
+          <Center py="xl">
+            <Text c="dimmed">Unable to load meetings. Try again shortly.</Text>
+          </Center>
+        ) : filtered.length === 0 && !listLoading ? (
+          <Center py="xl">
+            <Text c="dimmed">No meetings match these filters yet.</Text>
+          </Center>
+        ) : (
+          <Stack gap={0}>
+            {filtered.map((meetingItem, index) => (
+              <Box
+                key={meetingItem.id}
+                px={{ base: "md", md: "lg" }}
+                py="md"
+                onClick={() => setSelectedMeetingId(meetingItem.id)}
+                style={{
+                  cursor: "pointer",
+                  borderBottom:
+                    index === filtered.length - 1
+                      ? undefined
+                      : `1px solid ${
+                          isDark ? theme.colors.dark[5] : theme.colors.gray[2]
+                        }`,
+                }}
+              >
+                <Group justify="space-between" align="flex-start" wrap="nowrap">
+                  <Stack gap={6} style={{ flex: 1 }}>
+                    <Text fw={650}>{meetingItem.title}</Text>
+                    <Text size="sm" c="dimmed">
+                      {meetingItem.summary}
+                    </Text>
+                    <Text size="xs" c="dimmed">
+                      {meetingItem.dateLabel} • {meetingItem.durationLabel} •{" "}
+                      {meetingItem.channelLabel}
+                    </Text>
+                    <Group gap="xs" wrap="wrap">
+                      {meetingItem.tags.map((tag) => (
+                        <Badge key={tag} variant="light" color="gray">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </Group>
+                  </Stack>
+                  <ActionIcon
+                    variant="light"
+                    color="gray"
+                    aria-label="Open meeting"
+                  >
+                    <IconChevronRight size={18} />
+                  </ActionIcon>
+                </Group>
+              </Box>
+            ))}
+          </Stack>
+        )}
       </Surface>
 
       <Drawer
-        opened={!!meeting}
+        opened={!!selectedMeetingId}
         onClose={() => {
           setSelectedMeetingId(null);
           setFullScreen(false);
         }}
         position="right"
         size={fullScreen ? "100%" : "xl"}
-        overlayProps={{ opacity: 0.3, blur: 2 }}
+        overlayProps={uiOverlays.modal}
         styles={{
           content: {
             backgroundColor: isDark ? theme.colors.dark[7] : theme.white,
           },
         }}
       >
-        {meeting ? (
-          <Stack gap="md">
-            <Stack gap={4}>
-              <Group justify="space-between" align="center" wrap="wrap">
-                <Title order={3}>{meeting.title}</Title>
-                <Group gap="sm">
-                  <Button
-                    variant="light"
-                    leftSection={<IconDownload size={16} />}
-                  >
-                    Download
-                  </Button>
-                  <Button
-                    variant="outline"
-                    leftSection={<IconFilter size={16} />}
-                    onClick={() => setFullScreen((prev) => !prev)}
-                  >
-                    {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
-                  </Button>
-                </Group>
-              </Group>
-              <Text size="sm" c="dimmed">
-                {meeting.dateLabel} | {meeting.durationLabel} |{" "}
-                {meeting.channel}
-              </Text>
-              <Group gap="xs" wrap="wrap">
-                {meeting.tags.map((tag) => (
-                  <Badge key={tag} variant="light" color="gray">
-                    {tag}
-                  </Badge>
-                ))}
-              </Group>
-            </Stack>
-
-            <Surface p="md" tone="soft">
-              <Group gap="sm" align="center" wrap="wrap">
-                <ThemeIcon variant="light" color="cyan" radius="md">
-                  <IconMicrophone size={16} />
-                </ThemeIcon>
-                <Stack gap={0}>
-                  <Text fw={600}>Audio</Text>
-                  <Text size="sm" c="dimmed">
-                    Playback for the full recording.
-                  </Text>
-                </Stack>
-              </Group>
-              <Divider my="sm" />
-              <audio
-                controls
-                preload="none"
-                style={{ width: "100%" }}
-                src={meeting.audioUrl ?? undefined}
-              />
-            </Surface>
-
-            <Surface p="md">
-              <Group gap="xs" mb="xs">
-                <ThemeIcon variant="light" color="brand" radius="md">
-                  <IconNote size={16} />
-                </ThemeIcon>
-                <Text fw={600}>Summary</Text>
-              </Group>
-              <Text size="sm" c="dimmed">
-                {meeting.summary}
-              </Text>
-              <Divider my="sm" />
-              <ScrollArea h={fullScreen ? 260 : 200} offsetScrollbars>
-                <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
-                  {meeting.notes}
-                </Text>
-              </ScrollArea>
-              <Divider my="sm" />
-              {meeting.events.find((event) => event.type === "voice") ? (
-                <Stack gap="xs">
-                  <Text fw={600} size="sm">
-                    Receipt
-                  </Text>
-                  {(() => {
-                    const receipt = meeting.events.find(
-                      (event) => event.type === "voice",
-                    );
-                    if (!receipt) return null;
-                    return (
-                      <EvidenceCard
-                        quote={receipt.text}
-                        speaker={receipt.speaker || "Unknown"}
-                        time={receipt.time}
-                        channel={meeting.channel}
-                      />
-                    );
-                  })()}
-                </Stack>
-              ) : null}
-            </Surface>
-
-            <Surface p="md">
-              <Group gap="xs" mb="xs">
-                <ThemeIcon variant="light" color="cyan" radius="md">
-                  <IconUsers size={16} />
-                </ThemeIcon>
-                <Text fw={600}>Attendees</Text>
-              </Group>
-              <Text size="sm" c="dimmed">
-                {meeting.attendees.join(", ")}
-              </Text>
-            </Surface>
-
-            <Surface p="md">
-              <Group justify="space-between" align="center" mb="sm" wrap="wrap">
-                <Group gap="sm">
-                  <ThemeIcon variant="light" color="brand" radius="md">
-                    <IconFilter size={16} />
-                  </ThemeIcon>
-                  <Text fw={600}>Timeline</Text>
-                </Group>
-                <Group gap="xs">
-                  {FILTER_OPTIONS.map((filter) => {
-                    const isActive = activeFilters.includes(filter.value);
-                    return (
+        {selectedMeetingId ? (
+          <Box style={{ position: "relative" }}>
+            {detailQuery.error ? (
+              <Center py="xl">
+                <Text c="dimmed">Unable to load meeting details.</Text>
+              </Center>
+            ) : detailLoading ? (
+              <Center py="xl">
+                <Loader color="brand" />
+              </Center>
+            ) : meeting ? (
+              <Stack gap="md">
+                <Stack gap={4}>
+                  <Group justify="space-between" align="center" wrap="wrap">
+                    <Title order={3}>{meeting.title}</Title>
+                    <Group gap="sm">
                       <Button
-                        key={filter.value}
-                        size="xs"
-                        variant={isActive ? "light" : "subtle"}
-                        color={isActive ? "cyan" : "gray"}
-                        onClick={() => {
-                          setActiveFilters((current) =>
-                            current.includes(filter.value)
-                              ? current.filter(
-                                  (value) => value !== filter.value,
-                                )
-                              : [...current, filter.value],
-                          );
-                        }}
+                        variant="light"
+                        leftSection={<IconDownload size={16} />}
+                        onClick={handleDownload}
                       >
-                        {filter.label}
+                        Download
                       </Button>
-                    );
-                  })}
-                </Group>
-              </Group>
-              <ScrollArea h={fullScreen ? 620 : 360} offsetScrollbars>
-                <Stack gap={0}>
-                  {visibleEvents.map((event) => {
-                    const meta = EVENT_META[event.type];
-                    const Icon = meta.icon;
-                    const showMetaLabel = Boolean(event.speaker);
-                    return (
-                      <Box
-                        key={event.id}
-                        px="sm"
-                        py="sm"
-                        style={{
-                          borderBottom: `1px solid ${
-                            isDark ? theme.colors.dark[5] : theme.colors.gray[2]
-                          }`,
-                        }}
+                      <Button
+                        variant="outline"
+                        leftSection={<IconFilter size={16} />}
+                        onClick={() => setFullScreen((prev) => !prev)}
                       >
-                        <Group gap="sm" align="flex-start" wrap="nowrap">
-                          <ThemeIcon
-                            variant="light"
-                            color={meta.color}
-                            radius="md"
-                            size={32}
-                          >
-                            <Icon size={16} />
-                          </ThemeIcon>
-                          <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
-                            <Group gap="xs" align="baseline" wrap="wrap">
-                              <Text fw={700} size="sm">
-                                {event.speaker ?? meta.label}
-                              </Text>
-                              <Text size="xs" c="dimmed">
-                                {event.time}
-                              </Text>
-                              {showMetaLabel ? (
-                                <Text size="xs" c="dimmed">
-                                  • {meta.label}
-                                </Text>
-                              ) : null}
-                            </Group>
-                            <Text size="sm" c="dimmed">
-                              {event.text}
-                            </Text>
-                          </Stack>
-                        </Group>
-                      </Box>
-                    );
-                  })}
+                        {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
+                      </Button>
+                    </Group>
+                  </Group>
+                  <Text size="sm" c="dimmed">
+                    {meeting.dateLabel} | {meeting.durationLabel} |{" "}
+                    {meeting.channel}
+                  </Text>
+                  <Group gap="xs" wrap="wrap">
+                    {meeting.tags.map((tag) => (
+                      <Badge key={tag} variant="light" color="gray">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </Group>
                 </Stack>
-              </ScrollArea>
-            </Surface>
-          </Stack>
+
+                <Surface p="md" tone="soft">
+                  <Group gap="sm" align="center" wrap="wrap">
+                    <ThemeIcon variant="light" color="cyan">
+                      <IconMicrophone size={16} />
+                    </ThemeIcon>
+                    <Stack gap={0}>
+                      <Text fw={600}>Audio</Text>
+                      <Text size="sm" c="dimmed">
+                        Playback for the full recording.
+                      </Text>
+                    </Stack>
+                  </Group>
+                  <Divider my="sm" />
+                  {meeting.audioUrl ? (
+                    <audio
+                      controls
+                      preload="none"
+                      style={{ width: "100%" }}
+                      src={meeting.audioUrl}
+                    />
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      Audio isn’t available for this meeting yet.
+                    </Text>
+                  )}
+                </Surface>
+
+                <Surface p="md">
+                  <Group gap="xs" mb="xs">
+                    <ThemeIcon variant="light" color="brand">
+                      <IconNote size={16} />
+                    </ThemeIcon>
+                    <Text fw={600}>Summary</Text>
+                  </Group>
+                  <Text size="sm" c="dimmed">
+                    {meeting.summary}
+                  </Text>
+                  <Divider my="sm" />
+                  <ScrollArea h={fullScreen ? 260 : 200} offsetScrollbars>
+                    <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                      {meeting.notes}
+                    </Text>
+                  </ScrollArea>
+                  <Divider my="sm" />
+                  {meeting.events.find((event) => event.type === "voice") ? (
+                    <Stack gap="xs">
+                      <Text fw={600} size="sm">
+                        Receipt
+                      </Text>
+                      {(() => {
+                        const receipt = meeting.events.find(
+                          (event) => event.type === "voice",
+                        );
+                        if (!receipt) return null;
+                        return (
+                          <EvidenceCard
+                            quote={receipt.text}
+                            speaker={receipt.speaker || "Unknown"}
+                            time={receipt.time}
+                            channel={meeting.channel}
+                          />
+                        );
+                      })()}
+                    </Stack>
+                  ) : null}
+                </Surface>
+
+                <Surface p="md">
+                  <Group gap="xs" mb="xs">
+                    <ThemeIcon variant="light" color="cyan">
+                      <IconUsers size={16} />
+                    </ThemeIcon>
+                    <Text fw={600}>Attendees</Text>
+                  </Group>
+                  <Text size="sm" c="dimmed">
+                    {meeting.attendees.join(", ")}
+                  </Text>
+                </Surface>
+
+                <Surface p="md">
+                  <Group
+                    justify="space-between"
+                    align="center"
+                    mb="sm"
+                    wrap="wrap"
+                  >
+                    <Group gap="sm">
+                      <ThemeIcon variant="light" color="brand">
+                        <IconFilter size={16} />
+                      </ThemeIcon>
+                      <Text fw={600}>Timeline</Text>
+                    </Group>
+                    <Group gap="xs">
+                      {FILTER_OPTIONS.map((filter) => {
+                        const isActive = activeFilters.includes(filter.value);
+                        return (
+                          <Button
+                            key={filter.value}
+                            size="xs"
+                            variant={isActive ? "light" : "subtle"}
+                            color={isActive ? "cyan" : "gray"}
+                            onClick={() => {
+                              setActiveFilters((current) =>
+                                current.includes(filter.value)
+                                  ? current.filter(
+                                      (value) => value !== filter.value,
+                                    )
+                                  : [...current, filter.value],
+                              );
+                            }}
+                          >
+                            {filter.label}
+                          </Button>
+                        );
+                      })}
+                    </Group>
+                  </Group>
+                  <ScrollArea h={fullScreen ? 620 : 360} offsetScrollbars>
+                    {visibleEvents.length === 0 ? (
+                      <Center py="xl">
+                        <Text size="sm" c="dimmed">
+                          Timeline data will appear after the meeting finishes
+                          processing.
+                        </Text>
+                      </Center>
+                    ) : (
+                      <Stack gap={0}>
+                        {visibleEvents.map((event) => {
+                          const meta = EVENT_META[event.type];
+                          const Icon = meta.icon;
+                          const showMetaLabel = Boolean(event.speaker);
+                          return (
+                            <Box
+                              key={event.id}
+                              px="sm"
+                              py="sm"
+                              style={{
+                                borderBottom: `1px solid ${
+                                  isDark
+                                    ? theme.colors.dark[5]
+                                    : theme.colors.gray[2]
+                                }`,
+                              }}
+                            >
+                              <Group gap="sm" align="flex-start" wrap="nowrap">
+                                <ThemeIcon
+                                  variant="light"
+                                  color={meta.color}
+                                  size={32}
+                                >
+                                  <Icon size={16} />
+                                </ThemeIcon>
+                                <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
+                                  <Group gap="xs" align="baseline" wrap="wrap">
+                                    <Text fw={700} size="sm">
+                                      {event.speaker ?? meta.label}
+                                    </Text>
+                                    <Text size="xs" c="dimmed">
+                                      {event.time}
+                                    </Text>
+                                    {showMetaLabel ? (
+                                      <Text size="xs" c="dimmed">
+                                        • {meta.label}
+                                      </Text>
+                                    ) : null}
+                                  </Group>
+                                  <Text size="sm" c="dimmed">
+                                    {event.text}
+                                  </Text>
+                                </Stack>
+                              </Group>
+                            </Box>
+                          );
+                        })}
+                      </Stack>
+                    )}
+                  </ScrollArea>
+                </Surface>
+              </Stack>
+            ) : null}
+          </Box>
         ) : null}
       </Drawer>
     </Stack>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -23,6 +23,7 @@ import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
 import PricingCard from "../components/PricingCard";
 import { trpc } from "../services/trpc";
+import { uiBorders, uiColors, uiGradients } from "../uiTokens";
 
 type PlanTier = "free" | "basic" | "pro";
 
@@ -86,8 +87,14 @@ export function Billing() {
   const data = billingQuery.data ?? null;
   const loading = billingQuery.isLoading || guildLoading;
   const error = billingQuery.error ? "Unable to load billing status." : null;
-  const isCheckoutPending = checkoutMutation.isPending;
   const isPortalPending = portalMutation.isPending;
+  const isFreeTier = data?.tier === "free";
+
+  useEffect(() => {
+    if (isFreeTier) {
+      setShowPlans(true);
+    }
+  }, [isFreeTier]);
 
   if (loading) {
     return (
@@ -174,105 +181,121 @@ export function Billing() {
   };
 
   return (
-    <Stack gap="xl">
+    <Stack gap="xl" w="100%" style={{ width: "100%" }}>
       <PageHeader
         title="Billing"
         description="Manage subscriptions for the current server."
       />
 
-      <Surface
-        p="xl"
-        style={{
-          backgroundImage: isDark
-            ? "linear-gradient(135deg, rgba(42, 46, 68, 0.8), rgba(30, 30, 40, 0.6))"
-            : "linear-gradient(135deg, rgba(94, 100, 242, 0.08), rgba(139, 92, 246, 0.06))",
-        }}
-      >
-        <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
-          <Stack gap="md">
-            <Stack gap="xs">
-              <Group gap="sm">
-                <ThemeIcon color="brand" variant="light" radius="md">
-                  <IconCreditCard size={18} />
-                </ThemeIcon>
-                <Text fw={600}>Current plan</Text>
-              </Group>
-              <Group gap="sm" align="center">
-                <Text size="lg" fw={700}>
-                  {data.tier === "free"
-                    ? "Free"
-                    : data.tier === "pro"
-                      ? "Pro"
-                      : "Basic"}
+      {isFreeTier ? (
+        <Surface
+          p="xl"
+          style={{
+            backgroundImage: uiGradients.billingPanel(isDark),
+          }}
+        >
+          <Stack gap="sm">
+            <Group gap="sm">
+              <ThemeIcon color="brand" variant="light">
+                <IconCreditCard size={18} />
+              </ThemeIcon>
+              <Text fw={600}>You’re on the Free plan</Text>
+            </Group>
+            <Text c="dimmed" size="sm">
+              Unlock deeper recall, longer sessions, and higher retention by
+              upgrading below.
+            </Text>
+            <Text size="sm" c="dimmed">
+              Server: {serverName}
+            </Text>
+          </Stack>
+        </Surface>
+      ) : (
+        <Surface
+          p="xl"
+          style={{
+            backgroundImage: uiGradients.billingPanel(isDark),
+          }}
+        >
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
+            <Stack gap="md">
+              <Stack gap="xs">
+                <Group gap="sm">
+                  <ThemeIcon color="brand" variant="light">
+                    <IconCreditCard size={18} />
+                  </ThemeIcon>
+                  <Text fw={600}>Current plan</Text>
+                </Group>
+                <Group gap="sm" align="center">
+                  <Text size="lg" fw={700}>
+                    {data.tier === "pro" ? "Pro" : "Basic"}
+                  </Text>
+                  <Badge color="brand">{statusLabel}</Badge>
+                </Group>
+                <Text c="dimmed" size="sm">
+                  {statusLine}
                 </Text>
-                <Badge color={data.tier === "free" ? "gray" : "brand"}>
-                  {statusLabel}
-                </Badge>
-              </Group>
-              <Text c="dimmed" size="sm">
-                {statusLine}
-              </Text>
-              <Text size="sm" c="dimmed">
-                Server: {serverName}
-              </Text>
-            </Stack>
+                <Text size="sm" c="dimmed">
+                  Server: {serverName}
+                </Text>
+              </Stack>
 
-            <Divider />
+              <Divider />
+
+              <Stack gap="xs">
+                <Text fw={600}>Actions</Text>
+                <Group gap="sm" wrap="wrap">
+                  <Button
+                    variant="gradient"
+                    gradient={{ from: "brand", to: "violet" }}
+                    disabled={!selectedGuildId}
+                    loading={isPortalPending}
+                    onClick={handlePortal}
+                  >
+                    Manage billing
+                  </Button>
+                </Group>
+                <Text size="xs" c="dimmed">
+                  Changes apply immediately.
+                </Text>
+              </Stack>
+            </Stack>
 
             <Stack gap="xs">
-              <Text fw={600}>Actions</Text>
-              <Group gap="sm" wrap="wrap">
-                <Button
-                  variant="gradient"
-                  gradient={{ from: "brand", to: "violet" }}
-                  disabled={!selectedGuildId}
-                  loading={
-                    data.tier === "free" ? isCheckoutPending : isPortalPending
-                  }
-                  onClick={data.tier === "free" ? handleCheckout : handlePortal}
-                >
-                  {data.tier === "free" ? "Upgrade to Basic" : "Manage billing"}
-                </Button>
-              </Group>
-              <Text size="xs" c="dimmed">
-                Changes apply immediately.
-              </Text>
+              <Text fw={600}>Included in this plan</Text>
+              <List
+                spacing="xs"
+                size="sm"
+                icon={
+                  <ThemeIcon color="brand" size={20}>
+                    <IconCheck size={12} />
+                  </ThemeIcon>
+                }
+              >
+                {BENEFITS.map((benefit) => (
+                  <List.Item key={benefit.label}>
+                    {benefit.label}: {benefit.values[data.tier]}
+                  </List.Item>
+                ))}
+              </List>
             </Stack>
-          </Stack>
-
-          <Stack gap="xs">
-            <Text fw={600}>Included in this plan</Text>
-            <List
-              spacing="xs"
-              size="sm"
-              icon={
-                <ThemeIcon color="brand" radius="xl" size={20}>
-                  <IconCheck size={12} />
-                </ThemeIcon>
-              }
-            >
-              {BENEFITS.map((benefit) => (
-                <List.Item key={benefit.label}>
-                  {benefit.label}: {benefit.values[data.tier]}
-                </List.Item>
-              ))}
-            </List>
-          </Stack>
-        </SimpleGrid>
-      </Surface>
+          </SimpleGrid>
+        </Surface>
+      )}
 
       <Surface
         p="lg"
         tone={showPlans ? "default" : "soft"}
         onClick={!showPlans ? () => setShowPlans(true) : undefined}
-        style={
-          !showPlans
-            ? {
+        style={{
+          width: "100%",
+          ...(showPlans
+            ? {}
+            : {
                 cursor: "pointer",
-                borderColor: "var(--mantine-color-brand-6)",
-              }
-            : undefined
-        }
+                borderColor: uiColors.highlightBorder,
+              }),
+        }}
       >
         <Stack gap="sm">
           <Group justify="space-between" align="center" wrap="wrap">
@@ -311,7 +334,7 @@ export function Billing() {
                 ctaProps={{
                   variant: data.tier === "free" ? "light" : "outline",
                 }}
-                badge={data.tier === "free" ? "Current plan" : undefined}
+                badge={data.tier === "free" ? "Current plan" : "Free forever"}
               />
               <PricingCard
                 name="Basic"
@@ -352,8 +375,8 @@ export function Billing() {
                   data.tier === "pro" ? "Current plan" : "Unlimited meetings"
                 }
                 tone="soft"
-                borderColor="var(--mantine-color-cyan-5)"
-                borderWidth={2}
+                borderColor={uiColors.accentBorder}
+                borderWidth={uiBorders.accentWidth}
               />
             </SimpleGrid>
           </Collapse>

@@ -6,6 +6,7 @@ import {
   useMantineTheme,
 } from "@mantine/core";
 import { ReactNode } from "react";
+import { uiTypography } from "../uiTokens";
 
 type SectionProps = {
   title: string;
@@ -30,12 +31,10 @@ export function Section({
     <Stack gap="md" align={align === "center" ? "center" : undefined}>
       {eyebrow ? (
         <Text
-          tt="uppercase"
-          fw={600}
           size="xs"
           c={isDark ? theme.colors.cyan[3] : theme.colors.cyan[7]}
           ta={alignText}
-          style={{ letterSpacing: "0.12em" }}
+          style={uiTypography.sectionEyebrow}
         >
           {eyebrow}
         </Text>

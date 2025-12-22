@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Alert,
   Badge,
   Button,
   Card,
@@ -7,9 +8,11 @@ import {
   Tabs,
   TextInput,
   Textarea,
+  ThemeIcon,
   createTheme,
   type MantineColorsTuple,
 } from "@mantine/core";
+import { uiRadii } from "./uiTokens";
 
 const brand: MantineColorsTuple = [
   "#edf0ff",
@@ -44,7 +47,7 @@ export const theme = createTheme({
   },
   primaryColor: "brand",
   primaryShade: { light: 6, dark: 5 },
-  defaultRadius: "lg",
+  defaultRadius: uiRadii.base,
   defaultGradient: { from: "brand", to: "violet", deg: 135 },
   colors: {
     brand,
@@ -53,40 +56,50 @@ export const theme = createTheme({
   components: {
     Button: Button.extend({
       defaultProps: {
-        radius: "md",
+        radius: uiRadii.control,
       },
     }),
     ActionIcon: ActionIcon.extend({
       defaultProps: {
-        radius: "md",
+        radius: uiRadii.control,
         variant: "outline",
       },
     }),
     Card: Card.extend({
       defaultProps: {
-        radius: "lg",
+        radius: uiRadii.surface,
         withBorder: true,
         shadow: "sm",
       },
     }),
     Badge: Badge.extend({
       defaultProps: {
-        radius: "sm",
+        radius: uiRadii.badge,
       },
     }),
     TextInput: TextInput.extend({
       defaultProps: {
-        radius: "md",
+        radius: uiRadii.control,
       },
     }),
     Textarea: Textarea.extend({
       defaultProps: {
-        radius: "md",
+        radius: uiRadii.control,
       },
     }),
     SegmentedControl: SegmentedControl.extend({
       defaultProps: {
-        radius: "xl",
+        radius: uiRadii.control,
+      },
+    }),
+    ThemeIcon: ThemeIcon.extend({
+      defaultProps: {
+        radius: uiRadii.icon,
+      },
+    }),
+    Alert: Alert.extend({
+      defaultProps: {
+        radius: uiRadii.control,
       },
     }),
     Tabs: Tabs.extend({

@@ -20,7 +20,10 @@ import {
 } from "./commands/startMeeting";
 import { handleAutoRecordCommand } from "./commands/autorecord";
 import { handleContextCommand } from "./commands/context";
-import { getAutoRecordSetting } from "./db";
+import { getAutoRecordSettingByChannel } from "./services/autorecordService";
+import { fetchServerContext } from "./services/appContextService";
+import { fetchChannelContext } from "./services/channelContextService";
+import { getGuildLimits } from "./services/subscriptionService";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
@@ -60,7 +63,7 @@ import {
   isOnboardModal,
   onboardCommand,
 } from "./commands/onboard";
-import { getGuildInstaller } from "./db";
+import { fetchGuildInstaller } from "./services/guildInstallerService";
 
 const TOKEN = config.discord.botToken;
 const CLIENT_ID = config.discord.clientId;
@@ -94,7 +97,7 @@ export async function setupBot() {
       return;
     }
     try {
-      const installer = await getGuildInstaller(guild.id);
+      const installer = await fetchGuildInstaller(guild.id);
       const dmTarget =
         installer?.installerId &&
         (await client.users.fetch(installer.installerId).catch(() => null));
@@ -324,14 +327,14 @@ async function handleUserJoin(newState: VoiceState) {
   ) {
     try {
       // Check for specific channel setting
-      let autoRecordSetting = await getAutoRecordSetting(
+      let autoRecordSetting = await getAutoRecordSettingByChannel(
         newState.guild.id,
         newState.channelId!,
       );
 
       // If no specific setting, check for record-all setting
       if (!autoRecordSetting) {
-        autoRecordSetting = await getAutoRecordSetting(
+        autoRecordSetting = await getAutoRecordSettingByChannel(
           newState.guild.id,
           "ALL",
         );
@@ -339,18 +342,40 @@ async function handleUserJoin(newState: VoiceState) {
 
       // If auto-record is enabled, start recording
       if (autoRecordSetting && autoRecordSetting.enabled) {
+        const [serverContext, channelContext] = await Promise.all([
+          fetchServerContext(newState.guild.id),
+          fetchChannelContext(newState.guild.id, newState.channelId!),
+        ]);
+        const resolvedTextChannelId =
+          autoRecordSetting.textChannelId ??
+          serverContext?.defaultNotesChannelId;
+        if (!resolvedTextChannelId) {
+          console.error(
+            `No default notes channel configured for auto-record in guild ${newState.guild.id}`,
+          );
+          return;
+        }
         const textChannel = newState.guild.channels.cache.get(
-          autoRecordSetting.textChannelId,
+          resolvedTextChannelId,
         ) as TextChannel;
 
         if (textChannel && newState.channel) {
           console.log(
             `Auto-starting recording in ${newState.channel.name} due to auto-record settings`,
           );
-          await handleAutoStartMeeting(client, newState.channel, textChannel);
+          const { limits } = await getGuildLimits(newState.guild.id);
+          const liveVoiceDefault = serverContext?.liveVoiceEnabled ?? false;
+          const liveVoiceOverride = channelContext?.liveVoiceEnabled;
+          const liveVoiceEnabled =
+            limits.liveVoiceEnabled && (liveVoiceOverride ?? liveVoiceDefault);
+          const tags = autoRecordSetting.tags ?? serverContext?.defaultTags;
+          await handleAutoStartMeeting(client, newState.channel, textChannel, {
+            tags,
+            liveVoiceEnabled,
+          });
         } else {
           console.error(
-            `Could not find text channel ${autoRecordSetting.textChannelId} for auto-recording`,
+            `Could not find text channel ${resolvedTextChannelId} for auto-recording`,
           );
         }
       }

@@ -24,8 +24,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ? "authenticated"
       : "unauthenticated";
 
+  const portalRedirect =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/portal/select-server`
+      : "/portal/select-server";
   const loginUrl = `${API_BASE}/auth/discord?redirect=${encodeURIComponent(
-    typeof window !== "undefined" ? window.location.href : "/",
+    portalRedirect,
   )}`;
 
   const refetch = authQuery.refetch;

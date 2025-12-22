@@ -5,6 +5,7 @@ import {
   useMantineTheme,
 } from "@mantine/core";
 import type { ComponentPropsWithoutRef } from "react";
+import { uiGradients, uiRadii, uiSurfaces } from "../uiTokens";
 
 type SurfaceProps = PaperProps &
   ComponentPropsWithoutRef<"div"> & {
@@ -16,15 +17,9 @@ export function Surface({ tone = "default", style, ...props }: SurfaceProps) {
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
 
-  const accentGlow = isDark
-    ? "linear-gradient(140deg, rgba(34, 211, 238, 0.08), rgba(99, 102, 241, 0.06))"
-    : "linear-gradient(140deg, rgba(34, 211, 238, 0.12), rgba(99, 102, 241, 0.06))";
-
   const backgroundColor =
     tone === "soft"
-      ? isDark
-        ? "rgba(22, 26, 36, 0.66)"
-        : "rgba(248, 250, 255, 0.95)"
+      ? uiSurfaces.softBackground(isDark)
       : isDark
         ? theme.colors.dark[6]
         : theme.white;
@@ -32,20 +27,17 @@ export function Surface({ tone = "default", style, ...props }: SurfaceProps) {
   const borderColor = isDark ? theme.colors.dark[4] : theme.colors.gray[2];
 
   const shadow =
-    tone === "raised"
-      ? isDark
-        ? "0 18px 40px rgba(0, 0, 0, 0.45)"
-        : "0 18px 40px rgba(15, 23, 42, 0.12)"
-      : undefined;
+    tone === "raised" ? uiSurfaces.raisedShadow(isDark) : undefined;
 
   return (
     <Paper
       withBorder
-      radius="xl"
+      radius={uiRadii.surface}
       shadow={tone === "raised" ? undefined : "sm"}
       style={{
         backgroundColor,
-        backgroundImage: tone === "soft" ? accentGlow : undefined,
+        backgroundImage:
+          tone === "soft" ? uiGradients.surfaceSoft(isDark) : undefined,
         borderColor,
         boxShadow: shadow,
         ...style,

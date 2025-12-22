@@ -5,50 +5,9 @@ import {
   fetchServerContext,
   setServerContext,
 } from "../../services/appContextService";
-import {
-  ensureBotInGuild,
-  ensureManageGuildWithUserToken,
-} from "../../services/guildAccessService";
-import type { TrpcContext } from "../context";
+import { ensureManageGuildWithUserToken } from "../../services/guildAccessService";
+import { ensureBotPresence } from "./ensureBotPresence";
 import { authedProcedure, router } from "../trpc";
-
-const ensureBotPresence = async (ctx: TrpcContext, serverId: string) => {
-  const sessionData = ctx.req.session as typeof ctx.req.session & {
-    botGuildIds?: string[];
-    botGuildIdsFetchedAt?: number;
-  };
-  const cacheAgeMs =
-    sessionData.botGuildIdsFetchedAt != null
-      ? Date.now() - sessionData.botGuildIdsFetchedAt
-      : Number.POSITIVE_INFINITY;
-  const cacheFresh = cacheAgeMs < 5 * 60 * 1000;
-  if (cacheFresh && sessionData.botGuildIds) {
-    if (!sessionData.botGuildIds.includes(serverId)) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Bot is not in that guild",
-      });
-    }
-    return;
-  }
-  const botCheck = await ensureBotInGuild(serverId);
-  if (botCheck === null) {
-    throw new TRPCError({
-      code: "TOO_MANY_REQUESTS",
-      message: "Discord rate limited. Please retry.",
-    });
-  }
-  if (!botCheck) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Bot is not in that guild",
-    });
-  }
-  sessionData.botGuildIds = Array.from(
-    new Set([...(sessionData.botGuildIds ?? []), serverId]),
-  );
-  sessionData.botGuildIdsFetchedAt = Date.now();
-};
 
 const get = authedProcedure
   .input(z.object({ serverId: z.string() }))
@@ -65,11 +24,24 @@ const get = authedProcedure
     }
     await ensureBotPresence(ctx, input.serverId);
     const ctxRecord = await fetchServerContext(input.serverId);
-    return { context: ctxRecord?.context ?? "" };
+    return {
+      context: ctxRecord?.context ?? "",
+      defaultNotesChannelId: ctxRecord?.defaultNotesChannelId ?? null,
+      defaultTags: ctxRecord?.defaultTags ?? [],
+      liveVoiceEnabled: ctxRecord?.liveVoiceEnabled ?? false,
+    };
   });
 
 const set = authedProcedure
-  .input(z.object({ serverId: z.string(), context: z.string().min(1) }))
+  .input(
+    z.object({
+      serverId: z.string(),
+      context: z.string().optional(),
+      defaultNotesChannelId: z.string().nullable().optional(),
+      defaultTags: z.array(z.string()).optional(),
+      liveVoiceEnabled: z.boolean().optional(),
+    }),
+  )
   .mutation(async ({ ctx, input }) => {
     const ok = await ensureManageGuildWithUserToken(
       ctx.user.accessToken,
@@ -82,7 +54,22 @@ const set = authedProcedure
       });
     }
     await ensureBotPresence(ctx, input.serverId);
-    await setServerContext(input.serverId, ctx.user.id, input.context);
+    const update = {
+      ...(input.context !== undefined ? { context: input.context } : {}),
+      ...(input.defaultNotesChannelId !== undefined
+        ? { defaultNotesChannelId: input.defaultNotesChannelId }
+        : {}),
+      ...(input.defaultTags !== undefined
+        ? { defaultTags: input.defaultTags }
+        : {}),
+      ...(input.liveVoiceEnabled !== undefined
+        ? { liveVoiceEnabled: input.liveVoiceEnabled }
+        : {}),
+    };
+    if (Object.keys(update).length === 0) {
+      return { ok: true };
+    }
+    await setServerContext(input.serverId, ctx.user.id, update);
     return { ok: true };
   });
 

@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { getRecentMeetingsForGuild } from "../db";
+import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
 import { config } from "./configService";
 import { normalizeTags, parseTags } from "../utils/tags";
 import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
@@ -12,6 +12,11 @@ const openAIClient = new OpenAI({
 
 export type AskScope = "guild" | "channel";
 
+export type AskHistoryMessage = {
+  role: "user" | "chronote";
+  text: string;
+};
+
 export interface AskRequest {
   guildId: string;
   channelId: string;
@@ -19,10 +24,12 @@ export interface AskRequest {
   tags?: string[];
   scope?: AskScope;
   maxMeetings?: number;
+  history?: AskHistoryMessage[];
 }
 
 export interface AskResponse {
   answer: string;
+  sourceMeetingIds?: string[];
 }
 
 function truncate(text: string, maxLen: number): string {
@@ -39,7 +46,11 @@ export async function answerQuestionService(
     : undefined;
 
   const maxMeetings = req.maxMeetings ?? config.ask.maxMeetings;
-  let meetings = await getRecentMeetingsForGuild(guildId, maxMeetings);
+  const allMeetings = await listRecentMeetingsForGuildService(
+    guildId,
+    maxMeetings,
+  );
+  let meetings = allMeetings;
 
   if (tags?.length) {
     meetings = meetings.filter(
@@ -52,34 +63,61 @@ export async function answerQuestionService(
   }
 
   if (!meetings.length) {
+    if (!allMeetings.length) {
+      return {
+        answer:
+          "I don't have any meetings yet. Start one with `/startmeeting` in Discord or enable auto-recording in Settings.",
+        sourceMeetingIds: [],
+      };
+    }
     const note =
       maxMeetings < config.ask.maxMeetings
         ? buildUpgradeTextOnly(
             "No relevant meetings found. Upgrade for deeper history.",
           )
         : "No relevant meetings found.";
-    return { answer: note };
+    return { answer: note, sourceMeetingIds: [] };
   }
 
+  const sourceMeetingIds = meetings.map(
+    (meeting) => meeting.channelId_timestamp,
+  );
+  const scrubInternalIds = (text: string) =>
+    text
+      .replace(/\(id [0-9a-f-]{8,}\)/gi, "")
+      .replace(/\bid [0-9a-f-]{8,}\b/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
   const contextBlocks = meetings.map((m) => {
     const date = new Date(m.timestamp).toLocaleDateString();
     const tagText = m.tags?.length ? `Tags: ${m.tags.join(", ")}` : "";
-    const notes = m.notes ? truncate(m.notes, 900) : "(no notes)";
+    const notes = m.notes
+      ? truncate(scrubInternalIds(m.notes), 900)
+      : "(no notes)";
     const sourceLink =
       m.notesChannelId && m.notesMessageIds?.length
         ? `https://discord.com/channels/${guildId}/${m.notesChannelId}/${m.notesMessageIds[0]}`
-        : "n/a";
-    return `- Meeting ${date} (id ${m.meetingId}) ${tagText}\n  Notes: ${notes}\n  Source: ${sourceLink}`;
+        : "";
+    const sourceLine = sourceLink ? `\n  Source: ${sourceLink}` : "";
+    return `- Meeting ${date} ${tagText}\n  Notes: ${notes}${sourceLine}`;
   });
 
   const system =
-    "You are Meeting Notes Bot. Answer the user's question using only the provided meeting summaries/notes. " +
-    "Cite the meeting id and source link(s) from the context. If uncertain, say so.";
+    "You are Chronote. Answer the user's question using the provided meeting summaries/notes and the conversation so far. " +
+    "Prefer meeting notes for factual answers about past sessions. If the user provides new facts in the conversation, you can use them for follow-ups. " +
+    "Cite source link(s) from the context as markdown links. Do not include internal IDs. If uncertain, say so.";
+
+  const history = (req.history ?? []).slice(-10);
+  const historyMessages = history.map((msg) => ({
+    role: msg.role === "chronote" ? ("assistant" as const) : ("user" as const),
+    content: msg.text,
+  }));
 
   const completion = await openAIClient.chat.completions.create({
     model: config.liveVoice.responderModel,
     messages: [
       { role: "system", content: system },
+      ...historyMessages,
       {
         role: "user",
         content: `Question: ${question}\n\nContext:\n${contextBlocks.join("\n")}`,
@@ -88,5 +126,8 @@ export async function answerQuestionService(
     max_completion_tokens: 300,
   });
 
-  return { answer: completion.choices[0].message.content ?? "No answer." };
+  return {
+    answer: completion.choices[0].message.content ?? "No answer.",
+    sourceMeetingIds,
+  };
 }

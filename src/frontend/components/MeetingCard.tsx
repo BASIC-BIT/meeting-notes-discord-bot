@@ -42,7 +42,7 @@ export function MeetingCard({ meeting, onOpen }: MeetingCardProps) {
         </Text>
         <Group gap="xs">
           <Group gap={6}>
-            <ThemeIcon size={22} radius="xl" variant="light" color="gray">
+            <ThemeIcon size={22} variant="light" color="gray">
               <IconCalendar size={12} />
             </ThemeIcon>
             <Text size="xs" c="dimmed">
@@ -50,7 +50,7 @@ export function MeetingCard({ meeting, onOpen }: MeetingCardProps) {
             </Text>
           </Group>
           <Group gap={6}>
-            <ThemeIcon size={22} radius="xl" variant="light" color="gray">
+            <ThemeIcon size={22} variant="light" color="gray">
               <IconClock size={12} />
             </ThemeIcon>
             <Text size="xs" c="dimmed">

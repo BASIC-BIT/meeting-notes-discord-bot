@@ -5,15 +5,17 @@ import {
   ChannelType,
 } from "discord.js";
 import {
-  writeServerContext,
-  getServerContext,
-  deleteServerContext,
-  writeChannelContext,
-  getChannelContext,
-  getAllChannelContexts,
-  deleteChannelContext,
-} from "../db";
-import { ServerContext, ChannelContext } from "../types/db";
+  clearServerContextService,
+  fetchServerContext,
+  setServerContext,
+} from "../services/appContextService";
+import {
+  clearChannelContext,
+  fetchChannelContext,
+  listChannelContexts,
+  setChannelContext,
+} from "../services/channelContextService";
+import { ChannelContext } from "../types/db";
 
 export async function handleContextCommand(
   interaction: ChatInputCommandInteraction,
@@ -81,15 +83,10 @@ async function handleSetServerContext(
     return;
   }
 
-  const serverContext: ServerContext = {
-    guildId: interaction.guild!.id,
-    context: contextText,
-    updatedAt: new Date().toISOString(),
-    updatedBy: interaction.user.id,
-  };
-
   try {
-    await writeServerContext(serverContext);
+    await setServerContext(interaction.guild!.id, interaction.user.id, {
+      context: contextText,
+    });
 
     const embed = new EmbedBuilder()
       .setTitle("Server Context Updated")
@@ -142,16 +139,13 @@ async function handleSetChannelContext(
     return;
   }
 
-  const channelContext: ChannelContext = {
-    guildId: interaction.guild!.id,
-    channelId: channel.id,
-    context: contextText,
-    updatedAt: new Date().toISOString(),
-    updatedBy: interaction.user.id,
-  };
-
   try {
-    await writeChannelContext(channelContext);
+    await setChannelContext(
+      interaction.guild!.id,
+      channel.id,
+      interaction.user.id,
+      { context: contextText },
+    );
 
     const embed = new EmbedBuilder()
       .setTitle("Channel Context Updated")
@@ -188,11 +182,11 @@ async function handleViewContext(interaction: ChatInputCommandInteraction) {
   const channel = interaction.options.getChannel("channel");
 
   try {
-    const serverContext = await getServerContext(interaction.guild!.id);
+    const serverContext = await fetchServerContext(interaction.guild!.id);
     let channelContext: ChannelContext | undefined;
 
     if (channel) {
-      channelContext = await getChannelContext(
+      channelContext = await fetchChannelContext(
         interaction.guild!.id,
         channel.id,
       );
@@ -223,7 +217,9 @@ async function handleViewContext(interaction: ChatInputCommandInteraction) {
       if (channelContext) {
         embed.addFields({
           name: `Channel Context (${channel.name})`,
-          value: channelContext.context.substring(0, 1024),
+          value: channelContext.context
+            ? channelContext.context.substring(0, 1024)
+            : "*No channel context set*",
         });
         embed.addFields({
           name: "Channel Context Metadata",
@@ -251,7 +247,7 @@ async function handleClearServerContext(
   interaction: ChatInputCommandInteraction,
 ) {
   try {
-    const existing = await getServerContext(interaction.guild!.id);
+    const existing = await fetchServerContext(interaction.guild!.id);
     if (!existing) {
       await interaction.reply({
         content: "No server context to clear.",
@@ -260,7 +256,7 @@ async function handleClearServerContext(
       return;
     }
 
-    await deleteServerContext(interaction.guild!.id);
+    await clearServerContextService(interaction.guild!.id);
 
     const embed = new EmbedBuilder()
       .setTitle("Server Context Cleared")
@@ -284,7 +280,10 @@ async function handleClearChannelContext(
   const channel = interaction.options.getChannel("channel", true);
 
   try {
-    const existing = await getChannelContext(interaction.guild!.id, channel.id);
+    const existing = await fetchChannelContext(
+      interaction.guild!.id,
+      channel.id,
+    );
     if (!existing) {
       await interaction.reply({
         content: `No context set for **${channel.name}**.`,
@@ -293,7 +292,7 @@ async function handleClearChannelContext(
       return;
     }
 
-    await deleteChannelContext(interaction.guild!.id, channel.id);
+    await clearChannelContext(interaction.guild!.id, channel.id);
 
     const embed = new EmbedBuilder()
       .setTitle("Channel Context Cleared")
@@ -313,8 +312,8 @@ async function handleClearChannelContext(
 
 async function handleListContexts(interaction: ChatInputCommandInteraction) {
   try {
-    const serverContext = await getServerContext(interaction.guild!.id);
-    const channelContexts = await getAllChannelContexts(interaction.guild!.id);
+    const serverContext = await fetchServerContext(interaction.guild!.id);
+    const channelContexts = await listChannelContexts(interaction.guild!.id);
 
     const embed = new EmbedBuilder()
       .setTitle("All Contexts in Server")
@@ -322,7 +321,7 @@ async function handleListContexts(interaction: ChatInputCommandInteraction) {
       .setTimestamp();
 
     // Add server context
-    if (serverContext) {
+    if (serverContext?.context) {
       embed.addFields({
         name: "📋 Server Context",
         value:
@@ -338,9 +337,12 @@ async function handleListContexts(interaction: ChatInputCommandInteraction) {
           const channel = await interaction.guild!.channels.fetch(
             ctx.channelId,
           );
+          const contextText = ctx.context ?? "";
           const preview =
-            ctx.context.substring(0, 100) +
-            (ctx.context.length > 100 ? "..." : "");
+            contextText.length > 0
+              ? contextText.substring(0, 100) +
+                (contextText.length > 100 ? "..." : "")
+              : "No context";
           return `**${channel?.name || "Unknown Channel"}**: ${preview}`;
         }),
       );

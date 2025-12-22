@@ -654,6 +654,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           "${aws_dynamodb_table.auto_record_settings_table.arn}/index/*",
           aws_dynamodb_table.server_context_table.arn,
           aws_dynamodb_table.channel_context_table.arn,
+          aws_dynamodb_table.ask_conversation_table.arn,
           aws_dynamodb_table.meeting_history_table.arn,
           "${aws_dynamodb_table.meeting_history_table.arn}/index/*",
           aws_dynamodb_table.installer_table.arn,
@@ -1098,6 +1099,37 @@ resource "aws_dynamodb_table" "onboarding_state_table" {
 
   tags = {
     Name = "OnboardingStateTable"
+  }
+}
+
+# Ask Conversation Table
+resource "aws_dynamodb_table" "ask_conversation_table" {
+  name         = "AskConversationTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "AskConversationTable"
   }
 }
 
