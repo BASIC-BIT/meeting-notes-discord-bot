@@ -2,6 +2,7 @@ import { MeetingData } from "../types/meeting-data";
 import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
 import { config } from "./configService";
 import { normalizeTags } from "../utils/tags";
+import { formatParticipantLabel } from "../utils/participants";
 
 type Line = { ts: number; speaker: string; text: string };
 export type LatestUtterance = {
@@ -38,10 +39,10 @@ function collectWindowLines(meeting: MeetingData): Line[] {
 
 function getSpeakerLabel(meeting: MeetingData, userId: string): string {
   const participant = meeting.participants.get(userId);
-  if (!participant) return userId;
-  return (
-    participant.nickname || participant.globalName || participant.tag || userId
-  );
+  return formatParticipantLabel(participant, {
+    includeUsername: false,
+    fallbackName: userId,
+  });
 }
 
 export interface LiveResponderContext {

@@ -14,6 +14,7 @@ import { EndBehaviorType } from "@discordjs/voice";
 import prism from "prism-media";
 import { PassThrough } from "node:stream";
 import { transcribeSnippet } from "./transcription";
+import { formatParticipantLabel } from "./utils/participants";
 import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
 import * as fs from "node:fs";
@@ -214,10 +215,27 @@ export async function compileTranscriptions(
   const transcription = meeting.audioData.audioFiles
     .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
     .map((fileData) => {
-      const userTag =
-        client.users.cache.get(fileData.userId)?.tag ?? fileData.userId;
+      const participant = meeting.participants.get(fileData.userId);
+      const member = meeting.guild.members.cache.get(fileData.userId);
+      const user = client.users.cache.get(fileData.userId);
+      const fallbackName =
+        member?.nickname ||
+        member?.user.globalName ||
+        member?.user.username ||
+        user?.globalName ||
+        user?.username ||
+        fileData.userId;
+      const fallbackUsername =
+        member?.user.username || user?.username || undefined;
+      const speakerLabel = formatParticipantLabel(participant, {
+        includeUsername: true,
+        fallbackName,
+        fallbackUsername,
+      });
 
-      return `[${userTag} @ ${new Date(fileData.timestamp).toLocaleString()}]: ${fileData.transcript}`;
+      return `[${speakerLabel} @ ${new Date(
+        fileData.timestamp,
+      ).toLocaleString()}]: ${fileData.transcript}`;
     })
     .join("\n");
 

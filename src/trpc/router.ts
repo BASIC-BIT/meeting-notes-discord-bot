@@ -6,6 +6,7 @@ import { billingRouter } from "./routers/billing";
 import { channelContextsRouter } from "./routers/channelContexts";
 import { contextRouter } from "./routers/context";
 import { meetingsRouter } from "./routers/meetings";
+import { pricingRouter } from "./routers/pricing";
 import { serversRouter } from "./routers/servers";
 
 export const appRouter = router({
@@ -16,6 +17,7 @@ export const appRouter = router({
   channelContexts: channelContextsRouter,
   context: contextRouter,
   meetings: meetingsRouter,
+  pricing: pricingRouter,
   servers: serversRouter,
 });
 

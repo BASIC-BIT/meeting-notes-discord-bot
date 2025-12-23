@@ -8,9 +8,11 @@ import {
   getMockBillingSnapshot,
   seedMockSubscription,
 } from "../../services/billingService";
+import { resolvePaidPlanPriceId } from "../../services/pricingService";
 import { getStripeClient } from "../../services/stripeClient";
 import { config } from "../../services/configService";
 import { authedProcedure, router } from "../trpc";
+import type { BillingInterval, PaidTier } from "../../types/pricing";
 
 const me = authedProcedure
   .input(z.object({ serverId: z.string().optional() }))
@@ -34,7 +36,13 @@ const me = authedProcedure
   });
 
 const checkout = authedProcedure
-  .input(z.object({ serverId: z.string() }))
+  .input(
+    z.object({
+      serverId: z.string(),
+      tier: z.enum(["basic", "pro"]),
+      interval: z.enum(["month", "year"]).default("month"),
+    }),
+  )
   .mutation(async ({ ctx, input }) => {
     if (config.mock.enabled) {
       await seedMockSubscription(input.serverId);
@@ -48,6 +56,12 @@ const checkout = authedProcedure
       });
     }
     try {
+      const priceId =
+        (await resolvePaidPlanPriceId({
+          stripe,
+          tier: input.tier as PaidTier,
+          interval: input.interval as BillingInterval,
+        })) || config.stripe.priceBasic;
       const url = await createCheckoutSession({
         stripe,
         user: {
@@ -56,6 +70,7 @@ const checkout = authedProcedure
           username: ctx.user.username ?? undefined,
         },
         guildId: input.serverId,
+        priceId,
       });
       return { url };
     } catch (err) {

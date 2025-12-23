@@ -143,15 +143,17 @@ export async function createCheckoutSession(params: {
   stripe: Stripe;
   user: StripeUser;
   guildId: string;
+  priceId?: string | null;
 }): Promise<string> {
-  const { stripe, user, guildId } = params;
-  if (!config.stripe.priceBasic?.startsWith("price_")) {
+  const { stripe, user, guildId, priceId } = params;
+  const checkoutPriceId = priceId || config.stripe.priceBasic;
+  if (!checkoutPriceId?.startsWith("price_")) {
     throw new Error("Stripe price not configured");
   }
   const customerId = await ensureStripeCustomer(stripe, user);
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
-    line_items: [{ price: config.stripe.priceBasic, quantity: 1 }],
+    line_items: [{ price: checkoutPriceId, quantity: 1 }],
     success_url: config.stripe.successUrl,
     cancel_url: config.stripe.cancelUrl,
     customer: customerId,

@@ -22,6 +22,7 @@ import { stripCodeFences } from "../utils/text";
 import { buildPaginatedEmbeds } from "../utils/embedPagination";
 import { MeetingHistory, SuggestionHistoryEntry } from "../types/db";
 import { fetchJsonFromS3 } from "../services/storageService";
+import { formatParticipantLabel } from "../utils/participants";
 
 type PendingCorrection = {
   guildId: string;
@@ -472,9 +473,11 @@ async function resolveTranscript(history: MeetingHistory): Promise<string> {
     const payload = await fetchJsonFromS3<{
       text?: string;
       segments?: Array<{
+        userId?: string;
         text?: string;
-        nickname?: string;
-        globalName?: string;
+        username?: string;
+        displayName?: string;
+        serverNickname?: string;
         tag?: string;
       }>;
     }>(history.transcriptS3Key);
@@ -485,8 +488,25 @@ async function resolveTranscript(history: MeetingHistory): Promise<string> {
       return payload.segments
         .filter((segment) => segment.text)
         .map((segment) => {
-          const speaker =
-            segment.nickname || segment.globalName || segment.tag || "Unknown";
+          const speaker = formatParticipantLabel(
+            {
+              id: segment.userId ?? "unknown",
+              username: segment.username ?? segment.tag ?? "unknown",
+              displayName: segment.displayName,
+              serverNickname: segment.serverNickname,
+              tag: segment.tag,
+            },
+            {
+              includeUsername: true,
+              fallbackName:
+                segment.serverNickname ||
+                segment.displayName ||
+                segment.username ||
+                segment.tag ||
+                "Unknown",
+              fallbackUsername: segment.username ?? segment.tag,
+            },
+          );
           return `${speaker}: ${segment.text}`;
         })
         .join("\n");

@@ -32,6 +32,7 @@ import PageHeader from "../components/PageHeader";
 import { trpc } from "../services/trpc";
 import { useGuildContext } from "../contexts/GuildContext";
 import type { AskConversation, AskMessage } from "../../types/ask";
+import { getDiscordOpenUrl } from "../utils/discordLinks";
 import {
   uiColors,
   uiEffects,
@@ -62,6 +63,7 @@ export default function Ask() {
   const [optimisticConversation, setOptimisticConversation] =
     useState<AskConversation | null>(null);
   const chatViewportRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const listQuery = trpc.ask.listConversations.useQuery(
     { serverId: selectedGuildId ?? "" },
@@ -82,6 +84,9 @@ export default function Ask() {
   const renameMutation = trpc.ask.rename.useMutation();
 
   const conversations = listQuery.data?.conversations ?? [];
+  const listBusy = listQuery.isLoading || listQuery.isFetching;
+  const conversationBusy =
+    conversationQuery.isLoading || conversationQuery.isFetching;
 
   useEffect(() => {
     if (!selectedGuildId) {
@@ -114,8 +119,12 @@ export default function Ask() {
     );
   }, [query, conversations, optimisticConversation]);
 
-  const activeConversation = conversationQuery.data?.conversation;
-  const activeMessages = conversationQuery.data?.messages ?? [];
+  const activeConversation = isCreatingNew
+    ? null
+    : conversationQuery.data?.conversation;
+  const activeMessages = isCreatingNew
+    ? []
+    : (conversationQuery.data?.messages ?? []);
   const displayTitle =
     activeConversation?.title ?? optimisticConversation?.title ?? "New chat";
   const displayMessages = useMemo(() => {
@@ -169,6 +178,30 @@ export default function Ask() {
     setOptimisticMessages([]);
     setOptimisticConversation(null);
   };
+
+  useEffect(() => {
+    if (!selectedGuildId || !isCreatingNew) return;
+    const handle = window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [isCreatingNew, selectedGuildId]);
+
+  useEffect(() => {
+    if (!selectedGuildId) return;
+    if (askMutation.isPending) return;
+    if (!activeId && !isCreatingNew && !activeConversation) return;
+    const handle = window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [
+    askMutation.isPending,
+    activeId,
+    activeConversation?.id,
+    isCreatingNew,
+    selectedGuildId,
+  ]);
 
   useEffect(() => {
     if (activeConversation) {
@@ -297,9 +330,6 @@ export default function Ask() {
     }
   };
 
-  const isPageLoading =
-    listQuery.isLoading || (activeId ? conversationQuery.isLoading : false);
-
   return (
     <Stack gap="md" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
       <PageHeader
@@ -307,15 +337,18 @@ export default function Ask() {
         description="Query recent meetings with receipts. Conversations stay scoped to the selected server."
       />
 
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        <LoadingOverlay
-          visible={isPageLoading}
-          overlayProps={uiOverlays.loading}
-          loaderProps={{ size: "md" }}
-        />
+      <div
+        style={{
+          position: "relative",
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
         <Grid
           gutter="lg"
-          style={{ flex: 1, minHeight: 0 }}
+          style={{ flex: 1, minHeight: 0, height: "100%" }}
           align="stretch"
           styles={{ inner: { height: "100%" } }}
         >
@@ -341,14 +374,27 @@ export default function Ask() {
                 maxHeight: "100%",
               }}
             >
+              <LoadingOverlay
+                visible={listQuery.isLoading || listQuery.isFetching}
+                overlayProps={uiOverlays.loading}
+                loaderProps={{ size: "md" }}
+              />
               <Stack gap="sm" style={{ height: "100%", minHeight: 0 }}>
-                <Group justify="space-between" align="center">
+                <Group
+                  justify="space-between"
+                  align="center"
+                  style={{
+                    paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
+                  }}
+                >
                   <Text fw={600}>Conversations</Text>
                   <Button
                     size="xs"
                     variant="light"
                     leftSection={<IconPlus size={14} />}
                     onClick={handleNewConversation}
+                    disabled={listBusy || conversationBusy}
+                    loading={listBusy}
                   >
                     New
                   </Button>
@@ -358,12 +404,22 @@ export default function Ask() {
                   value={query}
                   onChange={(event) => setQuery(event.currentTarget.value)}
                   leftSection={<IconSearch size={14} />}
+                  styles={{
+                    input: {
+                      paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
+                    },
+                  }}
                 />
                 <ScrollArea
                   style={{ flex: 1, minHeight: 0 }}
                   type="always"
                   offsetScrollbars
                   scrollbarSize={10}
+                  styles={{
+                    viewport: {
+                      paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
+                    },
+                  }}
                 >
                   <Stack gap="sm">
                     {listQuery.error ? (
@@ -444,6 +500,16 @@ export default function Ask() {
                 maxHeight: "100%",
               }}
             >
+              <LoadingOverlay
+                visible={
+                  listQuery.isLoading ||
+                  listQuery.isFetching ||
+                  conversationQuery.isLoading ||
+                  conversationQuery.isFetching
+                }
+                overlayProps={uiOverlays.loading}
+                loaderProps={{ size: "md" }}
+              />
               <Stack gap="md" style={{ height: "100%", minHeight: 0 }}>
                 <Group justify="space-between" align="center">
                   <Group gap="sm">
@@ -523,6 +589,7 @@ export default function Ask() {
                     {renameError}
                   </Text>
                 ) : null}
+                <Divider />
                 <ScrollArea
                   style={{ flex: 1, minHeight: 0 }}
                   viewportRef={chatViewportRef}
@@ -586,16 +653,22 @@ export default function Ask() {
                                 <ReactMarkdown
                                   remarkPlugins={[remarkGfm]}
                                   components={{
-                                    a: (props) => (
-                                      <a
-                                        {...props}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        style={{
-                                          color: uiColors.linkAccent,
-                                        }}
-                                      />
-                                    ),
+                                    a: (props) => {
+                                      const resolvedHref = props.href
+                                        ? getDiscordOpenUrl(props.href)
+                                        : undefined;
+                                      return (
+                                        <a
+                                          {...props}
+                                          href={resolvedHref}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          style={{
+                                            color: uiColors.linkAccent,
+                                          }}
+                                        />
+                                      );
+                                    },
                                     p: (props) => (
                                       <p {...props} style={{ margin: 0 }} />
                                     ),
@@ -621,6 +694,16 @@ export default function Ask() {
                     value={draft}
                     onChange={(event) => setDraft(event.currentTarget.value)}
                     disabled={!selectedGuildId || askMutation.isPending}
+                    ref={inputRef}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        (event.ctrlKey || event.metaKey)
+                      ) {
+                        event.preventDefault();
+                        void handleAsk();
+                      }
+                    }}
                   />
                   {errorMessage ? (
                     <Text size="xs" c="red">

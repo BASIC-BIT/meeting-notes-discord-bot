@@ -219,6 +219,7 @@ export default function Settings() {
     () => voiceChannels.filter((channel) => !usedChannelIds.has(channel.value)),
     [voiceChannels, usedChannelIds],
   );
+  const channelsRefreshing = channelsQuery.isFetching;
 
   const channelBusy =
     rulesQuery.isLoading ||
@@ -592,6 +593,8 @@ export default function Settings() {
                 variant="subtle"
                 leftSection={<IconRefresh size={16} />}
                 onClick={() => channelsQuery.refetch()}
+                loading={channelsRefreshing}
+                disabled={channelBusy}
               >
                 Refresh channels
               </Button>
@@ -853,6 +856,8 @@ export default function Settings() {
                 variant="subtle"
                 leftSection={<IconRefresh size={16} />}
                 onClick={() => channelsQuery.refetch()}
+                loading={channelsRefreshing}
+                disabled={channelBusy}
               >
                 Recheck bot access
               </Button>

@@ -17,6 +17,7 @@ import {
   buildLiveResponderContext,
   LatestUtterance,
 } from "./services/liveResponderContextService";
+import { formatParticipantLabel } from "./utils/participants";
 
 type GateDecision = {
   respond: boolean;
@@ -39,10 +40,10 @@ const OUTPUT_SAMPLE_RATE = 48000;
 
 function getSpeakerLabel(meeting: MeetingData, userId: string): string {
   const participant = meeting.participants.get(userId);
-  if (!participant) return userId;
-  return (
-    participant.nickname || participant.globalName || participant.tag || userId
-  );
+  return formatParticipantLabel(participant, {
+    includeUsername: false,
+    fallbackName: userId,
+  });
 }
 
 function collectRecentTranscripts(meeting: MeetingData): string[] {

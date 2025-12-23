@@ -48,9 +48,10 @@ function buildTranscriptJson(
     const participant = meeting.participants.get(seg.userId);
     return {
       userId: seg.userId,
+      username: participant?.username,
+      displayName: participant?.displayName,
+      serverNickname: participant?.serverNickname,
       tag: participant?.tag,
-      nickname: participant?.nickname,
-      globalName: participant?.globalName,
       startedAt: new Date(seg.timestamp).toISOString(),
       text: seg.text,
     };

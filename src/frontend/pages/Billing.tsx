@@ -9,6 +9,7 @@ import {
   Group,
   List,
   Loader,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Text,
@@ -24,6 +25,14 @@ import Surface from "../components/Surface";
 import PricingCard from "../components/PricingCard";
 import { trpc } from "../services/trpc";
 import { uiBorders, uiColors, uiGradients } from "../uiTokens";
+import type { BillingInterval, PaidTier } from "../../types/pricing";
+import {
+  annualSavingsLabel,
+  billingLabelForInterval,
+  buildPaidPlanLookup,
+  formatPlanPrice,
+  resolvePaidPlan,
+} from "../utils/pricing";
 
 type PlanTier = "free" | "basic" | "pro";
 
@@ -69,11 +78,15 @@ const BENEFITS: Benefit[] = [
 
 export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
+  const [interval, setInterval] = useState<BillingInterval>("month");
   const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
   const billingQuery = trpc.billing.me.useQuery(
     { serverId: selectedGuildId ?? undefined },
     { enabled: Boolean(selectedGuildId) },
   );
+  const pricingQuery = trpc.pricing.plans.useQuery(undefined, {
+    staleTime: 1000 * 60 * 5,
+  });
   const checkoutMutation = trpc.billing.checkout.useMutation();
   const portalMutation = trpc.billing.portal.useMutation();
   const scheme = useComputedColorScheme("dark");
@@ -87,6 +100,11 @@ export function Billing() {
   const data = billingQuery.data ?? null;
   const loading = billingQuery.isLoading || guildLoading;
   const error = billingQuery.error ? "Unable to load billing status." : null;
+  const paidPlans = pricingQuery.data?.plans ?? [];
+  const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
+  const basicPlan = resolvePaidPlan(planLookup, "basic", interval);
+  const proPlan = resolvePaidPlan(planLookup, "pro", interval);
+  const hasAnnualPlans = paidPlans.some((plan) => plan.interval === "year");
   const isPortalPending = portalMutation.isPending;
   const isFreeTier = data?.tier === "free";
 
@@ -146,11 +164,22 @@ export function Billing() {
       ).toLocaleDateString()}`
     : statusLabel;
 
-  const handleCheckout = async () => {
+  const handleCheckout = async (tier: PaidTier) => {
     try {
       if (!selectedGuildId) return;
+      const plan = resolvePaidPlan(planLookup, tier, interval);
+      if (!plan) {
+        notifications.show({
+          color: "red",
+          title: "Pricing unavailable",
+          message: "We could not find pricing for that plan. Please try again.",
+        });
+        return;
+      }
       const body = await checkoutMutation.mutateAsync({
         serverId: selectedGuildId,
+        tier,
+        interval,
       });
       window.location.href = body.url;
     } catch (err) {
@@ -179,6 +208,9 @@ export function Billing() {
       });
     }
   };
+
+  const isFreePlan = data?.tier === "free";
+  const plansExpanded = isFreePlan ? true : showPlans;
 
   return (
     <Stack gap="xl" w="100%" style={{ width: "100%" }}>
@@ -285,11 +317,11 @@ export function Billing() {
 
       <Surface
         p="lg"
-        tone={showPlans ? "default" : "soft"}
-        onClick={!showPlans ? () => setShowPlans(true) : undefined}
+        tone={plansExpanded ? "default" : "soft"}
+        onClick={!plansExpanded ? () => setShowPlans(true) : undefined}
         style={{
           width: "100%",
-          ...(showPlans
+          ...(plansExpanded
             ? {}
             : {
                 cursor: "pointer",
@@ -302,23 +334,38 @@ export function Billing() {
             <Group gap="sm" align="center">
               <Title order={4}>Plans</Title>
             </Group>
-            <Button
-              size="xs"
-              variant="subtle"
-              color="gray"
-              onClick={() => setShowPlans((prev) => !prev)}
-            >
-              {showPlans ? "Hide plans" : "Compare plans"}
-            </Button>
+            <SegmentedControl
+              value={interval}
+              onChange={(value) => setInterval(value as BillingInterval)}
+              data={[
+                { label: "Monthly", value: "month" },
+                {
+                  label: "Annual (2 months free)",
+                  value: "year",
+                  disabled: !hasAnnualPlans,
+                },
+              ]}
+              size="sm"
+            />
+            {isFreePlan ? null : (
+              <Button
+                size="xs"
+                variant="subtle"
+                color="gray"
+                onClick={() => setShowPlans((prev) => !prev)}
+              >
+                {plansExpanded ? "Hide plans" : "Compare plans"}
+              </Button>
+            )}
           </Group>
-          {!showPlans ? (
+          {!plansExpanded ? (
             <Text size="sm" c="dimmed">
               Compare plan details when you are ready to change tiers.
             </Text>
           ) : null}
-          <Collapse in={showPlans}>
+          <Collapse in={plansExpanded}>
             <Divider my="sm" />
-            <SimpleGrid cols={{ base: 1, md: 3 }} spacing="md">
+            <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">
               <PricingCard
                 name="Free"
                 price="$0"
@@ -335,10 +382,11 @@ export function Billing() {
                   variant: data.tier === "free" ? "light" : "outline",
                 }}
                 badge={data.tier === "free" ? "Current plan" : "Free forever"}
+                billingLabel="Always free"
               />
               <PricingCard
                 name="Basic"
-                price="$12 / mo"
+                price={formatPlanPrice(basicPlan, interval)}
                 description="Unlock longer sessions and deeper recall."
                 features={[
                   "Up to 20 hours per week",
@@ -349,18 +397,21 @@ export function Billing() {
                 cta={
                   data.tier === "basic" ? "Current plan" : "Upgrade to Basic"
                 }
-                ctaDisabled={data.tier === "basic"}
+                ctaDisabled={data.tier === "basic" || !basicPlan}
                 ctaProps={
                   data.tier === "basic"
                     ? { variant: "light" }
-                    : { onClick: handleCheckout }
+                    : { onClick: () => handleCheckout("basic") }
                 }
                 highlighted
                 badge={data.tier === "basic" ? "Current plan" : "Best value"}
+                billingLabel={`${billingLabelForInterval(interval)}${
+                  interval === "year" ? ` • ${annualSavingsLabel}` : ""
+                }`}
               />
               <PricingCard
                 name="Pro"
-                price="$29 / mo"
+                price={formatPlanPrice(proPlan, interval)}
                 description="Unlimited retention and deep server memory."
                 features={[
                   "Unlimited retention",
@@ -370,13 +421,21 @@ export function Billing() {
                   "Priority features + support",
                 ]}
                 cta={data.tier === "pro" ? "Current plan" : "Upgrade to Pro"}
-                ctaDisabled
+                ctaDisabled={data.tier === "pro" || !proPlan}
+                ctaProps={
+                  data.tier === "pro"
+                    ? { variant: "light" }
+                    : { onClick: () => handleCheckout("pro") }
+                }
                 badge={
                   data.tier === "pro" ? "Current plan" : "Unlimited meetings"
                 }
                 tone="soft"
                 borderColor={uiColors.accentBorder}
                 borderWidth={uiBorders.accentWidth}
+                billingLabel={`${billingLabelForInterval(interval)}${
+                  interval === "year" ? ` • ${annualSavingsLabel}` : ""
+                }`}
               />
             </SimpleGrid>
           </Collapse>

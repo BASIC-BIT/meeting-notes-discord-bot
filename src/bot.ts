@@ -24,6 +24,7 @@ import { getAutoRecordSettingByChannel } from "./services/autorecordService";
 import { fetchServerContext } from "./services/appContextService";
 import { fetchChannelContext } from "./services/channelContextService";
 import { getGuildLimits } from "./services/subscriptionService";
+import { formatParticipantLabel, fromMember } from "./utils/participants";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
@@ -297,15 +298,13 @@ async function handleUserJoin(newState: VoiceState) {
     newState.member.user.id !== client.user!.id &&
     meeting.voiceChannel.id === newState.channelId
   ) {
-    const userTag = newState.member!.user.tag;
-    console.log(`${userTag} joined the voice channel.`);
-    meeting.attendance.add(userTag);
-    const participant = {
-      id: newState.member!.user.id,
-      tag: userTag,
-      nickname: newState.member?.displayName ?? undefined,
-      globalName: newState.member?.user.globalName ?? undefined,
-    };
+    const participant = fromMember(newState.member);
+    const userLabel = formatParticipantLabel(participant, {
+      includeUsername: false,
+      fallbackName: newState.member.user.username,
+    });
+    console.log(`${userLabel} joined the voice channel.`);
+    meeting.attendance.add(userLabel);
     meeting.participants.set(participant.id, participant);
     meeting.chatLog.push({
       type: "join",
@@ -393,14 +392,12 @@ async function handleUserLeave(oldState: VoiceState) {
     oldState.member.user.id !== client.user!.id &&
     meeting.voiceChannel.id === oldState.channelId
   ) {
-    const userTag = oldState.member!.user.tag;
-    console.log(`${userTag} left the voice channel.`);
-    const participant = {
-      id: oldState.member!.user.id,
-      tag: userTag,
-      nickname: oldState.member?.displayName ?? undefined,
-      globalName: oldState.member?.user.globalName ?? undefined,
-    };
+    const participant = fromMember(oldState.member);
+    const userLabel = formatParticipantLabel(participant, {
+      includeUsername: false,
+      fallbackName: oldState.member.user.username,
+    });
+    console.log(`${userLabel} left the voice channel.`);
     meeting.participants.set(participant.id, participant);
     meeting.chatLog.push({
       type: "leave",

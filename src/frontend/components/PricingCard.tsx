@@ -40,6 +40,7 @@ type PricingCardProps = {
   highlighted?: boolean;
   badge?: string;
   note?: string;
+  billingLabel?: string;
   tone?: "default" | "raised" | "soft";
   borderColor?: string;
   borderWidth?: number;
@@ -56,6 +57,7 @@ export function PricingCard({
   highlighted = false,
   badge,
   note,
+  billingLabel,
   tone,
   borderColor,
   borderWidth,
@@ -105,7 +107,7 @@ export function PricingCard({
             {price}
           </Text>
           <Text size="sm" c="dimmed">
-            Billed monthly
+            {billingLabel ?? "Billed monthly"}
           </Text>
         </Stack>
         <List

@@ -206,9 +206,10 @@ function buildDefaultStore(): MockStore {
     ];
     const segments = transcriptLines.map((line, index) => ({
       userId: `mock-${line.speaker.toLowerCase()}`,
+      username: line.speaker.toLowerCase(),
+      displayName: line.speaker,
+      serverNickname: line.speaker,
       tag: line.speaker,
-      nickname: line.speaker,
-      globalName: line.speaker,
       startedAt: new Date(
         Date.parse(timestamp) + index * 90 * 1000,
       ).toISOString(),
@@ -239,13 +240,17 @@ function buildDefaultStore(): MockStore {
       participants: [
         {
           id: mockUser.id,
+          username: "mockuser",
+          displayName: "MockUser",
+          serverNickname: "MockUser",
           tag: "MockUser#0001",
-          globalName: "MockUser",
         },
         {
           id: "999999999999999999",
+          username: "chronote",
+          displayName: "Chronote",
+          serverNickname: "Chronote",
           tag: "Chronote#0000",
-          globalName: "Chronote",
         },
       ],
       attendees: ["MockUser", "Chronote"],

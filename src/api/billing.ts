@@ -41,6 +41,10 @@ export function registerBillingRoutes(
           stripe,
           user,
           guildId,
+          priceId:
+            typeof req.body?.priceId === "string"
+              ? req.body.priceId
+              : undefined,
         });
         res.json({ url });
       } catch (err) {

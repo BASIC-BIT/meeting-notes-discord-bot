@@ -22,9 +22,10 @@ import { authedProcedure, router } from "../trpc";
 
 type TranscriptSegment = {
   userId: string;
+  username?: string;
+  displayName?: string;
+  serverNickname?: string;
   tag?: string;
-  nickname?: string;
-  globalName?: string;
   startedAt: string;
   text?: string;
 };
@@ -190,8 +191,9 @@ const detail = authedProcedure
       return `${minutes}:${String(secs).padStart(2, "0")}`;
     };
     const speakerName = (participant?: Participant, fallback?: string) =>
-      participant?.nickname ||
-      participant?.globalName ||
+      participant?.serverNickname ||
+      participant?.displayName ||
+      participant?.username ||
       participant?.tag ||
       fallback ||
       "Unknown";
@@ -209,7 +211,11 @@ const detail = authedProcedure
           type: "voice",
           time: formatElapsed(elapsed),
           speaker:
-            segment.nickname || segment.globalName || segment.tag || "Unknown",
+            segment.serverNickname ||
+            segment.displayName ||
+            segment.username ||
+            segment.tag ||
+            "Unknown",
           text: segment.text,
         });
       }
@@ -289,7 +295,7 @@ const detail = authedProcedure
         audioUrl,
         attendees:
           history.participants?.map((participant) =>
-            speakerName(participant, participant.tag),
+            speakerName(participant, participant.username ?? participant.tag),
           ) ??
           history.attendees ??
           [],

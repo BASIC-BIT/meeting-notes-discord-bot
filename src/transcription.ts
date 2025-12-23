@@ -39,6 +39,7 @@ import {
   isMemoryEnabled,
 } from "./services/contextService";
 import { config } from "./services/configService";
+import { formatParticipantLabel } from "./utils/participants";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 const openAIClient = new OpenAI({
@@ -441,6 +442,26 @@ function formatChatLogForPrompt(
   return combinedLines;
 }
 
+function formatParticipantRoster(meeting: MeetingData): string | undefined {
+  const participants = Array.from(meeting.participants.values());
+  if (participants.length === 0) {
+    return undefined;
+  }
+  return participants
+    .map((participant) => {
+      const preferred = formatParticipantLabel(participant, {
+        includeUsername: false,
+        fallbackName: participant.username,
+      });
+      const username = participant.username || participant.tag || "unknown";
+      const displayName = participant.displayName ?? "-";
+      const serverNickname = participant.serverNickname ?? "-";
+      const profile = `https://discord.com/users/${participant.id}`;
+      return `- ${preferred} | username: ${username} | display name: ${displayName} | server nickname: ${serverNickname} | id: ${participant.id} | profile: ${profile}`;
+    })
+    .join("\n");
+}
+
 export async function getNotesSystemPrompt(
   meeting: MeetingData,
 ): Promise<string> {
@@ -470,6 +491,7 @@ export async function getNotesSystemPrompt(
     "Meeting Notes Bot";
 
   const chatContext = formatChatLogForPrompt(meeting.chatLog);
+  const participantRoster = formatParticipantRoster(meeting);
 
   const longStoryTestMode = config.notes.longStoryTestMode;
   const longStoryTargetChars = config.notes.longStoryTargetChars;
@@ -563,12 +585,16 @@ The goal is to create comprehensive notes that leverage historical context to pr
   }
 - **Bot identity**: You are "${botDisplayName}" in this server; canonical name is "Meeting Notes Bot".
 - **Transcript ordering caution**: Speaker order can be unreliable because audio is batched until ~5 seconds of silence.
+- **Participant naming guidance**: Use server nicknames when provided; otherwise use global display names; if absent, use usernames. Be consistent across the summary. If useful, you may link a participant's name to their profile URL from the roster.
 
 ${
   chatContext
     ? `Participant chat (recent, raw, chronological):\n${chatContext}`
     : ""
 }
+
+### Participants:
+${participantRoster ?? "No participant roster captured."}
 
 ### Contextual Information:
 - **Discord Server**: "${serverName}" (${serverDescription}).

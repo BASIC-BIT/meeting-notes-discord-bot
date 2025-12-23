@@ -9,7 +9,6 @@ import {
   Drawer,
   Group,
   Loader,
-  LoadingOverlay,
   MultiSelect,
   ScrollArea,
   SimpleGrid,
@@ -330,11 +329,7 @@ export default function Library() {
     return meeting.events.filter((event) => activeFilters.includes(event.type));
   }, [meeting, activeFilters]);
 
-  const listLoading =
-    meetingsQuery.isLoading ||
-    channelsQuery.isLoading ||
-    meetingsQuery.isFetching ||
-    channelsQuery.isFetching;
+  const listLoading = meetingsQuery.isLoading || channelsQuery.isLoading;
   const listError = meetingsQuery.error ?? channelsQuery.error;
   const detailLoading = detailQuery.isLoading || detailQuery.isFetching;
   const [refreshing, setRefreshing] = useState(false);
@@ -459,12 +454,11 @@ export default function Library() {
       </Group>
 
       <Surface p={0} style={{ position: "relative" }}>
-        <LoadingOverlay
-          visible={listLoading}
-          overlayProps={uiOverlays.loading}
-          loaderProps={{ size: "md" }}
-        />
-        {listError ? (
+        {listLoading ? (
+          <Center py="xl" style={{ minHeight: 240 }}>
+            <Loader color="brand" />
+          </Center>
+        ) : listError ? (
           <Center py="xl">
             <Text c="dimmed">Unable to load meetings. Try again shortly.</Text>
           </Center>

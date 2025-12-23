@@ -120,6 +120,17 @@ class ConfigService {
     secretKey: process.env.STRIPE_SECRET_KEY || "",
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
     priceBasic: process.env.STRIPE_PRICE_BASIC || "",
+    lookupKeys: {
+      basicMonthly:
+        process.env.STRIPE_PRICE_LOOKUP_BASIC_MONTHLY ||
+        "chronote_basic_monthly",
+      basicAnnual:
+        process.env.STRIPE_PRICE_LOOKUP_BASIC_ANNUAL || "chronote_basic_annual",
+      proMonthly:
+        process.env.STRIPE_PRICE_LOOKUP_PRO_MONTHLY || "chronote_pro_monthly",
+      proAnnual:
+        process.env.STRIPE_PRICE_LOOKUP_PRO_ANNUAL || "chronote_pro_annual",
+    },
     successUrl: process.env.STRIPE_SUCCESS_URL || "",
     cancelUrl: process.env.STRIPE_CANCEL_URL || "",
     portalReturnUrl: process.env.STRIPE_PORTAL_RETURN_URL || "",
@@ -169,7 +180,6 @@ class ConfigService {
     // Stripe validation (optional unless key provided)
     if (this.stripe.secretKey) {
       required.push(
-        { name: "STRIPE_PRICE_BASIC", value: this.stripe.priceBasic },
         { name: "STRIPE_SUCCESS_URL", value: this.stripe.successUrl },
         { name: "STRIPE_CANCEL_URL", value: this.stripe.cancelUrl },
       );

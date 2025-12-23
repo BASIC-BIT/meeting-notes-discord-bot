@@ -26,7 +26,12 @@ import {
 } from "./constants";
 import { v4 as uuidv4 } from "uuid";
 import { ChatEntry } from "./types/chat";
-import { buildParticipantSnapshot } from "./utils/participants";
+import {
+  buildParticipantSnapshot,
+  formatParticipantLabel,
+  fromMember,
+  fromUser,
+} from "./utils/participants";
 import { config } from "./services/configService";
 
 const meetings = new Map<string, MeetingData>();
@@ -189,8 +194,6 @@ export async function initializeMeeting(
     );
   });
 
-  // Record initial attendance
-  voiceChannel.members.forEach((member) => attendance.add(member.user.tag));
   // Snapshot participants for initial members
   await Promise.all(
     voiceChannel.members.map(async (member) => {
@@ -200,6 +203,12 @@ export async function initializeMeeting(
       );
       if (participant) {
         meeting.participants.set(member.user.id, participant);
+        attendance.add(
+          formatParticipantLabel(participant, {
+            includeUsername: false,
+            fallbackName: member.user.username,
+          }),
+        );
       }
     }),
   );
@@ -226,12 +235,9 @@ export async function initializeMeeting(
   collector.on("collect", (message) => {
     if (message.author.bot) return;
 
-    const participant = meeting.participants.get(message.author.id) || {
-      id: message.author.id,
-      tag: message.author.tag,
-      nickname: message.member?.displayName ?? undefined,
-      globalName: message.author.globalName ?? undefined,
-    };
+    const participant =
+      meeting.participants.get(message.author.id) ??
+      (message.member ? fromMember(message.member) : fromUser(message.author));
 
     meeting.participants.set(message.author.id, participant);
 
@@ -244,7 +250,12 @@ export async function initializeMeeting(
     };
 
     meeting.chatLog.push(entry);
-    meeting.attendance.add(message.author.tag);
+    meeting.attendance.add(
+      formatParticipantLabel(participant, {
+        includeUsername: false,
+        fallbackName: message.author.username,
+      }),
+    );
   });
 
   // Add meeting to the global map

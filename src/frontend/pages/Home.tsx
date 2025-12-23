@@ -1,9 +1,11 @@
+import { useMemo, useState } from "react";
 import {
   Badge,
   Button,
   Divider,
   Group,
   List,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Text,
@@ -35,6 +37,15 @@ import {
   uiEffects,
   uiTypography,
 } from "../uiTokens";
+import { trpc } from "../services/trpc";
+import type { BillingInterval } from "../../types/pricing";
+import {
+  annualSavingsLabel,
+  billingLabelForInterval,
+  buildPaidPlanLookup,
+  formatPlanPrice,
+  resolvePaidPlan,
+} from "../utils/pricing";
 
 const features = [
   {
@@ -121,6 +132,15 @@ const useCases = [
 export default function Home() {
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
+  const [interval, setInterval] = useState<BillingInterval>("month");
+  const pricingQuery = trpc.pricing.plans.useQuery(undefined, {
+    staleTime: 1000 * 60 * 5,
+  });
+  const paidPlans = pricingQuery.data?.plans ?? [];
+  const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
+  const hasAnnualPlans = paidPlans.some((plan) => plan.interval === "year");
+  const basicPlan = resolvePaidPlan(planLookup, "basic", interval);
+  const proPlan = resolvePaidPlan(planLookup, "pro", interval);
 
   const heroBackgroundImage = heroBackground(isDark);
 
@@ -388,6 +408,24 @@ export default function Home() {
         title="Memory power, server-based pricing"
         description="Start free, upgrade when you need deeper recall and longer retention."
       >
+        <Group justify="space-between" align="center" wrap="wrap">
+          <Text size="sm" c="dimmed">
+            Pricing shown per server.
+          </Text>
+          <SegmentedControl
+            value={interval}
+            onChange={(value) => setInterval(value as BillingInterval)}
+            data={[
+              { label: "Monthly", value: "month" },
+              {
+                label: "Annual (2 months free)",
+                value: "year",
+                disabled: !hasAnnualPlans,
+              },
+            ]}
+            size="sm"
+          />
+        </Group>
         <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
           <PricingCard
             name="Free"
@@ -401,10 +439,11 @@ export default function Home() {
               "Notes, tags, and summary embeds",
             ]}
             cta="Get started"
+            billingLabel="Always free"
           />
           <PricingCard
             name="Basic"
-            price="$12 / mo"
+            price={formatPlanPrice(basicPlan, interval)}
             description="Unlock longer sessions and deeper recall."
             features={[
               "Up to 20 hours per week",
@@ -414,10 +453,13 @@ export default function Home() {
             ]}
             cta="Upgrade to Basic"
             highlighted
+            billingLabel={`${billingLabelForInterval(interval)}${
+              interval === "year" ? ` • ${annualSavingsLabel}` : ""
+            }`}
           />
           <PricingCard
             name="Pro"
-            price="$29 / mo"
+            price={formatPlanPrice(proPlan, interval)}
             description="Unlimited retention and deep server memory."
             features={[
               "Unlimited retention",
@@ -432,6 +474,9 @@ export default function Home() {
             tone="raised"
             borderColor={uiColors.accentBorder}
             borderWidth={uiBorders.accentWidth}
+            billingLabel={`${billingLabelForInterval(interval)}${
+              interval === "year" ? ` • ${annualSavingsLabel}` : ""
+            }`}
           />
         </SimpleGrid>
       </Section>
