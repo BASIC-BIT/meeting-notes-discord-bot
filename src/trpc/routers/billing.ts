@@ -56,12 +56,21 @@ const checkout = authedProcedure
       });
     }
     try {
-      const priceId =
+      let priceId =
         (await resolvePaidPlanPriceId({
           stripe,
           tier: input.tier as PaidTier,
           interval: input.interval as BillingInterval,
-        })) || config.stripe.priceBasic;
+        })) || null;
+      if (!priceId && input.tier === "basic" && config.stripe.priceBasic) {
+        priceId = config.stripe.priceBasic;
+      }
+      if (!priceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Pricing unavailable for selected plan",
+        });
+      }
       const url = await createCheckoutSession({
         stripe,
         user: {
