@@ -23,6 +23,7 @@
 - [ ] Terraform apply (staging)
 - [ ] Terraform apply (prod)
 - [ ] Verify ACM certs + CloudFront aliases
+- [ ] Enable AWS cost allocation tags (Project, Environment) in Billing console
 
 ## Deploy
 

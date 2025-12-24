@@ -27,6 +27,17 @@ terraform {
   }
 }
 
+provider "aws" {
+  default_tags {
+    tags = {
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "terraform"
+      Service     = "chronote"
+    }
+  }
+}
+
 variable "project_name" {
   description = "Project name prefix for resource naming"
   type        = string
