@@ -31,11 +31,17 @@ const isAuthed = t.middleware(({ ctx, next }) => {
   });
 });
 
-const isManageGuild = t.middleware(async ({ ctx, input, next }) => {
-  const guildId = requireGuildId(input);
-  await requireManageGuild({ accessToken: ctx.user.accessToken, guildId });
-  return next();
-});
+const isManageGuild = t.middleware(
+  async ({ ctx, input, getRawInput, next }) => {
+    if (!ctx.user?.accessToken) {
+      throw new TRPCError({ code: "UNAUTHORIZED" });
+    }
+    const resolvedInput = input ?? (await getRawInput());
+    const guildId = requireGuildId(resolvedInput);
+    await requireManageGuild({ accessToken: ctx.user.accessToken, guildId });
+    return next();
+  },
+);
 
 export const router = t.router;
 export const publicProcedure = t.procedure;

@@ -34,4 +34,9 @@ export class BillingPage {
       await toggle.click();
     }
   }
+
+  async waitForLoaded(): Promise<void> {
+    await this.root().waitFor({ state: "visible" });
+    await this.currentPlan().waitFor({ state: "visible" });
+  }
 }

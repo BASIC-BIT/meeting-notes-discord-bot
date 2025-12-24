@@ -20,8 +20,22 @@ export class LibraryPage {
     return this.page.getByTestId(testIds.library.meetingRow);
   }
 
+  loadingIndicator(): Locator {
+    return this.page.getByTestId(testIds.library.loading);
+  }
+
   meetingRowByText(text: string): Locator {
     return this.meetingRows().filter({ hasText: text });
+  }
+
+  async waitForLoaded(expectedCount?: number): Promise<void> {
+    await this.root().waitFor({ state: "visible" });
+    await this.loadingIndicator().waitFor({ state: "hidden" });
+    if (typeof expectedCount === "number") {
+      if (expectedCount > 0) {
+        await this.meetingRows().first().waitFor({ state: "visible" });
+      }
+    }
   }
 
   firstMeeting(): Locator {

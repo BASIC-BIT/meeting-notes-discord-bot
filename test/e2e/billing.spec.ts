@@ -11,6 +11,7 @@ test("billing page shows paid and free states (mock)", async ({
 
   await nav.goToBilling();
   await expect(billingPage.root()).toBeVisible();
+  await billingPage.waitForLoaded();
   await expect(billingPage.currentPlan()).toContainText(
     mockBilling.paidTierLabel,
   );
@@ -25,5 +26,6 @@ test("billing page shows paid and free states (mock)", async ({
   await serverSelectPage.goto();
   await serverSelectPage.openServerByName(mockGuilds.chronote.name);
   await nav.goToBilling();
+  await billingPage.waitForLoaded();
   await expect(billingPage.currentPlan()).toContainText(/free plan/i);
 });

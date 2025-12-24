@@ -75,7 +75,7 @@ export const requireGuildId = (input: unknown): string => {
   return guildId;
 };
 
-const permissionReasonSet = new Set(Object.values(PERMISSION_REASONS));
+const permissionReasonSet = new Set<string>(Object.values(PERMISSION_REASONS));
 
 export const getPermissionReason = (
   cause: unknown,

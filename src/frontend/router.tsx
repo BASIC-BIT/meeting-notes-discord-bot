@@ -1,4 +1,5 @@
 import {
+  lazyRouteComponent,
   Navigate,
   Outlet,
   RootRoute,
@@ -6,13 +7,16 @@ import {
   Router,
 } from "@tanstack/react-router";
 import MarketingLayout from "./layouts/MarketingLayout";
-import PortalLayout from "./layouts/PortalLayout";
-import PortalServerLayout from "./layouts/PortalServerLayout";
-import Ask from "./pages/Ask";
-import Billing from "./pages/Billing";
-import Library from "./pages/Library";
-import ServerSelect from "./pages/ServerSelect";
-import Settings from "./pages/Settings";
+
+const PortalLayout = lazyRouteComponent(() => import("./layouts/PortalLayout"));
+const PortalServerLayout = lazyRouteComponent(
+  () => import("./layouts/PortalServerLayout"),
+);
+const ServerSelect = lazyRouteComponent(() => import("./pages/ServerSelect"));
+const Library = lazyRouteComponent(() => import("./pages/Library"));
+const Ask = lazyRouteComponent(() => import("./pages/Ask"));
+const Billing = lazyRouteComponent(() => import("./pages/Billing"));
+const Settings = lazyRouteComponent(() => import("./pages/Settings"));
 import { useGuildContext } from "./contexts/GuildContext";
 import { usePortalStore } from "./stores/portalStore";
 

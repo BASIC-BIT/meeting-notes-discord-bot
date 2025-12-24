@@ -11,6 +11,7 @@ test("library page shows meetings and drawer details (mock)", async ({
 
   await nav.goToLibrary();
   await expect(libraryPage.root()).toBeVisible();
+  await libraryPage.waitForLoaded(mockLibrary.meetingCount);
   await expect(libraryPage.meetingRows()).toHaveCount(mockLibrary.meetingCount);
 
   await libraryPage.searchInput().fill(mockLibrary.meetingTitle);

@@ -11,6 +11,7 @@ test("ask page lists conversations and sends a question (mock)", async ({
 
   await nav.goToAsk();
   await expect(askPage.root()).toBeVisible();
+  await askPage.waitForReady(mockAsk.conversationTitle);
 
   if (mockAsk.conversationTitle) {
     const conversation = askPage.conversationItemByTitle(

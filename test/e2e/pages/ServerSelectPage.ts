@@ -22,13 +22,24 @@ export class ServerSelectPage {
     });
   }
 
+  private async waitForPortal(): Promise<void> {
+    await this.page.waitForURL(/\/portal\/server\/.+\/library/);
+    await this.page
+      .getByTestId(testIds.nav.library)
+      .waitFor({ state: "visible" });
+  }
+
   async openFirstServer(): Promise<void> {
+    await this.root().waitFor({ state: "visible" });
     const card = this.firstServerCard();
     await card.getByTestId(testIds.serverSelect.open).click();
+    await this.waitForPortal();
   }
 
   async openServerByName(name: string): Promise<void> {
+    await this.root().waitFor({ state: "visible" });
     const card = this.serverCardByName(name).first();
     await card.getByTestId(testIds.serverSelect.open).click();
+    await this.waitForPortal();
   }
 }

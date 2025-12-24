@@ -24,6 +24,27 @@ export class SettingsPage {
     return this.page.getByTestId(testIds.settings.override);
   }
 
+  loadingGlobal(): Locator {
+    return this.page.getByTestId(testIds.settings.loadingGlobal).first();
+  }
+
+  loadingOverrides(): Locator {
+    return this.page.getByTestId(testIds.settings.loadingOverrides).first();
+  }
+
+  async waitForLoaded(expectedOverrideName?: string): Promise<void> {
+    await this.root().waitFor({ state: "visible" });
+    await this.loadingGlobal().waitFor({ state: "hidden" });
+    await this.loadingOverrides().waitFor({ state: "hidden" });
+    if (expectedOverrideName) {
+      await this.overrideByName(expectedOverrideName).waitFor({
+        state: "visible",
+      });
+    } else {
+      await this.firstOverride().waitFor({ state: "visible" });
+    }
+  }
+
   overrideByName(name: string): Locator {
     return this.overrides().filter({ hasText: name }).first();
   }

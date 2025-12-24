@@ -461,7 +461,11 @@ export default function Library() {
         data-testid="library-list"
       >
         {listLoading ? (
-          <Center py="xl" style={{ minHeight: 240 }}>
+          <Center
+            py="xl"
+            style={{ minHeight: 240 }}
+            data-testid="library-loading"
+          >
             <Loader color="brand" />
           </Center>
         ) : listError ? (

@@ -381,6 +381,7 @@ export default function Ask() {
             >
               <LoadingOverlay
                 visible={listQuery.isLoading || listQuery.isFetching}
+                data-testid="ask-loading-list"
                 overlayProps={uiOverlays.loading}
                 loaderProps={{ size: "md" }}
               />
@@ -517,6 +518,7 @@ export default function Ask() {
                   conversationQuery.isLoading ||
                   conversationQuery.isFetching
                 }
+                data-testid="ask-loading-pane"
                 overlayProps={uiOverlays.loading}
                 loaderProps={{ size: "md" }}
               />

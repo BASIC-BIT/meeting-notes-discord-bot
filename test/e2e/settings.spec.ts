@@ -11,6 +11,9 @@ test("settings page shows overrides and updates tags (mock)", async ({
 
   await nav.goToSettings();
   await expect(settingsPage.root()).toBeVisible();
+  await settingsPage.waitForLoaded(
+    mockSettings.overrideChannelName || undefined,
+  );
 
   const override = mockSettings.overrideChannelName
     ? settingsPage.overrideByName(mockSettings.overrideChannelName)

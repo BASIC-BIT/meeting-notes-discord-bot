@@ -477,6 +477,7 @@ export default function Settings() {
       >
         <LoadingOverlay
           visible={globalBusy}
+          data-testid="settings-loading-global"
           overlayProps={uiOverlays.loading}
           loaderProps={{ size: "md" }}
         />
@@ -586,6 +587,7 @@ export default function Settings() {
       >
         <LoadingOverlay
           visible={channelBusy}
+          data-testid="settings-loading-overrides"
           overlayProps={uiOverlays.loading}
           loaderProps={{ size: "md" }}
         />

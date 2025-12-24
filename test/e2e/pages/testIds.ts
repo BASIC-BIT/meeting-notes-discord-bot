@@ -21,6 +21,7 @@ export const testIds = {
     meetingRow: "library-meeting-row",
     drawer: "meeting-drawer",
     download: "meeting-download",
+    loading: "library-loading",
   },
   ask: {
     page: "ask-page",
@@ -32,6 +33,8 @@ export const testIds = {
     renameInput: "ask-rename-input",
     rename: "ask-rename",
     conversationItem: "ask-conversation-item",
+    loadingList: "ask-loading-list",
+    loadingPane: "ask-loading-pane",
   },
   billing: {
     page: "billing-page",
@@ -49,5 +52,7 @@ export const testIds = {
     override: "settings-override",
     removeOverride: "settings-remove-override",
     saveChannel: "settings-save-channel",
+    loadingGlobal: "settings-loading-global",
+    loadingOverrides: "settings-loading-overrides",
   },
 } as const;

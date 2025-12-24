@@ -16,6 +16,14 @@ export class AskPage {
     return this.page.getByTestId(testIds.ask.title);
   }
 
+  loadingList(): Locator {
+    return this.page.getByTestId(testIds.ask.loadingList).first();
+  }
+
+  loadingPane(): Locator {
+    return this.page.getByTestId(testIds.ask.loadingPane).first();
+  }
+
   input(): Locator {
     return this.page.getByTestId(testIds.ask.input);
   }
@@ -25,6 +33,17 @@ export class AskPage {
       .getByTestId(testIds.ask.conversationItem)
       .filter({ hasText: title })
       .first();
+  }
+
+  async waitForReady(expectedTitle?: string): Promise<void> {
+    await this.root().waitFor({ state: "visible" });
+    await this.loadingList().waitFor({ state: "hidden" });
+    await this.loadingPane().waitFor({ state: "hidden" });
+    if (expectedTitle) {
+      await this.conversationItemByTitle(expectedTitle).waitFor({
+        state: "visible",
+      });
+    }
   }
 
   async ask(question: string): Promise<void> {
