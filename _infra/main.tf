@@ -36,12 +36,6 @@ variable "AWS_TOKEN_KEY" {
 variable "DISCORD_CLIENT_ID" {
   sensitive = true
 }
-variable "DISCORD_BOT_TOKEN" {
-  sensitive = true
-}
-variable "OPENAI_API_KEY" {
-  sensitive = true
-}
 variable "OPENAI_ORGANIZATION_ID" {
   sensitive = true
   default   = ""
@@ -92,19 +86,93 @@ variable "ENABLE_OAUTH" {
   default   = "false"
 }
 
-variable "DISCORD_CLIENT_SECRET" {
-  sensitive = true
-  default   = ""
-}
-
 variable "DISCORD_CALLBACK_URL" {
   sensitive = true
   default   = ""
 }
 
-variable "OAUTH_SECRET" {
-  sensitive = true
-  default   = ""
+variable "NODE_ENV" {
+  description = "Node environment for the container"
+  type        = string
+  default     = "production"
+}
+
+variable "ENABLE_ONBOARDING" {
+  description = "Enable onboarding flow in the web app"
+  type        = string
+  default     = "false"
+}
+
+variable "FRONTEND_ALLOWED_ORIGINS" {
+  description = "Comma-separated list of allowed origins for API CORS"
+  type        = string
+  default     = ""
+}
+
+variable "FRONTEND_SITE_URL" {
+  description = "Primary frontend site URL"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_MODE" {
+  description = "Stripe mode (test or live)"
+  type        = string
+  default     = "test"
+}
+
+variable "STRIPE_PRICE_BASIC" {
+  description = "Optional fallback Stripe price ID for basic plan"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_PRICE_LOOKUP_BASIC_MONTHLY" {
+  description = "Stripe lookup key for basic monthly"
+  type        = string
+  default     = "chronote_basic_monthly"
+}
+
+variable "STRIPE_PRICE_LOOKUP_BASIC_ANNUAL" {
+  description = "Stripe lookup key for basic annual"
+  type        = string
+  default     = "chronote_basic_annual"
+}
+
+variable "STRIPE_PRICE_LOOKUP_PRO_MONTHLY" {
+  description = "Stripe lookup key for pro monthly"
+  type        = string
+  default     = "chronote_pro_monthly"
+}
+
+variable "STRIPE_PRICE_LOOKUP_PRO_ANNUAL" {
+  description = "Stripe lookup key for pro annual"
+  type        = string
+  default     = "chronote_pro_annual"
+}
+
+variable "STRIPE_SUCCESS_URL" {
+  description = "Stripe success redirect URL"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_CANCEL_URL" {
+  description = "Stripe cancel redirect URL"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_PORTAL_RETURN_URL" {
+  description = "Stripe portal return URL"
+  type        = string
+  default     = ""
+}
+
+variable "BILLING_LANDING_URL" {
+  description = "Billing landing URL fallback"
+  type        = string
+  default     = ""
 }
 
 
@@ -800,28 +868,12 @@ resource "aws_ecs_task_definition" "app_task" {
           value = var.DISCORD_CLIENT_ID
         },
         {
-          name  = "DISCORD_CLIENT_SECRET"
-          value = var.DISCORD_CLIENT_SECRET
-        },
-        {
           name  = "DISCORD_CALLBACK_URL"
           value = var.DISCORD_CALLBACK_URL
         },
         {
-          name  = "OAUTH_SECRET"
-          value = var.OAUTH_SECRET
-        },
-        {
           name  = "ENABLE_OAUTH"
           value = var.ENABLE_OAUTH
-        },
-        {
-          name  = "DISCORD_BOT_TOKEN"
-          value = var.DISCORD_BOT_TOKEN
-        },
-        {
-          name  = "OPENAI_API_KEY"
-          value = var.OPENAI_API_KEY
         },
         {
           name  = "OPENAI_ORGANIZATION_ID"
@@ -838,6 +890,88 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "TRANSCRIPTS_PREFIX"
           value = var.TRANSCRIPTS_PREFIX
+        },
+        {
+          name  = "NODE_ENV"
+          value = var.NODE_ENV
+        },
+        {
+          name  = "ENABLE_ONBOARDING"
+          value = var.ENABLE_ONBOARDING
+        },
+        {
+          name  = "FRONTEND_ALLOWED_ORIGINS"
+          value = var.FRONTEND_ALLOWED_ORIGINS
+        },
+        {
+          name  = "FRONTEND_SITE_URL"
+          value = var.FRONTEND_SITE_URL
+        },
+        {
+          name  = "STRIPE_MODE"
+          value = var.STRIPE_MODE
+        },
+        {
+          name  = "STRIPE_PRICE_BASIC"
+          value = var.STRIPE_PRICE_BASIC
+        },
+        {
+          name  = "STRIPE_PRICE_LOOKUP_BASIC_MONTHLY"
+          value = var.STRIPE_PRICE_LOOKUP_BASIC_MONTHLY
+        },
+        {
+          name  = "STRIPE_PRICE_LOOKUP_BASIC_ANNUAL"
+          value = var.STRIPE_PRICE_LOOKUP_BASIC_ANNUAL
+        },
+        {
+          name  = "STRIPE_PRICE_LOOKUP_PRO_MONTHLY"
+          value = var.STRIPE_PRICE_LOOKUP_PRO_MONTHLY
+        },
+        {
+          name  = "STRIPE_PRICE_LOOKUP_PRO_ANNUAL"
+          value = var.STRIPE_PRICE_LOOKUP_PRO_ANNUAL
+        },
+        {
+          name  = "STRIPE_SUCCESS_URL"
+          value = var.STRIPE_SUCCESS_URL
+        },
+        {
+          name  = "STRIPE_CANCEL_URL"
+          value = var.STRIPE_CANCEL_URL
+        },
+        {
+          name  = "STRIPE_PORTAL_RETURN_URL"
+          value = var.STRIPE_PORTAL_RETURN_URL
+        },
+        {
+          name  = "BILLING_LANDING_URL"
+          value = var.BILLING_LANDING_URL
+        },
+      ]
+      secrets = [
+        {
+          name      = "DISCORD_BOT_TOKEN"
+          valueFrom = aws_secretsmanager_secret.discord_bot_token.arn
+        },
+        {
+          name      = "DISCORD_CLIENT_SECRET"
+          valueFrom = aws_secretsmanager_secret.discord_client_secret.arn
+        },
+        {
+          name      = "OAUTH_SECRET"
+          valueFrom = aws_secretsmanager_secret.oauth_secret.arn
+        },
+        {
+          name      = "OPENAI_API_KEY"
+          valueFrom = aws_secretsmanager_secret.openai_api_key.arn
+        },
+        {
+          name      = "STRIPE_SECRET_KEY"
+          valueFrom = aws_secretsmanager_secret.stripe_secret_key.arn
+        },
+        {
+          name      = "STRIPE_WEBHOOK_SECRET"
+          valueFrom = aws_secretsmanager_secret.stripe_webhook_secret.arn
         },
       ]
       #      healthCheck = {
@@ -858,11 +992,11 @@ resource "aws_ecs_service" "app_service" {
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
   # COMMENT THIS OUT TO DEPLOY ANY CHNAGES TO THE TASK DEFINITION - SUPER JANK LOL
-  lifecycle {
-    ignore_changes = [
-      task_definition
-    ]
-  }
+  #lifecycle {
+  #  ignore_changes = [
+  #    task_definition
+  #  ]
+  #}
 
   enable_execute_command = true
 

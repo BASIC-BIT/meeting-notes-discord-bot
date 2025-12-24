@@ -1,33 +1,21 @@
-import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   clearChannelContext,
   listChannelContexts,
   setChannelContext,
 } from "../../services/channelContextService";
-import { ensureManageGuildWithUserToken } from "../../services/guildAccessService";
 import { ensureBotPresence } from "./ensureBotPresence";
-import { authedProcedure, router } from "../trpc";
+import { manageGuildProcedure, router } from "../trpc";
 
-const list = authedProcedure
+const list = manageGuildProcedure
   .input(z.object({ serverId: z.string() }))
   .query(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     await ensureBotPresence(ctx, input.serverId);
     const contexts = await listChannelContexts(input.serverId);
     return { contexts };
   });
 
-const set = authedProcedure
+const set = manageGuildProcedure
   .input(
     z.object({
       serverId: z.string(),
@@ -37,16 +25,6 @@ const set = authedProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     await ensureBotPresence(ctx, input.serverId);
     const trimmedContext = input.context?.trim();
     await setChannelContext(input.serverId, input.channelId, ctx.user.id, {
@@ -59,19 +37,9 @@ const set = authedProcedure
     return { ok: true };
   });
 
-const clear = authedProcedure
+const clear = manageGuildProcedure
   .input(z.object({ serverId: z.string(), channelId: z.string() }))
   .mutation(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     await ensureBotPresence(ctx, input.serverId);
     await clearChannelContext(input.serverId, input.channelId);
     return { ok: true };

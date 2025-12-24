@@ -5,27 +5,16 @@ import {
   removeAutoRecordSetting,
   saveAutoRecordSetting,
 } from "../../services/autorecordService";
-import { ensureManageGuildWithUserToken } from "../../services/guildAccessService";
-import { authedProcedure, router } from "../trpc";
+import { manageGuildProcedure, router } from "../trpc";
 
-const list = authedProcedure
+const list = manageGuildProcedure
   .input(z.object({ serverId: z.string() }))
-  .query(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
+  .query(async ({ input }) => {
     const rules = await listAutoRecordSettings(input.serverId);
     return { rules };
   });
 
-const add = authedProcedure
+const add = manageGuildProcedure
   .input(
     z.object({
       serverId: z.string(),
@@ -36,16 +25,6 @@ const add = authedProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     if (input.mode === "one" && !input.voiceChannelId) {
       throw new TRPCError({
         code: "BAD_REQUEST",
@@ -64,19 +43,9 @@ const add = authedProcedure
     return { rule };
   });
 
-const remove = authedProcedure
+const remove = manageGuildProcedure
   .input(z.object({ serverId: z.string(), channelId: z.string() }))
-  .mutation(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
+  .mutation(async ({ input }) => {
     await removeAutoRecordSetting(input.serverId, input.channelId);
     return { ok: true };
   });

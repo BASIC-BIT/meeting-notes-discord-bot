@@ -10,7 +10,7 @@ const ADMIN = 1 << 3;
 export async function ensureManageGuildWithUserToken(
   userAccessToken: string | undefined,
   guildId: string,
-): Promise<boolean> {
+): Promise<boolean | null> {
   if (!userAccessToken) return false;
   try {
     const guilds = await listUserGuilds(userAccessToken);
@@ -25,7 +25,7 @@ export async function ensureManageGuildWithUserToken(
   } catch (err) {
     if (isDiscordApiError(err) && err.status === 429) {
       console.warn("ensureManageGuildWithUserToken rate limited", { guildId });
-      return false;
+      return null;
     }
     console.error("ensureManageGuildWithUserToken error", err);
     return false;

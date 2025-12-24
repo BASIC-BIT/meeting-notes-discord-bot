@@ -61,6 +61,23 @@ export function registerGuildRoutes(app: express.Express) {
     return true;
   };
 
+  const requireManageGuild = async (
+    res: express.Response,
+    user: AuthedUser,
+    guildId: string,
+  ): Promise<boolean> => {
+    const ok = await ensureManageGuildWithUserToken(user.accessToken, guildId);
+    if (ok === null) {
+      res.status(429).json({ error: "Discord rate limited. Please retry." });
+      return false;
+    }
+    if (!ok) {
+      res.status(403).json({ error: "Manage Guild required" });
+      return false;
+    }
+    return true;
+  };
+
   // Context routes
   app.get(
     "/api/guilds/:guildId/context",
@@ -68,12 +85,11 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await ensureManageGuildWithUserToken(user.accessToken, guildId))) {
+      if (!(await requireManageGuild(res, user, guildId))) {
         console.warn("Context 403: missing Manage Guild", {
           guildId,
           userId: user?.id,
         });
-        res.status(403).json({ error: "Manage Guild required" });
         return;
       }
       if (!(await ensureBotPresence(req, res, guildId))) {
@@ -94,8 +110,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await ensureManageGuildWithUserToken(user.accessToken, guildId))) {
-        res.status(403).json({ error: "Manage Guild required" });
+      if (!(await requireManageGuild(res, user, guildId))) {
         return;
       }
       if (!(await ensureBotPresence(req, res, guildId))) {
@@ -128,8 +143,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await ensureManageGuildWithUserToken(user.accessToken, guildId))) {
-        res.status(403).json({ error: "Manage Guild required" });
+      if (!(await requireManageGuild(res, user, guildId))) {
         return;
       }
       if (!(await ensureBotPresence(req, res, guildId))) {
@@ -147,8 +161,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await ensureManageGuildWithUserToken(user.accessToken, guildId))) {
-        res.status(403).json({ error: "Manage Guild required" });
+      if (!(await requireManageGuild(res, user, guildId))) {
         return;
       }
       const rules = await listAutoRecordSettings(guildId);
@@ -162,8 +175,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await ensureManageGuildWithUserToken(user.accessToken, guildId))) {
-        res.status(403).json({ error: "Manage Guild required" });
+      if (!(await requireManageGuild(res, user, guildId))) {
         return;
       }
       const { mode, voiceChannelId, textChannelId, tags } = req.body as {
@@ -195,8 +207,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await ensureManageGuildWithUserToken(user.accessToken, guildId))) {
-        res.status(403).json({ error: "Manage Guild required" });
+      if (!(await requireManageGuild(res, user, guildId))) {
         return;
       }
       const { channelId } = req.body as { channelId?: string };
@@ -298,8 +309,7 @@ export function registerGuildRoutes(app: express.Express) {
         res.status(401).json({ error: "No access token. Please re-login." });
         return;
       }
-      if (!(await ensureManageGuildWithUserToken(user.accessToken, guildId))) {
-        res.status(403).json({ error: "Manage Guild required" });
+      if (!(await requireManageGuild(res, user, guildId))) {
         return;
       }
       const { question, tags, scope, channelId } = req.body as {

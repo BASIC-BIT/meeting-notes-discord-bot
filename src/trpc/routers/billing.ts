@@ -11,8 +11,8 @@ import {
 import { resolvePaidPlanPriceId } from "../../services/pricingService";
 import { getStripeClient } from "../../services/stripeClient";
 import { config } from "../../services/configService";
-import { ensureManageGuildWithUserToken } from "../../services/guildAccessService";
-import { authedProcedure, router } from "../trpc";
+import { requireManageGuild } from "../permissions";
+import { authedProcedure, manageGuildProcedure, router } from "../trpc";
 import type { BillingInterval, PaidTier } from "../../types/pricing";
 
 const me = authedProcedure
@@ -21,16 +21,10 @@ const me = authedProcedure
     if (!input.serverId) {
       return buildBillingDisabledSnapshot();
     }
-    const allowed = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!allowed) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
+    await requireManageGuild({
+      accessToken: ctx.user.accessToken,
+      guildId: input.serverId,
+    });
     if (config.mock.enabled) {
       return getMockBillingSnapshot(input.serverId);
     }
@@ -44,7 +38,7 @@ const me = authedProcedure
     });
   });
 
-const checkout = authedProcedure
+const checkout = manageGuildProcedure
   .input(
     z.object({
       serverId: z.string(),
@@ -53,16 +47,6 @@ const checkout = authedProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const allowed = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!allowed) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     if (config.mock.enabled) {
       await seedMockSubscription(input.serverId);
       return { url: `/portal/server/${input.serverId}/billing?mock=checkout` };
@@ -110,19 +94,9 @@ const checkout = authedProcedure
     }
   });
 
-const portal = authedProcedure
+const portal = manageGuildProcedure
   .input(z.object({ serverId: z.string() }))
   .mutation(async ({ ctx, input }) => {
-    const allowed = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!allowed) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     if (config.mock.enabled) {
       return { url: `/portal/server/${input.serverId}/billing?mock=portal` };
     }

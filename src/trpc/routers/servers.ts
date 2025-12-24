@@ -1,9 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import {
-  ensureBotInGuild,
-  ensureUserInGuild,
-} from "../../services/guildAccessService";
+import { ensureBotInGuild } from "../../services/guildAccessService";
 import {
   isDiscordApiError,
   listBotGuilds,
@@ -19,7 +16,7 @@ import type {
   DiscordRole,
 } from "../../repositories/types";
 import { config } from "../../services/configService";
-import { authedProcedure, router } from "../trpc";
+import { authedProcedure, manageGuildProcedure, router } from "../trpc";
 
 const listEligible = authedProcedure.query(async ({ ctx }) => {
   let userGuilds: DiscordGuild[];
@@ -88,7 +85,7 @@ const listEligible = authedProcedure.query(async ({ ctx }) => {
   return { guilds: eligible };
 });
 
-const channels = authedProcedure
+const channels = manageGuildProcedure
   .input(z.object({ serverId: z.string() }))
   .query(async ({ ctx, input }) => {
     const { serverId } = input;
@@ -98,26 +95,6 @@ const channels = authedProcedure
       botGuildIds?: string[];
       botGuildIdsFetchedAt?: number;
     };
-
-    const cachedGuilds = sessionData.guildIds ?? [];
-    if (!cachedGuilds.includes(serverId)) {
-      const accessCheck = await ensureUserInGuild(
-        ctx.user.accessToken,
-        serverId,
-      );
-      if (accessCheck === null) {
-        throw new TRPCError({
-          code: "TOO_MANY_REQUESTS",
-          message: "Discord rate limited. Please retry.",
-        });
-      }
-      if (!accessCheck) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Guild access required",
-        });
-      }
-    }
 
     const cacheAgeMs =
       sessionData.botGuildIdsFetchedAt != null

@@ -4,10 +4,7 @@ import {
   getMeetingHistoryService,
   listRecentMeetingsForGuildService,
 } from "../../services/meetingHistoryService";
-import {
-  ensureBotInGuild,
-  ensureUserInGuild,
-} from "../../services/guildAccessService";
+import { ensureBotInGuild } from "../../services/guildAccessService";
 import { config } from "../../services/configService";
 import {
   fetchJsonFromS3,
@@ -18,7 +15,7 @@ import {
   listGuildChannels,
 } from "../../services/discordService";
 import type { Participant } from "../../types/participants";
-import { authedProcedure, router } from "../trpc";
+import { manageGuildProcedure, router } from "../trpc";
 
 type TranscriptSegment = {
   userId: string;
@@ -52,31 +49,14 @@ type MeetingEvent = {
   text: string;
 };
 
-const list = authedProcedure
+const list = manageGuildProcedure
   .input(
     z.object({
       serverId: z.string(),
       limit: z.number().min(1).max(100).optional(),
     }),
   )
-  .query(async ({ ctx, input }) => {
-    const accessCheck = await ensureUserInGuild(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (accessCheck === null) {
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: "Discord rate limited. Please retry.",
-      });
-    }
-    if (!accessCheck) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Guild access required",
-      });
-    }
-
+  .query(async ({ input }) => {
     const botCheck = await ensureBotInGuild(input.serverId);
     if (botCheck === null) {
       throw new TRPCError({
@@ -134,31 +114,14 @@ const list = authedProcedure
     };
   });
 
-const detail = authedProcedure
+const detail = manageGuildProcedure
   .input(
     z.object({
       serverId: z.string(),
       meetingId: z.string(),
     }),
   )
-  .query(async ({ ctx, input }) => {
-    const accessCheck = await ensureUserInGuild(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (accessCheck === null) {
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: "Discord rate limited. Please retry.",
-      });
-    }
-    if (!accessCheck) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Guild access required",
-      });
-    }
-
+  .query(async ({ input }) => {
     const history = await getMeetingHistoryService(
       input.serverId,
       input.meetingId,

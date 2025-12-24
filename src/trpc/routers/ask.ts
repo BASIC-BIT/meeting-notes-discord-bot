@@ -6,10 +6,9 @@ import {
   listAskConversations,
   renameAskConversation,
 } from "../../services/askConversationService";
-import { ensureManageGuildWithUserToken } from "../../services/guildAccessService";
-import { authedProcedure, router } from "../trpc";
+import { manageGuildProcedure, router } from "../trpc";
 
-const ask = authedProcedure
+const ask = manageGuildProcedure
   .input(
     z.object({
       serverId: z.string(),
@@ -21,16 +20,6 @@ const ask = authedProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     const result = await askWithConversation({
       userId: ctx.user.id,
       guildId: input.serverId,
@@ -43,19 +32,9 @@ const ask = authedProcedure
     return result;
   });
 
-const listConversations = authedProcedure
+const listConversations = manageGuildProcedure
   .input(z.object({ serverId: z.string() }))
   .query(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     const conversations = await listAskConversations(
       ctx.user.id,
       input.serverId,
@@ -63,19 +42,9 @@ const listConversations = authedProcedure
     return { conversations };
   });
 
-const getConversation = authedProcedure
+const getConversation = manageGuildProcedure
   .input(z.object({ serverId: z.string(), conversationId: z.string() }))
   .query(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     const result = await getAskConversationWithMessages(
       ctx.user.id,
       input.serverId,
@@ -90,7 +59,7 @@ const getConversation = authedProcedure
     return result;
   });
 
-const rename = authedProcedure
+const rename = manageGuildProcedure
   .input(
     z.object({
       serverId: z.string(),
@@ -99,16 +68,6 @@ const rename = authedProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const ok = await ensureManageGuildWithUserToken(
-      ctx.user.accessToken,
-      input.serverId,
-    );
-    if (!ok) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Manage Guild required",
-      });
-    }
     const updated = await renameAskConversation(
       ctx.user.id,
       input.serverId,

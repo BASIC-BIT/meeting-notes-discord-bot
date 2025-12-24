@@ -1,15 +1,13 @@
 # Required
 DISCORD_CLIENT_ID="your-discord-client-id-here"
-DISCORD_BOT_TOKEN="your-discord-bot-token-here"
-DISCORD_CLIENT_SECRET="your-discord-client-secret-here"
-DISCORD_CALLBACK_URL="https://your-domain.example.com/auth/discord/callback"
-OAUTH_SECRET="replace-with-random-string"
-OPENAI_API_KEY="your-openai-api-key-here"
 GITHUB_TOKEN="your-github-token-here"
 AWS_TOKEN_KEY="your-aws-token-key-here"
 
 # Optional (leave blank to use defaults)
 ENABLE_OAUTH="false"                          # defaults false
+DISCORD_CALLBACK_URL=""                       # required if ENABLE_OAUTH=true
+NODE_ENV="production"                         # recommended for ECS task
+ENABLE_ONBOARDING="false"
 OPENAI_ORGANIZATION_ID=""                     # optional
 OPENAI_PROJECT_ID=""                          # optional
 FRONTEND_BUCKET=""                            # auto-named if blank
@@ -18,6 +16,21 @@ FRONTEND_CERT_ARN=""                          # only when FRONTEND_DOMAIN is set
 TRANSCRIPTS_BUCKET=""                         # auto-named if blank
 TRANSCRIPTS_PREFIX=""                         # no prefix if blank
 HOSTED_ZONE_NAME=""                           # e.g., basicbit.net. (required if setting FRONTEND_DOMAIN)
+# Frontend/CORS
+FRONTEND_ALLOWED_ORIGINS=""                   # comma-separated origins, no trailing slash
+FRONTEND_SITE_URL=""                          # primary frontend URL
+
+# Stripe (non-secret config; secrets are in AWS Secrets Manager)
+STRIPE_MODE="test"
+STRIPE_PRICE_BASIC=""                         # optional legacy fallback
+STRIPE_PRICE_LOOKUP_BASIC_MONTHLY="chronote_basic_monthly"
+STRIPE_PRICE_LOOKUP_BASIC_ANNUAL="chronote_basic_annual"
+STRIPE_PRICE_LOOKUP_PRO_MONTHLY="chronote_pro_monthly"
+STRIPE_PRICE_LOOKUP_PRO_ANNUAL="chronote_pro_annual"
+STRIPE_SUCCESS_URL=""
+STRIPE_CANCEL_URL=""
+STRIPE_PORTAL_RETURN_URL=""
+BILLING_LANDING_URL=""
 
 # Observability (hosted AMG/AMP)
 # Create a Grafana service account token (preferred) or AMG API key, then set these:
@@ -25,3 +38,11 @@ grafana_api_key=""
 grafana_url=""
 aws_region="us-east-1"
 grafana_suffix_seed=""                       # optional; change to force a new workspace name suffix
+# Secrets (managed in AWS Secrets Manager)
+# After apply, set secret values for:
+# - meeting-notes/discord-bot-token
+# - meeting-notes/discord-client-secret
+# - meeting-notes/oauth-secret
+# - meeting-notes/openai-api-key
+# - meeting-notes/stripe-secret-key
+# - meeting-notes/stripe-webhook-secret
