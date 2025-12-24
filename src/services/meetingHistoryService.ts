@@ -19,6 +19,18 @@ export async function listRecentMeetingsForGuildService(
   return getMeetingHistoryRepository().listRecentByGuild(guildId, limit);
 }
 
+export async function listMeetingsForGuildInRangeService(
+  guildId: string,
+  startTimestamp: string,
+  endTimestamp: string,
+) {
+  return getMeetingHistoryRepository().listByGuildTimestampRange(
+    guildId,
+    startTimestamp,
+    endTimestamp,
+  );
+}
+
 export async function listRecentMeetingsForChannelService(
   guildId: string,
   channelId: string,

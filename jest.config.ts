@@ -60,7 +60,7 @@ const config: Config.InitialOptions = {
 
   // The glob patterns Jest uses to detect test files
   testMatch: ["**/__tests__/**/*.[jt]s?(x)", "**/?(*.)+(spec|test).[tj]s?(x)"],
-  testPathIgnorePatterns: ["/node_modules/", "/dist/", "/build/"],
+  testPathIgnorePatterns: ["/node_modules/", "/dist/", "/build/", "/test/e2e/"],
 
   // An array of file extensions your modules use
   moduleFileExtensions: ["js", "jsx", "ts", "tsx", "json", "node"],

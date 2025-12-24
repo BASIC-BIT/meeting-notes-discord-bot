@@ -11,6 +11,7 @@ import {
 import { resolvePaidPlanPriceId } from "../../services/pricingService";
 import { getStripeClient } from "../../services/stripeClient";
 import { config } from "../../services/configService";
+import { ensureManageGuildWithUserToken } from "../../services/guildAccessService";
 import { authedProcedure, router } from "../trpc";
 import type { BillingInterval, PaidTier } from "../../types/pricing";
 
@@ -19,6 +20,16 @@ const me = authedProcedure
   .query(async ({ ctx, input }) => {
     if (!input.serverId) {
       return buildBillingDisabledSnapshot();
+    }
+    const allowed = await ensureManageGuildWithUserToken(
+      ctx.user.accessToken,
+      input.serverId,
+    );
+    if (!allowed) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Manage Guild required",
+      });
     }
     if (config.mock.enabled) {
       return getMockBillingSnapshot(input.serverId);
@@ -30,8 +41,6 @@ const me = authedProcedure
     return getBillingSnapshot({
       stripe,
       guildId: input.serverId,
-      host: ctx.req.get("host") ?? "",
-      protocol: ctx.req.protocol,
     });
   });
 
@@ -44,6 +53,16 @@ const checkout = authedProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
+    const allowed = await ensureManageGuildWithUserToken(
+      ctx.user.accessToken,
+      input.serverId,
+    );
+    if (!allowed) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Manage Guild required",
+      });
+    }
     if (config.mock.enabled) {
       await seedMockSubscription(input.serverId);
       return { url: `/portal/server/${input.serverId}/billing?mock=checkout` };
@@ -94,6 +113,16 @@ const checkout = authedProcedure
 const portal = authedProcedure
   .input(z.object({ serverId: z.string() }))
   .mutation(async ({ ctx, input }) => {
+    const allowed = await ensureManageGuildWithUserToken(
+      ctx.user.accessToken,
+      input.serverId,
+    );
+    if (!allowed) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Manage Guild required",
+      });
+    }
     if (config.mock.enabled) {
       return { url: `/portal/server/${input.serverId}/billing?mock=portal` };
     }

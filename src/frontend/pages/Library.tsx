@@ -388,7 +388,7 @@ export default function Library() {
   };
 
   return (
-    <Stack gap="lg">
+    <Stack gap="lg" data-testid="library-page">
       <PageHeader
         title="Library"
         description="Every session, indexed by tags, channel, and timeline."
@@ -401,6 +401,7 @@ export default function Library() {
             onChange={(event) => setQuery(event.currentTarget.value)}
             placeholder="Search meetings"
             leftSection={<IconSearch size={16} />}
+            data-testid="library-search"
           />
           <MultiSelect
             data={tagOptions}
@@ -447,13 +448,18 @@ export default function Library() {
             leftSection={<IconRefresh size={14} />}
             loading={refreshing || meetingsQuery.isFetching}
             onClick={handleRefresh}
+            data-testid="library-refresh"
           >
             Refresh
           </Button>
         </Group>
       </Group>
 
-      <Surface p={0} style={{ position: "relative" }}>
+      <Surface
+        p={0}
+        style={{ position: "relative" }}
+        data-testid="library-list"
+      >
         {listLoading ? (
           <Center py="xl" style={{ minHeight: 240 }}>
             <Loader color="brand" />
@@ -474,6 +480,8 @@ export default function Library() {
                 px={{ base: "md", md: "lg" }}
                 py="md"
                 onClick={() => setSelectedMeetingId(meetingItem.id)}
+                data-testid="library-meeting-row"
+                data-meeting-id={meetingItem.id}
                 style={{
                   cursor: "pointer",
                   borderBottom:
@@ -525,6 +533,7 @@ export default function Library() {
         position="right"
         size={fullScreen ? "100%" : "xl"}
         overlayProps={uiOverlays.modal}
+        data-testid="meeting-drawer"
         styles={{
           content: {
             backgroundColor: isDark ? theme.colors.dark[7] : theme.white,
@@ -551,6 +560,7 @@ export default function Library() {
                         variant="light"
                         leftSection={<IconDownload size={16} />}
                         onClick={handleDownload}
+                        data-testid="meeting-download"
                       >
                         Download
                       </Button>

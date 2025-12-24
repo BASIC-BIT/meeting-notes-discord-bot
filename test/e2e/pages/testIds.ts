@@ -1,0 +1,53 @@
+export const testIds = {
+  home: {
+    hero: "home-hero",
+    ctaDiscord: "home-cta-discord",
+  },
+  serverSelect: {
+    root: "server-select",
+    card: "server-card",
+    open: "server-open",
+  },
+  nav: {
+    library: "nav-library",
+    ask: "nav-ask",
+    billing: "nav-billing",
+    settings: "nav-settings",
+  },
+  library: {
+    page: "library-page",
+    search: "library-search",
+    refresh: "library-refresh",
+    meetingRow: "library-meeting-row",
+    drawer: "meeting-drawer",
+    download: "meeting-download",
+  },
+  ask: {
+    page: "ask-page",
+    new: "ask-new",
+    title: "ask-title",
+    input: "ask-input",
+    send: "ask-send",
+    message: "ask-message",
+    renameInput: "ask-rename-input",
+    rename: "ask-rename",
+    conversationItem: "ask-conversation-item",
+  },
+  billing: {
+    page: "billing-page",
+    currentPlan: "billing-current-plan",
+    plans: "billing-plans",
+    planFree: "billing-plan-free",
+    manage: "billing-manage",
+    interval: "billing-interval",
+  },
+  settings: {
+    page: "settings-page",
+    addChannel: "settings-add-channel",
+    modal: "settings-channel-modal",
+    refreshChannels: "settings-refresh-channels",
+    override: "settings-override",
+    removeOverride: "settings-remove-override",
+    saveChannel: "settings-save-channel",
+  },
+} as const;

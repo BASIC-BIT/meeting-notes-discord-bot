@@ -150,6 +150,7 @@ export default function Home() {
         tone="raised"
         p={{ base: "lg", md: "xl" }}
         style={{ backgroundImage: heroBackgroundImage }}
+        data-testid="home-hero"
       >
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
           <Stack gap="md">
@@ -173,6 +174,7 @@ export default function Home() {
                 variant="gradient"
                 gradient={{ from: "brand", to: "violet" }}
                 component="a"
+                data-testid="home-cta-discord"
                 href="https://discord.com/oauth2/authorize?client_id=1278729036528619633&scope=bot%20applications.commands"
               >
                 Add to Discord
@@ -181,6 +183,7 @@ export default function Home() {
                 size="md"
                 variant="outline"
                 component="a"
+                data-testid="home-cta-docs"
                 href="https://meetingnotes.basicbit.net"
               >
                 View Docs
@@ -418,7 +421,7 @@ export default function Home() {
             data={[
               { label: "Monthly", value: "month" },
               {
-                label: "Annual (2 months free)",
+                label: "Annual (best value)",
                 value: "year",
                 disabled: !hasAnnualPlans,
               },

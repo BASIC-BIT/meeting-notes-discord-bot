@@ -63,7 +63,7 @@ export function SiteHeader({
               <IconMenu2 size={18} />
             </ActionIcon>
           ) : null}
-          <Link to="/" style={uiLinks.plain}>
+          <Link to="/" style={uiLinks.plain} data-testid="site-logo">
             <Group gap="sm" align="center" wrap="nowrap">
               <ThemeIcon
                 variant="gradient"
@@ -92,6 +92,7 @@ export function SiteHeader({
                 variant="light"
                 color="brand"
                 size={isMobile ? "xs" : "sm"}
+                data-testid="portal-cta"
               >
                 {portalLabel}
               </Button>
@@ -103,6 +104,7 @@ export function SiteHeader({
                 color="brand"
                 size={isMobile ? "xs" : "sm"}
                 disabled={loading}
+                data-testid="portal-cta"
               >
                 {portalLabel}
               </Button>
@@ -116,6 +118,7 @@ export function SiteHeader({
               size="lg"
               onClick={() => toggleColorScheme()}
               aria-label="Toggle color scheme"
+              data-testid="theme-toggle"
             >
               {isDark ? <IconSun size={18} /> : <IconMoonStars size={18} />}
             </ActionIcon>

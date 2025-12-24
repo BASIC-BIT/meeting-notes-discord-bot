@@ -1,0 +1,15 @@
+.git/
+node_modules/
+dist/
+build/
+coverage/
+_infra/
+_infra_state_mgmt/
+.venv/
+venv/
+.terraform/
+.next/
+.turbo/
+tmp/
+temp/
+logs/

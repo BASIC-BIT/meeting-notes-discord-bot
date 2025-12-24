@@ -464,13 +464,17 @@ export default function Settings() {
   };
 
   return (
-    <Stack gap="xl">
+    <Stack gap="xl" data-testid="settings-page">
       <PageHeader
         title="Server settings"
         description="Configure how Chronote records, tags, and summarizes this server."
       />
 
-      <Surface p="lg" style={{ position: "relative", overflow: "hidden" }}>
+      <Surface
+        p="lg"
+        style={{ position: "relative", overflow: "hidden" }}
+        data-testid="settings-global"
+      >
         <LoadingOverlay
           visible={globalBusy}
           overlayProps={uiOverlays.loading}
@@ -567,6 +571,7 @@ export default function Settings() {
               onClick={handleSaveGlobal}
               disabled={!canSaveGlobal || globalBusy}
               loading={savingGlobal}
+              data-testid="settings-save-defaults"
             >
               Save defaults
             </Button>
@@ -574,7 +579,11 @@ export default function Settings() {
         </Stack>
       </Surface>
 
-      <Surface p="lg" style={{ position: "relative", overflow: "hidden" }}>
+      <Surface
+        p="lg"
+        style={{ position: "relative", overflow: "hidden" }}
+        data-testid="settings-overrides"
+      >
         <LoadingOverlay
           visible={channelBusy}
           overlayProps={uiOverlays.loading}
@@ -595,6 +604,7 @@ export default function Settings() {
                 onClick={() => channelsQuery.refetch()}
                 loading={channelsRefreshing}
                 disabled={channelBusy}
+                data-testid="settings-refresh-channels"
               >
                 Refresh channels
               </Button>
@@ -602,6 +612,7 @@ export default function Settings() {
                 leftSection={<IconPlus size={16} />}
                 onClick={openAddChannel}
                 disabled={availableVoiceChannels.length === 0}
+                data-testid="settings-add-channel"
               >
                 Add channel
               </Button>
@@ -654,7 +665,13 @@ export default function Settings() {
                   );
                 }
                 return (
-                  <Surface key={override.channelId} p="md" tone="soft">
+                  <Surface
+                    key={override.channelId}
+                    p="md"
+                    tone="soft"
+                    data-testid="settings-override"
+                    data-channel-id={override.channelId}
+                  >
                     <Group
                       justify="space-between"
                       align="flex-start"
@@ -686,6 +703,8 @@ export default function Settings() {
                         <ActionIcon
                           color="red"
                           variant="subtle"
+                          aria-label="Remove override"
+                          data-testid="settings-remove-override"
                           onClick={() => handleRemoveOverride(override)}
                         >
                           <IconTrash size={16} />
@@ -707,6 +726,7 @@ export default function Settings() {
           editingChannelId ? "Edit channel settings" : "Add channel settings"
         }
         overlayProps={uiOverlays.modal}
+        data-testid="settings-channel-modal"
       >
         <Stack gap="sm">
           {editingChannelId ? (
@@ -858,6 +878,7 @@ export default function Settings() {
                 onClick={() => channelsQuery.refetch()}
                 loading={channelsRefreshing}
                 disabled={channelBusy}
+                data-testid="settings-recheck-bot"
               >
                 Recheck bot access
               </Button>
@@ -871,6 +892,7 @@ export default function Settings() {
               <Button
                 onClick={handleSaveChannel}
                 disabled={channelSaveDisabled}
+                data-testid="settings-save-channel"
               >
                 Save channel
               </Button>

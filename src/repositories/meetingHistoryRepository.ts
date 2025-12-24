@@ -1,6 +1,7 @@
 import { config } from "../services/configService";
 import {
   getMeetingHistory as getMeetingHistoryRecord,
+  getMeetingsForGuildInRange,
   getRecentMeetingsForChannel,
   getRecentMeetingsForGuild,
   updateMeetingNotes,
@@ -19,6 +20,11 @@ export type MeetingHistoryRepository = {
   listRecentByGuild: (
     guildId: string,
     limit?: number,
+  ) => Promise<MeetingHistory[]>;
+  listByGuildTimestampRange: (
+    guildId: string,
+    startTimestamp: string,
+    endTimestamp: string,
   ) => Promise<MeetingHistory[]>;
   listRecentByChannel: (
     guildId: string,
@@ -46,6 +52,7 @@ const realRepository: MeetingHistoryRepository = {
   write: writeMeetingHistory,
   get: getMeetingHistoryRecord,
   listRecentByGuild: getRecentMeetingsForGuild,
+  listByGuildTimestampRange: getMeetingsForGuildInRange,
   listRecentByChannel: getRecentMeetingsForChannel,
   updateNotes: (params) =>
     updateMeetingNotes(
@@ -93,6 +100,13 @@ const mockRepository: MeetingHistoryRepository = {
       .filter((item) => item.channelId === channelId)
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
       .slice(0, limit);
+  },
+  async listByGuildTimestampRange(guildId, startTimestamp, endTimestamp) {
+    const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
+    return items.filter((item) => {
+      if (!item.timestamp) return false;
+      return item.timestamp >= startTimestamp && item.timestamp <= endTimestamp;
+    });
   },
   async updateNotes(params) {
     const items =

@@ -13,8 +13,12 @@ import { getStripeClient } from "./services/stripeClient";
 import { saveGuildInstaller } from "./services/guildInstallerService";
 import { metricsMiddleware, metricsRegistry } from "./metrics";
 import { appRouter } from "./trpc/router";
-import { createContext } from "./trpc/context";
+import { AuthedProfile, createContext } from "./trpc/context";
 import { getMockUser } from "./repositories/mockStore";
+import {
+  buildDiscordAuthProfile,
+  ensureDiscordAccessToken,
+} from "./services/discordAuthService";
 
 export function setupWebServer() {
   const app = express();
@@ -73,9 +77,13 @@ export function setupWebServer() {
     config.server.nodeEnv === "development" &&
     config.frontend.siteUrl.startsWith("http://localhost");
 
+  const sessionStore = config.mock.enabled
+    ? new session.MemoryStore()
+    : new DynamoSessionStore();
+
   app.use(
     session({
-      store: new DynamoSessionStore(),
+      store: sessionStore,
       secret: config.server.oauthSecret,
       resave: false,
       saveUninitialized: false,
@@ -110,10 +118,13 @@ export function setupWebServer() {
         },
         (accessToken, refreshToken, profile, done) => {
           // Preserve access token for API calls (e.g., guild listing)
-          (profile as Profile & { accessToken?: string }).accessToken =
-            accessToken;
+          const authedProfile = buildDiscordAuthProfile(
+            profile as Profile,
+            accessToken,
+            refreshToken,
+          );
           // Here you can save the profile information to your database if needed
-          return done(null, profile);
+          return done(null, authedProfile);
         },
       ),
     );
@@ -125,6 +136,34 @@ export function setupWebServer() {
 
     passport.deserializeUser((obj, done) => {
       done(null, obj as User);
+    });
+
+    app.use(async (req, _res, next) => {
+      if (config.mock.enabled) {
+        next();
+        return;
+      }
+      if (!req.isAuthenticated?.()) {
+        next();
+        return;
+      }
+      const user = req.user as AuthedProfile;
+      const updated = await ensureDiscordAccessToken(user);
+      if (updated !== user) {
+        req.user = updated;
+        const sessionWithPassport = req.session as
+          | (typeof req.session & { passport?: { user?: unknown } })
+          | undefined;
+        if (sessionWithPassport?.passport?.user) {
+          sessionWithPassport.passport.user = updated;
+        }
+        if (sessionWithPassport) {
+          await new Promise<void>((resolve) => {
+            sessionWithPassport.save(() => resolve());
+          });
+        }
+      }
+      next();
     });
 
     // Discord OAuth routes

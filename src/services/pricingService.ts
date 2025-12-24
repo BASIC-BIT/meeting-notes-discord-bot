@@ -86,6 +86,36 @@ export async function getPaidPlans(stripe: Stripe): Promise<PaidPlan[]> {
   return sortPlans(plans);
 }
 
+export function resolveTierFromLookupKey(
+  lookupKey: string | null | undefined,
+): PaidTier | null {
+  if (!lookupKey) return null;
+  const lookup = config.stripe.lookupKeys;
+  const tierByKey: Record<string, PaidTier> = {
+    [lookup.basicMonthly]: "basic",
+    [lookup.basicAnnual]: "basic",
+    [lookup.proMonthly]: "pro",
+    [lookup.proAnnual]: "pro",
+  };
+  return tierByKey[lookupKey] ?? null;
+}
+
+export function resolveTierFromPrice(params: {
+  priceId?: string | null;
+  lookupKey?: string | null;
+}): PaidTier | null {
+  const lookupTier = resolveTierFromLookupKey(params.lookupKey);
+  if (lookupTier) return lookupTier;
+  if (
+    params.priceId &&
+    config.stripe.priceBasic &&
+    params.priceId === config.stripe.priceBasic
+  ) {
+    return "basic";
+  }
+  return null;
+}
+
 export function getMockPaidPlans(): PaidPlan[] {
   const lookupConfigs = buildLookupConfigs();
   const lookupMap = lookupByKey(lookupConfigs);

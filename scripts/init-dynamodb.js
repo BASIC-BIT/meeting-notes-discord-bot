@@ -22,6 +22,12 @@ const tables = [
     BillingMode: "PAY_PER_REQUEST",
   },
   {
+    TableName: "StripeWebhookEventTable",
+    KeySchema: [{ AttributeName: "eventId", KeyType: "HASH" }],
+    AttributeDefinitions: [{ AttributeName: "eventId", AttributeType: "S" }],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
     TableName: "AccessLogsTable",
     KeySchema: [{ AttributeName: "AccessLogID", KeyType: "HASH" }],
     AttributeDefinitions: [

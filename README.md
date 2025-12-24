@@ -32,6 +32,7 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 - Full local gate (auto-fix): `yarn run check` → eslint --fix, prettier --write, tests, backend build, Vite build.
 - CI-safe: `yarn run check:ci` → lint:check, prettier:check, tests, backend build, Vite build.
 - Individual: `yarn lint`, `yarn prettier`, `yarn test`, `yarn build`, `yarn build:web`.
+- Code stats (ad-hoc): `yarn code:stats` (requires `scc` + `lizard` on PATH; CI prints this report on deploy). Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can be used to suppress known complexity offenders.
 
 ## Frontend
 
@@ -51,7 +52,25 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 - OpenAI: gpt-4o-transcribe for ASR, gpt-5.1 for notes/corrections, gpt-5-mini for live gate, DALL-E 3 for images.
 - Billing: Stripe Checkout + Billing Portal; webhook handler persists GuildSubscription and PaymentTransaction in DynamoDB and handles payment_failed / subscription_deleted to downgrade appropriately (guild-scoped billing only).
 - Sessions: Express sessions stored in DynamoDB `SessionTable` (TTL on `expiresAt`).
-- Storage: DynamoDB tables include GuildSubscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, AskConversationTable, SessionTable, InstallerTable, OnboardingStateTable. Transcripts and audio artifacts go to S3 (`TRANSCRIPTS_BUCKET`).
+- Storage: DynamoDB tables include GuildSubscription, PaymentTransaction, StripeWebhookEventTable (idempotency with TTL), AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, AskConversationTable, SessionTable, InstallerTable, OnboardingStateTable. Transcripts and audio artifacts go to S3 (`TRANSCRIPTS_BUCKET`).
+
+### Stripe webhook testing (local)
+
+1. Install the Stripe CLI and authenticate: `stripe login`.
+2. In one terminal, start the webhook forwarder and copy the webhook signing secret it prints:
+   - `yarn stripe:listen`
+   - Set `STRIPE_WEBHOOK_SECRET` to the secret value for local testing.
+3. In another terminal, send fixture events:
+   - `yarn stripe:trigger:checkout`
+   - `yarn stripe:trigger:invoice-paid`
+   - `yarn stripe:trigger:invoice-failed`
+   - `yarn stripe:trigger:subscription-updated`
+   - `yarn stripe:trigger:subscription-deleted`
+
+Notes:
+
+- CLI triggers emit fixture events. For end-to-end metadata (guild_id, discord_id), run a real checkout from the UI and complete the Stripe test flow.
+- The webhook route expects a raw request body (`express.raw`) for signature verification, so it must be mounted before `express.json()` (already wired in `src/webserver.ts`).
 
 ## Infrastructure
 
@@ -73,6 +92,15 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 
 - `yarn observability:up` → starts local Prometheus (scrapes `host.docker.internal:3001/metrics`) and Grafana on :3000 with a pre-provisioned Prom datasource.
 - `yarn observability:down` to stop.
+
+## Code complexity with scc and lizard
+
+Setup:
+
+- Install Go from `https://go.dev/dl/`
+- Install scc: `go install github.com/boyter/scc/v3@latest`
+- Install lizard with uv: `uv sync`
+- Run: `yarn code:stats`
 
 ## Contribution
 

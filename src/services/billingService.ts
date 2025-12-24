@@ -2,6 +2,8 @@ import Stripe from "stripe";
 import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
 import { getPaymentTransactionRepository } from "../repositories/paymentTransactionRepository";
 import { config } from "./configService";
+import { getLimitsForTier } from "./subscriptionService";
+import { getRollingUsageForGuild } from "./meetingUsageService";
 import { nowIso } from "../utils/time";
 import type { GuildSubscription, PaymentTransaction } from "../types/db";
 
@@ -15,6 +17,12 @@ export type BillingSnapshot = {
   customerId: string | null;
   upgradeUrl: string | null;
   portalUrl: string | null;
+  usage: {
+    usedMinutes: number;
+    limitMinutes: number | null;
+    windowStartIso: string;
+    windowEndIso: string;
+  } | null;
 };
 
 type StripeUser = {
@@ -34,16 +42,15 @@ export function buildBillingDisabledSnapshot(): BillingSnapshot {
     portalUrl: null,
     billingEnabled: false,
     stripeMode: config.subscription.stripeMode || "disabled",
+    usage: null,
   };
 }
 
 export async function getBillingSnapshot(params: {
   stripe: Stripe | null;
   guildId: string;
-  host: string;
-  protocol: string;
 }): Promise<BillingSnapshot> {
-  const { stripe, guildId, host, protocol } = params;
+  const { stripe, guildId } = params;
   if (!stripe || !config.stripe.secretKey) {
     return buildBillingDisabledSnapshot();
   }
@@ -51,9 +58,18 @@ export async function getBillingSnapshot(params: {
   const subscription = await getSubscriptionRepository().get(guildId);
   const status = subscription?.status || "free";
   const nextBillingDate = subscription?.nextBillingDate || null;
+  const storedTier = subscription?.tier;
   const tier =
-    (subscription?.tier as BillingSnapshot["tier"] | undefined) ??
-    (status === "free" ? "free" : "basic");
+    storedTier === "free" || storedTier === "basic" || storedTier === "pro"
+      ? storedTier
+      : status === "free"
+        ? "free"
+        : "basic";
+
+  const limits = getLimitsForTier(tier);
+  const usage = await getRollingUsageForGuild(guildId);
+  const usedMinutes = Math.ceil(usage.usedSeconds / 60);
+  const limitMinutes = limits.maxMeetingMinutesRolling ?? null;
 
   return {
     tier,
@@ -62,9 +78,15 @@ export async function getBillingSnapshot(params: {
     subscriptionId: subscription?.stripeSubscriptionId || null,
     customerId: subscription?.stripeCustomerId || null,
     upgradeUrl: config.stripe.billingLandingUrl || null,
-    portalUrl: `${protocol}://${host}/api/billing/portal?guildId=${guildId}`,
+    portalUrl: null,
     billingEnabled: true,
     stripeMode: config.subscription.stripeMode || "live",
+    usage: {
+      usedMinutes,
+      limitMinutes,
+      windowStartIso: usage.windowStartIso,
+      windowEndIso: usage.windowEndIso,
+    },
   };
 }
 
@@ -73,9 +95,18 @@ export async function getMockBillingSnapshot(
 ): Promise<BillingSnapshot> {
   const subscription = await getSubscriptionRepository().get(guildId);
   const status = subscription?.status || "free";
+  const storedTier = subscription?.tier;
   const tier =
-    (subscription?.tier as BillingSnapshot["tier"] | undefined) ??
-    (status === "free" ? "free" : "basic");
+    storedTier === "free" || storedTier === "basic" || storedTier === "pro"
+      ? storedTier
+      : status === "free"
+        ? "free"
+        : "basic";
+  const limits = getLimitsForTier(tier);
+  const usage = await getRollingUsageForGuild(guildId);
+  const usedMinutes = Math.ceil(usage.usedSeconds / 60);
+  const limitMinutes = limits.maxMeetingMinutesRolling ?? null;
+
   return {
     tier,
     status,
@@ -83,9 +114,15 @@ export async function getMockBillingSnapshot(
     subscriptionId: subscription?.stripeSubscriptionId || null,
     customerId: subscription?.stripeCustomerId || null,
     upgradeUrl: `/portal/server/${guildId}/billing?mock=checkout`,
-    portalUrl: `/portal/server/${guildId}/billing?mock=portal`,
+    portalUrl: null,
     billingEnabled: true,
     stripeMode: "mock",
+    usage: {
+      usedMinutes,
+      limitMinutes,
+      windowStartIso: usage.windowStartIso,
+      windowEndIso: usage.windowEndIso,
+    },
   };
 }
 
@@ -158,6 +195,13 @@ export async function createCheckoutSession(params: {
     cancel_url: config.stripe.cancelUrl,
     customer: customerId,
     client_reference_id: user.id,
+    subscription_data: {
+      metadata: {
+        discord_id: user.id,
+        discord_username: user.username ?? "",
+        guild_id: guildId,
+      },
+    },
     metadata: {
       discord_id: user.id,
       discord_username: user.username ?? "",

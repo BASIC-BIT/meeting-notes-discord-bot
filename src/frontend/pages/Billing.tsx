@@ -9,6 +9,7 @@ import {
   Group,
   List,
   Loader,
+  Progress,
   SegmentedControl,
   SimpleGrid,
   Stack,
@@ -76,6 +77,14 @@ const BENEFITS: Benefit[] = [
   },
 ];
 
+const formatUsageMinutes = (minutes: number) => {
+  if (minutes >= 60) {
+    const hours = minutes / 60;
+    return `${hours.toFixed(hours % 1 === 0 ? 0 : 1)}h`;
+  }
+  return `${minutes}m`;
+};
+
 export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
   const [interval, setInterval] = useState<BillingInterval>("month");
@@ -137,6 +146,14 @@ export function Billing() {
       </Surface>
     );
   }
+
+  const usage = data.usage;
+  const usageLimit = usage?.limitMinutes ?? null;
+  const usageUsed = usage?.usedMinutes ?? 0;
+  const usagePercent =
+    usageLimit && usageLimit > 0
+      ? Math.min(100, (usageUsed / usageLimit) * 100)
+      : null;
 
   if (!data.billingEnabled) {
     return (
@@ -213,7 +230,12 @@ export function Billing() {
   const plansExpanded = isFreePlan ? true : showPlans;
 
   return (
-    <Stack gap="xl" w="100%" style={{ width: "100%" }}>
+    <Stack
+      gap="xl"
+      w="100%"
+      style={{ width: "100%" }}
+      data-testid="billing-page"
+    >
       <PageHeader
         title="Billing"
         description="Manage subscriptions for the current server."
@@ -225,6 +247,7 @@ export function Billing() {
           style={{
             backgroundImage: uiGradients.billingPanel(isDark),
           }}
+          data-testid="billing-current-plan"
         >
           <Stack gap="sm">
             <Group gap="sm">
@@ -240,6 +263,20 @@ export function Billing() {
             <Text size="sm" c="dimmed">
               Server: {serverName}
             </Text>
+            {usage && usageLimit ? (
+              <Stack gap={4}>
+                <Group justify="space-between" gap="xs">
+                  <Text size="sm" c="dimmed">
+                    Usage (rolling 7 days)
+                  </Text>
+                  <Text size="sm" fw={600}>
+                    {formatUsageMinutes(usageUsed)} /{" "}
+                    {formatUsageMinutes(usageLimit)}
+                  </Text>
+                </Group>
+                <Progress value={usagePercent ?? 0} color="brand" size="sm" />
+              </Stack>
+            ) : null}
           </Stack>
         </Surface>
       ) : (
@@ -248,6 +285,7 @@ export function Billing() {
           style={{
             backgroundImage: uiGradients.billingPanel(isDark),
           }}
+          data-testid="billing-current-plan"
         >
           <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
             <Stack gap="md">
@@ -270,6 +308,24 @@ export function Billing() {
                 <Text size="sm" c="dimmed">
                   Server: {serverName}
                 </Text>
+                {usage && usageLimit ? (
+                  <Stack gap={4}>
+                    <Group justify="space-between" gap="xs">
+                      <Text size="sm" c="dimmed">
+                        Usage (rolling 7 days)
+                      </Text>
+                      <Text size="sm" fw={600}>
+                        {formatUsageMinutes(usageUsed)} /{" "}
+                        {formatUsageMinutes(usageLimit)}
+                      </Text>
+                    </Group>
+                    <Progress
+                      value={usagePercent ?? 0}
+                      color="brand"
+                      size="sm"
+                    />
+                  </Stack>
+                ) : null}
               </Stack>
 
               <Divider />
@@ -283,6 +339,7 @@ export function Billing() {
                     disabled={!selectedGuildId}
                     loading={isPortalPending}
                     onClick={handlePortal}
+                    data-testid="billing-manage"
                   >
                     Manage billing
                   </Button>
@@ -328,6 +385,7 @@ export function Billing() {
                 borderColor: uiColors.highlightBorder,
               }),
         }}
+        data-testid="billing-plans"
       >
         <Stack gap="sm">
           <Group justify="space-between" align="center" wrap="wrap">
@@ -340,12 +398,13 @@ export function Billing() {
               data={[
                 { label: "Monthly", value: "month" },
                 {
-                  label: "Annual (2 months free)",
+                  label: "Annual (best value)",
                   value: "year",
                   disabled: !hasAnnualPlans,
                 },
               ]}
               size="sm"
+              data-testid="billing-interval"
             />
             {isFreePlan ? null : (
               <Button
@@ -383,6 +442,7 @@ export function Billing() {
                 }}
                 badge={data.tier === "free" ? "Current plan" : "Free forever"}
                 billingLabel="Always free"
+                testId="billing-plan-free"
               />
               <PricingCard
                 name="Basic"
@@ -408,6 +468,7 @@ export function Billing() {
                 billingLabel={`${billingLabelForInterval(interval)}${
                   interval === "year" ? ` • ${annualSavingsLabel}` : ""
                 }`}
+                testId="billing-plan-basic"
               />
               <PricingCard
                 name="Pro"
@@ -436,6 +497,7 @@ export function Billing() {
                 billingLabel={`${billingLabelForInterval(interval)}${
                   interval === "year" ? ` • ${annualSavingsLabel}` : ""
                 }`}
+                testId="billing-plan-pro"
               />
             </SimpleGrid>
           </Collapse>

@@ -1,4 +1,6 @@
 node_modules/
+.venv/
+venv/
 .idea/
 dist/
 .env
@@ -19,6 +21,8 @@ _infra_state_mgmt/.terraform
 
 # testing
 /coverage
+/playwright-report
+/test-results
 
 # production
 /build

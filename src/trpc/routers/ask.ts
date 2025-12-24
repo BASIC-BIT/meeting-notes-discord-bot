@@ -6,7 +6,7 @@ import {
   listAskConversations,
   renameAskConversation,
 } from "../../services/askConversationService";
-import { ensureUserInGuild } from "../../services/guildAccessService";
+import { ensureManageGuildWithUserToken } from "../../services/guildAccessService";
 import { authedProcedure, router } from "../trpc";
 
 const ask = authedProcedure
@@ -21,11 +21,14 @@ const ask = authedProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const ok = await ensureUserInGuild(ctx.user.accessToken, input.serverId);
-    if (ok === false) {
+    const ok = await ensureManageGuildWithUserToken(
+      ctx.user.accessToken,
+      input.serverId,
+    );
+    if (!ok) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "Server access required",
+        message: "Manage Guild required",
       });
     }
     const result = await askWithConversation({
@@ -43,11 +46,14 @@ const ask = authedProcedure
 const listConversations = authedProcedure
   .input(z.object({ serverId: z.string() }))
   .query(async ({ ctx, input }) => {
-    const ok = await ensureUserInGuild(ctx.user.accessToken, input.serverId);
-    if (ok === false) {
+    const ok = await ensureManageGuildWithUserToken(
+      ctx.user.accessToken,
+      input.serverId,
+    );
+    if (!ok) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "Server access required",
+        message: "Manage Guild required",
       });
     }
     const conversations = await listAskConversations(
@@ -60,11 +66,14 @@ const listConversations = authedProcedure
 const getConversation = authedProcedure
   .input(z.object({ serverId: z.string(), conversationId: z.string() }))
   .query(async ({ ctx, input }) => {
-    const ok = await ensureUserInGuild(ctx.user.accessToken, input.serverId);
-    if (ok === false) {
+    const ok = await ensureManageGuildWithUserToken(
+      ctx.user.accessToken,
+      input.serverId,
+    );
+    if (!ok) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "Server access required",
+        message: "Manage Guild required",
       });
     }
     const result = await getAskConversationWithMessages(
@@ -90,11 +99,14 @@ const rename = authedProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const ok = await ensureUserInGuild(ctx.user.accessToken, input.serverId);
-    if (ok === false) {
+    const ok = await ensureManageGuildWithUserToken(
+      ctx.user.accessToken,
+      input.serverId,
+    );
+    if (!ok) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "Server access required",
+        message: "Manage Guild required",
       });
     }
     const updated = await renameAskConversation(

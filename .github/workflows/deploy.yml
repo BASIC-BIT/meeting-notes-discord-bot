@@ -39,6 +39,15 @@ jobs:
         run: |
           echo "::warning::Some tests failed, but continuing with deployment. Please fix failing tests."
 
+      - name: Code stats (scc + lizard)
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
+            scc --ci /pwd
+          docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
+            scc --ci --by-file --sort lines /pwd
+          python3 -m pip install --quiet lizard
+          lizard -l ts -l tsx -l js -l jsx src test
+
       - name: Build TypeScript
         run: yarn build
 
@@ -54,9 +63,32 @@ jobs:
           fi
           echo "Build artifacts verified successfully"
 
+  e2e-tests:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.2"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run Playwright tests (mock mode)
+        run: yarn test:e2e
+
   deploybackend:
     name: Deploy Backend
-    needs: test-and-build
+    needs: [test-and-build, e2e-tests]
     runs-on: ubuntu-latest
     environment: sandbox
     steps:
@@ -273,7 +305,7 @@ jobs:
 
   deploy-frontend:
     name: Deploy Frontend
-    needs: test-and-build
+    needs: [test-and-build, e2e-tests]
     runs-on: ubuntu-latest
     environment: sandbox
     steps:

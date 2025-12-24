@@ -331,7 +331,11 @@ export default function Ask() {
   };
 
   return (
-    <Stack gap="md" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+    <Stack
+      gap="md"
+      style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
+      data-testid="ask-page"
+    >
       <PageHeader
         title="Ask"
         description="Query recent meetings with receipts. Conversations stay scoped to the selected server."
@@ -373,6 +377,7 @@ export default function Ask() {
                 minHeight: 0,
                 maxHeight: "100%",
               }}
+              data-testid="ask-conversations"
             >
               <LoadingOverlay
                 visible={listQuery.isLoading || listQuery.isFetching}
@@ -395,6 +400,7 @@ export default function Ask() {
                     onClick={handleNewConversation}
                     disabled={listBusy || conversationBusy}
                     loading={listBusy}
+                    data-testid="ask-new"
                   >
                     New
                   </Button>
@@ -404,6 +410,7 @@ export default function Ask() {
                   value={query}
                   onChange={(event) => setQuery(event.currentTarget.value)}
                   leftSection={<IconSearch size={14} />}
+                  data-testid="ask-search"
                   styles={{
                     input: {
                       paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
@@ -444,6 +451,8 @@ export default function Ask() {
                             tone={isActive ? "soft" : "default"}
                             shadow={undefined}
                             radius={uiRadii.surface}
+                            data-testid="ask-conversation-item"
+                            data-conversation-id={conv.id}
                             style={{
                               cursor: "pointer",
                               boxShadow: isActive
@@ -499,6 +508,7 @@ export default function Ask() {
                 minHeight: 0,
                 maxHeight: "100%",
               }}
+              data-testid="ask-pane"
             >
               <LoadingOverlay
                 visible={
@@ -537,9 +547,12 @@ export default function Ask() {
                         }}
                         size="sm"
                         styles={{ input: { minWidth: 220 } }}
+                        data-testid="ask-rename-input"
                       />
                     ) : (
-                      <Text fw={600}>{displayTitle}</Text>
+                      <Text fw={600} data-testid="ask-title">
+                        {displayTitle}
+                      </Text>
                     )}
                   </Group>
                   {showRename && selectedGuildId ? (
@@ -574,6 +587,7 @@ export default function Ask() {
                         variant="subtle"
                         leftSection={<IconPencil size={14} />}
                         onClick={() => setRenaming(true)}
+                        data-testid="ask-rename"
                       >
                         Rename
                       </Button>
@@ -596,6 +610,7 @@ export default function Ask() {
                   type="always"
                   offsetScrollbars
                   scrollbarSize={10}
+                  data-testid="ask-messages"
                   styles={{
                     viewport: {
                       paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
@@ -624,6 +639,9 @@ export default function Ask() {
                             message.role === "chronote" ? "soft" : "default"
                           }
                           radius={uiRadii.bubble}
+                          data-testid="ask-message"
+                          data-role={message.role}
+                          data-message-id={message.id}
                           style={{
                             alignSelf:
                               message.role === "user"
@@ -695,6 +713,7 @@ export default function Ask() {
                     onChange={(event) => setDraft(event.currentTarget.value)}
                     disabled={!selectedGuildId || askMutation.isPending}
                     ref={inputRef}
+                    data-testid="ask-input"
                     onKeyDown={(event) => {
                       if (
                         event.key === "Enter" &&
@@ -725,6 +744,7 @@ export default function Ask() {
                         askMutation.isPending
                       }
                       loading={askMutation.isPending}
+                      data-testid="ask-send"
                     >
                       Ask
                     </Button>

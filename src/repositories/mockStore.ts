@@ -8,6 +8,7 @@ import type {
   GuildInstaller,
   PaymentTransaction,
   OnboardingState,
+  StripeWebhookEvent,
 } from "../types/db";
 import type { AskConversation, AskMessage } from "../types/ask";
 import { config } from "../services/configService";
@@ -33,6 +34,7 @@ type MockStore = {
   guildInstallers: Map<string, GuildInstaller>;
   subscriptions: Map<string, GuildSubscription>;
   paymentTransactions: Map<string, PaymentTransaction>;
+  stripeWebhookEvents: Map<string, StripeWebhookEvent>;
   onboardingStates: Map<string, OnboardingState>;
   meetingHistoryByGuild: Map<string, MeetingHistory[]>;
   askConversationsByKey: Map<string, AskConversation[]>;
@@ -182,6 +184,7 @@ function buildDefaultStore(): MockStore {
   });
 
   const paymentTransactions = new Map<string, PaymentTransaction>();
+  const stripeWebhookEvents = new Map<string, StripeWebhookEvent>();
   const onboardingStates = new Map<string, OnboardingState>();
 
   const meetingHistoryByGuild = new Map<string, MeetingHistory[]>();
@@ -438,6 +441,7 @@ function buildDefaultStore(): MockStore {
     guildInstallers,
     subscriptions,
     paymentTransactions,
+    stripeWebhookEvents,
     onboardingStates,
     meetingHistoryByGuild,
     askConversationsByKey,

@@ -3,7 +3,11 @@ import type { Profile } from "passport-discord";
 import { config } from "../services/configService";
 import { getMockUser } from "../repositories/mockStore";
 
-export type AuthedProfile = Profile & { accessToken?: string };
+export type AuthedProfile = Profile & {
+  accessToken?: string;
+  refreshToken?: string;
+  tokenExpiresAt?: number;
+};
 
 export type TrpcContext = {
   req: Request;

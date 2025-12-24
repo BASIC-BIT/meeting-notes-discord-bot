@@ -1,5 +1,6 @@
 import { config } from "./services/configService";
 import {
+  AttributeValue,
   DynamoDBClient,
   GetItemCommand,
   PutItemCommand,
@@ -23,6 +24,7 @@ import {
   PaymentTransaction,
   RecordingTranscript,
   ServerContext,
+  StripeWebhookEvent,
   SuggestionHistoryEntry,
 } from "./types/db";
 
@@ -76,6 +78,33 @@ export async function writePaymentTransaction(
   };
   const command = new PutItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+// Stripe Webhook Event Table (idempotency)
+export async function writeStripeWebhookEvent(
+  event: StripeWebhookEvent,
+): Promise<void> {
+  const params = {
+    TableName: "StripeWebhookEventTable",
+    Item: marshall(event, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getStripeWebhookEvent(
+  eventId: string,
+): Promise<StripeWebhookEvent | undefined> {
+  const params = {
+    TableName: "StripeWebhookEventTable",
+    Key: marshall({ eventId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as StripeWebhookEvent;
+  }
+  return undefined;
 }
 
 // Read from PaymentTransaction Table
@@ -446,6 +475,41 @@ export async function getRecentMeetingsForGuild(
     return result.Items.map((item) => unmarshall(item) as MeetingHistory);
   }
   return [];
+}
+
+export async function getMeetingsForGuildInRange(
+  guildId: string,
+  startTimestamp: string,
+  endTimestamp: string,
+): Promise<MeetingHistory[]> {
+  const items: MeetingHistory[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: "MeetingHistoryTable",
+      IndexName: "GuildTimestampIndex",
+      KeyConditionExpression:
+        "guildId = :guildId AND #timestamp BETWEEN :start AND :end",
+      ExpressionAttributeNames: { "#timestamp": "timestamp" },
+      ExpressionAttributeValues: marshall({
+        ":guildId": guildId,
+        ":start": startTimestamp,
+        ":end": endTimestamp,
+      }),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new QueryCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as MeetingHistory),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
 }
 
 export async function getMeetingHistory(

@@ -91,6 +91,7 @@
 
 - Local: `npm run check` / `yarn run check` (lint --fix, prettier --write, test, build). CI-safe: `npm run check:ci` / `yarn run check:ci` (no auto-fix, uses prettier:check + lint:check). Avoid `yarn check` (built-in Yarn integrity command).
 - AI coding agents: after making code changes, prefer `yarn run check`; if you must avoid auto-fix (e.g., reviewing only), run `yarn run check:ci`. Report the command outcomes in your handoff. If you reformat, re-run the checks.
+- Optional quality scan: run `yarn code:stats` to print LOC + complexity (requires `scc` + `lizard` on PATH). `.sccignore` controls scc excludes; `whitelizard.txt` can whitelist known complexity offenders. CI also prints this report on deploy.
 
 ## Non-idiomatic typing
 

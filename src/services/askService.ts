@@ -62,6 +62,29 @@ export async function answerQuestionService(
     meetings = meetings.filter((m) => m.channelId === channelId);
   }
 
+  if (config.mock.enabled) {
+    if (!meetings.length) {
+      return {
+        answer:
+          "Mock mode: no meetings found yet. Start one with `/startmeeting` in Discord or enable auto-recording in Settings.",
+        sourceMeetingIds: [],
+      };
+    }
+    const sample = meetings[0];
+    const sourceMeetingIds = meetings.map(
+      (meeting) => meeting.channelId_timestamp,
+    );
+    const mockSourceLink =
+      sample.notesChannelId && sample.notesMessageIds?.length
+        ? `https://discord.com/channels/${guildId}/${sample.notesChannelId}/${sample.notesMessageIds[0]}`
+        : "";
+    const sourceLine = mockSourceLink ? `\n\nSource: ${mockSourceLink}` : "";
+    return {
+      answer: `Mock answer for "${question}".${sourceLine}`,
+      sourceMeetingIds,
+    };
+  }
+
   if (!meetings.length) {
     if (!allMeetings.length) {
       return {

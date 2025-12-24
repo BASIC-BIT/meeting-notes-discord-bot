@@ -6,6 +6,7 @@
   "scripts": {
     "start": "nodemon --exec ts-node src/index.ts",
     "start:mock": "nodemon --exec \"ts-node src/index.ts --mock\"",
+    "start:mock:once": "ts-node src/index.ts --mock",
     "build": "tsc",
     "build:web": "vite build",
     "build:all": "yarn build && yarn build:web",
@@ -14,6 +15,8 @@
     "terraform:plan": "terraform -chdir=_infra plan",
     "terraform:apply": "terraform -chdir=_infra apply",
     "test": "jest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "lint": "eslint --fix src test",
     "lint:check": "eslint src test",
     "prettier": "prettier . --write",
@@ -38,8 +41,14 @@
     "checkov": "uvx --from checkov checkov -d _infra --quiet --compact",
     "check": "yarn lint && yarn prettier && yarn test && yarn build:all",
     "check:ci": "yarn lint:check && yarn prettier:check && yarn test && yarn build",
-    "stripe:listen": "stripe listen --forward-to localhost:3001/api/billing/webhook",
-    "stripe:trigger": "stripe trigger"
+    "stripe:listen": "stripe listen --forward-to http://localhost:3001/api/billing/webhook",
+    "stripe:trigger": "stripe trigger",
+    "stripe:trigger:checkout": "stripe trigger checkout.session.completed",
+    "stripe:trigger:invoice-paid": "stripe trigger invoice.payment_succeeded",
+    "stripe:trigger:invoice-failed": "stripe trigger invoice.payment_failed",
+    "stripe:trigger:subscription-updated": "stripe trigger customer.subscription.updated",
+    "stripe:trigger:subscription-deleted": "stripe trigger customer.subscription.deleted",
+    "code:stats": "scc --ci && scc --ci --by-file --sort lines && lizard -l ts -l tsx -l js -l jsx src test"
   },
   "engines": {
     "node": "~20.19.2"
@@ -99,6 +108,7 @@
     "@babel/preset-env": "^7.27.2",
     "@babel/preset-typescript": "^7.27.1",
     "@jest/globals": "^29.7.0",
+    "@playwright/test": "^1.57.0",
     "@testing-library/dom": "^10.0.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",

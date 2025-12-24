@@ -20,13 +20,15 @@ import { GuildChannel } from "discord.js/typings";
 import { checkBotPermissions } from "../utils/permissions";
 import { handleEndMeetingOther } from "./endMeeting";
 import { parseTags } from "../utils/tags";
-import {
-  getTodayMeetingCount,
-  getGuildLimits,
-} from "../services/subscriptionService";
+import { getGuildLimits } from "../services/subscriptionService";
 import { buildUpgradePrompt } from "../utils/upgradePrompt";
 import { fetchServerContext } from "../services/appContextService";
 import { fetchChannelContext } from "../services/channelContextService";
+import {
+  getNextAvailableAt,
+  getRollingUsageForGuild,
+  getRollingWindowMs,
+} from "../services/meetingUsageService";
 
 export async function handleRequestStartMeeting(
   interaction: CommandInteraction,
@@ -101,25 +103,28 @@ export async function handleRequestStartMeeting(
 
   // Tier and limits
   const { limits } = await getGuildLimits(guildId);
-  if (limits.maxMeetingsPerDayPerGuild) {
-    const todayCount = await getTodayMeetingCount(
-      guildId,
-      limits.maxMeetingsPerDayPerGuild + 5,
-    );
-    if (todayCount >= limits.maxMeetingsPerDayPerGuild) {
+  if (limits.maxMeetingMinutesRolling) {
+    const usage = await getRollingUsageForGuild(guildId);
+    const limitSeconds = limits.maxMeetingMinutesRolling * 60;
+    if (usage.usedSeconds >= limitSeconds) {
+      const windowStartMs = Date.parse(usage.windowStartIso);
+      const nextAvailableAtIso = getNextAvailableAt(
+        usage.meetings,
+        windowStartMs,
+        getRollingWindowMs(),
+        limitSeconds,
+      );
+      const nextLabel = nextAvailableAtIso
+        ? `Try again after <t:${Math.floor(
+            Date.parse(nextAvailableAtIso) / 1000,
+          )}:R>.`
+        : "Try again later.";
       await interaction.reply(
         buildUpgradePrompt(
-          "Daily meeting limit reached for the free tier. Upgrade to keep recording.",
+          `Weekly meeting minutes limit reached for this plan. ${nextLabel}`,
         ),
       );
       return;
-    }
-    if (todayCount < limits.maxMeetingsPerDayPerGuild) {
-      const remaining = limits.maxMeetingsPerDayPerGuild - todayCount;
-      await interaction.followUp({
-        content: `You have ${remaining} free meeting(s) left today on the free tier.`,
-        ephemeral: true,
-      });
     }
   }
 
@@ -209,6 +214,29 @@ export async function handleAutoStartMeeting(
   options?: { tags?: string[]; liveVoiceEnabled?: boolean },
 ) {
   const guildId = voiceChannel.guild.id;
+  const { limits } = await getGuildLimits(guildId);
+  if (limits.maxMeetingMinutesRolling) {
+    const usage = await getRollingUsageForGuild(guildId);
+    const limitSeconds = limits.maxMeetingMinutesRolling * 60;
+    if (usage.usedSeconds >= limitSeconds) {
+      const windowStartMs = Date.parse(usage.windowStartIso);
+      const nextAvailableAtIso = getNextAvailableAt(
+        usage.meetings,
+        windowStartMs,
+        getRollingWindowMs(),
+        limitSeconds,
+      );
+      const nextLabel = nextAvailableAtIso
+        ? `Try again after <t:${Math.floor(
+            Date.parse(nextAvailableAtIso) / 1000,
+          )}:R>.`
+        : "Try again later.";
+      await textChannel.send(
+        `Weekly meeting minutes limit reached for this plan. ${nextLabel}`,
+      );
+      return false;
+    }
+  }
 
   // Check if a meeting is already active
   if (hasMeeting(guildId)) {

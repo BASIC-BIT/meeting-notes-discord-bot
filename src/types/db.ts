@@ -31,6 +31,12 @@ export interface PaymentTransaction {
   customerId?: string;
 }
 
+export interface StripeWebhookEvent {
+  eventId: string;
+  receivedAt: string;
+  expiresAt: number;
+}
+
 // Access Logs Type
 export interface AccessLog {
   accessLogID: string;

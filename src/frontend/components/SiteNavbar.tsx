@@ -79,6 +79,8 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
               color="gray"
               leftSection={<IconServer size={16} />}
               rightSection={<IconChevronRight size={16} />}
+              data-testid="nav-server-button"
+              data-selected-guild-id={selectedGuildId ?? ""}
               justify="space-between"
               styles={{
                 section: { marginInlineStart: 8, marginInlineEnd: 0 },
@@ -118,6 +120,7 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
               <NavLink
                 key={item.value}
                 label={item.label}
+                data-testid={`nav-${item.value}`}
                 leftSection={
                   <ThemeIcon
                     variant={isActive ? "light" : "transparent"}
@@ -147,6 +150,7 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
           <NavLink
             label="Support"
             description="Docs and quick help"
+            data-testid="nav-support"
             leftSection={
               <ThemeIcon variant="transparent" color="gray" size={34}>
                 <IconMessageCircle size={18} />

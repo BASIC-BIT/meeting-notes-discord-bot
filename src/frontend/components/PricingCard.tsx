@@ -44,6 +44,7 @@ type PricingCardProps = {
   tone?: "default" | "raised" | "soft";
   borderColor?: string;
   borderWidth?: number;
+  testId?: string;
 };
 
 export function PricingCard({
@@ -61,6 +62,7 @@ export function PricingCard({
   tone,
   borderColor,
   borderWidth,
+  testId,
 }: PricingCardProps) {
   const badgeLabel = highlighted ? (badge ?? "Best value") : badge;
   const buttonVariant =
@@ -80,6 +82,7 @@ export function PricingCard({
     <Surface
       p="xl"
       tone={computedTone}
+      data-testid={testId}
       style={{
         borderWidth: computedBorderWidth,
         borderColor: computedBorderColor,

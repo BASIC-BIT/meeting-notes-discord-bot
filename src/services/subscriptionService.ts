@@ -1,13 +1,12 @@
-import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
 import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
 import { config } from "./configService";
 
-export type Tier = "free" | "basic";
+export type Tier = "free" | "basic" | "pro";
 
 export interface TierLimits {
-  maxMeetingsPerDayPerGuild?: number;
   maxMeetingDurationMs?: number;
   maxMeetingDurationPretty?: string;
+  maxMeetingMinutesRolling?: number;
   maxAskMeetings?: number;
   liveVoiceEnabled: boolean;
   imagesEnabled: boolean;
@@ -21,18 +20,26 @@ export interface ResolvedSubscription {
 
 const DEFAULT_LIMITS: Record<Tier, TierLimits> = {
   free: {
-    maxMeetingsPerDayPerGuild: 3,
     maxMeetingDurationMs: 90 * 60 * 1000, // 90 minutes
     maxMeetingDurationPretty: "90 minutes",
+    maxMeetingMinutesRolling: 4 * 60,
     maxAskMeetings: 5,
     liveVoiceEnabled: false,
     imagesEnabled: false,
   },
   basic: {
-    maxMeetingsPerDayPerGuild: undefined,
     maxMeetingDurationMs: 7_200_000,
     maxMeetingDurationPretty: "2 hours",
+    maxMeetingMinutesRolling: 20 * 60,
     maxAskMeetings: 25,
+    liveVoiceEnabled: true,
+    imagesEnabled: true,
+  },
+  pro: {
+    maxMeetingDurationMs: 7_200_000,
+    maxMeetingDurationPretty: "2 hours",
+    maxMeetingMinutesRolling: undefined,
+    maxAskMeetings: 100,
     liveVoiceEnabled: true,
     imagesEnabled: true,
   },
@@ -54,7 +61,7 @@ export async function resolveGuildSubscription(
   guildId: string,
 ): Promise<ResolvedSubscription> {
   const forced = config.subscription.forceTier;
-  if (forced === "free" || forced === "basic") {
+  if (forced === "free" || forced === "basic" || forced === "pro") {
     return { tier: forced, status: forced, source: "forced" };
   }
 
@@ -78,7 +85,12 @@ export async function resolveGuildSubscription(
   const subscription = await getSubscriptionRepository().get(guildId);
   const status = subscription?.status || "free";
   const paidStatuses = new Set(["active", "trialing", "past_due"]);
-  const tier: Tier = paidStatuses.has(status) ? "basic" : "free";
+  const storedTier =
+    subscription?.tier === "basic" || subscription?.tier === "pro"
+      ? subscription.tier
+      : null;
+  const tier: Tier =
+    storedTier ?? (paidStatuses.has(status) ? "basic" : "free");
 
   const sub: ResolvedSubscription = {
     tier,
@@ -102,26 +114,4 @@ export async function getGuildLimits(guildId: string | null): Promise<{
   const subscription = await resolveGuildSubscription(guildId);
   const limits = getLimitsForTier(subscription.tier);
   return { subscription, limits };
-}
-
-export async function getTodayMeetingCount(
-  guildId: string,
-  lookback: number,
-): Promise<number> {
-  const recent = await listRecentMeetingsForGuildService(
-    guildId,
-    Math.max(lookback, 10),
-  );
-  const now = new Date();
-  const startOfDay = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate(),
-  );
-  const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
-  return recent.filter((m) => {
-    if (!m.timestamp) return false;
-    const ts = Date.parse(m.timestamp);
-    return ts >= startOfDay && ts < endOfDay;
-  }).length;
 }

@@ -25,6 +25,13 @@ import { generateAndSendNotes } from "./generateNotes";
 import { saveMeetingHistoryToDatabase } from "./saveMeetingHistory";
 import { renderChatEntryLine } from "../utils/chatLog";
 import { uploadMeetingArtifacts } from "../services/uploadService";
+import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
+import { getGuildLimits } from "../services/subscriptionService";
+import {
+  getNextAvailableAt,
+  getRollingUsageForGuild,
+  getRollingWindowMs,
+} from "../services/meetingUsageService";
 
 function doesUserHavePermissionToEndMeeting(
   meeting: MeetingData,
@@ -186,6 +193,7 @@ export async function handleEndMeetingButton(
 
     // Save meeting history to database before cleanup
     await saveMeetingHistoryToDatabase(meeting);
+    await maybeSendMinutesLimitNotice(meeting);
 
     meeting.setFinished();
     meeting.finished = true;
@@ -319,6 +327,7 @@ export async function handleEndMeetingOther(
 
     // Save meeting history to database before cleanup
     await saveMeetingHistoryToDatabase(meeting);
+    await maybeSendMinutesLimitNotice(meeting);
 
     meeting.setFinished();
     meeting.finished = true;
@@ -330,5 +339,48 @@ export async function handleEndMeetingOther(
       meeting.finished = true;
       deleteMeeting(meeting.guildId);
     }
+  }
+}
+
+async function maybeSendMinutesLimitNotice(meeting: MeetingData) {
+  const { limits } = await getGuildLimits(meeting.guildId);
+  if (!limits.maxMeetingMinutesRolling) return;
+
+  const usage = await getRollingUsageForGuild(meeting.guildId);
+  const limitSeconds = limits.maxMeetingMinutesRolling * 60;
+  const remainingSeconds = limitSeconds - usage.usedSeconds;
+  const remainingMinutes = Math.max(0, Math.ceil(remainingSeconds / 60));
+  const thresholdMinutes = Math.max(
+    60,
+    Math.ceil(limits.maxMeetingMinutesRolling * 0.2),
+  );
+
+  const windowStartMs = Date.parse(usage.windowStartIso);
+  const nextAvailableAtIso = getNextAvailableAt(
+    usage.meetings,
+    windowStartMs,
+    getRollingWindowMs(),
+    limitSeconds,
+  );
+  if (usage.usedSeconds >= limitSeconds) {
+    const nextLabel = nextAvailableAtIso
+      ? `You can record again after <t:${Math.floor(
+          Date.parse(nextAvailableAtIso) / 1000,
+        )}:R>.`
+      : "You can record again once older meetings roll out of the window.";
+    await meeting.textChannel.send(
+      buildUpgradeTextOnly(
+        `You've reached the weekly minutes limit for this plan. ${nextLabel}`,
+      ),
+    );
+    return;
+  }
+
+  if (remainingMinutes <= thresholdMinutes) {
+    await meeting.textChannel.send(
+      buildUpgradeTextOnly(
+        `Heads up: about ${remainingMinutes} minute(s) left in the weekly free-tier window.`,
+      ),
+    );
   }
 }

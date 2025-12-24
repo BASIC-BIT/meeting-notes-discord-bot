@@ -60,7 +60,7 @@ export default function ServerSelect() {
   }
 
   return (
-    <Stack gap="xl">
+    <Stack gap="xl" data-testid="server-select">
       <PageHeader
         title="Choose a server"
         description="Pick the server you want to manage and explore in the Chronote library."
@@ -70,6 +70,7 @@ export default function ServerSelect() {
         value={query}
         onChange={(event) => setQuery(event.currentTarget.value)}
         leftSection={<IconSearch size={14} />}
+        data-testid="server-search"
       />
       <ScrollArea offsetScrollbars type="auto" style={{ maxHeight: "60vh" }}>
         {filtered.length === 0 ? (
@@ -81,7 +82,13 @@ export default function ServerSelect() {
         ) : (
           <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
             {filtered.map((guild) => (
-              <Surface key={guild.id} p="lg" tone="soft">
+              <Surface
+                key={guild.id}
+                p="lg"
+                tone="soft"
+                data-testid="server-card"
+                data-server-id={guild.id}
+              >
                 <Stack gap="sm">
                   <Text fw={600}>{guild.name}</Text>
                   <Text size="sm" c="dimmed">
@@ -91,6 +98,7 @@ export default function ServerSelect() {
                     variant={selectedGuildId === guild.id ? "light" : "outline"}
                     color="brand"
                     rightSection={<IconArrowRight size={16} />}
+                    data-testid="server-open"
                     onClick={() => {
                       setSelectedGuildId(guild.id);
                       setLastServerId(guild.id);
