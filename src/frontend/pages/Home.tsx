@@ -184,7 +184,7 @@ export default function Home() {
                 variant="outline"
                 component="a"
                 data-testid="home-cta-docs"
-                href="https://meetingnotes.basicbit.net"
+                href="https://chronote.gg"
               >
                 View Docs
               </Button>
@@ -450,7 +450,7 @@ export default function Home() {
             description="Unlock longer sessions and deeper recall."
             features={[
               "Up to 20 hours per week",
-              "Up to 2 hours per meeting (8 hours coming soon)",
+              "Up to 2 hours per meeting",
               "Ask across longer history",
               "Live voice mode",
             ]}

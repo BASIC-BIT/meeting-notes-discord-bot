@@ -3,9 +3,10 @@
 # -----------------------------------------------
 
 resource "aws_prometheus_workspace" "amp" {
-  alias = "meeting-notes-amp"
+  alias = "${local.name_prefix}-amp"
   tags  = {
-    Project = "meeting-notes-discord-bot"
+    Project     = "${var.project_name}-discord-bot"
+    Environment = var.environment
   }
 }
 
@@ -37,20 +38,21 @@ resource "random_id" "grafana_suffix" {
 }
 
 resource "aws_grafana_workspace" "amg" {
-  name                     = "meeting-notes-grafana-${random_id.grafana_suffix.hex}"
+  name                     = "${local.name_prefix}-grafana-${random_id.grafana_suffix.hex}"
   account_access_type      = "CURRENT_ACCOUNT"
   authentication_providers = ["AWS_SSO"] # Requires IAM Identity Center configured
   permission_type          = "SERVICE_MANAGED"
   data_sources             = ["PROMETHEUS", "CLOUDWATCH"]
   role_arn                 = aws_iam_role.grafana_workspace_role.arn
   tags = {
-    Project = "meeting-notes-discord-bot"
+    Project     = "${var.project_name}-discord-bot"
+    Environment = var.environment
   }
 }
 
 # IAM role for AMG to access AWS data sources (CloudWatch, AMP in current account)
 resource "aws_iam_role" "grafana_workspace_role" {
-  name = "meeting-notes-grafana-workspace-role"
+  name = "${local.name_prefix}-grafana-workspace-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17",

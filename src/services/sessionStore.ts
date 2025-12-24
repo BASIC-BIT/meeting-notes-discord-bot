@@ -15,7 +15,7 @@ interface DynamoSession {
 }
 
 export class DynamoSessionStore extends session.Store {
-  private tableName = "SessionTable";
+  private tableName = `${config.database.tablePrefix ?? ""}SessionTable`;
   private client: DynamoDBClient;
   private ttlSeconds: number;
 

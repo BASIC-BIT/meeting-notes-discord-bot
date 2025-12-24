@@ -45,15 +45,36 @@ definition. You must set the secret values after the first apply.
 
 1. Apply Terraform as usual: `terraform apply`
 2. In AWS Secrets Manager, set **SecretString** values for:
-   - `meeting-notes/discord-bot-token`
-   - `meeting-notes/discord-client-secret`
-   - `meeting-notes/oauth-secret`
-   - `meeting-notes/openai-api-key`
-   - `meeting-notes/stripe-secret-key`
-   - `meeting-notes/stripe-webhook-secret`
+
+- `${project_name}-${environment}/discord-bot-token`
+- `${project_name}-${environment}/discord-client-secret`
+- `${project_name}-${environment}/oauth-secret`
+- `${project_name}-${environment}/openai-api-key`
+- `${project_name}-${environment}/stripe-secret-key`
+- `${project_name}-${environment}/stripe-webhook-secret`
+
 3. Redeploy the ECS service (or force a new deployment) so tasks pick up the new secrets.
 
 Notes:
 
 - These secrets should **not** live in `terraform.tfvars`.
 - Local development still uses `.env` values.
+
+## Environments (prod vs staging)
+
+Terraform now supports environment-specific resource naming via `environment`
+and `project_name` in `terraform.tfvars`.
+
+Recommended workflow:
+
+1. Use a separate workspace for staging: `terraform workspace new staging`
+2. Set `environment="staging"` and `github_environment="staging"` in
+   `terraform.tfvars` for staging runs.
+3. For production, keep `environment="prod"` and your existing GitHub Actions
+   environment name (currently `sandbox`).
+
+If you prefer separate variable files, use:
+
+- Prod: `terraform -chdir=_infra plan -var-file=terraform.tfvars`
+- Staging: copy `terraform.staging.tfvars.example` to `terraform.staging.tfvars`, then run
+  `terraform -chdir=_infra plan -var-file=terraform.staging.tfvars`

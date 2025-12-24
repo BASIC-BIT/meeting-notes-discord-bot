@@ -1,7 +1,8 @@
 locals {
-  secrets_prefix = "meeting-notes"
+  secrets_prefix = local.name_prefix
   secrets_tags = {
-    Project = "meeting-notes-discord-bot"
+    Project     = "${var.project_name}-discord-bot"
+    Environment = var.environment
   }
 }
 
@@ -59,7 +60,7 @@ data "aws_iam_policy_document" "ecs_secrets_policy" {
 }
 
 resource "aws_iam_policy" "ecs_task_secrets_policy" {
-  name   = "meeting-notes-ecs-task-secrets"
+  name   = "${local.name_prefix}-ecs-task-secrets"
   policy = data.aws_iam_policy_document.ecs_secrets_policy.json
 }
 

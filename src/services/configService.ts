@@ -90,6 +90,7 @@ class ConfigService {
     useLocalDynamoDB:
       process.env.NODE_ENV === "development" &&
       process.env.USE_LOCAL_DYNAMODB === "true",
+    tablePrefix: process.env.DDB_TABLE_PREFIX || "",
   };
 
   // Storage Configuration

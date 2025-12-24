@@ -1,9 +1,10 @@
-name: Meeting Notes Bot Deploy
-run-name: Meeting Notes Bot Deploy ${{ github.actor }}
+name: Meeting Notes Bot Deploy (Staging)
+
+run-name: Staging Deploy ${{ github.actor }}
+
 on:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
+
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
@@ -86,38 +87,11 @@ jobs:
       - name: Run Playwright tests (mock mode)
         run: yarn test:e2e
 
-  terraform-apply:
-    name: Terraform Apply (prod)
+  deploybackend:
+    name: Deploy Backend (Staging)
     needs: [test-and-build, e2e-tests]
     runs-on: ubuntu-latest
-    environment: sandbox
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Terraform init
-        run: terraform -chdir=_infra init
-
-      - name: Terraform apply
-        env:
-          TF_INPUT: "false"
-        run: terraform -chdir=_infra apply -auto-approve -var-file=terraform.tfvars
-
-  deploybackend:
-    name: Deploy Backend
-    needs: [test-and-build, e2e-tests, terraform-apply]
-    runs-on: ubuntu-latest
-    environment: sandbox
+    environment: staging
     env:
       ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
       ECS_SERVICE: ${{ vars.ECS_SERVICE }}
@@ -145,18 +119,11 @@ jobs:
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Build a docker container and
-          # push it to ECR so that it can
-          # be deployed to ECS.
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-
-          # Verify the image contains the required files
-          echo "Verifying Docker image contents..."
           docker run --rm $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ls -la dist/index.js || {
             echo "ERROR: dist/index.js not found in Docker image!"
             exit 1
           }
-
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
@@ -177,24 +144,13 @@ jobs:
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Get the current task definition
           TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION)
-
-          # Update the container image in the task definition
           NEW_TASK_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
-
-          # Clean up the task definition JSON to remove invalid fields
           CLEAN_TASK_DEFINITION=$(echo "$NEW_TASK_DEFINITION" | jq 'del(.status, .taskDefinitionArn, .revision, .registeredAt, .registeredBy, .compatibilities, .requiresAttributes)')
-
-          # Register the new task definition revision
           echo "$CLEAN_TASK_DEFINITION" | jq 'del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy)' > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
-
-          # Get the new task definition revision
           NEW_TASK_DEFINITION_REVISION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION | jq -r '.taskDefinition.taskDefinitionArn')
           echo "new_task_def=$NEW_TASK_DEFINITION_REVISION" >> $GITHUB_OUTPUT
-
-          # Update the ECS service to use the new task definition revision
           aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition $NEW_TASK_DEFINITION_REVISION --region $AWS_REGION
 
       - name: Wait for service stability
@@ -202,64 +158,43 @@ jobs:
           AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
           echo "Waiting for ECS service to stabilize..."
-
-          # Wait up to 10 minutes for the service to stabilize
           TIMEOUT=600
           INTERVAL=30
           ELAPSED=0
-
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            # Get service details
             SERVICE_STATUS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION)
-            
-            # Check running count vs desired count
             DESIRED_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].desiredCount')
             RUNNING_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].runningCount')
             PENDING_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].pendingCount')
-            
             echo "Service status: Desired=$DESIRED_COUNT, Running=$RUNNING_COUNT, Pending=$PENDING_COUNT"
-            
-            # Check for deployment completion
             DEPLOYMENTS=$(echo $SERVICE_STATUS | jq -r '.services[0].deployments | length')
-            
             if [ "$DEPLOYMENTS" -eq 1 ] && [ "$RUNNING_COUNT" -eq "$DESIRED_COUNT" ] && [ "$PENDING_COUNT" -eq 0 ]; then
               echo "Service has stabilized successfully!"
               break
             fi
-            
-            # Check for failed tasks
             EVENTS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION | jq -r '.services[0].events[0:5]')
             echo "Recent service events:"
             echo "$EVENTS" | jq -r '.[] | .message' | head -5
-            
-            # Check for task failures
             FAILED_TASKS=$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status STOPPED --region $AWS_REGION | jq -r '.taskArns[]')
-            
             if [ ! -z "$FAILED_TASKS" ]; then
               echo "Checking stopped tasks for failures..."
               for TASK in $FAILED_TASKS; do
                 TASK_DETAIL=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks $TASK --region $AWS_REGION)
                 STOP_REASON=$(echo $TASK_DETAIL | jq -r '.tasks[0].stoppedReason // "No reason provided"')
                 STOP_CODE=$(echo $TASK_DETAIL | jq -r '.tasks[0].stopCode // "Unknown"')
-                
                 if [[ "$STOP_REASON" != "Scaling activity initiated by deployment"* ]] && [[ "$STOP_CODE" != "ServiceSchedulerInitiated" ]]; then
                   echo "ERROR: Task failed with reason: $STOP_REASON (Code: $STOP_CODE)"
-                  
-                  # Get container exit reasons
                   CONTAINER_REASONS=$(echo $TASK_DETAIL | jq -r '.tasks[0].containers[] | select(.exitCode != null and .exitCode != 0) | "Container \(.name) exited with code \(.exitCode): \(.reason // "No reason")"')
                   if [ ! -z "$CONTAINER_REASONS" ]; then
                     echo "$CONTAINER_REASONS"
                   fi
-                  
                   exit 1
                 fi
               done
             fi
-            
             sleep $INTERVAL
             ELAPSED=$((ELAPSED + INTERVAL))
           done
-
           if [ $ELAPSED -ge $TIMEOUT ]; then
             echo "ERROR: Service failed to stabilize within $TIMEOUT seconds!"
             exit 1
@@ -270,28 +205,20 @@ jobs:
           AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
           echo "Verifying deployment health..."
-
-          # Get the running tasks
           RUNNING_TASKS=$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status RUNNING --region $AWS_REGION | jq -r '.taskArns[]')
-
           if [ -z "$RUNNING_TASKS" ]; then
             echo "ERROR: No running tasks found!"
             exit 1
           fi
-
-          # Check CloudWatch logs for startup errors (if available)
           LOG_GROUP="$ECS_LOG_GROUP"
           CURRENT_TIME=$(date +%s000)
-          START_TIME=$((CURRENT_TIME - 300000)) # Last 5 minutes
-
+          START_TIME=$((CURRENT_TIME - 300000))
           echo "Checking recent logs for errors..."
           RECENT_LOGS=$(aws logs filter-log-events --log-group-name $LOG_GROUP --start-time $START_TIME --filter-pattern "ERROR" --region $AWS_REGION 2>/dev/null || echo "{}")
-
           if [ $(echo "$RECENT_LOGS" | jq -r '.events | length') -gt 0 ]; then
             echo "WARNING: Found error logs in the last 5 minutes:"
             echo "$RECENT_LOGS" | jq -r '.events[] | .message' | head -10
           fi
-
           echo "Deployment completed successfully!"
 
       - name: Rollback on failure
@@ -301,45 +228,36 @@ jobs:
           PREVIOUS_TASK_DEF: ${{ steps.current-task-def.outputs.current_task_def }}
         run: |
           echo "Deployment failed! Rolling back to previous task definition: $PREVIOUS_TASK_DEF"
-
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
             --service "$ECS_SERVICE" \
             --task-definition $PREVIOUS_TASK_DEF \
             --region $AWS_REGION
-
           echo "Rollback initiated. Previous deployment restored."
 
       - name: Create deployment summary
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
-            echo "## ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "## ✅ Staging Deployment Successful!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Deployed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Deployment time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
           else
-            echo "## ❌ Deployment Failed!" >> $GITHUB_STEP_SUMMARY
+            echo "## ❌ Staging Deployment Failed!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Failed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Failure time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Common failure reasons:" >> $GITHUB_STEP_SUMMARY
-            echo "- Missing dist/index.js (check tsconfig.json noEmit setting)" >> $GITHUB_STEP_SUMMARY
-            echo "- Container startup failures (check environment variables)" >> $GITHUB_STEP_SUMMARY
-            echo "- Memory/resource limits exceeded" >> $GITHUB_STEP_SUMMARY
-            echo "- Dependencies or build issues" >> $GITHUB_STEP_SUMMARY
-          fi
 
   deploy-frontend:
-    name: Deploy Frontend
-    needs: [test-and-build, e2e-tests, terraform-apply]
+    name: Deploy Frontend (Staging)
+    needs: [test-and-build, e2e-tests]
     runs-on: ubuntu-latest
-    environment: sandbox
+    environment: staging
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -372,7 +290,6 @@ jobs:
             echo "FRONTEND_BUCKET not set in environment variables"
             exit 1
           fi
-          # Long cache for hashed assets; shorter for HTML
           aws s3 sync build/frontend s3://$FRONTEND_BUCKET --delete --exclude "index.html" --cache-control "public,max-age=31536000,immutable"
           aws s3 cp build/frontend/index.html s3://$FRONTEND_BUCKET/index.html --cache-control "public,max-age=600"
           if [ -f build/frontend/manifest.json ]; then

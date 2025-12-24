@@ -156,9 +156,7 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
                 <IconMessageCircle size={18} />
               </ThemeIcon>
             }
-            onClick={() =>
-              window.open("https://meetingnotes.basicbit.net", "_blank")
-            }
+            onClick={() => window.open("https://chronote.gg", "_blank")}
             style={{ borderRadius: theme.radius[uiRadii.control] }}
           />
         </Stack>

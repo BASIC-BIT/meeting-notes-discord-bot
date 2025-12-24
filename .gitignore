@@ -9,6 +9,7 @@ recordings/
 dynamodb-data/
 
 _infra/terraform.tfvars
+_infra/terraform.staging.tfvars
 _infra/.terraform/
 
 _infra_state_mgmt/.terraform

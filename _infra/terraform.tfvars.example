@@ -2,6 +2,9 @@
 DISCORD_CLIENT_ID="your-discord-client-id-here"
 GITHUB_TOKEN="your-github-token-here"
 AWS_TOKEN_KEY="your-aws-token-key-here"
+environment="prod"                           # prod | staging
+project_name="meeting-notes"
+github_environment="sandbox"                 # GitHub Actions environment name
 
 # Optional (leave blank to use defaults)
 ENABLE_OAUTH="false"                          # defaults false
@@ -15,7 +18,7 @@ FRONTEND_DOMAIN=""                            # no custom domain if blank
 FRONTEND_CERT_ARN=""                          # only when FRONTEND_DOMAIN is set
 TRANSCRIPTS_BUCKET=""                         # auto-named if blank
 TRANSCRIPTS_PREFIX=""                         # no prefix if blank
-HOSTED_ZONE_NAME=""                           # e.g., basicbit.net. (required if setting FRONTEND_DOMAIN)
+HOSTED_ZONE_NAME=""                           # e.g., chronote.gg. (required if setting FRONTEND_DOMAIN)
 # Frontend/CORS
 FRONTEND_ALLOWED_ORIGINS=""                   # comma-separated origins, no trailing slash
 FRONTEND_SITE_URL=""                          # primary frontend URL
@@ -40,9 +43,9 @@ aws_region="us-east-1"
 grafana_suffix_seed=""                       # optional; change to force a new workspace name suffix
 # Secrets (managed in AWS Secrets Manager)
 # After apply, set secret values for:
-# - meeting-notes/discord-bot-token
-# - meeting-notes/discord-client-secret
-# - meeting-notes/oauth-secret
-# - meeting-notes/openai-api-key
-# - meeting-notes/stripe-secret-key
-# - meeting-notes/stripe-webhook-secret
+# - ${project_name}-${environment}/discord-bot-token
+# - ${project_name}-${environment}/discord-client-secret
+# - ${project_name}-${environment}/oauth-secret
+# - ${project_name}-${environment}/openai-api-key
+# - ${project_name}-${environment}/stripe-secret-key
+# - ${project_name}-${environment}/stripe-webhook-secret

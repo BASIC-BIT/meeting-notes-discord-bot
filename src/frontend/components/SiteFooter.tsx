@@ -26,7 +26,7 @@ export function SiteFooter({ variant = "default" }: SiteFooterProps) {
           >
             Add to Discord
           </Anchor>
-          <Anchor href="https://meetingnotes.basicbit.net" size="sm">
+          <Anchor href="https://chronote.gg" size="sm">
             Docs
           </Anchor>
         </Group>

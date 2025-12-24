@@ -51,7 +51,7 @@ const BENEFITS: Benefit[] = [
     label: "Max meeting length",
     values: {
       free: "90 minutes",
-      basic: "2 hours (8 hours coming soon)",
+      basic: "2 hours",
       pro: "2 hours (8 hours coming soon)",
     },
   },
@@ -450,7 +450,7 @@ export function Billing() {
                 description="Unlock longer sessions and deeper recall."
                 features={[
                   "Up to 20 hours per week",
-                  "Up to 2 hours per meeting (8 hours coming soon)",
+                  "Up to 2 hours per meeting",
                   "Ask across longer history",
                   "Live voice mode",
                 ]}
