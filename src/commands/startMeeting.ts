@@ -16,11 +16,19 @@ import {
   hasMeeting,
   initializeMeeting,
 } from "../meetings";
-import { getAutoRecordSetting } from "../db";
 import { GuildChannel } from "discord.js/typings";
 import { checkBotPermissions } from "../utils/permissions";
 import { handleEndMeetingOther } from "./endMeeting";
 import { parseTags } from "../utils/tags";
+import { getGuildLimits } from "../services/subscriptionService";
+import { buildUpgradePrompt } from "../utils/upgradePrompt";
+import { fetchServerContext } from "../services/appContextService";
+import { fetchChannelContext } from "../services/channelContextService";
+import {
+  getNextAvailableAt,
+  getRollingUsageForGuild,
+  getRollingWindowMs,
+} from "../services/meetingUsageService";
 
 export async function handleRequestStartMeeting(
   interaction: CommandInteraction,
@@ -93,6 +101,33 @@ export async function handleRequestStartMeeting(
     return;
   }
 
+  // Tier and limits
+  const { limits } = await getGuildLimits(guildId);
+  if (limits.maxMeetingMinutesRolling) {
+    const usage = await getRollingUsageForGuild(guildId);
+    const limitSeconds = limits.maxMeetingMinutesRolling * 60;
+    if (usage.usedSeconds >= limitSeconds) {
+      const windowStartMs = Date.parse(usage.windowStartIso);
+      const nextAvailableAtIso = getNextAvailableAt(
+        usage.meetings,
+        windowStartMs,
+        getRollingWindowMs(),
+        limitSeconds,
+      );
+      const nextLabel = nextAvailableAtIso
+        ? `Try again after <t:${Math.floor(
+            Date.parse(nextAvailableAtIso) / 1000,
+          )}:R>.`
+        : "Try again later.";
+      await interaction.reply(
+        buildUpgradePrompt(
+          `Weekly meeting minutes limit reached for this plan. ${nextLabel}`,
+        ),
+      );
+      return;
+    }
+  }
+
   // Check bot permissions
   const permissionCheck = checkBotPermissions(
     voiceChannel,
@@ -104,6 +139,15 @@ export async function handleRequestStartMeeting(
     await interaction.reply(permissionCheck.errorMessage!);
     return;
   }
+
+  const [serverContext, channelContext] = await Promise.all([
+    fetchServerContext(guildId),
+    fetchChannelContext(guildId, voiceChannel.id),
+  ]);
+  const liveVoiceDefault = serverContext?.liveVoiceEnabled ?? false;
+  const liveVoiceOverride = channelContext?.liveVoiceEnabled;
+  const liveVoiceEnabled =
+    limits.liveVoiceEnabled && (liveVoiceOverride ?? liveVoiceDefault);
 
   // Initialize the meeting using the core function
   const meeting = await initializeMeeting({
@@ -118,6 +162,9 @@ export async function handleRequestStartMeeting(
     isAutoRecording: false,
     tags: tags ? parseTags(tags) : undefined,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
+    liveVoiceEnabled,
+    maxMeetingDurationMs: limits.maxMeetingDurationMs,
+    maxMeetingDurationPretty: limits.maxMeetingDurationPretty,
   });
 
   const embed = new EmbedBuilder()
@@ -164,12 +211,32 @@ export async function handleAutoStartMeeting(
   client: Client,
   voiceChannel: VoiceBasedChannel,
   textChannel: TextChannel,
+  options?: { tags?: string[]; liveVoiceEnabled?: boolean },
 ) {
-  const autoSetting =
-    (await getAutoRecordSetting(voiceChannel.guild.id, voiceChannel.id)) ||
-    (await getAutoRecordSetting(voiceChannel.guild.id, "ALL"));
-
   const guildId = voiceChannel.guild.id;
+  const { limits } = await getGuildLimits(guildId);
+  if (limits.maxMeetingMinutesRolling) {
+    const usage = await getRollingUsageForGuild(guildId);
+    const limitSeconds = limits.maxMeetingMinutesRolling * 60;
+    if (usage.usedSeconds >= limitSeconds) {
+      const windowStartMs = Date.parse(usage.windowStartIso);
+      const nextAvailableAtIso = getNextAvailableAt(
+        usage.meetings,
+        windowStartMs,
+        getRollingWindowMs(),
+        limitSeconds,
+      );
+      const nextLabel = nextAvailableAtIso
+        ? `Try again after <t:${Math.floor(
+            Date.parse(nextAvailableAtIso) / 1000,
+          )}:R>.`
+        : "Try again later.";
+      await textChannel.send(
+        `Weekly meeting minutes limit reached for this plan. ${nextLabel}`,
+      );
+      return false;
+    }
+  }
 
   // Check if a meeting is already active
   if (hasMeeting(guildId)) {
@@ -225,8 +292,9 @@ export async function handleAutoStartMeeting(
     generateNotes: true, // Always generate notes for auto-recordings
     initialInteraction: undefined, // No interaction for auto-recordings
     isAutoRecording: true,
-    tags: autoSetting?.tags,
+    tags: options?.tags,
     onTimeout: (meeting) => handleEndMeetingOther(client, meeting),
+    liveVoiceEnabled: options?.liveVoiceEnabled,
   });
 
   // Send notification that auto-recording has started

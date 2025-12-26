@@ -39,7 +39,7 @@ The Meeting Notes Discord Bot is a Node.js application built with TypeScript. It
   - Includes Passport.js setup with `passport-discord` for OAuth, though its current usage within the bot's core flow isn't fully detailed in the provided code. Likely for future web dashboard or extended features.
 - **Database Interaction (`src/db.ts`):**
   - Uses AWS SDK (`@aws-sdk/client-dynamodb`, `@aws-sdk/util-dynamodb`) to interact with DynamoDB.
-  - Defines functions to read/write data for `SubscriptionTable`, `PaymentTransactionTable`, `AccessLogsTable`, and `RecordingTranscriptTable`.
+- Defines functions to read/write data for `GuildSubscriptionTable`, `PaymentTransactionTable`, `AccessLogsTable`, and `RecordingTranscriptTable`.
   - The current bot logic in `repomix-output.xml` does not show active usage of these database functions in the core meeting recording/processing flow. This suggests they are for planned or auxiliary features (e.g., premium tiers, usage tracking).
 - **Configuration (`src/constants.ts`, `.env`):**
   - Manages constants like sample rates, API keys, and thresholds.

@@ -45,6 +45,8 @@ const config: Config.InitialOptions = {
   moduleNameMapper: {
     "\\.(css|less|scss|sass)$": "identity-obj-proxy",
     "\\.(jpg|jpeg|png|gif|svg)$": "<rootDir>/test/__mocks__/fileMock.js",
+    "^react-markdown$": "<rootDir>/test/__mocks__/reactMarkdown.tsx",
+    "^remark-gfm$": "<rootDir>/test/__mocks__/remarkGfm.ts",
   },
 
   // A map from regular expressions to paths to transformers
@@ -58,7 +60,7 @@ const config: Config.InitialOptions = {
 
   // The glob patterns Jest uses to detect test files
   testMatch: ["**/__tests__/**/*.[jt]s?(x)", "**/?(*.)+(spec|test).[tj]s?(x)"],
-  testPathIgnorePatterns: ["/node_modules/", "/dist/", "/build/"],
+  testPathIgnorePatterns: ["/node_modules/", "/dist/", "/build/", "/test/e2e/"],
 
   // An array of file extensions your modules use
   moduleFileExtensions: ["js", "jsx", "ts", "tsx", "json", "node"],

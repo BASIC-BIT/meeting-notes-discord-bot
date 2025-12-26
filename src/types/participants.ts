@@ -1,6 +1,7 @@
 export interface Participant {
   id: string; // Discord user snowflake
-  tag: string; // username#discriminator (or new global tag)
-  nickname?: string; // guild nickname/display name
-  globalName?: string; // Discord global display name
+  username: string; // Discord username
+  displayName?: string; // Discord global display name
+  serverNickname?: string; // guild nickname
+  tag?: string; // legacy username#discriminator (or new global tag)
 }

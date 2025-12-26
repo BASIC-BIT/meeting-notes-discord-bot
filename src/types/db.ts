@@ -1,8 +1,7 @@
 import { Participant } from "./participants";
 
-// Subscription Type
-export interface Subscription {
-  userID: string;
+export interface GuildSubscription {
+  guildId: string;
   status: string;
   tier: string;
   startDate: string;
@@ -10,7 +9,12 @@ export interface Subscription {
   nextBillingDate?: string;
   paymentMethod?: string;
   subscriptionType: string;
-  serverID: string;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  priceId?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  mode?: "live" | "test";
 }
 
 // Payment Transaction Type
@@ -24,6 +28,13 @@ export interface PaymentTransaction {
   paymentMethod: string;
   discountCode?: string;
   subscriptionID: string;
+  customerId?: string;
+}
+
+export interface StripeWebhookEvent {
+  eventId: string;
+  receivedAt: string;
+  expiresAt: number;
 }
 
 // Access Logs Type
@@ -64,7 +75,7 @@ export interface NotesHistoryEntry {
 export interface AutoRecordSettings {
   guildId: string; // Partition key
   channelId: string; // Sort key - use "ALL" for record all channels
-  textChannelId: string; // Where to send meeting notifications
+  textChannelId?: string; // Where to send meeting notifications (optional if using defaults)
   enabled: boolean; // Whether auto-recording is active
   recordAll: boolean; // True if this is a guild-wide setting
   createdBy: string; // User ID who created this setting
@@ -76,6 +87,9 @@ export interface AutoRecordSettings {
 export interface ServerContext {
   guildId: string; // Partition key
   context: string; // The context/instructions for the server
+  defaultNotesChannelId?: string;
+  defaultTags?: string[];
+  liveVoiceEnabled?: boolean;
   updatedAt: string; // ISO timestamp
   updatedBy: string; // User ID who last updated
 }
@@ -84,9 +98,36 @@ export interface ServerContext {
 export interface ChannelContext {
   guildId: string; // Partition key
   channelId: string; // Sort key
-  context: string; // The context/instructions for the channel
+  context?: string; // The context/instructions for the channel
+  liveVoiceEnabled?: boolean;
   updatedAt: string; // ISO timestamp
   updatedBy: string; // User ID who last updated
+}
+
+export interface GuildInstaller {
+  guildId: string; // Partition key
+  installerId: string;
+  installedAt: string; // ISO timestamp
+}
+
+export type OnboardingStep =
+  | "context"
+  | "autorecord"
+  | "tour"
+  | "upgrade"
+  | "complete";
+
+export interface OnboardingState {
+  guildId: string; // Partition key
+  userId: string; // Sort key
+  step: OnboardingStep;
+  contextDescription?: string;
+  toneNotes?: string;
+  autorecordMode?: "off" | "one" | "all";
+  autorecordVoiceChannelId?: string;
+  autorecordTextChannelId?: string;
+  updatedAt: string; // ISO timestamp
+  ttl: number; // epoch seconds for Dynamo TTL
 }
 
 // Meeting History Type
@@ -112,10 +153,35 @@ export interface MeetingHistory {
   updatedAt?: string; // Last time notes were edited
   notesLastEditedBy?: string; // User ID who last edited notes
   notesLastEditedAt?: string; // Timestamp of last notes edit
-  transcript?: string; // Full meeting transcript (legacy/compat; generally omitted when using S3)
-  transcriptS3Key?: string; // S3 object key where full transcript is stored
+  transcript?: string; // Deprecated: transcript now stored in S3 JSON; kept only for legacy records
+  transcriptS3Key?: string; // S3 object key where transcript JSON is stored
   suggestionsHistory?: SuggestionHistoryEntry[]; // Chronological list of suggestions applied
   notesHistory?: NotesHistoryEntry[]; // Versions of notes as they change
   audioS3Key?: string; // S3 key for combined audio
   chatS3Key?: string; // S3 key for chat log/json
+}
+
+export interface AskConversationRecord {
+  pk: string;
+  sk: string;
+  type: "conversation";
+  conversationId: string;
+  guildId: string;
+  userId: string;
+  title: string;
+  summary: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AskMessageRecord {
+  pk: string;
+  sk: string;
+  type: "message";
+  conversationId: string;
+  messageId: string;
+  role: "user" | "chronote";
+  text: string;
+  createdAt: string;
+  sourceMeetingIds?: string[];
 }

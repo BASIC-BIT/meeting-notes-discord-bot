@@ -1,0 +1,307 @@
+name: Meeting Notes Bot Deploy (Staging)
+
+run-name: Staging Deploy ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Test and Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.2"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run linter
+        run: yarn lint
+
+      - name: Run tests
+        id: run-tests
+        run: |
+          yarn test --passWithNoTests --testPathIgnorePatterns="src/frontend" || echo "test_failed=true" >> $GITHUB_OUTPUT
+
+      - name: Report test results
+        if: steps.run-tests.outputs.test_failed == 'true'
+        run: |
+          echo "::warning::Some tests failed, but continuing with deployment. Please fix failing tests."
+
+      - name: Code stats (scc + lizard)
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
+            scc --ci /pwd
+          docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
+            scc --ci --by-file --sort lines /pwd
+          python3 -m pip install --quiet lizard
+          lizard -l ts -l tsx -l js -l jsx src test
+
+      - name: Build TypeScript
+        run: yarn build
+
+      - name: Verify dist directory exists
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "ERROR: dist directory not found after build!"
+            exit 1
+          fi
+          if [ ! -f "dist/index.js" ]; then
+            echo "ERROR: dist/index.js not found after build!"
+            exit 1
+          fi
+          echo "Build artifacts verified successfully"
+
+  e2e-tests:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.2"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run Playwright tests (mock mode)
+        run: yarn test:e2e
+
+  deploybackend:
+    name: Deploy Backend (Staging)
+    needs: [test-and-build, e2e-tests]
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+      ECS_LOG_GROUP: ${{ vars.ECS_LOG_GROUP }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker run --rm $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ls -la dist/index.js || {
+            echo "ERROR: dist/index.js not found in Docker image!"
+            exit 1
+          }
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Get current task definition
+        id: current-task-def
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          CURRENT_TASK_DEF=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION | jq -r '.services[0].taskDefinition')
+          echo "current_task_def=$CURRENT_TASK_DEF" >> $GITHUB_OUTPUT
+          echo "Current task definition: $CURRENT_TASK_DEF"
+
+      - name: Update ECS service with new task definition
+        id: update-service
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION)
+          NEW_TASK_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
+          CLEAN_TASK_DEFINITION=$(echo "$NEW_TASK_DEFINITION" | jq 'del(.status, .taskDefinitionArn, .revision, .registeredAt, .registeredBy, .compatibilities, .requiresAttributes)')
+          echo "$CLEAN_TASK_DEFINITION" | jq 'del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy)' > new-task-def.json
+          aws ecs register-task-definition --cli-input-json file://new-task-def.json
+          NEW_TASK_DEFINITION_REVISION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "new_task_def=$NEW_TASK_DEFINITION_REVISION" >> $GITHUB_OUTPUT
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition $NEW_TASK_DEFINITION_REVISION --region $AWS_REGION
+
+      - name: Wait for service stability
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          echo "Waiting for ECS service to stabilize..."
+          TIMEOUT=600
+          INTERVAL=30
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            SERVICE_STATUS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION)
+            DESIRED_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].desiredCount')
+            RUNNING_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].runningCount')
+            PENDING_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].pendingCount')
+            echo "Service status: Desired=$DESIRED_COUNT, Running=$RUNNING_COUNT, Pending=$PENDING_COUNT"
+            DEPLOYMENTS=$(echo $SERVICE_STATUS | jq -r '.services[0].deployments | length')
+            if [ "$DEPLOYMENTS" -eq 1 ] && [ "$RUNNING_COUNT" -eq "$DESIRED_COUNT" ] && [ "$PENDING_COUNT" -eq 0 ]; then
+              echo "Service has stabilized successfully!"
+              break
+            fi
+            EVENTS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION | jq -r '.services[0].events[0:5]')
+            echo "Recent service events:"
+            echo "$EVENTS" | jq -r '.[] | .message' | head -5
+            FAILED_TASKS=$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status STOPPED --region $AWS_REGION | jq -r '.taskArns[]')
+            if [ ! -z "$FAILED_TASKS" ]; then
+              echo "Checking stopped tasks for failures..."
+              for TASK in $FAILED_TASKS; do
+                TASK_DETAIL=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks $TASK --region $AWS_REGION)
+                STOP_REASON=$(echo $TASK_DETAIL | jq -r '.tasks[0].stoppedReason // "No reason provided"')
+                STOP_CODE=$(echo $TASK_DETAIL | jq -r '.tasks[0].stopCode // "Unknown"')
+                if [[ "$STOP_REASON" != "Scaling activity initiated by deployment"* ]] && [[ "$STOP_CODE" != "ServiceSchedulerInitiated" ]]; then
+                  echo "ERROR: Task failed with reason: $STOP_REASON (Code: $STOP_CODE)"
+                  CONTAINER_REASONS=$(echo $TASK_DETAIL | jq -r '.tasks[0].containers[] | select(.exitCode != null and .exitCode != 0) | "Container \(.name) exited with code \(.exitCode): \(.reason // "No reason")"')
+                  if [ ! -z "$CONTAINER_REASONS" ]; then
+                    echo "$CONTAINER_REASONS"
+                  fi
+                  exit 1
+                fi
+              done
+            fi
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "ERROR: Service failed to stabilize within $TIMEOUT seconds!"
+            exit 1
+          fi
+
+      - name: Verify deployment health
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          echo "Verifying deployment health..."
+          RUNNING_TASKS=$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status RUNNING --region $AWS_REGION | jq -r '.taskArns[]')
+          if [ -z "$RUNNING_TASKS" ]; then
+            echo "ERROR: No running tasks found!"
+            exit 1
+          fi
+          LOG_GROUP="$ECS_LOG_GROUP"
+          CURRENT_TIME=$(date +%s000)
+          START_TIME=$((CURRENT_TIME - 300000))
+          echo "Checking recent logs for errors..."
+          RECENT_LOGS=$(aws logs filter-log-events --log-group-name $LOG_GROUP --start-time $START_TIME --filter-pattern "ERROR" --region $AWS_REGION 2>/dev/null || echo "{}")
+          if [ $(echo "$RECENT_LOGS" | jq -r '.events | length') -gt 0 ]; then
+            echo "WARNING: Found error logs in the last 5 minutes:"
+            echo "$RECENT_LOGS" | jq -r '.events[] | .message' | head -10
+          fi
+          echo "Deployment completed successfully!"
+
+      - name: Rollback on failure
+        if: failure() && steps.update-service.outcome == 'success'
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          PREVIOUS_TASK_DEF: ${{ steps.current-task-def.outputs.current_task_def }}
+        run: |
+          echo "Deployment failed! Rolling back to previous task definition: $PREVIOUS_TASK_DEF"
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition $PREVIOUS_TASK_DEF \
+            --region $AWS_REGION
+          echo "Rollback initiated. Previous deployment restored."
+
+      - name: Create deployment summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "## ✅ Staging Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Deployed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Deployment time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Staging Deployment Failed!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Failed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Failure time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+
+  deploy-frontend:
+    name: Deploy Frontend (Staging)
+    needs: [test-and-build, e2e-tests]
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.2"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build frontend (Vite)
+        run: yarn build:web
+
+      - name: Sync frontend to S3
+        env:
+          FRONTEND_BUCKET: ${{ vars.FRONTEND_BUCKET }}
+        run: |
+          if [ -z "$FRONTEND_BUCKET" ]; then
+            echo "FRONTEND_BUCKET not set in environment variables"
+            exit 1
+          fi
+          aws s3 sync build/frontend s3://$FRONTEND_BUCKET --delete --exclude "index.html" --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp build/frontend/index.html s3://$FRONTEND_BUCKET/index.html --cache-control "public,max-age=600"
+          if [ -f build/frontend/manifest.json ]; then
+            aws s3 cp build/frontend/manifest.json s3://$FRONTEND_BUCKET/manifest.json --cache-control "public,max-age=600"
+          fi
+
+      - name: Invalidate CloudFront
+        env:
+          FRONTEND_DISTRIBUTION_ID: ${{ vars.FRONTEND_DISTRIBUTION_ID }}
+        run: |
+          if [ -z "$FRONTEND_DISTRIBUTION_ID" ]; then
+            echo "FRONTEND_DISTRIBUTION_ID not set in environment variables"
+            exit 1
+          fi
+          aws cloudfront create-invalidation --distribution-id "$FRONTEND_DISTRIBUTION_ID" --paths "/index.html" "/manifest.json"

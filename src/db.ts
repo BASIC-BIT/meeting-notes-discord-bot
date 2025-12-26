@@ -1,5 +1,6 @@
 import { config } from "./services/configService";
 import {
+  AttributeValue,
   DynamoDBClient,
   GetItemCommand,
   PutItemCommand,
@@ -13,12 +14,17 @@ import {
   AccessLog,
   AutoRecordSettings,
   ChannelContext,
+  GuildSubscription,
   MeetingHistory,
   NotesHistoryEntry,
+  AskConversationRecord,
+  AskMessageRecord,
+  GuildInstaller,
+  OnboardingState,
   PaymentTransaction,
   RecordingTranscript,
   ServerContext,
-  Subscription,
+  StripeWebhookEvent,
   SuggestionHistoryEntry,
 } from "./types/db";
 
@@ -35,30 +41,32 @@ const dynamoDbClient = new DynamoDBClient(
     : { region: "us-east-1" },
 );
 
-// Write to Subscription Table
-export async function writeSubscription(
-  subscription: Subscription,
+const tablePrefix = config.database.tablePrefix ?? "";
+const tableName = (name: string) => `${tablePrefix}${name}`;
+
+// Guild Subscription Table
+export async function writeGuildSubscription(
+  subscription: GuildSubscription,
 ): Promise<void> {
   const params = {
-    TableName: "SubscriptionTable",
-    Item: marshall(subscription),
+    TableName: tableName("GuildSubscriptionTable"),
+    Item: marshall(subscription, { removeUndefinedValues: true }),
   };
   const command = new PutItemCommand(params);
   await dynamoDbClient.send(command);
 }
 
-// Read from Subscription Table
-export async function getSubscription(
-  userID: string,
-): Promise<Subscription | undefined> {
+export async function getGuildSubscription(
+  guildId: string,
+): Promise<GuildSubscription | undefined> {
   const params = {
-    TableName: "SubscriptionTable",
-    Key: marshall({ UserID: userID }),
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId }),
   };
   const command = new GetItemCommand(params);
   const result = await dynamoDbClient.send(command);
   if (result.Item) {
-    return unmarshall(result.Item) as Subscription;
+    return unmarshall(result.Item) as GuildSubscription;
   }
   return undefined;
 }
@@ -68,11 +76,38 @@ export async function writePaymentTransaction(
   transaction: PaymentTransaction,
 ): Promise<void> {
   const params = {
-    TableName: "PaymentTransactionTable",
+    TableName: tableName("PaymentTransactionTable"),
     Item: marshall(transaction),
   };
   const command = new PutItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+// Stripe Webhook Event Table (idempotency)
+export async function writeStripeWebhookEvent(
+  event: StripeWebhookEvent,
+): Promise<void> {
+  const params = {
+    TableName: tableName("StripeWebhookEventTable"),
+    Item: marshall(event, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getStripeWebhookEvent(
+  eventId: string,
+): Promise<StripeWebhookEvent | undefined> {
+  const params = {
+    TableName: tableName("StripeWebhookEventTable"),
+    Key: marshall({ eventId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as StripeWebhookEvent;
+  }
+  return undefined;
 }
 
 // Read from PaymentTransaction Table
@@ -80,7 +115,7 @@ export async function getPaymentTransaction(
   transactionID: string,
 ): Promise<PaymentTransaction | undefined> {
   const params = {
-    TableName: "PaymentTransactionTable",
+    TableName: tableName("PaymentTransactionTable"),
     Key: marshall({ TransactionID: transactionID }),
   };
   const command = new GetItemCommand(params);
@@ -94,7 +129,7 @@ export async function getPaymentTransaction(
 // Write to AccessLog Table
 export async function writeAccessLog(accessLog: AccessLog): Promise<void> {
   const params = {
-    TableName: "AccessLogsTable",
+    TableName: tableName("AccessLogsTable"),
     Item: marshall(accessLog),
   };
   const command = new PutItemCommand(params);
@@ -106,7 +141,7 @@ export async function getAccessLog(
   accessLogID: string,
 ): Promise<AccessLog | undefined> {
   const params = {
-    TableName: "AccessLogsTable",
+    TableName: tableName("AccessLogsTable"),
     Key: marshall({ AccessLogID: accessLogID }),
   };
   const command = new GetItemCommand(params);
@@ -122,7 +157,7 @@ export async function writeRecordingTranscript(
   recordingTranscript: RecordingTranscript,
 ): Promise<void> {
   const params = {
-    TableName: "RecordingTranscriptTable",
+    TableName: tableName("RecordingTranscriptTable"),
     Item: marshall(recordingTranscript),
   };
   const command = new PutItemCommand(params);
@@ -134,7 +169,7 @@ export async function getRecordingTranscript(
   meetingID: string,
 ): Promise<RecordingTranscript | undefined> {
   const params = {
-    TableName: "RecordingTranscriptTable",
+    TableName: tableName("RecordingTranscriptTable"),
     Key: marshall({ MeetingID: meetingID }),
   };
   const command = new GetItemCommand(params);
@@ -150,7 +185,7 @@ export async function writeAutoRecordSetting(
   setting: AutoRecordSettings,
 ): Promise<void> {
   const params = {
-    TableName: "AutoRecordSettingsTable",
+    TableName: tableName("AutoRecordSettingsTable"),
     Item: marshall(setting, { removeUndefinedValues: true }),
   };
   const command = new PutItemCommand(params);
@@ -163,7 +198,7 @@ export async function getAutoRecordSetting(
   channelId: string,
 ): Promise<AutoRecordSettings | undefined> {
   const params = {
-    TableName: "AutoRecordSettingsTable",
+    TableName: tableName("AutoRecordSettingsTable"),
     Key: marshall({ guildId, channelId }),
   };
   const command = new GetItemCommand(params);
@@ -179,7 +214,7 @@ export async function getAllAutoRecordSettings(
   guildId: string,
 ): Promise<AutoRecordSettings[]> {
   const params = {
-    TableName: "AutoRecordSettingsTable",
+    TableName: tableName("AutoRecordSettingsTable"),
     KeyConditionExpression: "guildId = :guildId",
     ExpressionAttributeValues: marshall({
       ":guildId": guildId,
@@ -199,7 +234,7 @@ export async function deleteAutoRecordSetting(
   channelId: string,
 ): Promise<void> {
   const params = {
-    TableName: "AutoRecordSettingsTable",
+    TableName: tableName("AutoRecordSettingsTable"),
     Key: marshall({ guildId, channelId }),
   };
   const command = new DeleteItemCommand(params);
@@ -211,7 +246,7 @@ export async function scanAutoRecordSettingsForRecordAll(): Promise<
   AutoRecordSettings[]
 > {
   const params = {
-    TableName: "AutoRecordSettingsTable",
+    TableName: tableName("AutoRecordSettingsTable"),
     FilterExpression: "recordAll = :recordAll AND enabled = :enabled",
     ExpressionAttributeValues: marshall({
       ":recordAll": true,
@@ -231,7 +266,7 @@ export async function writeServerContext(
   context: ServerContext,
 ): Promise<void> {
   const params = {
-    TableName: "ServerContextTable",
+    TableName: tableName("ServerContextTable"),
     Item: marshall(context, { removeUndefinedValues: true }),
   };
   const command = new PutItemCommand(params);
@@ -242,7 +277,7 @@ export async function getServerContext(
   guildId: string,
 ): Promise<ServerContext | undefined> {
   const params = {
-    TableName: "ServerContextTable",
+    TableName: tableName("ServerContextTable"),
     Key: marshall({ guildId }),
   };
   const command = new GetItemCommand(params);
@@ -255,7 +290,7 @@ export async function getServerContext(
 
 export async function deleteServerContext(guildId: string): Promise<void> {
   const params = {
-    TableName: "ServerContextTable",
+    TableName: tableName("ServerContextTable"),
     Key: marshall({ guildId }),
   };
   const command = new DeleteItemCommand(params);
@@ -267,7 +302,7 @@ export async function writeChannelContext(
   context: ChannelContext,
 ): Promise<void> {
   const params = {
-    TableName: "ChannelContextTable",
+    TableName: tableName("ChannelContextTable"),
     Item: marshall(context, { removeUndefinedValues: true }),
   };
   const command = new PutItemCommand(params);
@@ -279,7 +314,7 @@ export async function getChannelContext(
   channelId: string,
 ): Promise<ChannelContext | undefined> {
   const params = {
-    TableName: "ChannelContextTable",
+    TableName: tableName("ChannelContextTable"),
     Key: marshall({ guildId, channelId }),
   };
   const command = new GetItemCommand(params);
@@ -294,7 +329,7 @@ export async function getAllChannelContexts(
   guildId: string,
 ): Promise<ChannelContext[]> {
   const params = {
-    TableName: "ChannelContextTable",
+    TableName: tableName("ChannelContextTable"),
     KeyConditionExpression: "guildId = :guildId",
     ExpressionAttributeValues: marshall({
       ":guildId": guildId,
@@ -313,8 +348,75 @@ export async function deleteChannelContext(
   channelId: string,
 ): Promise<void> {
   const params = {
-    TableName: "ChannelContextTable",
+    TableName: tableName("ChannelContextTable"),
     Key: marshall({ guildId, channelId }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+// Guild installer mapping
+export async function writeGuildInstaller(
+  installer: GuildInstaller,
+): Promise<void> {
+  const params = {
+    TableName: tableName("InstallerTable"),
+    Item: marshall(installer),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getGuildInstaller(
+  guildId: string,
+): Promise<GuildInstaller | undefined> {
+  const params = {
+    TableName: tableName("InstallerTable"),
+    Key: marshall({ guildId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as GuildInstaller;
+  }
+  return undefined;
+}
+
+// Onboarding state helpers
+export async function writeOnboardingState(
+  state: OnboardingState,
+): Promise<void> {
+  const params = {
+    TableName: tableName("OnboardingStateTable"),
+    Item: marshall(state, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getOnboardingState(
+  guildId: string,
+  userId: string,
+): Promise<OnboardingState | undefined> {
+  const params = {
+    TableName: tableName("OnboardingStateTable"),
+    Key: marshall({ guildId, userId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as OnboardingState;
+  }
+  return undefined;
+}
+
+export async function deleteOnboardingState(
+  guildId: string,
+  userId: string,
+): Promise<void> {
+  const params = {
+    TableName: tableName("OnboardingStateTable"),
+    Key: marshall({ guildId, userId }),
   };
   const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);
@@ -325,7 +427,7 @@ export async function writeMeetingHistory(
   history: MeetingHistory,
 ): Promise<void> {
   const params = {
-    TableName: "MeetingHistoryTable",
+    TableName: tableName("MeetingHistoryTable"),
     Item: marshall(history, { removeUndefinedValues: true }),
   };
   const command = new PutItemCommand(params);
@@ -338,7 +440,7 @@ export async function getRecentMeetingsForChannel(
   limit: number = 5,
 ): Promise<MeetingHistory[]> {
   const params = {
-    TableName: "MeetingHistoryTable",
+    TableName: tableName("MeetingHistoryTable"),
     KeyConditionExpression:
       "guildId = :guildId AND begins_with(channelId_timestamp, :channelId)",
     ExpressionAttributeValues: marshall({
@@ -361,7 +463,7 @@ export async function getRecentMeetingsForGuild(
   limit: number = 10,
 ): Promise<MeetingHistory[]> {
   const params = {
-    TableName: "MeetingHistoryTable",
+    TableName: tableName("MeetingHistoryTable"),
     IndexName: "GuildTimestampIndex",
     KeyConditionExpression: "guildId = :guildId",
     ExpressionAttributeValues: marshall({
@@ -378,12 +480,47 @@ export async function getRecentMeetingsForGuild(
   return [];
 }
 
+export async function getMeetingsForGuildInRange(
+  guildId: string,
+  startTimestamp: string,
+  endTimestamp: string,
+): Promise<MeetingHistory[]> {
+  const items: MeetingHistory[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("MeetingHistoryTable"),
+      IndexName: "GuildTimestampIndex",
+      KeyConditionExpression:
+        "guildId = :guildId AND #timestamp BETWEEN :start AND :end",
+      ExpressionAttributeNames: { "#timestamp": "timestamp" },
+      ExpressionAttributeValues: marshall({
+        ":guildId": guildId,
+        ":start": startTimestamp,
+        ":end": endTimestamp,
+      }),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new QueryCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as MeetingHistory),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 export async function getMeetingHistory(
   guildId: string,
   channelId_timestamp: string,
 ): Promise<MeetingHistory | undefined> {
   const params = {
-    TableName: "MeetingHistoryTable",
+    TableName: tableName("MeetingHistoryTable"),
     Key: marshall({ guildId, channelId_timestamp }),
   };
   const command = new GetItemCommand(params);
@@ -486,7 +623,7 @@ export async function updateMeetingNotes(
   }
 
   const params: UpdateItemCommand["input"] = {
-    TableName: "MeetingHistoryTable",
+    TableName: tableName("MeetingHistoryTable"),
     Key: marshall({ guildId, channelId_timestamp }),
     UpdateExpression: `SET ${updateParts.join(", ")}`,
     ExpressionAttributeNames: expressionAttributeNames,
@@ -510,9 +647,98 @@ export async function updateMeetingNotes(
     ) {
       return false;
     }
+
     console.error("Failed to update meeting notes:", error);
     return false;
   }
+}
+
+function buildAskPartitionKey(userId: string, guildId: string) {
+  return `USER#${userId}#GUILD#${guildId}`;
+}
+
+export async function listAskConversations(
+  userId: string,
+  guildId: string,
+): Promise<AskConversationRecord[]> {
+  const pk = buildAskPartitionKey(userId, guildId);
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    KeyConditionExpression: "pk = :pk and begins_with(sk, :prefix)",
+    ExpressionAttributeValues: marshall({
+      ":pk": pk,
+      ":prefix": "CONV#",
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map(
+      (item) => unmarshall(item) as AskConversationRecord,
+    );
+  }
+  return [];
+}
+
+export async function getAskConversation(
+  userId: string,
+  guildId: string,
+  conversationId: string,
+): Promise<AskConversationRecord | undefined> {
+  const pk = buildAskPartitionKey(userId, guildId);
+  const sk = `CONV#${conversationId}`;
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    Key: marshall({ pk, sk }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as AskConversationRecord;
+  }
+  return undefined;
+}
+
+export async function listAskMessages(
+  userId: string,
+  guildId: string,
+  conversationId: string,
+): Promise<AskMessageRecord[]> {
+  const pk = buildAskPartitionKey(userId, guildId);
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    KeyConditionExpression: "pk = :pk and begins_with(sk, :prefix)",
+    ExpressionAttributeValues: marshall({
+      ":pk": pk,
+      ":prefix": `MSG#${conversationId}#`,
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as AskMessageRecord);
+  }
+  return [];
+}
+
+export async function writeAskConversation(
+  record: AskConversationRecord,
+): Promise<void> {
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function writeAskMessage(record: AskMessageRecord): Promise<void> {
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
 }
 
 export async function updateMeetingTags(
@@ -521,7 +747,7 @@ export async function updateMeetingTags(
   tags?: string[],
 ): Promise<void> {
   const params: UpdateItemCommand["input"] = {
-    TableName: "MeetingHistoryTable",
+    TableName: tableName("MeetingHistoryTable"),
     Key: marshall({ guildId, channelId_timestamp }),
     UpdateExpression: "SET #tags = :tags",
     ExpressionAttributeNames: {

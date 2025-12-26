@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Lint, format, unit tests, and build
+        run: yarn lint:check && yarn prettier:check && yarn test && yarn build:all
+
+      - name: Playwright e2e
+        run: yarn test:e2e
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Checkov (Terraform)
+        run: yarn checkov

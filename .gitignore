@@ -1,4 +1,6 @@
 node_modules/
+.venv/
+venv/
 .idea/
 dist/
 .env
@@ -7,6 +9,7 @@ recordings/
 dynamodb-data/
 
 _infra/terraform.tfvars
+_infra/terraform.staging.tfvars
 _infra/.terraform/
 
 _infra_state_mgmt/.terraform
@@ -19,6 +22,8 @@ _infra_state_mgmt/.terraform
 
 # testing
 /coverage
+/playwright-report
+/test-results
 
 # production
 /build

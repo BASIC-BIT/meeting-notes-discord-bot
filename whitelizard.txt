@@ -1,0 +1,2 @@
+# Lizard whitelist (one function name per line).
+# Add known complexity offenders here to suppress warnings.

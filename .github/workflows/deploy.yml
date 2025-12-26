@@ -39,6 +39,15 @@ jobs:
         run: |
           echo "::warning::Some tests failed, but continuing with deployment. Please fix failing tests."
 
+      - name: Code stats (scc + lizard)
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
+            scc --ci /pwd
+          docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
+            scc --ci --by-file --sort lines /pwd
+          python3 -m pip install --quiet lizard
+          lizard -l ts -l tsx -l js -l jsx src test
+
       - name: Build TypeScript
         run: yarn build
 
@@ -54,11 +63,66 @@ jobs:
           fi
           echo "Build artifacts verified successfully"
 
-  deploybackend:
-    name: Deploy Backend
-    needs: test-and-build
+  e2e-tests:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.2"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run Playwright tests (mock mode)
+        run: yarn test:e2e
+
+  terraform-apply:
+    name: Terraform Apply (prod)
+    needs: [test-and-build, e2e-tests]
     runs-on: ubuntu-latest
     environment: sandbox
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: terraform -chdir=_infra init
+
+      - name: Terraform apply
+        env:
+          TF_INPUT: "false"
+        run: terraform -chdir=_infra apply -auto-approve -var-file=terraform.tfvars
+
+  deploybackend:
+    name: Deploy Backend
+    needs: [test-and-build, e2e-tests, terraform-apply]
+    runs-on: ubuntu-latest
+    environment: sandbox
+    env:
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+      ECS_LOG_GROUP: ${{ vars.ECS_LOG_GROUP }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,7 +165,7 @@ jobs:
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
-          CURRENT_TASK_DEF=$(aws ecs describe-services --cluster meeting-notes-bot-cluster --services meeting-notes-bot-service --region $AWS_REGION | jq -r '.services[0].taskDefinition')
+          CURRENT_TASK_DEF=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION | jq -r '.services[0].taskDefinition')
           echo "current_task_def=$CURRENT_TASK_DEF" >> $GITHUB_OUTPUT
           echo "Current task definition: $CURRENT_TASK_DEF"
 
@@ -114,7 +178,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           # Get the current task definition
-          TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition meeting-notes-bot-task --region $AWS_REGION)
+          TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION)
 
           # Update the container image in the task definition
           NEW_TASK_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
@@ -127,11 +191,11 @@ jobs:
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
 
           # Get the new task definition revision
-          NEW_TASK_DEFINITION_REVISION=$(aws ecs describe-task-definition --task-definition meeting-notes-bot-task --region $AWS_REGION | jq -r '.taskDefinition.taskDefinitionArn')
+          NEW_TASK_DEFINITION_REVISION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION | jq -r '.taskDefinition.taskDefinitionArn')
           echo "new_task_def=$NEW_TASK_DEFINITION_REVISION" >> $GITHUB_OUTPUT
 
           # Update the ECS service to use the new task definition revision
-          aws ecs update-service --cluster meeting-notes-bot-cluster --service meeting-notes-bot-service --task-definition $NEW_TASK_DEFINITION_REVISION --region $AWS_REGION
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition $NEW_TASK_DEFINITION_REVISION --region $AWS_REGION
 
       - name: Wait for service stability
         env:
@@ -146,7 +210,7 @@ jobs:
 
           while [ $ELAPSED -lt $TIMEOUT ]; do
             # Get service details
-            SERVICE_STATUS=$(aws ecs describe-services --cluster meeting-notes-bot-cluster --services meeting-notes-bot-service --region $AWS_REGION)
+            SERVICE_STATUS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION)
             
             # Check running count vs desired count
             DESIRED_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].desiredCount')
@@ -164,17 +228,17 @@ jobs:
             fi
             
             # Check for failed tasks
-            EVENTS=$(aws ecs describe-services --cluster meeting-notes-bot-cluster --services meeting-notes-bot-service --region $AWS_REGION | jq -r '.services[0].events[0:5]')
+            EVENTS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION | jq -r '.services[0].events[0:5]')
             echo "Recent service events:"
             echo "$EVENTS" | jq -r '.[] | .message' | head -5
             
             # Check for task failures
-            FAILED_TASKS=$(aws ecs list-tasks --cluster meeting-notes-bot-cluster --service-name meeting-notes-bot-service --desired-status STOPPED --region $AWS_REGION | jq -r '.taskArns[]')
+            FAILED_TASKS=$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status STOPPED --region $AWS_REGION | jq -r '.taskArns[]')
             
             if [ ! -z "$FAILED_TASKS" ]; then
               echo "Checking stopped tasks for failures..."
               for TASK in $FAILED_TASKS; do
-                TASK_DETAIL=$(aws ecs describe-tasks --cluster meeting-notes-bot-cluster --tasks $TASK --region $AWS_REGION)
+                TASK_DETAIL=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks $TASK --region $AWS_REGION)
                 STOP_REASON=$(echo $TASK_DETAIL | jq -r '.tasks[0].stoppedReason // "No reason provided"')
                 STOP_CODE=$(echo $TASK_DETAIL | jq -r '.tasks[0].stopCode // "Unknown"')
                 
@@ -208,7 +272,7 @@ jobs:
           echo "Verifying deployment health..."
 
           # Get the running tasks
-          RUNNING_TASKS=$(aws ecs list-tasks --cluster meeting-notes-bot-cluster --service-name meeting-notes-bot-service --desired-status RUNNING --region $AWS_REGION | jq -r '.taskArns[]')
+          RUNNING_TASKS=$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status RUNNING --region $AWS_REGION | jq -r '.taskArns[]')
 
           if [ -z "$RUNNING_TASKS" ]; then
             echo "ERROR: No running tasks found!"
@@ -216,7 +280,7 @@ jobs:
           fi
 
           # Check CloudWatch logs for startup errors (if available)
-          LOG_GROUP="/ecs/meeting-notes-bot"
+          LOG_GROUP="$ECS_LOG_GROUP"
           CURRENT_TIME=$(date +%s000)
           START_TIME=$((CURRENT_TIME - 300000)) # Last 5 minutes
 
@@ -239,8 +303,8 @@ jobs:
           echo "Deployment failed! Rolling back to previous task definition: $PREVIOUS_TASK_DEF"
 
           aws ecs update-service \
-            --cluster meeting-notes-bot-cluster \
-            --service meeting-notes-bot-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
             --task-definition $PREVIOUS_TASK_DEF \
             --region $AWS_REGION
 
@@ -273,7 +337,7 @@ jobs:
 
   deploy-frontend:
     name: Deploy Frontend
-    needs: test-and-build
+    needs: [test-and-build, e2e-tests, terraform-apply]
     runs-on: ubuntu-latest
     environment: sandbox
     steps:

@@ -3,11 +3,18 @@ import dotenv from "dotenv";
 // Load environment variables once
 dotenv.config();
 
+const isMockMode =
+  process.env.MOCK_MODE === "true" || process.argv.includes("--mock");
+
 /**
  * Centralized configuration service
  * All environment variable access should go through this service
  */
 class ConfigService {
+  readonly mock = {
+    enabled: isMockMode,
+  };
+
   // Discord Configuration
   readonly discord = {
     botToken: process.env.DISCORD_BOT_TOKEN!,
@@ -46,6 +53,16 @@ class ConfigService {
     responderModel: process.env.LIVE_VOICE_RESPONDER_MODEL || "gpt-4o-mini",
     ttsModel: process.env.LIVE_VOICE_TTS_MODEL || "gpt-4o-mini-tts",
     ttsVoice: process.env.LIVE_VOICE_TTS_VOICE || "alloy",
+    windowSeconds: parseInt(process.env.LIVE_VOICE_WINDOW_SECONDS || "90", 10),
+    windowLines: parseInt(process.env.LIVE_VOICE_WINDOW_LINES || "40", 10),
+    pastMeetingsMax: parseInt(
+      process.env.LIVE_VOICE_PAST_MEETINGS_MAX || "3",
+      10,
+    ),
+    pastMeetingsMaxChars: parseInt(
+      process.env.LIVE_VOICE_PAST_MEETINGS_MAX_CHARS || "400",
+      10,
+    ),
     gateMaxOutputTokens: parseInt(
       process.env.LIVE_VOICE_GATE_MAX_OUTPUT_TOKENS || "256",
       10,
@@ -62,11 +79,18 @@ class ConfigService {
     maxMeetings: parseInt(process.env.ASK_MAX_MEETINGS || "25", 10),
   };
 
+  // Subscription / tier overrides
+  readonly subscription = {
+    forceTier: process.env.FORCE_TIER || "",
+    stripeMode: process.env.STRIPE_MODE || "live",
+  };
+
   // Database Configuration
   readonly database = {
     useLocalDynamoDB:
       process.env.NODE_ENV === "development" &&
       process.env.USE_LOCAL_DYNAMODB === "true",
+    tablePrefix: process.env.DDB_TABLE_PREFIX || "",
   };
 
   // Storage Configuration
@@ -83,8 +107,52 @@ class ConfigService {
     port: parseInt(process.env.PORT || "3001", 10),
     nodeEnv: process.env.NODE_ENV || "development",
     oauthSecret: process.env.OAUTH_SECRET || "",
-    oauthEnabled: process.env.ENABLE_OAUTH !== "false",
+    oauthEnabled: process.env.ENABLE_OAUTH !== "false" && !this.mock.enabled,
+    onboardingEnabled: process.env.ENABLE_ONBOARDING === "true",
     npmPackageVersion: process.env.npm_package_version || "unknown",
+    sessionTtlSeconds: parseInt(
+      process.env.SESSION_TTL_SECONDS || `${60 * 60 * 24 * 7}`,
+      10,
+    ),
+    // future: rate limit/budget configs per API route can live here
+  };
+
+  readonly stripe = {
+    secretKey: process.env.STRIPE_SECRET_KEY || "",
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
+    priceBasic: process.env.STRIPE_PRICE_BASIC || "",
+    lookupKeys: {
+      basicMonthly:
+        process.env.STRIPE_PRICE_LOOKUP_BASIC_MONTHLY ||
+        "chronote_basic_monthly",
+      basicAnnual:
+        process.env.STRIPE_PRICE_LOOKUP_BASIC_ANNUAL || "chronote_basic_annual",
+      proMonthly:
+        process.env.STRIPE_PRICE_LOOKUP_PRO_MONTHLY || "chronote_pro_monthly",
+      proAnnual:
+        process.env.STRIPE_PRICE_LOOKUP_PRO_ANNUAL || "chronote_pro_annual",
+    },
+    successUrl: process.env.STRIPE_SUCCESS_URL || "",
+    cancelUrl: process.env.STRIPE_CANCEL_URL || "",
+    portalReturnUrl: process.env.STRIPE_PORTAL_RETURN_URL || "",
+    billingLandingUrl:
+      process.env.BILLING_LANDING_URL ||
+      process.env.STRIPE_SUCCESS_URL ||
+      process.env.STRIPE_CANCEL_URL ||
+      "",
+  };
+
+  // Frontend / CORS
+  readonly frontend = {
+    allowedOrigins: (process.env.FRONTEND_ALLOWED_ORIGINS || "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0)
+      .map((origin) => origin.replace(/\/$/, "")),
+    siteUrl:
+      process.env.FRONTEND_SITE_URL ||
+      (process.env.FRONTEND_ALLOWED_ORIGINS || "").split(",")[0]?.trim() ||
+      "",
   };
 
   constructor() {
@@ -93,11 +161,13 @@ class ConfigService {
   }
 
   private validateConfig() {
-    const required = [
-      { name: "DISCORD_BOT_TOKEN", value: this.discord.botToken },
-      { name: "DISCORD_CLIENT_ID", value: this.discord.clientId },
-      { name: "OPENAI_API_KEY", value: this.openai.apiKey },
-    ];
+    const required = this.mock.enabled
+      ? []
+      : [
+          { name: "DISCORD_BOT_TOKEN", value: this.discord.botToken },
+          { name: "DISCORD_CLIENT_ID", value: this.discord.clientId },
+          { name: "OPENAI_API_KEY", value: this.openai.apiKey },
+        ];
 
     // Only require OAuth-related secrets if OAuth is enabled (default true)
     if (this.server.oauthEnabled) {
@@ -105,6 +175,14 @@ class ConfigService {
         { name: "DISCORD_CLIENT_SECRET", value: this.discord.clientSecret },
         { name: "DISCORD_CALLBACK_URL", value: this.discord.callbackUrl },
         { name: "OAUTH_SECRET", value: this.server.oauthSecret },
+      );
+    }
+
+    // Stripe validation (optional unless key provided)
+    if (this.stripe.secretKey) {
+      required.push(
+        { name: "STRIPE_SUCCESS_URL", value: this.stripe.successUrl },
+        { name: "STRIPE_CANCEL_URL", value: this.stripe.cancelUrl },
       );
     }
 

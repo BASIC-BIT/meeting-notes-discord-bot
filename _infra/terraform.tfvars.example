@@ -1,16 +1,51 @@
+# Required
 DISCORD_CLIENT_ID="your-discord-client-id-here"
-DISCORD_BOT_TOKEN="your-discord-bot-token-here"
-DISCORD_CLIENT_SECRET="your-discord-client-secret-here"
-DISCORD_CALLBACK_URL="https://your-domain.example.com/auth/discord/callback"
-OAUTH_SECRET="replace-with-random-string"
-ENABLE_OAUTH="false"
-OPENAI_API_KEY="your-openai-api-key-here"
 GITHUB_TOKEN="your-github-token-here"
 AWS_TOKEN_KEY="your-aws-token-key-here"
-OPENAI_ORGANIZATION_ID="your-openai-organization-id-here"
-OPENAI_PROJECT_ID="your-openai-project-id-here"
-FRONTEND_BUCKET=""
-FRONTEND_DOMAIN=""
-FRONTEND_CERT_ARN=""
-TRANSCRIPTS_BUCKET="your-transcripts-bucket-name"
-TRANSCRIPTS_PREFIX=""
+environment="prod"                           # prod | staging
+project_name="meeting-notes"
+github_environment="sandbox"                 # GitHub Actions environment name
+
+# Optional (leave blank to use defaults)
+ENABLE_OAUTH="false"                          # defaults false
+DISCORD_CALLBACK_URL=""                       # required if ENABLE_OAUTH=true
+NODE_ENV="production"                         # recommended for ECS task
+ENABLE_ONBOARDING="false"
+OPENAI_ORGANIZATION_ID=""                     # optional
+OPENAI_PROJECT_ID=""                          # optional
+FRONTEND_BUCKET=""                            # auto-named if blank
+FRONTEND_DOMAIN=""                            # no custom domain if blank
+FRONTEND_CERT_ARN=""                          # only when FRONTEND_DOMAIN is set
+TRANSCRIPTS_BUCKET=""                         # auto-named if blank
+TRANSCRIPTS_PREFIX=""                         # no prefix if blank
+HOSTED_ZONE_NAME=""                           # e.g., chronote.gg. (required if setting FRONTEND_DOMAIN)
+# Frontend/CORS
+FRONTEND_ALLOWED_ORIGINS=""                   # comma-separated origins, no trailing slash
+FRONTEND_SITE_URL=""                          # primary frontend URL
+
+# Stripe (non-secret config; secrets are in AWS Secrets Manager)
+STRIPE_MODE="test"
+STRIPE_PRICE_BASIC=""                         # optional legacy fallback
+STRIPE_PRICE_LOOKUP_BASIC_MONTHLY="chronote_basic_monthly"
+STRIPE_PRICE_LOOKUP_BASIC_ANNUAL="chronote_basic_annual"
+STRIPE_PRICE_LOOKUP_PRO_MONTHLY="chronote_pro_monthly"
+STRIPE_PRICE_LOOKUP_PRO_ANNUAL="chronote_pro_annual"
+STRIPE_SUCCESS_URL=""
+STRIPE_CANCEL_URL=""
+STRIPE_PORTAL_RETURN_URL=""
+BILLING_LANDING_URL=""
+
+# Observability (hosted AMG/AMP)
+# Create a Grafana service account token (preferred) or AMG API key, then set these:
+grafana_api_key=""
+grafana_url=""
+aws_region="us-east-1"
+grafana_suffix_seed=""                       # optional; change to force a new workspace name suffix
+# Secrets (managed in AWS Secrets Manager)
+# After apply, set secret values for:
+# - ${project_name}-${environment}/discord-bot-token
+# - ${project_name}-${environment}/discord-client-secret
+# - ${project_name}-${environment}/oauth-secret
+# - ${project_name}-${environment}/openai-api-key
+# - ${project_name}-${environment}/stripe-secret-key
+# - ${project_name}-${environment}/stripe-webhook-secret

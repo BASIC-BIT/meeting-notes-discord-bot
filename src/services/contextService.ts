@@ -1,10 +1,8 @@
 import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
-import {
-  getServerContext,
-  getChannelContext,
-  getRecentMeetingsForChannel,
-} from "../db";
+import { fetchServerContext } from "./appContextService";
+import { fetchChannelContext } from "./channelContextService";
+import { listRecentMeetingsForChannelService } from "./meetingHistoryService";
 import { config } from "./configService";
 
 export interface MeetingContextData {
@@ -33,24 +31,24 @@ export async function buildMeetingContext(
 
   try {
     // Fetch server context
-    const serverContext = await getServerContext(meeting.guildId);
+    const serverContext = await fetchServerContext(meeting.guildId);
     if (serverContext) {
       contextData.serverContext = serverContext.context;
     }
 
     // Fetch channel context
-    const channelContext = await getChannelContext(
+    const channelContext = await fetchChannelContext(
       meeting.guildId,
       meeting.voiceChannel.id,
     );
-    if (channelContext) {
+    if (channelContext?.context) {
       contextData.channelContext = channelContext.context;
     }
 
     // Fetch recent meetings if memory is enabled
     if (includeMemory) {
       const memoryDepth = config.context.memoryDepth;
-      const recentMeetings = await getRecentMeetingsForChannel(
+      const recentMeetings = await listRecentMeetingsForChannelService(
         meeting.guildId,
         meeting.voiceChannel.id,
         memoryDepth,

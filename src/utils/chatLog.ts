@@ -1,11 +1,8 @@
 import { ChatEntry } from "../types/chat";
+import { formatParticipantLabel } from "./participants";
 
 export function renderChatEntryLine(entry: ChatEntry): string {
-  const name =
-    entry.user.nickname ||
-    entry.user.globalName ||
-    entry.user.tag ||
-    entry.user.id;
+  const name = formatParticipantLabel(entry.user, { includeUsername: true });
   const time = new Date(entry.timestamp).toLocaleString();
 
   if (entry.type === "message") {

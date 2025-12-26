@@ -10,6 +10,7 @@ import {
   SlashCommandBuilder,
   TextChannel,
   VoiceState,
+  ChannelSelectMenuInteraction,
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
 import { getAllMeetings, getMeeting } from "./meetings";
@@ -19,7 +20,11 @@ import {
 } from "./commands/startMeeting";
 import { handleAutoRecordCommand } from "./commands/autorecord";
 import { handleContextCommand } from "./commands/context";
-import { getAutoRecordSetting } from "./db";
+import { getAutoRecordSettingByChannel } from "./services/autorecordService";
+import { fetchServerContext } from "./services/appContextService";
+import { fetchChannelContext } from "./services/channelContextService";
+import { getGuildLimits } from "./services/subscriptionService";
+import { formatParticipantLabel, fromMember } from "./utils/participants";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
@@ -48,6 +53,18 @@ import {
   isEditTagsHistoryModal,
 } from "./commands/tags";
 import { handleAskCommand } from "./commands/ask";
+import { billingCommand, handleBillingCommand } from "./commands/billing";
+import {
+  handleOnboardButtonInteraction,
+  handleOnboardChannelSelect,
+  handleOnboardCommand,
+  handleOnboardModalSubmit,
+  isOnboardButton,
+  isOnboardChannelSelect,
+  isOnboardModal,
+  onboardCommand,
+} from "./commands/onboard";
+import { fetchGuildInstaller } from "./services/guildInstallerService";
 
 const TOKEN = config.discord.botToken;
 const CLIENT_ID = config.discord.clientId;
@@ -74,6 +91,27 @@ export async function setupBot() {
     console.log(`Logged in as ${client.user?.tag}!`);
 
     client.on("voiceStateUpdate", handleVoiceStateUpdate);
+  });
+
+  client.on("guildCreate", async (guild) => {
+    if (!config.server.onboardingEnabled) {
+      return;
+    }
+    try {
+      const installer = await fetchGuildInstaller(guild.id);
+      const dmTarget =
+        installer?.installerId &&
+        (await client.users.fetch(installer.installerId).catch(() => null));
+      const recipient = dmTarget ?? (await guild.fetchOwner());
+      if (recipient) {
+        const targetUser = "user" in recipient ? recipient.user : recipient;
+        await targetUser.send(
+          "Thanks for adding Meeting Notes Bot! Run `/onboard` in your server (Manage Guild required) for a 1-minute setup.",
+        );
+      }
+    } catch (err) {
+      console.warn("Could not DM installer/owner on join", err);
+    }
   });
 
   client.on("interactionCreate", async (interaction) => {
@@ -108,6 +146,23 @@ export async function setupBot() {
             commandInteraction as ChatInputCommandInteraction,
           );
         }
+        if (commandName === "billing") {
+          await handleBillingCommand(
+            commandInteraction as ChatInputCommandInteraction,
+          );
+        }
+        if (commandName === "onboard") {
+          if (!config.server.onboardingEnabled) {
+            await commandInteraction.reply({
+              content: "Onboarding is currently disabled for this bot.",
+              ephemeral: true,
+            });
+            return;
+          }
+          await handleOnboardCommand(
+            commandInteraction as ChatInputCommandInteraction,
+          );
+        }
       }
       if (interaction.isModalSubmit()) {
         if (isNotesCorrectionModal(interaction.customId)) {
@@ -118,6 +173,16 @@ export async function setupBot() {
         }
         if (isEditTagsHistoryModal(interaction.customId)) {
           await handleEditTagsHistoryModal(interaction);
+        }
+        if (isOnboardModal(interaction.customId)) {
+          if (!config.server.onboardingEnabled) {
+            await interaction.reply({
+              content: "Onboarding is currently disabled for this bot.",
+              ephemeral: true,
+            });
+            return;
+          }
+          await handleOnboardModalSubmit(interaction);
         }
         return;
       }
@@ -145,12 +210,39 @@ export async function setupBot() {
           await handleEditTagsHistoryButton(buttonInteraction);
           return;
         }
+        if (isOnboardButton(buttonInteraction.customId)) {
+          if (!config.server.onboardingEnabled) {
+            await buttonInteraction.reply({
+              content: "Onboarding is currently disabled for this bot.",
+              ephemeral: true,
+            });
+            return;
+          }
+          await handleOnboardButtonInteraction(buttonInteraction);
+          return;
+        }
 
         if (buttonInteraction.customId === "end_meeting") {
           await handleEndMeetingButton(client, buttonInteraction);
         }
         if (buttonInteraction.customId === "generate_image") {
           await generateAndSendImage(interaction);
+        }
+      }
+      if (
+        interaction.isChannelSelectMenu &&
+        interaction.isChannelSelectMenu()
+      ) {
+        const channelSelect = interaction as ChannelSelectMenuInteraction;
+        if (isOnboardChannelSelect(channelSelect.customId)) {
+          if (!config.server.onboardingEnabled) {
+            await channelSelect.reply({
+              content: "Onboarding is currently disabled for this bot.",
+              ephemeral: true,
+            });
+            return;
+          }
+          await handleOnboardChannelSelect(channelSelect);
         }
       }
     } catch (e) {
@@ -206,15 +298,13 @@ async function handleUserJoin(newState: VoiceState) {
     newState.member.user.id !== client.user!.id &&
     meeting.voiceChannel.id === newState.channelId
   ) {
-    const userTag = newState.member!.user.tag;
-    console.log(`${userTag} joined the voice channel.`);
-    meeting.attendance.add(userTag);
-    const participant = {
-      id: newState.member!.user.id,
-      tag: userTag,
-      nickname: newState.member?.displayName ?? undefined,
-      globalName: newState.member?.user.globalName ?? undefined,
-    };
+    const participant = fromMember(newState.member);
+    const userLabel = formatParticipantLabel(participant, {
+      includeUsername: false,
+      fallbackName: newState.member.user.username,
+    });
+    console.log(`${userLabel} joined the voice channel.`);
+    meeting.attendance.add(userLabel);
     meeting.participants.set(participant.id, participant);
     meeting.chatLog.push({
       type: "join",
@@ -236,14 +326,14 @@ async function handleUserJoin(newState: VoiceState) {
   ) {
     try {
       // Check for specific channel setting
-      let autoRecordSetting = await getAutoRecordSetting(
+      let autoRecordSetting = await getAutoRecordSettingByChannel(
         newState.guild.id,
         newState.channelId!,
       );
 
       // If no specific setting, check for record-all setting
       if (!autoRecordSetting) {
-        autoRecordSetting = await getAutoRecordSetting(
+        autoRecordSetting = await getAutoRecordSettingByChannel(
           newState.guild.id,
           "ALL",
         );
@@ -251,18 +341,40 @@ async function handleUserJoin(newState: VoiceState) {
 
       // If auto-record is enabled, start recording
       if (autoRecordSetting && autoRecordSetting.enabled) {
+        const [serverContext, channelContext] = await Promise.all([
+          fetchServerContext(newState.guild.id),
+          fetchChannelContext(newState.guild.id, newState.channelId!),
+        ]);
+        const resolvedTextChannelId =
+          autoRecordSetting.textChannelId ??
+          serverContext?.defaultNotesChannelId;
+        if (!resolvedTextChannelId) {
+          console.error(
+            `No default notes channel configured for auto-record in guild ${newState.guild.id}`,
+          );
+          return;
+        }
         const textChannel = newState.guild.channels.cache.get(
-          autoRecordSetting.textChannelId,
+          resolvedTextChannelId,
         ) as TextChannel;
 
         if (textChannel && newState.channel) {
           console.log(
             `Auto-starting recording in ${newState.channel.name} due to auto-record settings`,
           );
-          await handleAutoStartMeeting(client, newState.channel, textChannel);
+          const { limits } = await getGuildLimits(newState.guild.id);
+          const liveVoiceDefault = serverContext?.liveVoiceEnabled ?? false;
+          const liveVoiceOverride = channelContext?.liveVoiceEnabled;
+          const liveVoiceEnabled =
+            limits.liveVoiceEnabled && (liveVoiceOverride ?? liveVoiceDefault);
+          const tags = autoRecordSetting.tags ?? serverContext?.defaultTags;
+          await handleAutoStartMeeting(client, newState.channel, textChannel, {
+            tags,
+            liveVoiceEnabled,
+          });
         } else {
           console.error(
-            `Could not find text channel ${autoRecordSetting.textChannelId} for auto-recording`,
+            `Could not find text channel ${resolvedTextChannelId} for auto-recording`,
           );
         }
       }
@@ -280,14 +392,12 @@ async function handleUserLeave(oldState: VoiceState) {
     oldState.member.user.id !== client.user!.id &&
     meeting.voiceChannel.id === oldState.channelId
   ) {
-    const userTag = oldState.member!.user.tag;
-    console.log(`${userTag} left the voice channel.`);
-    const participant = {
-      id: oldState.member!.user.id,
-      tag: userTag,
-      nickname: oldState.member?.displayName ?? undefined,
-      globalName: oldState.member?.user.globalName ?? undefined,
-    };
+    const participant = fromMember(oldState.member);
+    const userLabel = formatParticipantLabel(participant, {
+      includeUsername: false,
+      fallbackName: oldState.member.user.username,
+    });
+    console.log(`${userLabel} left the voice channel.`);
     meeting.participants.set(participant.id, participant);
     meeting.chatLog.push({
       type: "leave",
@@ -424,6 +534,7 @@ async function setupApplicationCommands() {
           )
           .setRequired(false),
       ),
+    billingCommand,
     new SlashCommandBuilder()
       .setName("context")
       .setDescription(
@@ -498,14 +609,22 @@ async function setupApplicationCommands() {
           .setName("list")
           .setDescription("List all contexts in this server"),
       ),
-  ].map((command) => command.toJSON());
+  ];
+
+  if (config.server.onboardingEnabled) {
+    commands.push(onboardCommand);
+  }
+
+  const commandPayload = commands.map((command) => command.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
 
   try {
     console.log("Started refreshing application (/) commands.");
 
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    await rest.put(Routes.applicationCommands(CLIENT_ID), {
+      body: commandPayload,
+    });
 
     console.log("Successfully reloaded application (/) commands.");
   } catch (error) {

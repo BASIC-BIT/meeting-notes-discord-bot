@@ -20,19 +20,64 @@ export async function buildParticipantSnapshot(
   }
 }
 
+export function getParticipantPreferredName(
+  participant?: Participant,
+  fallback?: string,
+): string | undefined {
+  return (
+    participant?.serverNickname ||
+    participant?.displayName ||
+    participant?.username ||
+    participant?.tag ||
+    fallback
+  );
+}
+
+export function getParticipantUsername(
+  participant?: Participant,
+  fallback?: string,
+): string | undefined {
+  return participant?.username || participant?.tag || fallback;
+}
+
+export function formatParticipantLabel(
+  participant?: Participant,
+  options?: {
+    includeUsername?: boolean;
+    fallbackName?: string;
+    fallbackUsername?: string;
+  },
+): string {
+  const name = getParticipantPreferredName(participant, options?.fallbackName);
+  const username = getParticipantUsername(
+    participant,
+    options?.fallbackUsername,
+  );
+  if (options?.includeUsername && username) {
+    const handle = username.startsWith("@") ? username.slice(1) : username;
+    if (name && handle && name.toLowerCase() !== handle.toLowerCase()) {
+      return `${name} (@${handle})`;
+    }
+    return name ?? `@${handle}`;
+  }
+  return name ?? username ?? "Unknown";
+}
+
 export function fromMember(member: GuildMember): Participant {
   return {
     id: member.user.id,
+    username: member.user.username,
+    displayName: member.user.globalName ?? undefined,
+    serverNickname: member.nickname ?? undefined,
     tag: member.user.tag,
-    nickname: member.nickname ?? member.displayName ?? undefined,
-    globalName: member.user.globalName ?? undefined,
   };
 }
 
 export function fromUser(user: User): Participant {
   return {
     id: user.id,
+    username: user.username,
+    displayName: user.globalName ?? undefined,
     tag: user.tag,
-    globalName: user.globalName ?? undefined,
   };
 }

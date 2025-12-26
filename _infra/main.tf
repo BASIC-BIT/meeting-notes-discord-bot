@@ -8,14 +8,41 @@ terraform {
       source  = "integrations/github"
       version = "~> 6.0"
     }
+    grafana = {
+      source  = "grafana/grafana"
+      version = "~> 2.7"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
   backend "s3" {
     region         = "us-east-1"
     bucket         = "meeting-notes-terraform-state-bucket"
     key            = "meeting-notes-terraform/state"
     dynamodb_table = "meeting-notes-terraform-state-locks"
+    workspace_key_prefix = "meeting-notes-terraform"
     encrypt        = true
   }
+}
+
+variable "project_name" {
+  description = "Project name prefix for resource naming"
+  type        = string
+  default     = "meeting-notes"
+}
+
+variable "environment" {
+  description = "Deployment environment (e.g., prod, staging)"
+  type        = string
+  default     = "prod"
+}
+
+variable "github_environment" {
+  description = "GitHub Actions environment name to populate with deploy variables"
+  type        = string
+  default     = "sandbox"
 }
 
 
@@ -26,12 +53,6 @@ variable "AWS_TOKEN_KEY" {
   sensitive = true
 }
 variable "DISCORD_CLIENT_ID" {
-  sensitive = true
-}
-variable "DISCORD_BOT_TOKEN" {
-  sensitive = true
-}
-variable "OPENAI_API_KEY" {
   sensitive = true
 }
 variable "OPENAI_ORGANIZATION_ID" {
@@ -73,14 +94,15 @@ variable "FRONTEND_CERT_ARN" {
   default     = ""
 }
 
+variable "HOSTED_ZONE_NAME" {
+  description = "Route53 hosted zone name (e.g., chronote.gg.) required if you want Terraform to create cert + DNS for FRONTEND_DOMAIN"
+  type        = string
+  default     = ""
+}
+
 variable "ENABLE_OAUTH" {
   sensitive = false
   default   = "false"
-}
-
-variable "DISCORD_CLIENT_SECRET" {
-  sensitive = true
-  default   = ""
 }
 
 variable "DISCORD_CALLBACK_URL" {
@@ -88,14 +110,101 @@ variable "DISCORD_CALLBACK_URL" {
   default   = ""
 }
 
-variable "OAUTH_SECRET" {
-  sensitive = true
-  default   = ""
+variable "NODE_ENV" {
+  description = "Node environment for the container"
+  type        = string
+  default     = "production"
+}
+
+variable "ENABLE_ONBOARDING" {
+  description = "Enable onboarding flow in the web app"
+  type        = string
+  default     = "false"
+}
+
+variable "FRONTEND_ALLOWED_ORIGINS" {
+  description = "Comma-separated list of allowed origins for API CORS"
+  type        = string
+  default     = ""
+}
+
+variable "FRONTEND_SITE_URL" {
+  description = "Primary frontend site URL"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_MODE" {
+  description = "Stripe mode (test or live)"
+  type        = string
+  default     = "test"
+}
+
+variable "STRIPE_PRICE_BASIC" {
+  description = "Optional fallback Stripe price ID for basic plan"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_PRICE_LOOKUP_BASIC_MONTHLY" {
+  description = "Stripe lookup key for basic monthly"
+  type        = string
+  default     = "chronote_basic_monthly"
+}
+
+variable "STRIPE_PRICE_LOOKUP_BASIC_ANNUAL" {
+  description = "Stripe lookup key for basic annual"
+  type        = string
+  default     = "chronote_basic_annual"
+}
+
+variable "STRIPE_PRICE_LOOKUP_PRO_MONTHLY" {
+  description = "Stripe lookup key for pro monthly"
+  type        = string
+  default     = "chronote_pro_monthly"
+}
+
+variable "STRIPE_PRICE_LOOKUP_PRO_ANNUAL" {
+  description = "Stripe lookup key for pro annual"
+  type        = string
+  default     = "chronote_pro_annual"
+}
+
+variable "STRIPE_SUCCESS_URL" {
+  description = "Stripe success redirect URL"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_CANCEL_URL" {
+  description = "Stripe cancel redirect URL"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_PORTAL_RETURN_URL" {
+  description = "Stripe portal return URL"
+  type        = string
+  default     = ""
+}
+
+variable "BILLING_LANDING_URL" {
+  description = "Billing landing URL fallback"
+  type        = string
+  default     = ""
 }
 
 
 provider "aws" {
   region = "us-east-1"
+  default_tags {
+    tags = {
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "terraform"
+      Service     = "chronote"
+    }
+  }
 }
 
 data "aws_caller_identity" "current" {}
@@ -106,13 +215,18 @@ provider "github" {
 }
 
 locals {
-  transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "meeting-notes-transcripts-${data.aws_caller_identity.current.account_id}"
-  frontend_bucket_name    = var.FRONTEND_BUCKET != "" ? var.FRONTEND_BUCKET : "meeting-notes-frontend-${data.aws_caller_identity.current.account_id}"
+  name_prefix             = "${var.project_name}-${var.environment}"
+  transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "${local.name_prefix}-transcripts-${data.aws_caller_identity.current.account_id}"
+  frontend_bucket_name    = var.FRONTEND_BUCKET != "" ? var.FRONTEND_BUCKET : "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}"
+  frontend_cert_arn = var.FRONTEND_CERT_ARN != "" ? var.FRONTEND_CERT_ARN : (
+    length(aws_acm_certificate_validation.frontend_cert) > 0 ? aws_acm_certificate_validation.frontend_cert[0].certificate_arn : ""
+  )
 }
 
 resource "aws_ecr_repository" "app_ecr_repo" {
-  name                 = "meeting-notes-bot-repo"
+  name                 = "${local.name_prefix}-bot-repo"
   image_tag_mutability = "IMMUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
@@ -151,30 +265,72 @@ data "github_repository" "repo" {
   full_name = "BASIC-BIT/meeting-notes-discord-bot"
 }
 
-resource "github_repository_environment" "repo_sandbox_env" {
+resource "github_repository_environment" "repo_env" {
   repository  = data.github_repository.repo.name
-  environment = "sandbox"
+  environment = var.github_environment
 }
 
 resource "github_actions_environment_variable" "envvar_aws_region" {
   repository    = data.github_repository.repo.name
-  environment   = github_repository_environment.repo_sandbox_env.environment
+  environment   = github_repository_environment.repo_env.environment
   variable_name = "AWS_REGION"
   value         = "us-east-1"
 }
 
 resource "github_actions_environment_variable" "envvar_ecr_repository" {
   repository    = data.github_repository.repo.name
-  environment   = github_repository_environment.repo_sandbox_env.environment
+  environment   = github_repository_environment.repo_env.environment
   variable_name = "ECR_REPOSITORY"
   value         = aws_ecr_repository.app_ecr_repo.name
 }
 
 resource "github_actions_environment_variable" "envvar_aws_access_key_id" {
   repository    = data.github_repository.repo.name
-  environment   = github_repository_environment.repo_sandbox_env.environment
+  environment   = github_repository_environment.repo_env.environment
   variable_name = "AWS_ACCESS_KEY_ID"
   value         = var.AWS_TOKEN_KEY
+}
+
+resource "github_actions_environment_variable" "envvar_frontend_bucket" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "FRONTEND_BUCKET"
+  value         = aws_s3_bucket.frontend.bucket
+}
+
+resource "github_actions_environment_variable" "envvar_frontend_distribution_id" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "FRONTEND_DISTRIBUTION_ID"
+  value         = aws_cloudfront_distribution.frontend.id
+}
+
+resource "github_actions_environment_variable" "envvar_ecs_cluster" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "ECS_CLUSTER"
+  value         = aws_ecs_cluster.main.name
+}
+
+resource "github_actions_environment_variable" "envvar_ecs_service" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "ECS_SERVICE"
+  value         = aws_ecs_service.app_service.name
+}
+
+resource "github_actions_environment_variable" "envvar_ecs_task_family" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "ECS_TASK_FAMILY"
+  value         = aws_ecs_task_definition.app_task.family
+}
+
+resource "github_actions_environment_variable" "envvar_ecs_log_group" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "ECS_LOG_GROUP"
+  value         = aws_cloudwatch_log_group.app_log_group.name
 }
 
 resource "aws_vpc" "app_vpc" {
@@ -243,12 +399,13 @@ resource "aws_route_table_association" "public_subnet_2_assoc" {
 }
 
 resource "aws_security_group" "ecs_service_sg" {
+  #checkov:skip=CKV_AWS_382 reason: Allow all egress temporarily while Discord voice debugging is in progress.
   revoke_rules_on_delete = true
 
   lifecycle {
     create_before_destroy = true
   }
-  description = "ECS service SG for meeting-notes-bot"
+  description = "ECS service SG for ${local.name_prefix}-bot"
   vpc_id      = aws_vpc.app_vpc.id
 
   ingress {
@@ -300,7 +457,7 @@ resource "aws_security_group" "ecs_service_sg" {
 }
 
 resource "aws_cloudwatch_log_group" "app_log_group" {
-  name              = "/ecs/meeting-notes-bot"
+  name              = "/ecs/${local.name_prefix}-bot"
   retention_in_days = 365
   kms_key_id        = aws_kms_key.app_general.arn
 
@@ -359,18 +516,26 @@ resource "aws_kms_key" "app_general" {
 }
 
 resource "aws_s3_bucket" "transcripts" {
+  #checkov:skip=CKV_AWS_18 reason: Access logging not enabled yet; will add if/when audit requirements demand it.
+  #checkov:skip=CKV_AWS_144 reason: Cross-region replication not required for current stage.
+  #checkov:skip=CKV2_AWS_62 reason: Event notifications not needed for transcripts storage.
   bucket = local.transcripts_bucket_name
 
   tags = {
-    Name = "meeting-notes-transcripts"
+    Name = "${local.name_prefix}-transcripts"
   }
 }
 
 resource "aws_s3_bucket" "frontend" {
+  #checkov:skip=CKV_AWS_18 reason: Access logging not enabled yet; will add if/when audit requirements demand it.
+  #checkov:skip=CKV_AWS_144 reason: Cross-region replication not required for current stage.
+  #checkov:skip=CKV2_AWS_61 reason: Lifecycle configuration not required for static site bucket.
+  #checkov:skip=CKV2_AWS_62 reason: Event notifications not needed for static site bucket.
   bucket = local.frontend_bucket_name
+  force_destroy = true
 
   tags = {
-    Name = "meeting-notes-frontend"
+    Name = "${local.name_prefix}-frontend"
   }
 }
 
@@ -429,7 +594,7 @@ resource "aws_s3_bucket_versioning" "transcripts" {
 }
 
 resource "aws_cloudfront_origin_access_control" "frontend_oac" {
-  name                              = "meeting-notes-frontend-oac"
+  name                              = "${local.name_prefix}-frontend-oac"
   description                       = "OAC for frontend bucket"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
@@ -437,6 +602,13 @@ resource "aws_cloudfront_origin_access_control" "frontend_oac" {
 }
 
 resource "aws_cloudfront_distribution" "frontend" {
+  #checkov:skip=CKV_AWS_86 reason: Access logging not enabled yet; will add if/when audit requirements demand it.
+  #checkov:skip=CKV_AWS_310 reason: Origin failover not configured; single-origin setup is acceptable for now.
+  #checkov:skip=CKV_AWS_374 reason: Geo restriction not required for current stage.
+  #checkov:skip=CKV_AWS_68 reason: WAF not enabled yet; to be evaluated closer to launch.
+  #checkov:skip=CKV2_AWS_42 reason: Custom SSL cert is conditional on FRONTEND_DOMAIN; default cert is acceptable if unset.
+  #checkov:skip=CKV2_AWS_32 reason: Response headers policy not attached yet; will be added with security hardening pass.
+  #checkov:skip=CKV2_AWS_47 reason: WAF AMR (Log4j) not configured without WAF.
   enabled             = true
   default_root_object = "index.html"
 
@@ -508,7 +680,7 @@ resource "aws_cloudfront_distribution" "frontend" {
   }
 
   viewer_certificate {
-    acm_certificate_arn            = var.FRONTEND_DOMAIN != "" ? var.FRONTEND_CERT_ARN : null
+    acm_certificate_arn            = var.FRONTEND_DOMAIN != "" ? local.frontend_cert_arn : null
     cloudfront_default_certificate = var.FRONTEND_DOMAIN == ""
     minimum_protocol_version       = "TLSv1.2_2021"
     ssl_support_method             = var.FRONTEND_DOMAIN != "" ? "sni-only" : null
@@ -561,7 +733,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "transcripts" {
 }
 
 resource "aws_ecs_cluster" "main" {
-  name = "meeting-notes-bot-cluster"
+  name = "${local.name_prefix}-bot-cluster"
 
   setting {
     name  = "containerInsights"
@@ -571,7 +743,7 @@ resource "aws_ecs_cluster" "main" {
 
 # Define an IAM role for ECS task execution
 resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "ecs_task_execution_role"
+  name = "${local.name_prefix}-ecs-task-exec-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
@@ -595,7 +767,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_policy" {
 
 # Define IAM role for the task (application) permissions
 resource "aws_iam_role" "ecs_task_app_role" {
-  name = "ecs_task_app_role"
+  name = "${local.name_prefix}-ecs-task-app-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
@@ -613,7 +785,7 @@ resource "aws_iam_role" "ecs_task_app_role" {
 
 # Create IAM policy for DynamoDB access
 resource "aws_iam_policy" "dynamodb_access_policy" {
-  name        = "meeting-notes-bot-dynamodb-policy"
+  name        = "${local.name_prefix}-bot-dynamodb-policy"
   description = "Policy for Meeting Notes Bot to access DynamoDB tables"
 
   policy = jsonencode({
@@ -630,16 +802,20 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           "dynamodb:Scan"
         ],
         Resource = [
-          aws_dynamodb_table.subscription_table.arn,
           aws_dynamodb_table.payment_transaction_table.arn,
+          aws_dynamodb_table.stripe_webhook_event_table.arn,
           aws_dynamodb_table.access_logs_table.arn,
           aws_dynamodb_table.recording_transcript_table.arn,
           aws_dynamodb_table.auto_record_settings_table.arn,
           "${aws_dynamodb_table.auto_record_settings_table.arn}/index/*",
           aws_dynamodb_table.server_context_table.arn,
           aws_dynamodb_table.channel_context_table.arn,
+          aws_dynamodb_table.ask_conversation_table.arn,
           aws_dynamodb_table.meeting_history_table.arn,
-          "${aws_dynamodb_table.meeting_history_table.arn}/index/*"
+          "${aws_dynamodb_table.meeting_history_table.arn}/index/*",
+          aws_dynamodb_table.installer_table.arn,
+          aws_dynamodb_table.onboarding_state_table.arn,
+          aws_dynamodb_table.guild_subscription_table.arn
         ]
       }
     ]
@@ -661,7 +837,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_dynamodb_policy_execution" {
 
 # KMS permissions for app tasks (and execution role as backup)
 resource "aws_iam_policy" "kms_app_policy" {
-  name        = "meeting-notes-bot-kms-policy"
+  name        = "${local.name_prefix}-bot-kms-policy"
   description = "Allow ECS tasks to use the app KMS key"
 
   policy = jsonencode({
@@ -694,7 +870,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_exec_kms_policy" {
 }
 
 resource "aws_iam_policy" "transcripts_s3_policy" {
-  name        = "meeting-notes-bot-transcripts-s3-policy"
+  name        = "${local.name_prefix}-bot-transcripts-s3-policy"
   description = "Allow ECS tasks to upload and read transcripts in the transcripts bucket"
 
   policy = jsonencode({
@@ -729,7 +905,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_exec_transcripts_policy" {
 
 # Update the ECS task definition to include the execution role ARN
 resource "aws_ecs_task_definition" "app_task" {
-  family                   = "meeting-notes-bot-task"
+  family                   = "${local.name_prefix}-bot-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "512"
@@ -739,7 +915,7 @@ resource "aws_ecs_task_definition" "app_task" {
 
   container_definitions = jsonencode([
     {
-      name      = "meeting-notes-bot"
+      name      = "${local.name_prefix}-bot"
       image     = aws_ecr_repository.app_ecr_repo.repository_url
       cpu       = 512
       memory    = 1024
@@ -779,28 +955,12 @@ resource "aws_ecs_task_definition" "app_task" {
           value = var.DISCORD_CLIENT_ID
         },
         {
-          name  = "DISCORD_CLIENT_SECRET"
-          value = var.DISCORD_CLIENT_SECRET
-        },
-        {
           name  = "DISCORD_CALLBACK_URL"
           value = var.DISCORD_CALLBACK_URL
         },
         {
-          name  = "OAUTH_SECRET"
-          value = var.OAUTH_SECRET
-        },
-        {
           name  = "ENABLE_OAUTH"
           value = var.ENABLE_OAUTH
-        },
-        {
-          name  = "DISCORD_BOT_TOKEN"
-          value = var.DISCORD_BOT_TOKEN
-        },
-        {
-          name  = "OPENAI_API_KEY"
-          value = var.OPENAI_API_KEY
         },
         {
           name  = "OPENAI_ORGANIZATION_ID"
@@ -818,6 +978,92 @@ resource "aws_ecs_task_definition" "app_task" {
           name  = "TRANSCRIPTS_PREFIX"
           value = var.TRANSCRIPTS_PREFIX
         },
+        {
+          name  = "DDB_TABLE_PREFIX"
+          value = "${local.name_prefix}-"
+        },
+        {
+          name  = "NODE_ENV"
+          value = var.NODE_ENV
+        },
+        {
+          name  = "ENABLE_ONBOARDING"
+          value = var.ENABLE_ONBOARDING
+        },
+        {
+          name  = "FRONTEND_ALLOWED_ORIGINS"
+          value = var.FRONTEND_ALLOWED_ORIGINS
+        },
+        {
+          name  = "FRONTEND_SITE_URL"
+          value = var.FRONTEND_SITE_URL
+        },
+        {
+          name  = "STRIPE_MODE"
+          value = var.STRIPE_MODE
+        },
+        {
+          name  = "STRIPE_PRICE_BASIC"
+          value = var.STRIPE_PRICE_BASIC
+        },
+        {
+          name  = "STRIPE_PRICE_LOOKUP_BASIC_MONTHLY"
+          value = var.STRIPE_PRICE_LOOKUP_BASIC_MONTHLY
+        },
+        {
+          name  = "STRIPE_PRICE_LOOKUP_BASIC_ANNUAL"
+          value = var.STRIPE_PRICE_LOOKUP_BASIC_ANNUAL
+        },
+        {
+          name  = "STRIPE_PRICE_LOOKUP_PRO_MONTHLY"
+          value = var.STRIPE_PRICE_LOOKUP_PRO_MONTHLY
+        },
+        {
+          name  = "STRIPE_PRICE_LOOKUP_PRO_ANNUAL"
+          value = var.STRIPE_PRICE_LOOKUP_PRO_ANNUAL
+        },
+        {
+          name  = "STRIPE_SUCCESS_URL"
+          value = var.STRIPE_SUCCESS_URL
+        },
+        {
+          name  = "STRIPE_CANCEL_URL"
+          value = var.STRIPE_CANCEL_URL
+        },
+        {
+          name  = "STRIPE_PORTAL_RETURN_URL"
+          value = var.STRIPE_PORTAL_RETURN_URL
+        },
+        {
+          name  = "BILLING_LANDING_URL"
+          value = var.BILLING_LANDING_URL
+        },
+      ]
+      secrets = [
+        {
+          name      = "DISCORD_BOT_TOKEN"
+          valueFrom = aws_secretsmanager_secret.discord_bot_token.arn
+        },
+        {
+          name      = "DISCORD_CLIENT_SECRET"
+          valueFrom = aws_secretsmanager_secret.discord_client_secret.arn
+        },
+        {
+          name      = "OAUTH_SECRET"
+          valueFrom = aws_secretsmanager_secret.oauth_secret.arn
+        },
+        {
+          name      = "OPENAI_API_KEY"
+          valueFrom = aws_secretsmanager_secret.openai_api_key.arn
+        },
+        {
+          name      = "STRIPE_SECRET_KEY"
+          valueFrom = aws_secretsmanager_secret.stripe_secret_key.arn
+        },
+        {
+          name      = "STRIPE_WEBHOOK_SECRET"
+          valueFrom = aws_secretsmanager_secret.stripe_webhook_secret.arn
+        },
       ]
       #      healthCheck = {
       #        command     = ["CMD-SHELL", "curl -f http://127.0.0.1:3001/health || exit 1"]
@@ -833,15 +1079,15 @@ resource "aws_ecs_task_definition" "app_task" {
 #checkov:skip=CKV_AWS_333 reason: Assigning public IP for now to avoid NAT Gateway cost; will migrate to private subnets with NAT when budget allows.
 resource "aws_ecs_service" "app_service" {
   #checkov:skip=CKV_AWS_333 reason: Assigning public IP for now to avoid NAT Gateway cost; will migrate to private subnets with NAT when budget allows.
-  name            = "meeting-notes-bot-service"
+  name            = "${local.name_prefix}-bot-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
   # COMMENT THIS OUT TO DEPLOY ANY CHNAGES TO THE TASK DEFINITION - SUPER JANK LOL
-  lifecycle {
-    ignore_changes = [
-      task_definition
-    ]
-  }
+  #lifecycle {
+  #  ignore_changes = [
+  #    task_definition
+  #  ]
+  #}
 
   enable_execute_command = true
 
@@ -862,13 +1108,13 @@ resource "aws_ecs_service" "app_service" {
   }
 }
 
-resource "aws_dynamodb_table" "subscription_table" {
-  name         = "SubscriptionTable"
+resource "aws_dynamodb_table" "guild_subscription_table" {
+  name         = "${local.name_prefix}-GuildSubscriptionTable"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "UserID"
+  hash_key     = "guildId"
 
   attribute {
-    name = "UserID"
+    name = "guildId"
     type = "S"
   }
 
@@ -882,12 +1128,12 @@ resource "aws_dynamodb_table" "subscription_table" {
   }
 
   tags = {
-    Name = "SubscriptionTable"
+    Name = "GuildSubscriptionTable"
   }
 }
 
 resource "aws_dynamodb_table" "payment_transaction_table" {
-  name         = "PaymentTransactionTable"
+  name         = "${local.name_prefix}-PaymentTransactionTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "TransactionID"
 
@@ -910,8 +1156,37 @@ resource "aws_dynamodb_table" "payment_transaction_table" {
   }
 }
 
+resource "aws_dynamodb_table" "stripe_webhook_event_table" {
+  name         = "${local.name_prefix}-StripeWebhookEventTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "eventId"
+
+  attribute {
+    name = "eventId"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "StripeWebhookEventTable"
+  }
+}
+
 resource "aws_dynamodb_table" "access_logs_table" {
-  name         = "AccessLogsTable"
+  name         = "${local.name_prefix}-AccessLogsTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "AccessLogID"
 
@@ -935,7 +1210,7 @@ resource "aws_dynamodb_table" "access_logs_table" {
 }
 
 resource "aws_dynamodb_table" "recording_transcript_table" {
-  name         = "RecordingTranscriptTable"
+  name         = "${local.name_prefix}-RecordingTranscriptTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "MeetingID"
 
@@ -959,7 +1234,7 @@ resource "aws_dynamodb_table" "recording_transcript_table" {
 }
 
 resource "aws_dynamodb_table" "auto_record_settings_table" {
-  name         = "AutoRecordSettingsTable"
+  name         = "${local.name_prefix}-AutoRecordSettingsTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "guildId"
   range_key    = "channelId"
@@ -994,9 +1269,128 @@ resource "aws_dynamodb_table" "auto_record_settings_table" {
   }
 }
 
+resource "aws_dynamodb_table" "session_table" {
+  name         = "${local.name_prefix}-SessionTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "sid"
+
+  attribute {
+    name = "sid"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "SessionTable"
+  }
+}
+
+resource "aws_dynamodb_table" "installer_table" {
+  name         = "${local.name_prefix}-InstallerTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "InstallerTable"
+  }
+}
+
+resource "aws_dynamodb_table" "onboarding_state_table" {
+  name         = "${local.name_prefix}-OnboardingStateTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+  range_key    = "userId"
+
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+
+  attribute {
+    name = "userId"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "OnboardingStateTable"
+  }
+}
+
+# Ask Conversation Table
+resource "aws_dynamodb_table" "ask_conversation_table" {
+  name         = "${local.name_prefix}-AskConversationTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "AskConversationTable"
+  }
+}
+
 # Server Context Table
 resource "aws_dynamodb_table" "server_context_table" {
-  name         = "ServerContextTable"
+  name         = "${local.name_prefix}-ServerContextTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "guildId"
 
@@ -1021,7 +1415,7 @@ resource "aws_dynamodb_table" "server_context_table" {
 
 # Channel Context Table
 resource "aws_dynamodb_table" "channel_context_table" {
-  name         = "ChannelContextTable"
+  name         = "${local.name_prefix}-ChannelContextTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "guildId"
   range_key    = "channelId"
@@ -1052,7 +1446,7 @@ resource "aws_dynamodb_table" "channel_context_table" {
 
 # Meeting History Table
 resource "aws_dynamodb_table" "meeting_history_table" {
-  name         = "MeetingHistoryTable"
+  name         = "${local.name_prefix}-MeetingHistoryTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "guildId"
   range_key    = "channelId_timestamp"
@@ -1124,6 +1518,7 @@ output "frontend_distribution_domain_name" {
 output "frontend_distribution_id" {
   value = aws_cloudfront_distribution.frontend.id
 }
+
 # Flow logs IAM role
 resource "aws_iam_role" "vpc_flow_logs_role" {
   name = "vpc_flow_logs_role"

@@ -12,13 +12,17 @@ import {
 } from "discord.js";
 import { diffLines } from "diff";
 import { v4 as uuidv4 } from "uuid";
-import { getMeetingHistory, updateMeetingNotes } from "../db";
+import {
+  getMeetingHistoryService,
+  updateMeetingNotesService,
+} from "../services/meetingHistoryService";
 import OpenAI from "openai";
 import { config } from "../services/configService";
 import { stripCodeFences } from "../utils/text";
 import { buildPaginatedEmbeds } from "../utils/embedPagination";
 import { MeetingHistory, SuggestionHistoryEntry } from "../types/db";
-import { fetchTranscriptFromS3 } from "../services/storageService";
+import { fetchJsonFromS3 } from "../services/storageService";
+import { formatParticipantLabel } from "../utils/participants";
 
 type PendingCorrection = {
   guildId: string;
@@ -241,7 +245,7 @@ export async function handleNotesCorrectionModal(
   const channelIdTimestamp = decodeKey(encodedKey);
   const guildId = interaction.guildId!;
 
-  const history = await getMeetingHistory(guildId, channelIdTimestamp);
+  const history = await getMeetingHistoryService(guildId, channelIdTimestamp);
 
   if (!history || !history.notes) {
     await interaction.reply({
@@ -372,19 +376,19 @@ async function applyCorrection(
     }
   }
 
-  const updateSucceeded = await updateMeetingNotes(
-    pending.guildId,
-    pending.channelIdTimestamp,
-    pending.newNotes,
-    newVersion,
-    interaction.user.id,
-    pending.suggestion,
-    pending.notesVersion,
-    {
+  const updateSucceeded = await updateMeetingNotesService({
+    guildId: pending.guildId,
+    channelId_timestamp: pending.channelIdTimestamp,
+    notes: pending.newNotes,
+    notesVersion: newVersion,
+    editedBy: interaction.user.id,
+    suggestion: pending.suggestion,
+    expectedPreviousVersion: pending.notesVersion,
+    metadata: {
       notesMessageIds: newMessageIds,
       notesChannelId: pending.notesChannelId,
     },
-  );
+  });
 
   if (!updateSucceeded) {
     await interaction.update({
@@ -466,14 +470,47 @@ function buildUpdatedEmbeds(
 
 async function resolveTranscript(history: MeetingHistory): Promise<string> {
   if (history.transcriptS3Key) {
-    const fromS3 = await fetchTranscriptFromS3(history.transcriptS3Key);
-    if (fromS3) {
-      return fromS3;
+    const payload = await fetchJsonFromS3<{
+      text?: string;
+      segments?: Array<{
+        userId?: string;
+        text?: string;
+        username?: string;
+        displayName?: string;
+        serverNickname?: string;
+        tag?: string;
+      }>;
+    }>(history.transcriptS3Key);
+    if (payload?.text) {
+      return payload.text;
     }
-  }
-
-  if (history.transcript && history.transcript.length > 0) {
-    return history.transcript;
+    if (payload?.segments?.length) {
+      return payload.segments
+        .filter((segment) => segment.text)
+        .map((segment) => {
+          const speaker = formatParticipantLabel(
+            {
+              id: segment.userId ?? "unknown",
+              username: segment.username ?? segment.tag ?? "unknown",
+              displayName: segment.displayName,
+              serverNickname: segment.serverNickname,
+              tag: segment.tag,
+            },
+            {
+              includeUsername: true,
+              fallbackName:
+                segment.serverNickname ||
+                segment.displayName ||
+                segment.username ||
+                segment.tag ||
+                "Unknown",
+              fallbackUsername: segment.username ?? segment.tag,
+            },
+          );
+          return `${speaker}: ${segment.text}`;
+        })
+        .join("\n");
+    }
   }
 
   return "";

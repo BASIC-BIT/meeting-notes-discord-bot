@@ -3,13 +3,36 @@ import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App";
 import reportWebVitals from "./reportWebVitals";
+import "@mantine/core/styles.css";
+import "@mantine/notifications/styles.css";
+import { MantineProvider } from "@mantine/core";
+import { Notifications } from "@mantine/notifications";
+import { AuthProvider } from "./contexts/AuthContext";
+import { theme } from "./theme";
+import { GuildProvider } from "./contexts/GuildContext";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { trpc } from "./services/trpc";
+import { trpcClient } from "./services/trpcClient";
+import { queryClient } from "./queryClient";
 
 const root = ReactDOM.createRoot(
   document.getElementById("root") as HTMLElement,
 );
+
 root.render(
   <React.StrictMode>
-    <App />
+    <MantineProvider theme={theme} defaultColorScheme="dark">
+      <trpc.Provider client={trpcClient} queryClient={queryClient}>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <GuildProvider>
+              <App />
+            </GuildProvider>
+            <Notifications position="top-right" />
+          </AuthProvider>
+        </QueryClientProvider>
+      </trpc.Provider>
+    </MantineProvider>
   </React.StrictMode>,
 );
 
