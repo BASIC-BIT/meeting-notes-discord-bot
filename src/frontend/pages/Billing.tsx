@@ -125,25 +125,47 @@ export function Billing() {
 
   if (loading) {
     return (
-      <Center py="xl">
-        <Stack gap="xs" align="center">
-          <Loader color="brand" />
-          <Text c="dimmed">Loading billing info...</Text>
-        </Stack>
-      </Center>
+      <Stack gap="xl" w="100%" data-testid="billing-page">
+        <PageHeader
+          title="Billing"
+          description="Manage subscriptions for the current server."
+        />
+        <Center py="xl">
+          <Stack gap="xs" align="center">
+            <Loader color="brand" />
+            <Text c="dimmed">Loading billing info...</Text>
+          </Stack>
+        </Center>
+      </Stack>
     );
   }
-  if (error) return <Text c="red">{error}</Text>;
+  if (error) {
+    return (
+      <Stack gap="xl" w="100%" data-testid="billing-page">
+        <PageHeader
+          title="Billing"
+          description="Manage subscriptions for the current server."
+        />
+        <Text c="red">{error}</Text>
+      </Stack>
+    );
+  }
   if (!data) {
     return (
-      <Surface p="xl">
-        <Stack gap="sm">
-          <Text fw={600}>Select a server to view billing</Text>
-          <Text c="dimmed" size="sm">
-            Choose a server in the sidebar to see its subscription status.
-          </Text>
-        </Stack>
-      </Surface>
+      <Stack gap="xl" w="100%" data-testid="billing-page">
+        <PageHeader
+          title="Billing"
+          description="Manage subscriptions for the current server."
+        />
+        <Surface p="xl">
+          <Stack gap="sm">
+            <Text fw={600}>Select a server to view billing</Text>
+            <Text c="dimmed" size="sm">
+              Choose a server in the sidebar to see its subscription status.
+            </Text>
+          </Stack>
+        </Surface>
+      </Stack>
     );
   }
 
@@ -157,7 +179,7 @@ export function Billing() {
 
   if (!data.billingEnabled) {
     return (
-      <Stack gap="lg">
+      <Stack gap="lg" data-testid="billing-page">
         <PageHeader
           title="Billing"
           description="Billing is disabled in this environment."

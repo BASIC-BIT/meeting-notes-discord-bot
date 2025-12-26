@@ -4,6 +4,7 @@ const reuseServer = process.env.PW_REUSE_SERVER === "true";
 const mockEnv = {
   MOCK_MODE: "true",
   ENABLE_OAUTH: "false",
+  OPENAI_API_KEY: "test-openai-api-key",
 };
 
 export default defineConfig({
