@@ -27,17 +27,6 @@ terraform {
   }
 }
 
-provider "aws" {
-  default_tags {
-    tags = {
-      Project     = var.project_name
-      Environment = var.environment
-      ManagedBy   = "terraform"
-      Service     = "chronote"
-    }
-  }
-}
-
 variable "project_name" {
   description = "Project name prefix for resource naming"
   type        = string
@@ -208,6 +197,14 @@ variable "BILLING_LANDING_URL" {
 
 provider "aws" {
   region = "us-east-1"
+  default_tags {
+    tags = {
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "terraform"
+      Service     = "chronote"
+    }
+  }
 }
 
 data "aws_caller_identity" "current" {}
@@ -229,6 +226,7 @@ locals {
 resource "aws_ecr_repository" "app_ecr_repo" {
   name                 = "${local.name_prefix}-bot-repo"
   image_tag_mutability = "IMMUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
@@ -526,6 +524,7 @@ resource "aws_s3_bucket" "transcripts" {
 
 resource "aws_s3_bucket" "frontend" {
   bucket = local.frontend_bucket_name
+  force_destroy = true
 
   tags = {
     Name = "${local.name_prefix}-frontend"
