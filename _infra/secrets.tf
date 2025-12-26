@@ -7,38 +7,50 @@ locals {
 }
 
 resource "aws_secretsmanager_secret" "discord_bot_token" {
+  #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/discord-bot-token"
   description = "Discord bot token"
+  kms_key_id  = aws_kms_key.app_general.arn
   tags        = local.secrets_tags
 }
 
 resource "aws_secretsmanager_secret" "discord_client_secret" {
+  #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/discord-client-secret"
   description = "Discord OAuth client secret"
+  kms_key_id  = aws_kms_key.app_general.arn
   tags        = local.secrets_tags
 }
 
 resource "aws_secretsmanager_secret" "oauth_secret" {
+  #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/oauth-secret"
   description = "Session/OAuth secret"
+  kms_key_id  = aws_kms_key.app_general.arn
   tags        = local.secrets_tags
 }
 
 resource "aws_secretsmanager_secret" "openai_api_key" {
+  #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/openai-api-key"
   description = "OpenAI API key"
+  kms_key_id  = aws_kms_key.app_general.arn
   tags        = local.secrets_tags
 }
 
 resource "aws_secretsmanager_secret" "stripe_secret_key" {
+  #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/stripe-secret-key"
   description = "Stripe secret API key"
+  kms_key_id  = aws_kms_key.app_general.arn
   tags        = local.secrets_tags
 }
 
 resource "aws_secretsmanager_secret" "stripe_webhook_secret" {
+  #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/stripe-webhook-secret"
   description = "Stripe webhook signing secret"
+  kms_key_id  = aws_kms_key.app_general.arn
   tags        = local.secrets_tags
 }
 

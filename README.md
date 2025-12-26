@@ -1,4 +1,4 @@
-# Meeting Notes Discord Bot
+# Chronote
 
 A Discord bot that records voice meetings, transcribes them with OpenAI, generates notes, and posts results back to Discord. It also supports billing, tagging, and a static frontend.
 

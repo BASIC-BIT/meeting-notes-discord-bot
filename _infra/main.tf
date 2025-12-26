@@ -399,6 +399,7 @@ resource "aws_route_table_association" "public_subnet_2_assoc" {
 }
 
 resource "aws_security_group" "ecs_service_sg" {
+  #checkov:skip=CKV_AWS_382 reason: Allow all egress temporarily while Discord voice debugging is in progress.
   revoke_rules_on_delete = true
 
   lifecycle {
@@ -515,6 +516,9 @@ resource "aws_kms_key" "app_general" {
 }
 
 resource "aws_s3_bucket" "transcripts" {
+  #checkov:skip=CKV_AWS_18 reason: Access logging not enabled yet; will add if/when audit requirements demand it.
+  #checkov:skip=CKV_AWS_144 reason: Cross-region replication not required for current stage.
+  #checkov:skip=CKV2_AWS_62 reason: Event notifications not needed for transcripts storage.
   bucket = local.transcripts_bucket_name
 
   tags = {
@@ -523,6 +527,10 @@ resource "aws_s3_bucket" "transcripts" {
 }
 
 resource "aws_s3_bucket" "frontend" {
+  #checkov:skip=CKV_AWS_18 reason: Access logging not enabled yet; will add if/when audit requirements demand it.
+  #checkov:skip=CKV_AWS_144 reason: Cross-region replication not required for current stage.
+  #checkov:skip=CKV2_AWS_61 reason: Lifecycle configuration not required for static site bucket.
+  #checkov:skip=CKV2_AWS_62 reason: Event notifications not needed for static site bucket.
   bucket = local.frontend_bucket_name
   force_destroy = true
 
@@ -594,6 +602,13 @@ resource "aws_cloudfront_origin_access_control" "frontend_oac" {
 }
 
 resource "aws_cloudfront_distribution" "frontend" {
+  #checkov:skip=CKV_AWS_86 reason: Access logging not enabled yet; will add if/when audit requirements demand it.
+  #checkov:skip=CKV_AWS_310 reason: Origin failover not configured; single-origin setup is acceptable for now.
+  #checkov:skip=CKV_AWS_374 reason: Geo restriction not required for current stage.
+  #checkov:skip=CKV_AWS_68 reason: WAF not enabled yet; to be evaluated closer to launch.
+  #checkov:skip=CKV2_AWS_42 reason: Custom SSL cert is conditional on FRONTEND_DOMAIN; default cert is acceptable if unset.
+  #checkov:skip=CKV2_AWS_32 reason: Response headers policy not attached yet; will be added with security hardening pass.
+  #checkov:skip=CKV2_AWS_47 reason: WAF AMR (Log4j) not configured without WAF.
   enabled             = true
   default_root_object = "index.html"
 
