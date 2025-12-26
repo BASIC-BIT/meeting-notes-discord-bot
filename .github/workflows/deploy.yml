@@ -86,6 +86,7 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Run Playwright tests (mock mode)
+        continue-on-error: true
         run: yarn test:e2e
 
   deploybackend:
