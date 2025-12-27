@@ -60,6 +60,21 @@ Notes:
 - These secrets should **not** live in `terraform.tfvars`.
 - Local development still uses `.env` values.
 
+## API domain (ALB)
+
+If you set `API_DOMAIN` in `terraform.tfvars`, Terraform will:
+
+- Create an internet-facing ALB for the API (HTTP/HTTPS listeners).
+- Create/validate an ACM certificate if `API_CERT_ARN` is not provided and `HOSTED_ZONE_NAME` is set.
+- Create a Route53 alias for `API_DOMAIN`.
+
+Recommended OAuth callback for production:
+
+- `https://api.<your-domain>/auth/discord/callback`
+
+The frontend build uses `VITE_API_BASE_URL` (set as a GitHub Actions env var) to
+target the API domain.
+
 ## Environments (prod vs staging)
 
 Terraform now supports environment-specific resource naming via `environment`
