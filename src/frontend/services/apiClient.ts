@@ -52,6 +52,12 @@ const rawBase = (runtimeApiBase || "").replace(/\/$/, "");
 export const API_BASE =
   rawBase && !/^https?:\/\//i.test(rawBase) ? `http://${rawBase}` : rawBase;
 
+export function buildApiUrl(path: string): string {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  if (!API_BASE) return normalized;
+  return `${API_BASE.replace(/\/$/, "")}${normalized}`;
+}
+
 function withBase(input: RequestInfo): RequestInfo {
   if (typeof input !== "string") return input;
   if (!API_BASE || input.startsWith("http")) return input;

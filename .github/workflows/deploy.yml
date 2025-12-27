@@ -301,12 +301,6 @@ jobs:
             echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Failed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Failure time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Common failure reasons:" >> $GITHUB_STEP_SUMMARY
-            echo "- Missing dist/index.js (check tsconfig.json noEmit setting)" >> $GITHUB_STEP_SUMMARY
-            echo "- Container startup failures (check environment variables)" >> $GITHUB_STEP_SUMMARY
-            echo "- Memory/resource limits exceeded" >> $GITHUB_STEP_SUMMARY
-            echo "- Dependencies or build issues" >> $GITHUB_STEP_SUMMARY
           fi
 
   deploy-frontend:

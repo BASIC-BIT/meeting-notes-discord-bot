@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useMemo } from "react";
-import { API_BASE } from "../services/apiClient";
+import { buildApiUrl } from "../services/apiClient";
 import { trpc } from "../services/trpc";
 
 type AuthState = "unknown" | "authenticated" | "unauthenticated";
@@ -28,7 +28,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     typeof window !== "undefined"
       ? `${window.location.origin}/portal/select-server`
       : "/portal/select-server";
-  const loginUrl = `${API_BASE}/auth/discord?redirect=${encodeURIComponent(
+  const loginUrl = `${buildApiUrl("/auth/discord")}?redirect=${encodeURIComponent(
     portalRedirect,
   )}`;
 

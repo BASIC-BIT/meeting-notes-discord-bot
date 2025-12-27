@@ -23,7 +23,6 @@ import {
   IconSparkles,
   IconTags,
   IconTimeline,
-  IconWaveSine,
 } from "@tabler/icons-react";
 import FeatureCard from "../components/FeatureCard";
 import PricingCard from "../components/PricingCard";
@@ -51,33 +50,32 @@ const features = [
   {
     title: "Automatic capture",
     description:
-      "Join on demand or auto-record a channel. Chronote captures audio, chat, and attendance.",
+      "Join on demand or auto-record a channel. Capture audio, chat, and attendance.",
     icon: <IconMicrophone size={22} />,
   },
   {
     title: "Transcript + summary",
     description:
-      "Structured notes with decisions and action items are posted back to Discord.",
+      "Structured notes land back in Discord with decisions and action items.",
     icon: <IconFileText size={22} />,
   },
   {
     title: "Search with receipts",
     description:
-      "Ask questions across recent sessions and get answers with quotes and timestamps.",
+      "Ask across recent sessions with quotes and timestamps attached.",
     icon: <IconSearch size={22} />,
   },
   {
     title: "Tags and filters",
     description:
-      "Add lightweight tags so meetings stay grouped by project, team, or campaign.",
+      "Add tags so sessions stay grouped by project, team, or campaign.",
     icon: <IconTags size={22} />,
   },
-  {
-    title: "Live voice mode",
-    description:
-      "A live mode where Chronote can speak back in voice for quick confirmations.",
-    icon: <IconWaveSine size={22} />,
-  },
+  // {
+  //   title: "Live voice mode",
+  //   description: "Optional live voice mode for quick confirmations in-channel.",
+  //   icon: <IconWaveSine size={22} />,
+  // },
   {
     title: "Exports + retention",
     description: "Download audio, transcript, and notes from the web library.",
@@ -85,7 +83,7 @@ const features = [
   },
   {
     title: "Built for speed",
-    description: "Fast onboarding, minimal setup, and sensible defaults.",
+    description: "Fast onboarding, minimal setup.",
     icon: <IconBolt size={22} />,
   },
 ];
@@ -94,17 +92,17 @@ const howItWorks = [
   {
     step: "01",
     title: "Start recording",
-    description: "Use a command or enable auto-recording for a voice channel.",
+    description: "Use a command or enable auto-recording for a channel.",
   },
   {
     step: "02",
     title: "Notes land in Discord",
-    description: "Transcript + structured summary post to your chosen channel.",
+    description: "Transcript + summary post to your chosen channel.",
   },
   {
     step: "03",
     title: "Search it later",
-    description: "Ask questions across recent meetings, with receipts.",
+    description: "Ask questions later, with receipts.",
   },
 ];
 
@@ -112,19 +110,19 @@ const useCases = [
   {
     title: "Communities",
     description:
-      "Keep volunteer staff aligned across weekly syncs, moderation meetings, and event planning.",
+      "Keep volunteer staff aligned across syncs, meetings, and event planning.",
     bullets: ["Catch-up summaries", "Attendance + decisions", "Action items"],
   },
   {
     title: "Tabletop campaigns",
     description:
-      "Recall lore, NPC names, and plot threads without digging through audio.",
+      "Recall lore, NPCs, and plot threads without digging through audio.",
     bullets: ["Session recaps", "Character tracking", "Campaign memory"],
   },
   {
     title: "Product teams",
     description:
-      "Capture decisions, tasks, and questions across standups, planning, and retros.",
+      "Capture decisions and tasks across standups, planning, and retros.",
     bullets: ["Action items", "Decision logs", "Cross-team context"],
   },
 ];
@@ -165,8 +163,8 @@ export default function Home() {
               Transcripts and summaries for Discord voice.
             </Title>
             <Text size="lg" c="dimmed">
-              Chronote records the session, posts structured notes back to your
-              server, and builds a searchable logbook on the web.
+              Record voice channels, get notes back in Discord, and keep a
+              searchable logbook on the web.
             </Text>
             <Group gap="sm">
               <Button
@@ -251,7 +249,7 @@ export default function Home() {
                     <Text size="xs" c="dimmed">
                       #session-notes
                     </Text>
-                    <Text fw={600}>D&D session - recap</Text>
+                    <Text fw={600}>D&D session recap</Text>
                     <List spacing="xs" size="sm">
                       <List.Item>
                         Decision: take the mountain pass instead of the swamp
@@ -325,7 +323,7 @@ export default function Home() {
       <Section
         eyebrow="Features"
         title="Everything you need to remember the meeting"
-        description="Capture, compress, and recall your meetings without leaving Discord."
+        description="Capture, compress, and recall without leaving Discord."
       >
         <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg">
           {features.map((feature) => (
@@ -362,7 +360,7 @@ export default function Home() {
       <Section
         eyebrow="Evidence-first"
         title="Answers come with receipts"
-        description="Chronote does not guess. Every answer is grounded in quotes, speakers, and timestamps."
+        description="No guessing. Every answer is grounded in quotes, speakers, and timestamps."
       >
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
           <Surface p="lg" tone="soft">
@@ -375,7 +373,7 @@ export default function Home() {
               </Group>
               <Text c="dimmed">
                 Ask about decisions, blockers, or campaign lore. Results point
-                back to the exact moment it was said.
+                back to the moment it was said.
               </Text>
               <EvidenceCard
                 quote="The outage root cause was the cache eviction policy."
@@ -394,7 +392,7 @@ export default function Home() {
               </Group>
               <Text c="dimmed">
                 Notes are organized as decisions, action items, and highlights
-                so teams can scan quickly.
+                for fast scanning.
               </Text>
               <List spacing="xs" size="sm">
                 <List.Item>Decision log with owners</List.Item>
@@ -437,7 +435,7 @@ export default function Home() {
             badge="Free forever"
             features={[
               "Up to 4 hours per week",
-              "Up to 90 minutes per meeting",
+              "Up to 60 minutes per meeting",
               "Ask across recent meetings",
               "Notes, tags, and summary embeds",
             ]}
