@@ -314,6 +314,8 @@ jobs:
     needs: [test-and-build, e2e-tests, checkov]
     runs-on: ubuntu-latest
     environment: sandbox
+    env:
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
