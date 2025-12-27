@@ -361,4 +361,4 @@ jobs:
             echo "FRONTEND_DISTRIBUTION_ID not set in environment variables"
             exit 1
           fi
-          aws cloudfront create-invalidation --distribution-id "$FRONTEND_DISTRIBUTION_ID" --paths "/index.html" "/manifest.json"
+          aws cloudfront create-invalidation --distribution-id "$FRONTEND_DISTRIBUTION_ID" --paths "/*"
