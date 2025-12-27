@@ -30,7 +30,6 @@ jobs:
         run: yarn lint:check && yarn prettier:check && yarn test && yarn build:all
 
       - name: Code stats (scc + lizard)
-        continue-on-error: true
         run: |
           docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
             scc --ci /pwd
@@ -86,7 +85,6 @@ jobs:
         run: npx playwright install --with-deps
 
       - name: Run Playwright tests (mock mode)
-        continue-on-error: true
         run: yarn test:e2e
 
   deploybackend:

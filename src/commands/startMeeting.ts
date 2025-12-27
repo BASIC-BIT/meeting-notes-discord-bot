@@ -30,102 +30,181 @@ import {
   getRollingWindowMs,
 } from "../services/meetingUsageService";
 
+type GuildLimits = Awaited<ReturnType<typeof getGuildLimits>>["limits"];
+
+const buildLimitReachedMessage = (nextAvailableAtIso?: string | null) => {
+  const nextLabel = nextAvailableAtIso
+    ? `Try again after <t:${Math.floor(
+        Date.parse(nextAvailableAtIso) / 1000,
+      )}:R>.`
+    : "Try again later.";
+  return `Weekly meeting minutes limit reached for this plan. ${nextLabel}`;
+};
+
+async function getLimitNotice(
+  guildId: string,
+  limits: GuildLimits,
+): Promise<string | null> {
+  if (!limits.maxMeetingMinutesRolling) return null;
+  const usage = await getRollingUsageForGuild(guildId);
+  const limitSeconds = limits.maxMeetingMinutesRolling * 60;
+  if (usage.usedSeconds < limitSeconds) return null;
+  const windowStartMs = Date.parse(usage.windowStartIso);
+  const nextAvailableAtIso = getNextAvailableAt(
+    usage.meetings,
+    windowStartMs,
+    getRollingWindowMs(),
+    limitSeconds,
+  );
+  return buildLimitReachedMessage(nextAvailableAtIso);
+}
+
+const resolveLiveVoiceEnabled = async (
+  guildId: string,
+  channelId: string,
+  limits: GuildLimits,
+) => {
+  const [serverContext, channelContext] = await Promise.all([
+    fetchServerContext(guildId),
+    fetchChannelContext(guildId, channelId),
+  ]);
+  const liveVoiceDefault = serverContext?.liveVoiceEnabled ?? false;
+  const liveVoiceOverride = channelContext?.liveVoiceEnabled;
+  return limits.liveVoiceEnabled && (liveVoiceOverride ?? liveVoiceDefault);
+};
+
+const getMeetingRequestOptions = (interaction: CommandInteraction) => {
+  if (!interaction.isChatInputCommand()) {
+    return { meetingContext: undefined, tags: undefined };
+  }
+  const meetingContext = interaction.options.getString("context") || undefined;
+  const rawTags = interaction.options.getString("tags") || undefined;
+  return {
+    meetingContext,
+    tags: rawTags ? parseTags(rawTags) : undefined,
+  };
+};
+
+type GuildChannelResult =
+  | {
+      ok: true;
+      guild: NonNullable<CommandInteraction["guild"]>;
+      guildChannel: GuildChannel;
+      textChannel: TextChannel;
+    }
+  | { ok: false; error: string };
+
+const resolveGuildChannels = (
+  interaction: CommandInteraction,
+): GuildChannelResult => {
+  const channel = interaction.channel;
+  const guild = interaction.guild;
+  if (!channel || !guild) {
+    return { ok: false, error: "Unable to find the channel or guild." };
+  }
+  if (channel.isDMBased()) {
+    return { ok: false, error: "Bot cannot be used within DMs." };
+  }
+  return {
+    ok: true,
+    guild,
+    guildChannel: channel as GuildChannel,
+    textChannel: channel as TextChannel,
+  };
+};
+
+const resolveBotMember = (guild: NonNullable<CommandInteraction["guild"]>) => {
+  const botId = guild.client.user?.id;
+  if (!botId) return null;
+  return guild.members.cache.get(botId) ?? null;
+};
+
+const ensureBotCanSend = (
+  guildChannel: GuildChannel,
+  botMember: GuildMember,
+) => {
+  const permissions = guildChannel.permissionsFor(botMember);
+  if (!permissions) {
+    return "I do not have permission to send messages in this channel.";
+  }
+  if (!permissions.has(PermissionsBitField.Flags.SendMessages)) {
+    return "I do not have permission to send messages in this channel.";
+  }
+  if (!permissions.has(PermissionsBitField.Flags.ViewChannel)) {
+    return "I do not have permission to send messages in this channel.";
+  }
+  return null;
+};
+
+const ensureNoActiveMeeting = (guildId: string) => {
+  if (!hasMeeting(guildId)) return null;
+  const meeting = getMeeting(guildId);
+  if (!meeting) return null;
+  if (meeting.finished) {
+    deleteMeeting(guildId);
+    return null;
+  }
+  return "A meeting is already active in this server.";
+};
+
+type VoiceChannelResult =
+  | { ok: true; voiceChannel: VoiceBasedChannel }
+  | { ok: false; error: string };
+
+const resolveMemberVoiceChannel = (member: GuildMember): VoiceChannelResult => {
+  const voiceChannel = member.voice.channel;
+  if (!voiceChannel) {
+    return { ok: false, error: "You need to join a voice channel first!" };
+  }
+  return { ok: true, voiceChannel };
+};
+
 export async function handleRequestStartMeeting(
   interaction: CommandInteraction,
 ) {
   const guildId = interaction.guildId!;
-  const meetingContext = interaction.isChatInputCommand()
-    ? interaction.options.getString("context") || undefined
-    : undefined;
-  const tags = interaction.isChatInputCommand()
-    ? interaction.options.getString("tags")
-    : undefined;
-
-  const channel = interaction.channel;
-
-  if (!channel || !interaction.guild) {
-    await interaction.reply("Unable to find the channel or guild.");
+  const { meetingContext, tags } = getMeetingRequestOptions(interaction);
+  const channelResult = resolveGuildChannels(interaction);
+  if (!channelResult.ok) {
+    await interaction.reply(channelResult.error);
     return;
   }
 
-  if (channel.isDMBased()) {
-    await interaction.reply("Bot cannot be used within DMs.");
-    return;
-  }
-
-  const guildChannel = channel as GuildChannel;
-  const textChannel = channel as TextChannel;
-
-  // Check if the bot has permission to send messages in the channel
-  const botMember = interaction.guild.members.cache.get(
-    interaction.client.user!.id,
-  );
-
+  const { guild, guildChannel, textChannel } = channelResult;
+  const botMember = resolveBotMember(guild);
   if (!botMember) {
     await interaction.reply("Bot not found in guild.");
     return;
   }
 
-  const chatChannelPermissions = guildChannel.permissionsFor(botMember);
-
-  if (
-    !chatChannelPermissions ||
-    !chatChannelPermissions.has(PermissionsBitField.Flags.SendMessages) ||
-    !chatChannelPermissions.has(PermissionsBitField.Flags.ViewChannel)
-  ) {
-    await interaction.reply(
-      "I do not have permission to send messages in this channel.",
-    );
+  const permissionError = ensureBotCanSend(guildChannel, botMember);
+  if (permissionError) {
+    await interaction.reply(permissionError);
     return;
   }
 
-  if (hasMeeting(guildId)) {
-    const meeting = getMeeting(guildId)!;
-    if (meeting.finished) {
-      // Cleanup the old meeting in preparation for a new one
-      // TODO: Eventually, store meetings in a database and get rid of this, no need to remove data unnecessarily
-      deleteMeeting(guildId);
-    } else {
-      await interaction.reply("A meeting is already active in this server.");
-      return;
-    }
+  const meetingConflict = ensureNoActiveMeeting(guildId);
+  if (meetingConflict) {
+    await interaction.reply(meetingConflict);
+    return;
   }
 
   const untypedMember = interaction.member;
   if (!untypedMember || !interaction.guild) return;
   const member = untypedMember as GuildMember;
-
-  const voiceChannel = member.voice.channel;
-  if (!voiceChannel) {
-    await interaction.reply("You need to join a voice channel first!");
+  const voiceResult = resolveMemberVoiceChannel(member);
+  if (!voiceResult.ok) {
+    await interaction.reply(voiceResult.error);
     return;
   }
+  const { voiceChannel } = voiceResult;
 
   // Tier and limits
   const { limits } = await getGuildLimits(guildId);
-  if (limits.maxMeetingMinutesRolling) {
-    const usage = await getRollingUsageForGuild(guildId);
-    const limitSeconds = limits.maxMeetingMinutesRolling * 60;
-    if (usage.usedSeconds >= limitSeconds) {
-      const windowStartMs = Date.parse(usage.windowStartIso);
-      const nextAvailableAtIso = getNextAvailableAt(
-        usage.meetings,
-        windowStartMs,
-        getRollingWindowMs(),
-        limitSeconds,
-      );
-      const nextLabel = nextAvailableAtIso
-        ? `Try again after <t:${Math.floor(
-            Date.parse(nextAvailableAtIso) / 1000,
-          )}:R>.`
-        : "Try again later.";
-      await interaction.reply(
-        buildUpgradePrompt(
-          `Weekly meeting minutes limit reached for this plan. ${nextLabel}`,
-        ),
-      );
-      return;
-    }
+  const limitNotice = await getLimitNotice(guildId, limits);
+  if (limitNotice) {
+    await interaction.reply(buildUpgradePrompt(limitNotice));
+    return;
   }
 
   // Check bot permissions
@@ -140,27 +219,24 @@ export async function handleRequestStartMeeting(
     return;
   }
 
-  const [serverContext, channelContext] = await Promise.all([
-    fetchServerContext(guildId),
-    fetchChannelContext(guildId, voiceChannel.id),
-  ]);
-  const liveVoiceDefault = serverContext?.liveVoiceEnabled ?? false;
-  const liveVoiceOverride = channelContext?.liveVoiceEnabled;
-  const liveVoiceEnabled =
-    limits.liveVoiceEnabled && (liveVoiceOverride ?? liveVoiceDefault);
+  const liveVoiceEnabled = await resolveLiveVoiceEnabled(
+    guildId,
+    voiceChannel.id,
+    limits,
+  );
 
   // Initialize the meeting using the core function
   const meeting = await initializeMeeting({
     voiceChannel,
     textChannel,
-    guild: interaction.guild,
+    guild,
     creator: interaction.user,
     transcribeMeeting: true,
     generateNotes: true,
     meetingContext,
     initialInteraction: undefined,
     isAutoRecording: false,
-    tags: tags ? parseTags(tags) : undefined,
+    tags,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
     liveVoiceEnabled,
     maxMeetingDurationMs: limits.maxMeetingDurationMs,
@@ -215,27 +291,10 @@ export async function handleAutoStartMeeting(
 ) {
   const guildId = voiceChannel.guild.id;
   const { limits } = await getGuildLimits(guildId);
-  if (limits.maxMeetingMinutesRolling) {
-    const usage = await getRollingUsageForGuild(guildId);
-    const limitSeconds = limits.maxMeetingMinutesRolling * 60;
-    if (usage.usedSeconds >= limitSeconds) {
-      const windowStartMs = Date.parse(usage.windowStartIso);
-      const nextAvailableAtIso = getNextAvailableAt(
-        usage.meetings,
-        windowStartMs,
-        getRollingWindowMs(),
-        limitSeconds,
-      );
-      const nextLabel = nextAvailableAtIso
-        ? `Try again after <t:${Math.floor(
-            Date.parse(nextAvailableAtIso) / 1000,
-          )}:R>.`
-        : "Try again later.";
-      await textChannel.send(
-        `Weekly meeting minutes limit reached for this plan. ${nextLabel}`,
-      );
-      return false;
-    }
+  const limitNotice = await getLimitNotice(guildId, limits);
+  if (limitNotice) {
+    await textChannel.send(limitNotice);
+    return false;
   }
 
   // Check if a meeting is already active

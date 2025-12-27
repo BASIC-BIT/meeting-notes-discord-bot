@@ -103,6 +103,26 @@ type MeetingSummaryRow = {
   transcriptAvailable: boolean;
 };
 
+type MeetingListItem = MeetingSummaryRow & {
+  title: string;
+  summary: string;
+  dateLabel: string;
+  durationLabel: string;
+  channelLabel: string;
+};
+
+type RawMeetingDetail = {
+  id: string;
+  channelId: string;
+  timestamp: string;
+  duration: number;
+  tags?: string[];
+  notes?: string | null;
+  audioUrl?: string | null;
+  attendees?: string[];
+  events?: MeetingEvent[];
+};
+
 const FILTER_OPTIONS = [
   { value: "voice", label: "Voice" },
   { value: "chat", label: "Chat" },
@@ -118,6 +138,145 @@ const EVENT_META: Record<
   chat: { color: "cyan", label: "Chat", icon: IconMessageCircle },
   presence: { color: "gray", label: "Join/leave", icon: IconUsers },
   bot: { color: "violet", label: "Chronote", icon: IconSparkles },
+};
+
+const formatChannelLabel = (name?: string, fallback?: string) => {
+  const raw = name ?? fallback ?? "Unknown channel";
+  return raw.startsWith("#") ? raw : `#${raw}`;
+};
+
+const formatDurationLabel = (seconds: number) => {
+  const safe = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  }
+  return `${minutes}m`;
+};
+
+const formatDateLabel = (timestamp: string) => {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown date";
+  }
+  return format(date, "MMM d, yyyy");
+};
+
+const normalizeNotes = (notes: string) => notes.replace(/\r/g, "").trim();
+
+const deriveTitle = (notes: string, channelLabel: string) => {
+  const lines = normalizeNotes(notes)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const skip = new Set([
+    "highlights",
+    "decisions",
+    "action items",
+    "actions",
+    "recap",
+    "summary",
+  ]);
+  const candidate = lines.find((line) => !skip.has(line.toLowerCase()));
+  if (candidate) {
+    return candidate.replace(/^[-*#]\s*/, "");
+  }
+  return `Meeting in ${channelLabel.replace(/^#/, "")}`;
+};
+
+const deriveSummary = (notes: string) => {
+  const normalized = normalizeNotes(notes);
+  if (!normalized) {
+    return "Notes will appear after the meeting is processed.";
+  }
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const summaryLine = lines.find((line) =>
+    line.toLowerCase().includes("summary"),
+  );
+  if (summaryLine) {
+    return summaryLine.replace(/^summary[:\s-]*/i, "");
+  }
+  const singleLine = lines.join(" ").replace(/\s+/g, " ");
+  if (singleLine.length <= 180) {
+    return singleLine;
+  }
+  return `${singleLine.slice(0, 180)}...`;
+};
+
+const filterMeetings = (
+  meetingItems: MeetingListItem[],
+  options: {
+    query: string;
+    selectedTags: string[];
+    selectedChannel: string | null;
+    selectedRange: string;
+  },
+) => {
+  const { query, selectedTags, selectedChannel, selectedRange } = options;
+  const rangeDays =
+    selectedRange === "all" ? null : Number.parseInt(selectedRange, 10);
+  const now = Date.now();
+  const needle = query.toLowerCase();
+
+  return meetingItems.filter((meetingItem) => {
+    if (query) {
+      const text = `${meetingItem.title} ${meetingItem.summary}`.toLowerCase();
+      if (!text.includes(needle)) return false;
+    }
+    if (selectedTags.length) {
+      const matches = selectedTags.every((tag) =>
+        meetingItem.tags.includes(tag),
+      );
+      if (!matches) return false;
+    }
+    if (selectedChannel && meetingItem.channelId !== selectedChannel) {
+      return false;
+    }
+    if (rangeDays) {
+      const ts = Date.parse(meetingItem.timestamp);
+      if (Number.isFinite(ts)) {
+        const diffDays = (now - ts) / (1000 * 60 * 60 * 24);
+        if (diffDays > rangeDays) return false;
+      }
+    }
+    return true;
+  });
+};
+
+const buildMeetingDetails = (
+  detail: RawMeetingDetail,
+  channelNameMap: Map<string, string>,
+): MeetingDetails => {
+  const channelLabel = formatChannelLabel(
+    channelNameMap.get(detail.channelId),
+    detail.channelId,
+  );
+  const dateLabel = formatDateLabel(detail.timestamp);
+  const durationLabel = formatDurationLabel(detail.duration);
+  const title = deriveTitle(detail.notes ?? "", channelLabel);
+  const summary = deriveSummary(detail.notes ?? "");
+  return {
+    id: detail.id,
+    title,
+    summary,
+    notes: detail.notes || "No notes recorded.",
+    dateLabel,
+    durationLabel,
+    tags: detail.tags ?? [],
+    channel: channelLabel,
+    audioUrl: detail.audioUrl ?? null,
+    attendees:
+      detail.attendees && detail.attendees.length > 0
+        ? detail.attendees
+        : ["Unknown"],
+    decisions: [],
+    actions: [],
+    events: detail.events ?? [],
+  } satisfies MeetingDetails;
 };
 
 export default function Library() {
@@ -168,64 +327,12 @@ export default function Library() {
     return map;
   }, [channelsQuery.data]);
 
-  const formatChannelLabel = (name?: string, fallback?: string) => {
-    const raw = name ?? fallback ?? "Unknown channel";
-    return raw.startsWith("#") ? raw : `#${raw}`;
-  };
-
-  const formatDurationLabel = (seconds: number) => {
-    const safe = Math.max(0, Math.floor(seconds));
-    const hours = Math.floor(safe / 3600);
-    const minutes = Math.floor((safe % 3600) / 60);
-    if (hours > 0) {
-      return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-    }
-    return `${minutes}m`;
-  };
-
-  const formatDateLabel = (timestamp: string) => {
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) {
-      return "Unknown date";
-    }
-    return format(date, "MMM d, yyyy");
-  };
-
-  const normalizeNotes = (notes: string) => notes.replace(/\r/g, "").trim();
-
-  const deriveTitle = (notes: string, channelLabel: string) => {
-    const lines = normalizeNotes(notes)
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const skip = new Set([
-      "highlights",
-      "decisions",
-      "action items",
-      "actions",
-      "recap",
-      "summary",
-    ]);
-    const candidate = lines.find((line) => !skip.has(line.toLowerCase()));
-    if (candidate) {
-      return candidate.replace(/^[-*#]\s*/, "");
-    }
-    return `Meeting in ${channelLabel.replace(/^#/, "")}`;
-  };
-
-  const deriveSummary = (notes: string) => {
-    const clean = normalizeNotes(notes);
-    if (!clean) return "Notes will appear after the meeting is processed.";
-    const flattened = clean.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
-    return flattened.length > 180 ? `${flattened.slice(0, 180)}...` : flattened;
-  };
-
   const meetingRows = useMemo<MeetingSummaryRow[]>(
     () => meetingsQuery.data?.meetings ?? [],
     [meetingsQuery.data],
   );
 
-  const meetingItems = useMemo(() => {
+  const meetingItems = useMemo<MeetingListItem[]>(() => {
     return meetingRows.map((meetingRow) => {
       const channelLabel = formatChannelLabel(
         channelNameMap.get(meetingRow.channelId) ?? meetingRow.channelName,
@@ -264,64 +371,20 @@ export default function Library() {
     }));
   }, [meetingRows, channelNameMap]);
 
-  const filtered = useMemo(() => {
-    const rangeDays =
-      selectedRange === "all" ? null : Number.parseInt(selectedRange, 10);
-    const now = Date.now();
-    return meetingItems.filter((meetingItem) => {
-      if (query) {
-        const text =
-          `${meetingItem.title} ${meetingItem.summary}`.toLowerCase();
-        if (!text.includes(query.toLowerCase())) return false;
-      }
-      if (selectedTags.length) {
-        if (!selectedTags.every((tag) => meetingItem.tags.includes(tag))) {
-          return false;
-        }
-      }
-      if (selectedChannel && meetingItem.channelId !== selectedChannel) {
-        return false;
-      }
-      if (rangeDays) {
-        const ts = Date.parse(meetingItem.timestamp);
-        if (Number.isFinite(ts)) {
-          const diffDays = (now - ts) / (1000 * 60 * 60 * 24);
-          if (diffDays > rangeDays) return false;
-        }
-      }
-      return true;
-    });
-  }, [meetingItems, query, selectedTags, selectedChannel, selectedRange]);
+  const filtered = useMemo(
+    () =>
+      filterMeetings(meetingItems, {
+        query,
+        selectedTags,
+        selectedChannel,
+        selectedRange,
+      }),
+    [meetingItems, query, selectedTags, selectedChannel, selectedRange],
+  );
 
   const meeting = useMemo(() => {
     const detail = detailQuery.data?.meeting;
-    if (!detail) return null;
-    const channelLabel = formatChannelLabel(
-      channelNameMap.get(detail.channelId),
-      detail.channelId,
-    );
-    const dateLabel = formatDateLabel(detail.timestamp);
-    const durationLabel = formatDurationLabel(detail.duration);
-    const title = deriveTitle(detail.notes ?? "", channelLabel);
-    const summary = deriveSummary(detail.notes ?? "");
-    return {
-      id: detail.id,
-      title,
-      summary,
-      notes: detail.notes || "No notes recorded.",
-      dateLabel,
-      durationLabel,
-      tags: detail.tags ?? [],
-      channel: channelLabel,
-      audioUrl: detail.audioUrl ?? null,
-      attendees:
-        detail.attendees && detail.attendees.length > 0
-          ? detail.attendees
-          : ["Unknown"],
-      decisions: [],
-      actions: [],
-      events: detail.events ?? [],
-    } satisfies MeetingDetails;
+    return detail ? buildMeetingDetails(detail, channelNameMap) : null;
   }, [detailQuery.data, channelNameMap]);
 
   const visibleEvents = useMemo(() => {

@@ -54,6 +54,248 @@ type ChannelOverride = {
 const formatChannelLabel = (channel: ChannelOption) =>
   channel.botAccess ? channel.label : `${channel.label} (bot access needed)`;
 
+const mergeOverrideSources = (
+  channelRules: AutoRecordSettings[],
+  channelContexts: ChannelContext[],
+) => {
+  const merged = new Map<
+    string,
+    { rule?: AutoRecordSettings; context?: ChannelContext }
+  >();
+  channelRules.forEach((rule) => {
+    merged.set(rule.channelId, { rule });
+  });
+  channelContexts.forEach((context) => {
+    const existing = merged.get(context.channelId) ?? {};
+    merged.set(context.channelId, { ...existing, context });
+  });
+  return merged;
+};
+
+const resolveVoiceLabel = (
+  voiceChannelMap: Map<string, string>,
+  channelId: string,
+) => voiceChannelMap.get(channelId) ?? "Unknown channel";
+
+const resolveTextChannelId = (
+  rule: AutoRecordSettings | undefined,
+  defaultNotesChannelId: string | null,
+) => rule?.textChannelId ?? defaultNotesChannelId ?? undefined;
+
+const resolveOverrideTextLabel = (options: {
+  rule?: AutoRecordSettings;
+  resolvedTextChannelId?: string;
+  textChannelMap: Map<string, string>;
+  defaultNotesChannelId: string | null;
+}) => {
+  const { rule, resolvedTextChannelId, textChannelMap, defaultNotesChannelId } =
+    options;
+  if (!rule) return undefined;
+  const label = textChannelMap.get(resolvedTextChannelId ?? "");
+  if (label) return label;
+  return defaultNotesChannelId ? "Default notes channel" : "Unknown channel";
+};
+
+type ChannelOverrideSource = {
+  rule?: AutoRecordSettings;
+  context?: ChannelContext;
+};
+
+const toChannelOverride = (options: {
+  channelId: string;
+  entry: ChannelOverrideSource;
+  voiceChannelMap: Map<string, string>;
+  textChannelMap: Map<string, string>;
+  defaultNotesChannelId: string | null;
+}): ChannelOverride => {
+  const {
+    channelId,
+    entry,
+    voiceChannelMap,
+    textChannelMap,
+    defaultNotesChannelId,
+  } = options;
+  const voiceLabel = resolveVoiceLabel(voiceChannelMap, channelId);
+  const resolvedTextChannelId = resolveTextChannelId(
+    entry.rule,
+    defaultNotesChannelId,
+  );
+  const textLabel = resolveOverrideTextLabel({
+    rule: entry.rule,
+    resolvedTextChannelId,
+    textChannelMap,
+    defaultNotesChannelId,
+  });
+  return {
+    channelId,
+    voiceLabel,
+    textLabel,
+    textChannelId: entry.rule?.textChannelId,
+    tags: entry.rule?.tags,
+    context: entry.context?.context,
+    autoRecordEnabled: Boolean(entry.rule?.enabled),
+    liveVoiceEnabled: entry.context?.liveVoiceEnabled,
+  };
+};
+
+const sortOverridesByLabel = (left: ChannelOverride, right: ChannelOverride) =>
+  left.voiceLabel.localeCompare(right.voiceLabel);
+
+const buildChannelOverrides = (options: {
+  channelRules: AutoRecordSettings[];
+  channelContexts: ChannelContext[];
+  voiceChannelMap: Map<string, string>;
+  textChannelMap: Map<string, string>;
+  defaultNotesChannelId: string | null;
+}): ChannelOverride[] => {
+  const {
+    channelRules,
+    channelContexts,
+    voiceChannelMap,
+    textChannelMap,
+    defaultNotesChannelId,
+  } = options;
+  const merged = mergeOverrideSources(channelRules, channelContexts);
+  return Array.from(merged.entries())
+    .map(([channelId, entry]) =>
+      toChannelOverride({
+        channelId,
+        entry,
+        voiceChannelMap,
+        textChannelMap,
+        defaultNotesChannelId,
+      }),
+    )
+    .sort(sortOverridesByLabel);
+};
+
+const resolveDefaultNotesChannelId = (options: {
+  contextData?: {
+    defaultNotesChannelId?: string | null;
+  } | null;
+  recordAllRule: AutoRecordSettings | null;
+}) => {
+  const { contextData, recordAllRule } = options;
+  return (
+    contextData?.defaultNotesChannelId ?? recordAllRule?.textChannelId ?? null
+  );
+};
+
+const resolveDefaultTags = (
+  contextData?: {
+    defaultTags?: string[] | null;
+  } | null,
+) => (contextData?.defaultTags ?? []).join(", ");
+
+const resetGlobalDefaults = (options: {
+  setServerContext: (value: string) => void;
+  setDefaultTags: (value: string) => void;
+  setDefaultNotesChannelId: (value: string | null) => void;
+  setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setRecordAllEnabled: (value: boolean) => void;
+  setGlobalDirty: (value: boolean) => void;
+}) => {
+  const {
+    setServerContext,
+    setDefaultTags,
+    setDefaultNotesChannelId,
+    setGlobalLiveVoiceEnabled,
+    setRecordAllEnabled,
+    setGlobalDirty,
+  } = options;
+  setServerContext("");
+  setDefaultNotesChannelId(null);
+  setDefaultTags("");
+  setGlobalLiveVoiceEnabled(false);
+  setRecordAllEnabled(false);
+  setGlobalDirty(false);
+};
+
+const applyGlobalDefaults = (options: {
+  contextData: {
+    context?: string | null;
+    defaultTags?: string[] | null;
+    defaultNotesChannelId?: string | null;
+    liveVoiceEnabled?: boolean | null;
+  };
+  recordAllRule: AutoRecordSettings | null;
+  setServerContext: (value: string) => void;
+  setDefaultTags: (value: string) => void;
+  setDefaultNotesChannelId: (value: string | null) => void;
+  setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setRecordAllEnabled: (value: boolean) => void;
+}) => {
+  const {
+    contextData,
+    recordAllRule,
+    setServerContext,
+    setDefaultTags,
+    setDefaultNotesChannelId,
+    setGlobalLiveVoiceEnabled,
+    setRecordAllEnabled,
+  } = options;
+  setServerContext(contextData.context ?? "");
+  setDefaultTags(resolveDefaultTags(contextData));
+  setDefaultNotesChannelId(
+    resolveDefaultNotesChannelId({ contextData, recordAllRule }),
+  );
+  setGlobalLiveVoiceEnabled(contextData.liveVoiceEnabled ?? false);
+  setRecordAllEnabled(Boolean(recordAllRule));
+};
+
+const syncGlobalDefaults = (options: {
+  selectedGuildId: string | null;
+  contextData?: {
+    context?: string | null;
+    defaultTags?: string[] | null;
+    defaultNotesChannelId?: string | null;
+    liveVoiceEnabled?: boolean | null;
+  } | null;
+  recordAllRule: AutoRecordSettings | null;
+  globalDirty: boolean;
+  setServerContext: (value: string) => void;
+  setDefaultTags: (value: string) => void;
+  setDefaultNotesChannelId: (value: string | null) => void;
+  setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setRecordAllEnabled: (value: boolean) => void;
+  setGlobalDirty: (value: boolean) => void;
+}) => {
+  const {
+    selectedGuildId,
+    contextData,
+    recordAllRule,
+    globalDirty,
+    setServerContext,
+    setDefaultTags,
+    setDefaultNotesChannelId,
+    setGlobalLiveVoiceEnabled,
+    setRecordAllEnabled,
+    setGlobalDirty,
+  } = options;
+
+  if (!selectedGuildId) {
+    resetGlobalDefaults({
+      setServerContext,
+      setDefaultNotesChannelId,
+      setDefaultTags,
+      setGlobalLiveVoiceEnabled,
+      setRecordAllEnabled,
+      setGlobalDirty,
+    });
+    return;
+  }
+  if (!contextData || globalDirty) return;
+  applyGlobalDefaults({
+    contextData,
+    recordAllRule,
+    setServerContext,
+    setDefaultTags,
+    setDefaultNotesChannelId,
+    setGlobalLiveVoiceEnabled,
+    setRecordAllEnabled,
+  });
+};
+
 export default function Settings() {
   const { selectedGuildId, loading: guildLoading } = useGuildContext();
   const trpcUtils = trpc.useUtils();
@@ -168,48 +410,23 @@ export default function Settings() {
     [textChannels],
   );
 
-  const overrides = useMemo<ChannelOverride[]>(() => {
-    const merged = new Map<
-      string,
-      { rule?: AutoRecordSettings; context?: ChannelContext }
-    >();
-    channelRules.forEach((rule) => {
-      merged.set(rule.channelId, { rule });
-    });
-    channelContexts.forEach((context) => {
-      const existing = merged.get(context.channelId) ?? {};
-      merged.set(context.channelId, { ...existing, context });
-    });
-    return Array.from(merged.entries())
-      .map(([channelId, entry]) => {
-        const voiceLabel = voiceChannelMap.get(channelId) ?? "Unknown channel";
-        const resolvedTextChannelId =
-          entry.rule?.textChannelId ?? defaultNotesChannelId ?? undefined;
-        const textLabel = entry.rule
-          ? (textChannelMap.get(resolvedTextChannelId ?? "") ??
-            (defaultNotesChannelId
-              ? "Default notes channel"
-              : "Unknown channel"))
-          : undefined;
-        return {
-          channelId,
-          voiceLabel,
-          textLabel,
-          textChannelId: entry.rule?.textChannelId,
-          tags: entry.rule?.tags,
-          context: entry.context?.context,
-          autoRecordEnabled: Boolean(entry.rule?.enabled),
-          liveVoiceEnabled: entry.context?.liveVoiceEnabled,
-        };
-      })
-      .sort((a, b) => a.voiceLabel.localeCompare(b.voiceLabel));
-  }, [
-    channelRules,
-    channelContexts,
-    voiceChannelMap,
-    textChannelMap,
-    defaultNotesChannelId,
-  ]);
+  const overrides = useMemo(
+    () =>
+      buildChannelOverrides({
+        channelRules,
+        channelContexts,
+        voiceChannelMap,
+        textChannelMap,
+        defaultNotesChannelId,
+      }),
+    [
+      channelRules,
+      channelContexts,
+      voiceChannelMap,
+      textChannelMap,
+      defaultNotesChannelId,
+    ],
+  );
 
   const usedChannelIds = useMemo(
     () => new Set(overrides.map((override) => override.channelId)),
@@ -236,25 +453,18 @@ export default function Settings() {
     savingGlobal;
 
   useEffect(() => {
-    if (!selectedGuildId) {
-      setServerContext("");
-      setDefaultNotesChannelId(null);
-      setDefaultTags("");
-      setGlobalLiveVoiceEnabled(false);
-      setRecordAllEnabled(false);
-      setGlobalDirty(false);
-      return;
-    }
-    if (!contextQuery.data || globalDirty) return;
-    setServerContext(contextQuery.data.context ?? "");
-    setDefaultTags((contextQuery.data.defaultTags ?? []).join(", "));
-    setDefaultNotesChannelId(
-      contextQuery.data.defaultNotesChannelId ??
-        recordAllRule?.textChannelId ??
-        null,
-    );
-    setGlobalLiveVoiceEnabled(contextQuery.data.liveVoiceEnabled ?? false);
-    setRecordAllEnabled(Boolean(recordAllRule));
+    syncGlobalDefaults({
+      selectedGuildId,
+      contextData: contextQuery.data,
+      recordAllRule,
+      globalDirty,
+      setServerContext,
+      setDefaultTags,
+      setDefaultNotesChannelId,
+      setGlobalLiveVoiceEnabled,
+      setRecordAllEnabled,
+      setGlobalDirty,
+    });
   }, [contextQuery.data, recordAllRule, selectedGuildId, globalDirty]);
 
   const recordAllRequiresNotesChannel =

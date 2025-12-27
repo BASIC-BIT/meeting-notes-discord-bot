@@ -22,6 +22,89 @@ type GuildContextValue = {
 const GuildContext = createContext<GuildContextValue | undefined>(undefined);
 const STORAGE_KEY = "mn-selected-guild";
 
+const clearStoredGuild = () => {
+  localStorage.removeItem(STORAGE_KEY);
+};
+
+const storeGuild = (id: string | null) => {
+  if (id) {
+    localStorage.setItem(STORAGE_KEY, id);
+  } else {
+    clearStoredGuild();
+  }
+};
+
+const isGuildErrorWithData = (
+  error: unknown,
+): error is { data?: { code?: string } } =>
+  Boolean(error && typeof error === "object" && "data" in error);
+
+const resolveGuildError = (error: unknown) => {
+  if (isGuildErrorWithData(error) && error.data?.code === "UNAUTHORIZED") {
+    return "auth";
+  }
+  return "Unable to load your servers. Please re-login with the guilds scope.";
+};
+
+const syncSelectedGuild = (options: {
+  selectedGuildId: string | null;
+  guilds: Guild[];
+  setSelectedGuildId: (value: string | null) => void;
+}) => {
+  const { selectedGuildId, guilds, setSelectedGuildId } = options;
+  if (!selectedGuildId || guilds.length === 0) return;
+  const stillMember = guilds.some((guild) => guild.id === selectedGuildId);
+  if (stillMember) return;
+  setSelectedGuildId(null);
+  clearStoredGuild();
+};
+
+const applyGuildQueryState = (options: {
+  authState: string;
+  guildsData: Guild[] | null;
+  guildError: unknown;
+  selectedGuildId: string | null;
+  setGuilds: (value: Guild[]) => void;
+  setSelectedGuildId: (value: string | null) => void;
+  setError: (value: string | null) => void;
+}) => {
+  const {
+    authState,
+    guildsData,
+    guildError,
+    selectedGuildId,
+    setGuilds,
+    setSelectedGuildId,
+    setError,
+  } = options;
+  if (authState === "unauthenticated") {
+    setGuilds([]);
+    setSelectedGuildId(null);
+    clearStoredGuild();
+    setError("auth");
+    return;
+  }
+  if (guildError) {
+    const message = resolveGuildError(guildError);
+    if (message === "auth") {
+      setError("auth");
+    } else {
+      console.error("Guild fetch error", guildError);
+      setError(message);
+    }
+    return;
+  }
+  if (guildsData) {
+    setGuilds(guildsData);
+    syncSelectedGuild({
+      selectedGuildId,
+      guilds: guildsData,
+      setSelectedGuildId,
+    });
+    setError(null);
+  }
+};
+
 export function GuildProvider({ children }: { children: React.ReactNode }) {
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedGuildId, setSelectedGuildId] = useState<string | null>(() =>
@@ -39,39 +122,18 @@ export function GuildProvider({ children }: { children: React.ReactNode }) {
       : authState === "unknown";
 
   useEffect(() => {
-    if (authState === "unauthenticated") {
-      setGuilds([]);
-      setSelectedGuildId(null);
-      localStorage.removeItem(STORAGE_KEY);
-      setError("auth");
-      return;
-    }
-    if (guildQuery.error) {
-      if (guildQuery.error.data?.code === "UNAUTHORIZED") {
-        setError("auth");
-      } else {
-        console.error("Guild fetch error", guildQuery.error);
-        setError(
-          "Unable to load your servers. Please re-login with the guilds scope.",
-        );
-      }
-      return;
-    }
-    if (guildQuery.data) {
-      const data = Array.isArray(guildQuery.data.guilds)
-        ? guildQuery.data.guilds
-        : [];
-      setGuilds(data);
-      if (
-        selectedGuildId &&
-        data.length > 0 &&
-        !data.find((g) => g.id === selectedGuildId)
-      ) {
-        setSelectedGuildId(null);
-        localStorage.removeItem(STORAGE_KEY);
-      }
-      setError(null);
-    }
+    const data = Array.isArray(guildQuery.data?.guilds)
+      ? guildQuery.data?.guilds
+      : null;
+    applyGuildQueryState({
+      authState,
+      guildsData: data,
+      guildError: guildQuery.error,
+      selectedGuildId,
+      setGuilds,
+      setSelectedGuildId,
+      setError,
+    });
   }, [authState, guildQuery.data, guildQuery.error, selectedGuildId]);
 
   const value = useMemo(
@@ -80,11 +142,7 @@ export function GuildProvider({ children }: { children: React.ReactNode }) {
       selectedGuildId,
       setSelectedGuildId: (id: string | null) => {
         setSelectedGuildId(id);
-        if (id) {
-          localStorage.setItem(STORAGE_KEY, id);
-        } else {
-          localStorage.removeItem(STORAGE_KEY);
-        }
+        storeGuild(id);
       },
       loading,
       error,

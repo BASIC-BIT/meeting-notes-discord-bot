@@ -5,7 +5,18 @@ const mockEnv = {
   MOCK_MODE: "true",
   ENABLE_OAUTH: "false",
   OPENAI_API_KEY: "test-openai-api-key",
+  DISCORD_BOT_TOKEN: "test-bot-token",
+  DISCORD_CLIENT_ID: "test-client-id",
+  DISCORD_CLIENT_SECRET: "test-client-secret",
+  DISCORD_CALLBACK_URL: "http://localhost:3001/auth/discord/callback",
+  OAUTH_SECRET: "test-oauth-secret",
 };
+
+for (const [key, value] of Object.entries(mockEnv)) {
+  if (!process.env[key]) {
+    process.env[key] = value;
+  }
+}
 
 export default defineConfig({
   testDir: "test/e2e",

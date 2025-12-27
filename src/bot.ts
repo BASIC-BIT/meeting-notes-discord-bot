@@ -2,8 +2,8 @@ import {
   ButtonInteraction,
   ChatInputCommandInteraction,
   Client,
-  CommandInteraction,
   GatewayIntentBits,
+  ModalSubmitInteraction,
   Partials,
   RepliableInteraction,
   REST,
@@ -80,6 +80,162 @@ const client = new Client({
   partials: [Partials.Channel, Partials.User],
 });
 
+const replyOnboardingDisabled = async (interaction: RepliableInteraction) => {
+  await interaction.reply({
+    content: "Onboarding is currently disabled for this bot.",
+    ephemeral: true,
+  });
+};
+
+const commandHandlers: Record<
+  string,
+  (interaction: ChatInputCommandInteraction) => Promise<void>
+> = {
+  autorecord: handleAutoRecordCommand,
+  ask: handleAskCommand,
+  context: handleContextCommand,
+  billing: handleBillingCommand,
+};
+
+const handleCommandInteraction = async (
+  interaction: ChatInputCommandInteraction,
+) => {
+  const { commandName } = interaction;
+  if (commandName === "startmeeting") {
+    await handleRequestStartMeeting(interaction);
+    return;
+  }
+  if (commandName === "onboard") {
+    if (!config.server.onboardingEnabled) {
+      await replyOnboardingDisabled(interaction);
+      return;
+    }
+    await handleOnboardCommand(interaction);
+    return;
+  }
+  const handler = commandHandlers[commandName];
+  if (handler) {
+    await handler(interaction);
+  }
+};
+
+const modalHandlers: Array<{
+  matches: (customId: string) => boolean;
+  handle: (interaction: ModalSubmitInteraction) => Promise<void>;
+  onboarding?: boolean;
+}> = [
+  {
+    matches: isNotesCorrectionModal,
+    handle: handleNotesCorrectionModal,
+  },
+  {
+    matches: isEditTagsModal,
+    handle: handleEditTagsModal,
+  },
+  {
+    matches: isEditTagsHistoryModal,
+    handle: handleEditTagsHistoryModal,
+  },
+  {
+    matches: isOnboardModal,
+    handle: handleOnboardModalSubmit,
+    onboarding: true,
+  },
+];
+
+const handleModalInteraction = async (interaction: ModalSubmitInteraction) => {
+  for (const entry of modalHandlers) {
+    if (!entry.matches(interaction.customId)) continue;
+    if (entry.onboarding && !config.server.onboardingEnabled) {
+      await replyOnboardingDisabled(interaction);
+      return;
+    }
+    await entry.handle(interaction);
+    return;
+  }
+};
+
+const buttonHandlers: Array<{
+  matches: (customId: string) => boolean;
+  handle: (interaction: ButtonInteraction) => Promise<void>;
+  onboarding?: boolean;
+}> = [
+  {
+    matches: isNotesCorrectionAccept,
+    handle: handleNotesCorrectionAccept,
+  },
+  {
+    matches: isNotesCorrectionReject,
+    handle: handleNotesCorrectionReject,
+  },
+  {
+    matches: isNotesCorrectionButton,
+    handle: handleNotesCorrectionButton,
+  },
+  {
+    matches: isEditTagsButton,
+    handle: handleEditTagsButton,
+  },
+  {
+    matches: isEditTagsHistoryButton,
+    handle: handleEditTagsHistoryButton,
+  },
+  {
+    matches: isOnboardButton,
+    handle: handleOnboardButtonInteraction,
+    onboarding: true,
+  },
+];
+
+const handleButtonInteraction = async (interaction: ButtonInteraction) => {
+  for (const entry of buttonHandlers) {
+    if (!entry.matches(interaction.customId)) continue;
+    if (entry.onboarding && !config.server.onboardingEnabled) {
+      await replyOnboardingDisabled(interaction);
+      return;
+    }
+    await entry.handle(interaction);
+    return;
+  }
+
+  if (interaction.customId === "end_meeting") {
+    await handleEndMeetingButton(client, interaction);
+    return;
+  }
+  if (interaction.customId === "generate_image") {
+    await generateAndSendImage(interaction);
+  }
+};
+
+const handleChannelSelectInteraction = async (
+  interaction: ChannelSelectMenuInteraction,
+) => {
+  if (!isOnboardChannelSelect(interaction.customId)) return;
+  if (!config.server.onboardingEnabled) {
+    await replyOnboardingDisabled(interaction);
+    return;
+  }
+  await handleOnboardChannelSelect(interaction);
+};
+
+const handleInteractionCreate = async (interaction: RepliableInteraction) => {
+  if (interaction.isChatInputCommand()) {
+    await handleCommandInteraction(interaction);
+    return;
+  }
+  if (interaction.isModalSubmit()) {
+    await handleModalInteraction(interaction);
+    return;
+  }
+  if (interaction.isButton()) {
+    await handleButtonInteraction(interaction);
+    return;
+  }
+  if (interaction.isChannelSelectMenu()) {
+    await handleChannelSelectInteraction(interaction);
+  }
+};
+
 export async function setupBot() {
   if (!TOKEN || !CLIENT_ID) {
     throw new Error(
@@ -123,134 +279,14 @@ export async function setupBot() {
       return;
     }
     try {
-      if (interaction.isCommand()) {
-        const commandInteraction = interaction as CommandInteraction;
-
-        const { commandName } = interaction;
-
-        if (commandName === "startmeeting") {
-          await handleRequestStartMeeting(commandInteraction);
-        }
-        if (commandName === "autorecord") {
-          await handleAutoRecordCommand(
-            commandInteraction as ChatInputCommandInteraction,
-          );
-        }
-        if (commandName === "ask") {
-          await handleAskCommand(
-            commandInteraction as ChatInputCommandInteraction,
-          );
-        }
-        if (commandName === "context") {
-          await handleContextCommand(
-            commandInteraction as ChatInputCommandInteraction,
-          );
-        }
-        if (commandName === "billing") {
-          await handleBillingCommand(
-            commandInteraction as ChatInputCommandInteraction,
-          );
-        }
-        if (commandName === "onboard") {
-          if (!config.server.onboardingEnabled) {
-            await commandInteraction.reply({
-              content: "Onboarding is currently disabled for this bot.",
-              ephemeral: true,
-            });
-            return;
-          }
-          await handleOnboardCommand(
-            commandInteraction as ChatInputCommandInteraction,
-          );
-        }
-      }
-      if (interaction.isModalSubmit()) {
-        if (isNotesCorrectionModal(interaction.customId)) {
-          await handleNotesCorrectionModal(interaction);
-        }
-        if (isEditTagsModal(interaction.customId)) {
-          await handleEditTagsModal(interaction);
-        }
-        if (isEditTagsHistoryModal(interaction.customId)) {
-          await handleEditTagsHistoryModal(interaction);
-        }
-        if (isOnboardModal(interaction.customId)) {
-          if (!config.server.onboardingEnabled) {
-            await interaction.reply({
-              content: "Onboarding is currently disabled for this bot.",
-              ephemeral: true,
-            });
-            return;
-          }
-          await handleOnboardModalSubmit(interaction);
-        }
-        return;
-      }
-      if (interaction.isButton()) {
-        const buttonInteraction = interaction as ButtonInteraction;
-
-        if (isNotesCorrectionAccept(buttonInteraction.customId)) {
-          await handleNotesCorrectionAccept(buttonInteraction);
-          return;
-        }
-        if (isNotesCorrectionReject(buttonInteraction.customId)) {
-          await handleNotesCorrectionReject(buttonInteraction);
-          return;
-        }
-
-        if (isNotesCorrectionButton(buttonInteraction.customId)) {
-          await handleNotesCorrectionButton(buttonInteraction);
-          return;
-        }
-        if (isEditTagsButton(buttonInteraction.customId)) {
-          await handleEditTagsButton(buttonInteraction);
-          return;
-        }
-        if (isEditTagsHistoryButton(buttonInteraction.customId)) {
-          await handleEditTagsHistoryButton(buttonInteraction);
-          return;
-        }
-        if (isOnboardButton(buttonInteraction.customId)) {
-          if (!config.server.onboardingEnabled) {
-            await buttonInteraction.reply({
-              content: "Onboarding is currently disabled for this bot.",
-              ephemeral: true,
-            });
-            return;
-          }
-          await handleOnboardButtonInteraction(buttonInteraction);
-          return;
-        }
-
-        if (buttonInteraction.customId === "end_meeting") {
-          await handleEndMeetingButton(client, buttonInteraction);
-        }
-        if (buttonInteraction.customId === "generate_image") {
-          await generateAndSendImage(interaction);
-        }
-      }
-      if (
-        interaction.isChannelSelectMenu &&
-        interaction.isChannelSelectMenu()
-      ) {
-        const channelSelect = interaction as ChannelSelectMenuInteraction;
-        if (isOnboardChannelSelect(channelSelect.customId)) {
-          if (!config.server.onboardingEnabled) {
-            await channelSelect.reply({
-              content: "Onboarding is currently disabled for this bot.",
-              ephemeral: true,
-            });
-            return;
-          }
-          await handleOnboardChannelSelect(channelSelect);
-        }
+      if (interaction.isRepliable()) {
+        await handleInteractionCreate(interaction);
       }
     } catch (e) {
       console.error("Unknown error processing command: ", e);
       try {
         if (interaction.isRepliable()) {
-          const repliableInteraction = interaction as RepliableInteraction;
-          await repliableInteraction.reply("Unknown Error handling request.");
+          await interaction.reply("Unknown Error handling request.");
         }
       } catch (e2) {
         console.error("Error replying to interaction about initial error", e2);

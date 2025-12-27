@@ -3,6 +3,99 @@ import { MeetingHistory } from "../types/db";
 import { writeMeetingHistoryService } from "../services/meetingHistoryService";
 import { getNotes } from "../transcription";
 
+async function resolveMeetingNotes(
+  meeting: MeetingData,
+): Promise<string | undefined> {
+  if (!meeting.generateNotes) return meeting.notesText;
+  if (meeting.notesText) return meeting.notesText;
+
+  try {
+    const notes = await getNotes(meeting);
+    meeting.notesText = notes;
+    return notes;
+  } catch (error) {
+    console.error("Error generating notes for meeting history:", error);
+    return meeting.notesText;
+  }
+}
+
+function buildNotesMetadata(
+  meeting: MeetingData,
+  notes: string | undefined,
+  timestamp: string,
+) {
+  const notesVersion = resolveNotesVersion(meeting, notes);
+  const notesLastEditedBy = resolveNotesLastEditedBy(meeting, notes);
+  const notesLastEditedAt = resolveNotesLastEditedAt(
+    meeting,
+    notesVersion,
+    timestamp,
+  );
+  const notesHistory = buildNotesHistory({
+    meeting,
+    notes,
+    notesVersion,
+    notesLastEditedBy,
+    notesLastEditedAt,
+    timestamp,
+  });
+
+  return { notesVersion, notesLastEditedBy, notesLastEditedAt, notesHistory };
+}
+
+function resolveNotesVersion(
+  meeting: MeetingData,
+  notes: string | undefined,
+): number | undefined {
+  if (meeting.notesVersion != null) return meeting.notesVersion;
+  return notes ? 1 : undefined;
+}
+
+function resolveNotesLastEditedBy(
+  meeting: MeetingData,
+  notes: string | undefined,
+): string | undefined {
+  if (meeting.notesLastEditedBy) return meeting.notesLastEditedBy;
+  return notes ? meeting.creator.id : undefined;
+}
+
+function resolveNotesLastEditedAt(
+  meeting: MeetingData,
+  notesVersion: number | undefined,
+  timestamp: string,
+): string | undefined {
+  if (meeting.notesLastEditedAt) return meeting.notesLastEditedAt;
+  if (!notesVersion) return undefined;
+  return meeting.endTime?.toISOString() ?? timestamp;
+}
+
+function buildNotesHistory(options: {
+  meeting: MeetingData;
+  notes: string | undefined;
+  notesVersion: number | undefined;
+  notesLastEditedBy: string | undefined;
+  notesLastEditedAt: string | undefined;
+  timestamp: string;
+}) {
+  const {
+    meeting,
+    notes,
+    notesVersion,
+    notesLastEditedBy,
+    notesLastEditedAt,
+    timestamp,
+  } = options;
+  if (!notes || !notesVersion) return undefined;
+  return [
+    {
+      version: notesVersion,
+      notes,
+      editedBy: notesLastEditedBy ?? meeting.creator.id,
+      editedAt: notesLastEditedAt ?? timestamp,
+    },
+  ];
+}
+
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   // Only save if transcription was enabled (we need something to save)
   if (!meeting.transcribeMeeting || !meeting.finalTranscript) {
@@ -17,42 +110,10 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
         )
       : 0;
 
-    // Generate notes if enabled
-    let notes: string | undefined = meeting.notesText;
-
-    if (meeting.generateNotes && !notes) {
-      try {
-        // Notes now encompass everything (summary, action items, etc.)
-        notes = await getNotes(meeting);
-        meeting.notesText = notes;
-      } catch (error) {
-        console.error("Error generating notes for meeting history:", error);
-        // Continue saving history even if AI generation fails
-      }
-    }
-
+    const notes = await resolveMeetingNotes(meeting);
     const transcriptS3Key = meeting.transcriptS3Key;
-
-    const notesVersion = meeting.notesVersion ?? (notes ? 1 : undefined);
-    const notesLastEditedBy =
-      meeting.notesLastEditedBy ?? (notes ? meeting.creator.id : undefined);
-    const notesLastEditedAt =
-      meeting.notesLastEditedAt ??
-      (notesVersion
-        ? (meeting.endTime?.toISOString() ?? timestamp)
-        : undefined);
-
-    const notesHistory =
-      notes && notesVersion
-        ? [
-            {
-              version: notesVersion,
-              notes,
-              editedBy: notesLastEditedBy ?? meeting.creator.id,
-              editedAt: notesLastEditedAt ?? timestamp,
-            },
-          ]
-        : undefined;
+    const { notesVersion, notesLastEditedBy, notesLastEditedAt, notesHistory } =
+      buildNotesMetadata(meeting, notes, timestamp);
 
     const history: MeetingHistory = {
       guildId: meeting.guildId,

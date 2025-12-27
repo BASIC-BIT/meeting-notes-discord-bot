@@ -47,6 +47,39 @@ type PricingCardProps = {
   testId?: string;
 };
 
+const resolveBadgeLabel = (highlighted: boolean, badge?: string) =>
+  highlighted ? (badge ?? "Best value") : badge;
+
+const resolveButtonVariant = (
+  highlighted: boolean,
+  ctaProps?: PricingCtaProps,
+): ButtonVariant => ctaProps?.variant ?? (highlighted ? "gradient" : "outline");
+
+const resolveButtonGradient = (
+  highlighted: boolean,
+  ctaProps?: PricingCtaProps,
+) =>
+  ctaProps?.gradient ??
+  (highlighted ? { from: "brand", to: "violet" } : undefined);
+
+const resolveButtonDisabled = (
+  ctaProps?: PricingCtaProps,
+  disabled?: boolean,
+) => disabled ?? ctaProps?.disabled ?? false;
+
+const resolveTone = (highlighted: boolean, tone?: PricingCardProps["tone"]) =>
+  tone ?? (highlighted ? "raised" : "default");
+
+const resolveBorderWidth = (highlighted: boolean, borderWidth?: number) =>
+  borderWidth ??
+  (highlighted ? uiBorders.highlightWidth : uiBorders.defaultWidth);
+
+const resolveBorderColor = (highlighted: boolean, borderColor?: string) =>
+  borderColor ?? (highlighted ? uiColors.highlightBorder : undefined);
+
+const resolveBadgeColor = (highlighted: boolean) =>
+  highlighted ? "brand" : "cyan";
+
 export function PricingCard({
   name,
   price,
@@ -64,20 +97,14 @@ export function PricingCard({
   borderWidth,
   testId,
 }: PricingCardProps) {
-  const badgeLabel = highlighted ? (badge ?? "Best value") : badge;
-  const buttonVariant =
-    ctaProps?.variant ?? (highlighted ? "gradient" : "outline");
-  const buttonGradient =
-    ctaProps?.gradient ??
-    (highlighted ? { from: "brand", to: "violet" } : undefined);
-  const buttonDisabled = ctaDisabled ?? ctaProps?.disabled ?? false;
-  const computedTone = tone ?? (highlighted ? "raised" : "default");
-  const computedBorderWidth =
-    borderWidth ??
-    (highlighted ? uiBorders.highlightWidth : uiBorders.defaultWidth);
-  const computedBorderColor =
-    borderColor ?? (highlighted ? uiColors.highlightBorder : undefined);
-  const badgeColor = highlighted ? "brand" : "cyan";
+  const badgeLabel = resolveBadgeLabel(highlighted, badge);
+  const buttonVariant = resolveButtonVariant(highlighted, ctaProps);
+  const buttonGradient = resolveButtonGradient(highlighted, ctaProps);
+  const buttonDisabled = resolveButtonDisabled(ctaProps, ctaDisabled);
+  const computedTone = resolveTone(highlighted, tone);
+  const computedBorderWidth = resolveBorderWidth(highlighted, borderWidth);
+  const computedBorderColor = resolveBorderColor(highlighted, borderColor);
+  const badgeColor = resolveBadgeColor(highlighted);
   return (
     <Surface
       p="xl"

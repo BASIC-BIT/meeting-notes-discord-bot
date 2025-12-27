@@ -510,6 +510,25 @@ resource "aws_kms_key" "app_general" {
           "kms:DescribeKey"
         ],
         Resource = "*"
+      },
+      {
+        Sid    = "AllowCloudFrontOAC",
+        Effect = "Allow",
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        },
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ],
+        Resource = "*",
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = "arn:aws:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/${aws_cloudfront_distribution.frontend.id}"
+          }
+        }
       }
     ]
   })

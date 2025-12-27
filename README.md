@@ -33,7 +33,7 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 - Full local gate (auto-fix): `yarn run check` → eslint --fix, prettier --write, tests, backend build, Vite build.
 - CI-safe: `yarn run check:ci` → lint:check, prettier:check, tests, backend build, Vite build.
 - Individual: `yarn lint`, `yarn prettier`, `yarn test`, `yarn build`, `yarn build:web`.
-- Code stats (ad-hoc): `yarn code:stats` (requires `scc` + `lizard` on PATH; CI prints this report on deploy). Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can be used to suppress known complexity offenders.
+- Code stats (ad-hoc): `yarn code:stats` (requires `scc` on PATH; CI prints this report on deploy). Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can be used to suppress known complexity offenders.
 
 ## Frontend
 
@@ -99,9 +99,8 @@ Notes:
 
 Setup:
 
-- Install Go from `https://go.dev/dl/`
-- Install scc: `go install github.com/boyter/scc/v3@latest`
-- Install lizard with uv: `uv sync`
+- Install scc (Windows): `choco install scc` (run in an elevated shell).
+- Install lizard: `python -m pip install lizard`
 - Run: `yarn code:stats`
 
 ## Contribution
