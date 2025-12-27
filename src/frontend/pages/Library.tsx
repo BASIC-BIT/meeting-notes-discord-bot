@@ -186,7 +186,11 @@ const deriveTitle = (notes: string, channelLabel: string) => {
 };
 
 const deriveSummary = (notes: string) => {
-  const lines = normalizeNotes(notes)
+  const normalized = normalizeNotes(notes);
+  if (!normalized) {
+    return "Notes will appear after the meeting is processed.";
+  }
+  const lines = normalized
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
@@ -196,10 +200,11 @@ const deriveSummary = (notes: string) => {
   if (summaryLine) {
     return summaryLine.replace(/^summary[:\s-]*/i, "");
   }
-  const firstContent = lines.find(
-    (line) => !line.toLowerCase().startsWith("decision"),
-  );
-  return firstContent ?? "No summary recorded.";
+  const singleLine = lines.join(" ").replace(/\s+/g, " ");
+  if (singleLine.length <= 180) {
+    return singleLine;
+  }
+  return `${singleLine.slice(0, 180)}...`;
 };
 
 const filterMeetings = (
