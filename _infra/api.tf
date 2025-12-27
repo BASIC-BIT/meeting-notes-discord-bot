@@ -41,6 +41,7 @@ resource "aws_security_group" "api_alb_sg" {
   description = "ALB SG for ${local.name_prefix} API"
   vpc_id      = aws_vpc.app_vpc.id
 
+  #checkov:skip=CKV_AWS_260: HTTP is enabled only to redirect to HTTPS.
   ingress {
     description = "Allow HTTP"
     from_port   = 80
@@ -58,22 +59,27 @@ resource "aws_security_group" "api_alb_sg" {
   }
 
   egress {
-    description = "Allow ALB egress"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow ALB to reach ECS tasks"
+    from_port   = 3001
+    to_port     = 3001
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
   }
 }
 
 resource "aws_lb" "api_alb" {
+  #checkov:skip=CKV_AWS_91: Access logs not yet enabled for the API ALB.
+  #checkov:skip=CKV2_AWS_28: WAF not enabled yet; revisit before public launch.
   name               = "${local.name_prefix}-api"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.api_alb_sg.id]
   subnets            = [aws_subnet.app_public_subnet_1.id, aws_subnet.app_public_subnet_2.id]
+  drop_invalid_header_fields = true
+  enable_deletion_protection = true
 }
 
+#checkov:skip=CKV_AWS_378: TLS terminates at the ALB; target group uses HTTP.
 resource "aws_lb_target_group" "api_tg" {
   name        = "${local.name_prefix}-api-tg"
   port        = 3001
@@ -92,13 +98,19 @@ resource "aws_lb_target_group" "api_tg" {
 }
 
 resource "aws_lb_listener" "api_http" {
+  #checkov:skip=CKV_AWS_2: HTTP listener only redirects to HTTPS.
+  #checkov:skip=CKV_AWS_103: TLS enforcement handled on HTTPS listener.
   load_balancer_arn = aws_lb.api_alb.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.api_tg.arn
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
   }
 }
 
