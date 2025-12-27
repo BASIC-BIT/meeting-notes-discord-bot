@@ -11,6 +11,11 @@ import { getStripeWebhookRepository } from "../repositories/stripeWebhookReposit
 
 type KnownTier = "free" | "basic" | "pro";
 
+type WebhookHandler = (options: {
+  stripe: Stripe;
+  event: Stripe.Event;
+}) => Promise<void>;
+
 const normalizeTier = (tier?: string | null): KnownTier | null => {
   if (tier === "free" || tier === "basic" || tier === "pro") {
     return tier;
@@ -48,6 +53,9 @@ const resolveTierFromInvoice = (invoice: Stripe.Invoice): KnownTier | null => {
   return tier;
 };
 
+const toIso = (seconds?: number | null): string | undefined =>
+  seconds ? new Date(seconds * 1000).toISOString() : undefined;
+
 const resolveGuildIdFromInvoice = async (
   stripe: Stripe,
   invoice: Stripe.Invoice,
@@ -74,6 +82,217 @@ const resolveGuildIdFromInvoice = async (
   }
 
   return "";
+};
+
+const buildSubscriptionPayload = (params: {
+  guildId: string;
+  status: string;
+  tier: KnownTier;
+  startDate?: string;
+  endDate?: string;
+  nextBillingDate?: string;
+  paymentMethod?: string;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  updatedBy?: string;
+  priceId?: string;
+  mode: "live" | "test";
+}): Parameters<typeof saveGuildSubscription>[0] => ({
+  guildId: params.guildId,
+  status: params.status,
+  tier: params.tier,
+  startDate: params.startDate ?? new Date().toISOString(),
+  endDate: params.endDate,
+  nextBillingDate: params.nextBillingDate,
+  paymentMethod: params.paymentMethod,
+  subscriptionType: "stripe",
+  stripeCustomerId: params.stripeCustomerId,
+  stripeSubscriptionId: params.stripeSubscriptionId,
+  updatedAt: new Date().toISOString(),
+  updatedBy: params.updatedBy,
+  priceId: params.priceId,
+  mode: params.mode,
+});
+
+const handleCheckoutSessionCompleted: WebhookHandler = async ({
+  stripe,
+  event,
+}) => {
+  const session = event.data.object as Stripe.Checkout.Session;
+  if (!session.subscription) return;
+  const sub = await stripe.subscriptions.retrieve(
+    session.subscription as string,
+  );
+  const guildId =
+    readMetadataValue(session.metadata, "guild_id") ||
+    readMetadataValue(sub.metadata, "guild_id");
+  if (!guildId) {
+    console.warn(
+      "Stripe checkout session missing guild_id metadata",
+      session.id,
+    );
+    return;
+  }
+  const tier = resolveTierFromSubscription(sub);
+  await saveGuildSubscription(
+    buildSubscriptionPayload({
+      guildId,
+      status: sub.status,
+      tier,
+      startDate: toIso(sub.start_date),
+      endDate: toIso(sub.ended_at),
+      nextBillingDate: toIso(sub.current_period_end),
+      paymentMethod: session.payment_method_types?.[0],
+      stripeCustomerId:
+        typeof session.customer === "string" ? session.customer : undefined,
+      stripeSubscriptionId:
+        typeof session.subscription === "string"
+          ? session.subscription
+          : undefined,
+      updatedBy:
+        readMetadataValue(session.metadata, "discord_id") ||
+        readMetadataValue(sub.metadata, "discord_id") ||
+        undefined,
+      priceId:
+        typeof sub.items?.data?.[0]?.price?.id === "string"
+          ? sub.items?.data?.[0]?.price?.id
+          : undefined,
+      mode: sub.livemode ? "live" : "test",
+    }),
+  );
+};
+
+const handleInvoicePaymentFailed: WebhookHandler = async ({
+  stripe,
+  event,
+}) => {
+  const invoice = event.data.object as Stripe.Invoice;
+  const guildId = await resolveGuildIdFromInvoice(stripe, invoice);
+  if (!guildId) {
+    console.warn("Stripe invoice missing guild_id metadata", invoice.id);
+    return;
+  }
+  const existing = await getSubscriptionRepository().get(guildId);
+  const existingTier = normalizeTier(existing?.tier);
+  const tierFromInvoice = resolveTierFromInvoice(invoice);
+  await saveGuildSubscription(
+    buildSubscriptionPayload({
+      guildId,
+      status: "past_due",
+      tier:
+        tierFromInvoice ??
+        (existingTier && existingTier !== "free" ? existingTier : "basic"),
+      startDate:
+        existing?.startDate ?? new Date(invoice.created * 1000).toISOString(),
+      nextBillingDate: invoice.next_payment_attempt
+        ? toIso(invoice.next_payment_attempt)
+        : existing?.nextBillingDate,
+      paymentMethod: invoice.default_payment_method ? "card" : "unknown",
+      stripeCustomerId:
+        typeof invoice.customer === "string" ? invoice.customer : undefined,
+      stripeSubscriptionId:
+        typeof invoice.subscription === "string"
+          ? invoice.subscription
+          : undefined,
+      priceId:
+        typeof invoice.lines?.data?.[0]?.price?.id === "string"
+          ? invoice.lines?.data?.[0]?.price?.id
+          : existing?.priceId,
+      mode: invoice.livemode ? "live" : "test",
+    }),
+  );
+};
+
+const handleSubscriptionUpsert: WebhookHandler = async ({ event }) => {
+  const subscription = event.data.object as Stripe.Subscription;
+  const guildId = readMetadataValue(subscription.metadata, "guild_id");
+  if (!guildId) {
+    console.warn(
+      "Stripe subscription missing guild_id metadata",
+      subscription.id,
+    );
+    return;
+  }
+  const tier = resolveTierFromSubscription(subscription);
+  await saveGuildSubscription(
+    buildSubscriptionPayload({
+      guildId,
+      status: subscription.status,
+      tier,
+      startDate: toIso(subscription.start_date),
+      endDate: toIso(subscription.ended_at),
+      nextBillingDate: toIso(subscription.current_period_end),
+      paymentMethod: subscription.default_payment_method ? "card" : "unknown",
+      stripeCustomerId:
+        typeof subscription.customer === "string"
+          ? subscription.customer
+          : undefined,
+      stripeSubscriptionId: subscription.id,
+      updatedBy:
+        readMetadataValue(subscription.metadata, "discord_id") || undefined,
+      priceId:
+        typeof subscription.items?.data?.[0]?.price?.id === "string"
+          ? subscription.items?.data?.[0]?.price?.id
+          : undefined,
+      mode: subscription.livemode ? "live" : "test",
+    }),
+  );
+};
+
+const handleSubscriptionDeleted: WebhookHandler = async ({ event }) => {
+  const subscription = event.data.object as Stripe.Subscription;
+  const guildId = readMetadataValue(subscription.metadata, "guild_id");
+  if (!guildId) return;
+  await saveGuildSubscription(
+    buildSubscriptionPayload({
+      guildId,
+      status: "canceled",
+      tier: "free",
+      startDate: toIso(subscription.start_date),
+      endDate: toIso(subscription.ended_at) ?? new Date().toISOString(),
+      paymentMethod: undefined,
+      stripeCustomerId:
+        typeof subscription.customer === "string"
+          ? subscription.customer
+          : undefined,
+      stripeSubscriptionId: subscription.id,
+      mode: subscription.livemode ? "live" : "test",
+    }),
+  );
+};
+
+const handleInvoicePaymentSucceeded: WebhookHandler = async ({
+  stripe,
+  event,
+}) => {
+  const invoice = event.data.object as Stripe.Invoice;
+  const guildId = await resolveGuildIdFromInvoice(stripe, invoice);
+  if (!guildId) {
+    console.warn("Stripe invoice missing guild_id metadata", invoice.id);
+    return;
+  }
+  await recordPaymentTransaction({
+    transactionID: invoice.id,
+    userID: guildId,
+    amount: (invoice.amount_paid || 0) / 100,
+    currency: invoice.currency,
+    status: invoice.status || "paid",
+    paymentDate: new Date(invoice.created * 1000).toISOString(),
+    paymentMethod: invoice.default_payment_method ? "card" : "unknown",
+    discountCode: invoice.discount?.coupon?.id,
+    subscriptionID: invoice.subscription ? String(invoice.subscription) : "",
+    customerId:
+      typeof invoice.customer === "string" ? invoice.customer : undefined,
+  });
+};
+
+const handlersByEvent: Record<string, WebhookHandler> = {
+  "checkout.session.completed": handleCheckoutSessionCompleted,
+  "invoice.payment_failed": handleInvoicePaymentFailed,
+  "invoice.payment_succeeded": handleInvoicePaymentSucceeded,
+  "customer.subscription.created": handleSubscriptionUpsert,
+  "customer.subscription.updated": handleSubscriptionUpsert,
+  "customer.subscription.deleted": handleSubscriptionDeleted,
 };
 
 export function registerBillingRoutes(
@@ -113,205 +332,9 @@ export function registerBillingRoutes(
         expiresAt: Math.floor(Date.now() / 1000) + ttlSeconds,
       });
 
-      switch (event.type) {
-        case "checkout.session.completed": {
-          const session = event.data.object as Stripe.Checkout.Session;
-          if (!session.subscription) break;
-          const sub = await stripe.subscriptions.retrieve(
-            session.subscription as string,
-          );
-          const guildId =
-            readMetadataValue(session.metadata, "guild_id") ||
-            readMetadataValue(sub.metadata, "guild_id");
-          if (!guildId) {
-            console.warn(
-              "Stripe checkout session missing guild_id metadata",
-              session.id,
-            );
-            break;
-          }
-          const tier = resolveTierFromSubscription(sub);
-          await saveGuildSubscription({
-            guildId,
-            status: sub.status,
-            tier,
-            startDate: new Date(sub.start_date * 1000).toISOString(),
-            endDate: sub.ended_at
-              ? new Date(sub.ended_at * 1000).toISOString()
-              : undefined,
-            nextBillingDate: sub.current_period_end
-              ? new Date(sub.current_period_end * 1000).toISOString()
-              : undefined,
-            paymentMethod: session.payment_method_types?.[0],
-            subscriptionType: "stripe",
-            stripeCustomerId:
-              typeof session.customer === "string"
-                ? session.customer
-                : undefined,
-            stripeSubscriptionId:
-              typeof session.subscription === "string"
-                ? session.subscription
-                : undefined,
-            updatedAt: new Date().toISOString(),
-            updatedBy:
-              readMetadataValue(session.metadata, "discord_id") ||
-              readMetadataValue(sub.metadata, "discord_id") ||
-              undefined,
-            priceId:
-              typeof sub.items?.data?.[0]?.price?.id === "string"
-                ? sub.items?.data?.[0]?.price?.id
-                : undefined,
-            mode: sub.livemode ? "live" : "test",
-          });
-          break;
-        }
-        case "invoice.payment_failed": {
-          const invoice = event.data.object as Stripe.Invoice;
-          const guildId = await resolveGuildIdFromInvoice(stripe, invoice);
-          if (!guildId) {
-            console.warn(
-              "Stripe invoice missing guild_id metadata",
-              invoice.id,
-            );
-            break;
-          }
-          const existing = await getSubscriptionRepository().get(guildId);
-          const existingTier = normalizeTier(existing?.tier);
-          const tierFromInvoice = resolveTierFromInvoice(invoice);
-          await saveGuildSubscription({
-            guildId,
-            status: "past_due",
-            tier:
-              tierFromInvoice ??
-              (existingTier && existingTier !== "free"
-                ? existingTier
-                : "basic"),
-            startDate:
-              existing?.startDate ??
-              new Date(invoice.created * 1000).toISOString(),
-            nextBillingDate: invoice.next_payment_attempt
-              ? new Date(invoice.next_payment_attempt * 1000).toISOString()
-              : existing?.nextBillingDate,
-            paymentMethod: invoice.default_payment_method ? "card" : "unknown",
-            subscriptionType: "stripe",
-            stripeCustomerId:
-              typeof invoice.customer === "string"
-                ? invoice.customer
-                : undefined,
-            stripeSubscriptionId:
-              typeof invoice.subscription === "string"
-                ? invoice.subscription
-                : undefined,
-            updatedAt: new Date().toISOString(),
-            priceId:
-              typeof invoice.lines?.data?.[0]?.price?.id === "string"
-                ? invoice.lines?.data?.[0]?.price?.id
-                : existing?.priceId,
-            mode: invoice.livemode ? "live" : "test",
-          });
-          break;
-        }
-        case "customer.subscription.created":
-        case "customer.subscription.updated": {
-          const subscription = event.data.object as Stripe.Subscription;
-          const guildId = readMetadataValue(subscription.metadata, "guild_id");
-          if (!guildId) {
-            console.warn(
-              "Stripe subscription missing guild_id metadata",
-              subscription.id,
-            );
-            break;
-          }
-          const tier = resolveTierFromSubscription(subscription);
-          await saveGuildSubscription({
-            guildId,
-            status: subscription.status,
-            tier,
-            startDate: new Date(subscription.start_date * 1000).toISOString(),
-            endDate: subscription.ended_at
-              ? new Date(subscription.ended_at * 1000).toISOString()
-              : undefined,
-            nextBillingDate: subscription.current_period_end
-              ? new Date(subscription.current_period_end * 1000).toISOString()
-              : undefined,
-            paymentMethod: subscription.default_payment_method
-              ? "card"
-              : "unknown",
-            subscriptionType: "stripe",
-            stripeCustomerId:
-              typeof subscription.customer === "string"
-                ? subscription.customer
-                : undefined,
-            stripeSubscriptionId: subscription.id,
-            updatedAt: new Date().toISOString(),
-            updatedBy:
-              readMetadataValue(subscription.metadata, "discord_id") ||
-              undefined,
-            priceId:
-              typeof subscription.items?.data?.[0]?.price?.id === "string"
-                ? subscription.items?.data?.[0]?.price?.id
-                : undefined,
-            mode: subscription.livemode ? "live" : "test",
-          });
-          break;
-        }
-        case "customer.subscription.deleted": {
-          const subscription = event.data.object as Stripe.Subscription;
-          const guildId = readMetadataValue(subscription.metadata, "guild_id");
-          if (guildId) {
-            await saveGuildSubscription({
-              guildId,
-              status: "canceled",
-              tier: "free",
-              startDate: new Date(subscription.start_date * 1000).toISOString(),
-              endDate: subscription.ended_at
-                ? new Date(subscription.ended_at * 1000).toISOString()
-                : new Date().toISOString(),
-              nextBillingDate: undefined,
-              paymentMethod: undefined,
-              subscriptionType: "stripe",
-              stripeCustomerId:
-                typeof subscription.customer === "string"
-                  ? subscription.customer
-                  : undefined,
-              stripeSubscriptionId: subscription.id,
-              updatedAt: new Date().toISOString(),
-              mode: subscription.livemode ? "live" : "test",
-            });
-          }
-          break;
-        }
-        case "invoice.payment_succeeded": {
-          const invoice = event.data.object as Stripe.Invoice;
-          const guildId = await resolveGuildIdFromInvoice(stripe, invoice);
-          if (!guildId) {
-            console.warn(
-              "Stripe invoice missing guild_id metadata",
-              invoice.id,
-            );
-            break;
-          }
-          await recordPaymentTransaction({
-            transactionID: invoice.id,
-            userID: guildId,
-            amount: (invoice.amount_paid || 0) / 100,
-            currency: invoice.currency,
-            status: invoice.status || "paid",
-            paymentDate: new Date(invoice.created * 1000).toISOString(),
-            paymentMethod: invoice.default_payment_method ? "card" : "unknown",
-            discountCode: invoice.discount?.coupon?.id,
-            subscriptionID: invoice.subscription
-              ? String(invoice.subscription)
-              : "",
-            customerId:
-              typeof invoice.customer === "string"
-                ? invoice.customer
-                : undefined,
-          });
-          break;
-        }
-        default:
-          break;
+      const handler = handlersByEvent[event.type];
+      if (handler) {
+        await handler({ stripe, event });
       }
       res.json({ received: true });
     } catch (err) {

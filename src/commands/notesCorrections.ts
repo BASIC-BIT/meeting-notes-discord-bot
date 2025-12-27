@@ -334,46 +334,23 @@ async function applyCorrection(
   const row = buildCorrectionRow(pending.guildId, pending.channelIdTimestamp);
 
   let newMessageIds: string[] | undefined;
+  let channel: Awaited<ReturnType<typeof interactionChannelFetch>> | null =
+    null;
 
   if (pending.notesChannelId) {
-    const channel = await interaction.client.channels.fetch(
+    channel = await interactionChannelFetch(
       pending.notesChannelId,
+      interaction,
     );
-
-    if (channel?.isSendable()) {
-      const existingIds = pending.notesMessageIds ?? [];
-
-      let color: number | undefined;
-      if (existingIds.length > 0) {
-        try {
-          const first = await channel.messages.fetch(existingIds[0]);
-          color = first.embeds[0]?.color ?? undefined;
-        } catch (error) {
-          console.error(
-            "Failed to fetch existing notes message for color:",
-            error,
-          );
-        }
-      }
-
-      const embeds = buildUpdatedEmbeds(
-        pending.newNotes,
-        newVersion,
-        interaction.user.tag,
-        color,
-      );
-
-      const sentIds: string[] = [];
-      for (let i = 0; i < embeds.length; i++) {
-        const msg = await channel.send({
-          embeds: [embeds[i]],
-          components: i === 0 ? [row] : [],
-        });
-        sentIds.push(msg.id);
-      }
-
-      newMessageIds = sentIds;
-    }
+    const existingIds = pending.notesMessageIds ?? [];
+    const color = await resolveEmbedColor(channel, existingIds[0]);
+    const embeds = buildUpdatedEmbeds(
+      pending.newNotes,
+      newVersion,
+      interaction.user.tag,
+      color,
+    );
+    newMessageIds = await sendUpdatedEmbeds(channel, embeds, row);
   }
 
   const updateSucceeded = await updateMeetingNotesService({
@@ -399,27 +376,11 @@ async function applyCorrection(
     return false;
   }
 
-  // Update succeeded — remove old messages if we posted replacements
-  if (pending.notesChannelId && newMessageIds?.length) {
+  // Update succeeded - remove old messages if we posted replacements
+  if (pending.notesChannelId && newMessageIds?.length && channel) {
     try {
-      const channel = await interaction.client.channels.fetch(
-        pending.notesChannelId,
-      );
-      if (channel?.isSendable()) {
-        const existingIds = pending.notesMessageIds ?? [];
-
-        for (const id of existingIds) {
-          try {
-            const msg = await channel.messages.fetch(id);
-            await msg.delete();
-          } catch (error) {
-            console.error(
-              "Failed to delete old notes message after update:",
-              error,
-            );
-          }
-        }
-      }
+      const existingIds = pending.notesMessageIds ?? [];
+      await deleteOldNotesMessages(channel, existingIds);
     } catch (error) {
       console.error(
         "Failed to clean up old notes messages after update:",
@@ -466,6 +427,59 @@ function buildUpdatedEmbeds(
     footerText,
     color: color ?? undefined,
   });
+}
+
+async function resolveEmbedColor(
+  channel: Awaited<ReturnType<typeof interactionChannelFetch>>,
+  messageId?: string,
+): Promise<number | undefined> {
+  if (!messageId || !channel?.isSendable()) return undefined;
+  try {
+    const first = await channel.messages.fetch(messageId);
+    return first.embeds[0]?.color ?? undefined;
+  } catch (error) {
+    console.error("Failed to fetch existing notes message for color:", error);
+    return undefined;
+  }
+}
+
+async function interactionChannelFetch(
+  channelId: string,
+  interaction: ButtonInteraction,
+) {
+  return interaction.client.channels.fetch(channelId);
+}
+
+async function sendUpdatedEmbeds(
+  channel: Awaited<ReturnType<typeof interactionChannelFetch>>,
+  embeds: ReturnType<typeof buildUpdatedEmbeds>,
+  row: ActionRowBuilder<ButtonBuilder>,
+): Promise<string[] | undefined> {
+  if (!channel?.isSendable()) return undefined;
+  const sentIds: string[] = [];
+  for (let i = 0; i < embeds.length; i++) {
+    const msg = await channel.send({
+      embeds: [embeds[i]],
+      components: i === 0 ? [row] : [],
+    });
+    sentIds.push(msg.id);
+  }
+  return sentIds;
+}
+
+async function deleteOldNotesMessages(
+  channel: Awaited<ReturnType<typeof interactionChannelFetch>>,
+  messageIds: string[],
+): Promise<void> {
+  if (!channel?.isSendable()) return;
+  for (const id of messageIds) {
+    try {
+      const msg = await channel.messages.fetch(id);
+      await msg.delete();
+    } catch (error) {
+      console.error("Failed to delete old notes message after update:", error);
+    }
+  }
 }
 
 async function resolveTranscript(history: MeetingHistory): Promise<string> {

@@ -46,6 +46,52 @@ const formatUpdated = (value: string) => format(new Date(value), "MMM d");
 const truncate = (text: string, maxLen: number) =>
   text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
 
+const buildThinkingMessage = (): AskMessage => ({
+  id: "thinking",
+  role: "chronote",
+  text: "Thinking...",
+  createdAt: new Date().toISOString(),
+});
+
+const hasOptimisticMessage = (
+  base: AskMessage[],
+  optimisticMessages: AskMessage[],
+) =>
+  base === optimisticMessages ||
+  base.some(
+    (msg) => msg.role === "user" && msg.text === optimisticMessages[0]?.text,
+  );
+
+const buildDisplayMessages = (options: {
+  activeConversation: AskConversation | null;
+  activeId: string | null;
+  activeMessages: AskMessage[];
+  optimisticMessages: AskMessage[];
+  isPending: boolean;
+}) => {
+  const {
+    activeConversation,
+    activeId,
+    activeMessages,
+    optimisticMessages,
+    isPending,
+  } = options;
+  const base =
+    activeConversation || activeId ? activeMessages : optimisticMessages;
+  const pending =
+    isPending && optimisticMessages.length > 0 ? [buildThinkingMessage()] : [];
+
+  if (!optimisticMessages.length) {
+    return [...base, ...pending];
+  }
+
+  if (hasOptimisticMessage(base, optimisticMessages)) {
+    return [...base, ...pending];
+  }
+
+  return [...base, ...optimisticMessages, ...pending];
+};
+
 export default function Ask() {
   const { selectedGuildId } = useGuildContext();
   const trpcUtils = trpc.useUtils();
@@ -121,44 +167,29 @@ export default function Ask() {
 
   const activeConversation = isCreatingNew
     ? null
-    : conversationQuery.data?.conversation;
+    : (conversationQuery.data?.conversation ?? null);
   const activeMessages = isCreatingNew
     ? []
     : (conversationQuery.data?.messages ?? []);
   const displayTitle =
     activeConversation?.title ?? optimisticConversation?.title ?? "New chat";
-  const displayMessages = useMemo(() => {
-    const base =
-      activeConversation || activeId ? activeMessages : optimisticMessages;
-    const pending =
-      askMutation.isPending && optimisticMessages.length > 0
-        ? [
-            {
-              id: "thinking",
-              role: "chronote",
-              text: "Thinking...",
-              createdAt: new Date().toISOString(),
-            } as AskMessage,
-          ]
-        : [];
-    if (!optimisticMessages.length) {
-      return [...base, ...pending];
-    }
-    const hasOptimistic =
-      base.some(
-        (msg) => msg.role === "user" && msg.text === optimisticMessages[0].text,
-      ) || base === optimisticMessages;
-    if (hasOptimistic) {
-      return [...base, ...pending];
-    }
-    return [...base, ...optimisticMessages, ...pending];
-  }, [
-    activeConversation,
-    activeId,
-    activeMessages,
-    optimisticMessages,
-    askMutation.isPending,
-  ]);
+  const displayMessages = useMemo(
+    () =>
+      buildDisplayMessages({
+        activeConversation,
+        activeId,
+        activeMessages,
+        optimisticMessages,
+        isPending: askMutation.isPending,
+      }),
+    [
+      activeConversation,
+      activeId,
+      activeMessages,
+      optimisticMessages,
+      askMutation.isPending,
+    ],
+  );
   const showRename = Boolean(activeConversation && displayMessages.length > 0);
 
   useEffect(() => {
