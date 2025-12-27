@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, splitVendorChunkPlugin } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import tsconfigPaths from "vite-tsconfig-paths";
 import path from "node:path";
@@ -12,46 +12,11 @@ export default defineConfig({
       projects: [path.resolve(__dirname, "tsconfig.frontend.json")],
     }),
     react(),
+    splitVendorChunkPlugin(),
   ],
   build: {
     outDir: path.resolve(__dirname, "build", "frontend"),
     emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (!id.includes("node_modules")) return;
-          if (id.includes("@mantine") || id.includes("@tabler")) {
-            return "vendor-ui";
-          }
-          if (id.includes("@tanstack")) {
-            return "vendor-tanstack";
-          }
-          if (id.includes("@trpc")) {
-            return "vendor-trpc";
-          }
-          if (id.includes("date-fns")) {
-            return "vendor-date";
-          }
-          if (
-            id.includes("react-markdown") ||
-            id.includes("remark") ||
-            id.includes("rehype") ||
-            id.includes("mdast") ||
-            id.includes("micromark")
-          ) {
-            return "vendor-markdown";
-          }
-          if (
-            id.includes("node_modules/react/") ||
-            id.includes("node_modules/react-dom/") ||
-            id.includes("node_modules/scheduler/")
-          ) {
-            return "vendor-react";
-          }
-          return "vendor";
-        },
-      },
-    },
   },
   server: {
     port: 5173,
