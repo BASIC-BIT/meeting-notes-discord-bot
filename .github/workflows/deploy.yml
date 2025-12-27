@@ -147,15 +147,13 @@ jobs:
         id: update-service
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE: ${{ steps.build-image.outputs.image }}
         run: |
           # Get the current task definition
           TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION)
 
           # Update the container image in the task definition
-          NEW_TASK_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
+          NEW_TASK_DEFINITION=$(echo "$TASK_DEFINITION" | jq --arg IMAGE "$IMAGE" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
 
           # Clean up the task definition JSON to remove invalid fields
           CLEAN_TASK_DEFINITION=$(echo "$NEW_TASK_DEFINITION" | jq 'del(.status, .taskDefinitionArn, .revision, .registeredAt, .registeredBy, .compatibilities, .requiresAttributes)')

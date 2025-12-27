@@ -140,12 +140,10 @@ jobs:
         id: update-service
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE: ${{ steps.build-image.outputs.image }}
         run: |
           TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION)
-          NEW_TASK_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
+          NEW_TASK_DEFINITION=$(echo "$TASK_DEFINITION" | jq --arg IMAGE "$IMAGE" '.taskDefinition | .containerDefinitions[0].image = $IMAGE')
           CLEAN_TASK_DEFINITION=$(echo "$NEW_TASK_DEFINITION" | jq 'del(.status, .taskDefinitionArn, .revision, .registeredAt, .registeredBy, .compatibilities, .requiresAttributes)')
           echo "$CLEAN_TASK_DEFINITION" | jq 'del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy)' > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
