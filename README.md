@@ -44,6 +44,7 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
   - `/portal/server/:serverId/{library|ask|billing|settings}`
 - Deployed via GitHub Actions to S3 + CloudFront (see `_infra/` and `.github/workflows/deploy.yml`).
 - Static hosting variables: `FRONTEND_BUCKET`, `FRONTEND_DOMAIN` (optional), `FRONTEND_CERT_ARN` (when custom domain is set). Allow the SPA to call the API by setting `FRONTEND_ALLOWED_ORIGINS` (comma-separated, e.g., CloudFront domain). CloudFront distribution outputs are emitted by Terraform.
+- API hosting: backend runs behind an ALB when `API_DOMAIN` is set (e.g., `api.chronote.gg`). Terraform sets a GitHub Actions env var `VITE_API_BASE_URL` so the frontend uses the API domain at build time. OAuth callback should be `https://api.<domain>/auth/discord/callback`.
 - Local dev uses Vite proxying for `/auth`, `/user`, `/api`, and `/trpc` (tRPC).
 
 ## Backend / services
@@ -76,6 +77,7 @@ Notes:
 ## Infrastructure
 
 - Terraform in `_infra/` provisions ECS/Fargate bot, Dynamo tables, transcripts bucket, SessionTable, and the static frontend (S3 + CloudFront with OAC, SPA fallback).
+- When `API_DOMAIN` is set, Terraform also provisions an internet-facing ALB for the API (listener on 80/443) plus Route53 alias + ACM cert.
 - Runtime secrets for ECS are stored in **AWS Secrets Manager** and referenced by the task definition (see `_infra/README.md`).
 - Helpers: `yarn terraform:init | plan | apply`.
 - IaC scanning: `yarn checkov` (Checkov) locally; also runs in CI.

@@ -9,7 +9,8 @@ github_environment="staging"
 
 # OAuth / URLs
 ENABLE_OAUTH="true"
-DISCORD_CALLBACK_URL="https://staging.chronote.gg/callback"
+API_DOMAIN="api.staging.chronote.gg"
+DISCORD_CALLBACK_URL="https://api.staging.chronote.gg/auth/discord/callback"
 FRONTEND_DOMAIN="staging.chronote.gg"
 HOSTED_ZONE_NAME="chronote.gg."
 FRONTEND_ALLOWED_ORIGINS="https://staging.chronote.gg"

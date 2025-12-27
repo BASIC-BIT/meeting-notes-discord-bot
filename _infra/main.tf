@@ -94,6 +94,18 @@ variable "FRONTEND_CERT_ARN" {
   default     = ""
 }
 
+variable "API_DOMAIN" {
+  description = "Optional custom domain for the API (ALB); leave blank to use ALB DNS directly"
+  type        = string
+  default     = ""
+}
+
+variable "API_CERT_ARN" {
+  description = "ACM cert ARN for the API domain (required if API_DOMAIN set and no ACM created)"
+  type        = string
+  default     = ""
+}
+
 variable "HOSTED_ZONE_NAME" {
   description = "Route53 hosted zone name (e.g., chronote.gg.) required if you want Terraform to create cert + DNS for FRONTEND_DOMAIN"
   type        = string
@@ -221,6 +233,13 @@ locals {
   frontend_cert_arn = var.FRONTEND_CERT_ARN != "" ? var.FRONTEND_CERT_ARN : (
     length(aws_acm_certificate_validation.frontend_cert) > 0 ? aws_acm_certificate_validation.frontend_cert[0].certificate_arn : ""
   )
+  api_cert_arn = var.API_CERT_ARN != "" ? var.API_CERT_ARN : (
+    length(aws_acm_certificate_validation.api_cert) > 0 ? aws_acm_certificate_validation.api_cert[0].certificate_arn : ""
+  )
+  api_base_url = var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}" : "http://${aws_lb.api_alb.dns_name}"
+  discord_callback_url = var.DISCORD_CALLBACK_URL != "" ? var.DISCORD_CALLBACK_URL : (
+    var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}/auth/discord/callback" : ""
+  )
 }
 
 resource "aws_ecr_repository" "app_ecr_repo" {
@@ -303,6 +322,13 @@ resource "github_actions_environment_variable" "envvar_frontend_distribution_id"
   environment   = github_repository_environment.repo_env.environment
   variable_name = "FRONTEND_DISTRIBUTION_ID"
   value         = aws_cloudfront_distribution.frontend.id
+}
+
+resource "github_actions_environment_variable" "envvar_vite_api_base_url" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "VITE_API_BASE_URL"
+  value         = local.api_base_url
 }
 
 resource "github_actions_environment_variable" "envvar_ecs_cluster" {
@@ -409,11 +435,11 @@ resource "aws_security_group" "ecs_service_sg" {
   vpc_id      = aws_vpc.app_vpc.id
 
   ingress {
-    description = "Allow app traffic from the internet to port 3001"
+    description     = "Allow app traffic from the ALB to port 3001"
     from_port   = 3001
     to_port     = 3001
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    security_groups = [aws_security_group.api_alb_sg.id]
   }
 
   # Outbound HTTPS for Discord/OpenAI/AWS APIs
@@ -975,7 +1001,7 @@ resource "aws_ecs_task_definition" "app_task" {
         },
         {
           name  = "DISCORD_CALLBACK_URL"
-          value = var.DISCORD_CALLBACK_URL
+          value = local.discord_callback_url
         },
         {
           name  = "ENABLE_OAUTH"
@@ -1125,6 +1151,14 @@ resource "aws_ecs_service" "app_service" {
     security_groups  = [aws_security_group.ecs_service_sg.id]
     assign_public_ip = true
   }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.api_tg.arn
+    container_name   = "${local.name_prefix}-bot"
+    container_port   = 3001
+  }
+
+  depends_on = [aws_lb_listener.api_http]
 }
 
 resource "aws_dynamodb_table" "guild_subscription_table" {
