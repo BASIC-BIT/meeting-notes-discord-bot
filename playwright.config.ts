@@ -42,7 +42,8 @@ export default defineConfig({
       reuseExistingServer: reuseServer,
       env: {
         ...mockEnv,
-        VITE_API_BASE_URL: "http://localhost:3001",
+        // Use Vite's proxy for local E2E to avoid CORS issues.
+        VITE_API_BASE_URL: "",
       },
       timeout: 120_000,
     },
