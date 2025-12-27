@@ -29,28 +29,33 @@ declare global {
   }
 }
 
-const resolveViteEnv = (): { VITE_API_BASE_URL?: string } | undefined => {
-  try {
-    // Avoid direct import.meta usage to keep Jest/CommonJS happy.
-    // eslint-disable-next-line no-new-func
-    return new Function(
-      "return typeof import.meta !== 'undefined' ? import.meta.env : undefined",
-    )();
-  } catch {
-    return undefined;
+function normalizeApiBase(raw: string): string {
+  const trimmed = raw.trim().replace(/\/$/, "");
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+
+  // Assume localhost is plain HTTP for local dev.
+  if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/.*)?$/i.test(trimmed)) {
+    return `http://${trimmed}`;
   }
-};
+
+  // Default to HTTPS for everything else (avoids mixed-content on HTTPS sites).
+  return `https://${trimmed}`;
+}
+
+type ApiBaseGlobal = { __API_BASE_URL__?: string };
+
+const apiBaseFromGlobal =
+  typeof globalThis !== "undefined" &&
+  typeof (globalThis as ApiBaseGlobal).__API_BASE_URL__ === "string"
+    ? (globalThis as ApiBaseGlobal).__API_BASE_URL__
+    : undefined;
 
 const runtimeApiBase =
-  (typeof window !== "undefined" &&
-    typeof window.__API_BASE_URL__ === "string" &&
-    window.__API_BASE_URL__) ||
-  resolveViteEnv()?.VITE_API_BASE_URL ||
+  apiBaseFromGlobal ||
   (typeof process !== "undefined" ? process.env.VITE_API_BASE_URL : undefined);
 
-const rawBase = (runtimeApiBase || "").replace(/\/$/, "");
-export const API_BASE =
-  rawBase && !/^https?:\/\//i.test(rawBase) ? `http://${rawBase}` : rawBase;
+export const API_BASE = normalizeApiBase(runtimeApiBase || "");
 
 export function buildApiUrl(path: string): string {
   const normalized = path.startsWith("/") ? path : `/${path}`;

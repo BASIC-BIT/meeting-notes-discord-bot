@@ -300,7 +300,7 @@ export default function Home() {
       <Section
         eyebrow="Built for"
         title="Work and play alike"
-        description="Designed for teams, communities, and campaigns that need memory."
+        description="For teams, communities, and campaigns that want a reliable record."
       >
         <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
           {useCases.map((useCase) => (
@@ -323,7 +323,7 @@ export default function Home() {
       <Section
         eyebrow="Features"
         title="Everything you need to remember the meeting"
-        description="Capture, compress, and recall without leaving Discord."
+        description="Capture now, find it later, all without leaving Discord."
       >
         <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg">
           {features.map((feature) => (
@@ -340,7 +340,7 @@ export default function Home() {
       <Section
         eyebrow="Workflow"
         title="From voice channel to logbook in minutes"
-        description="A quiet pipeline from live voice to a usable record."
+        description="A simple pipeline from voice chat to a usable record."
       >
         <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg">
           {howItWorks.map((step) => (
@@ -360,7 +360,7 @@ export default function Home() {
       <Section
         eyebrow="Evidence-first"
         title="Answers come with receipts"
-        description="No guessing. Every answer is grounded in quotes, speakers, and timestamps."
+        description="Every answer points to quotes, speakers, and timestamps."
       >
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
           <Surface p="lg" tone="soft">
@@ -376,9 +376,9 @@ export default function Home() {
                 back to the moment it was said.
               </Text>
               <EvidenceCard
-                quote="The outage root cause was the cache eviction policy."
-                speaker="Sam"
-                meeting="Weekly ops sync"
+                quote="Ada wants a favor in exchange for the map; she doesn't trust the captain."
+                speaker="Rin"
+                meeting="Campaign recap"
               />
             </Stack>
           </Surface>
@@ -407,7 +407,7 @@ export default function Home() {
       <Section
         eyebrow="Pricing"
         title="Memory power, server-based pricing"
-        description="Start free, upgrade when you need deeper recall and longer retention."
+        description="Start free, upgrade when you need more history and longer retention."
       >
         <Group justify="space-between" align="center" wrap="wrap">
           <Text size="sm" c="dimmed">
@@ -431,7 +431,7 @@ export default function Home() {
           <PricingCard
             name="Free"
             price="$0"
-            description="Great for lightweight teams and one-off sessions."
+            description="Great for smaller servers and one-off sessions."
             badge="Free forever"
             features={[
               "Up to 4 hours per week",
@@ -445,7 +445,7 @@ export default function Home() {
           <PricingCard
             name="Basic"
             price={formatPlanPrice(basicPlan, interval)}
-            description="Unlock longer sessions and deeper recall."
+            description="Unlock longer sessions and more history."
             features={[
               "Up to 20 hours per week",
               "Up to 2 hours per meeting",
@@ -461,7 +461,7 @@ export default function Home() {
           <PricingCard
             name="Pro"
             price={formatPlanPrice(proPlan, interval)}
-            description="Unlimited retention and deep server memory."
+            description="Unlimited retention and full-history search."
             features={[
               "Unlimited retention",
               "Unlimited recording time",
@@ -487,7 +487,7 @@ export default function Home() {
           <Stack gap={6}>
             <Title order={3}>Ready to keep the record?</Title>
             <Text c="dimmed">
-              Add Chronote, run your first meeting, and get notes in minutes.
+              Add Chronote, record your first session, and get notes in minutes.
             </Text>
           </Stack>
           <Button

@@ -26,7 +26,7 @@
 ## Known issues / watch list
 
 - ECS service SG egress temporarily open for voice debugging; must tighten when stable.
-- Live voice: no overlap avoidance—bot can talk over people by design; revisit UX later.
+- Live voice: no overlap avoidance (bot can talk over people by design); revisit UX later.
 - Need richer responder context/RAG over meeting history; consider PCM mixer to avoid interlaced voices.
 
 ## Next planned work

@@ -27,5 +27,5 @@
 - Express routes expect `Promise<void>` handlers; return after responses.
 - Live voice gate returns only a boolean; no fallback; temperature/max_tokens not supported on gpt-5-mini.
 - Thinking cue loops until TTS playback begins; interval configurable (`LIVE_VOICE_THINKING_CUE_INTERVAL_MS`).
-- ECS service SG currently allows wide egress temporarily for voice debug—must be tightened later.
+- ECS service SG currently allows wide egress temporarily for voice debug; must be tightened later.
 - Frontend is static via CloudFront; APIs served by Express separately.
