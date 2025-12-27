@@ -160,82 +160,30 @@ jobs:
 
           # Register the new task definition revision
           echo "$CLEAN_TASK_DEFINITION" | jq 'del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy)' > new-task-def.json
-          aws ecs register-task-definition --cli-input-json file://new-task-def.json
-
-          # Get the new task definition revision
-          NEW_TASK_DEFINITION_REVISION=$(aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --region $AWS_REGION | jq -r '.taskDefinition.taskDefinitionArn')
-          echo "new_task_def=$NEW_TASK_DEFINITION_REVISION" >> $GITHUB_OUTPUT
+          REGISTERED_TASK_DEF=$(aws ecs register-task-definition --cli-input-json file://new-task-def.json)
+          NEW_TASK_DEFINITION_ARN=$(echo "$REGISTERED_TASK_DEF" | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "new_task_def=$NEW_TASK_DEFINITION_ARN" >> $GITHUB_OUTPUT
 
           # Update the ECS service to use the new task definition revision
-          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition $NEW_TASK_DEFINITION_REVISION --region $AWS_REGION
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$NEW_TASK_DEFINITION_ARN" --region $AWS_REGION
 
       - name: Wait for service stability
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
+          set -euo pipefail
           echo "Waiting for ECS service to stabilize..."
 
-          # Wait up to 10 minutes for the service to stabilize
-          TIMEOUT=600
-          INTERVAL=30
-          ELAPSED=0
-
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            # Get service details
-            SERVICE_STATUS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION)
-            
-            # Check running count vs desired count
-            DESIRED_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].desiredCount')
-            RUNNING_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].runningCount')
-            PENDING_COUNT=$(echo $SERVICE_STATUS | jq -r '.services[0].pendingCount')
-            
-            echo "Service status: Desired=$DESIRED_COUNT, Running=$RUNNING_COUNT, Pending=$PENDING_COUNT"
-            
-            # Check for deployment completion
-            DEPLOYMENTS=$(echo $SERVICE_STATUS | jq -r '.services[0].deployments | length')
-            
-            if [ "$DEPLOYMENTS" -eq 1 ] && [ "$RUNNING_COUNT" -eq "$DESIRED_COUNT" ] && [ "$PENDING_COUNT" -eq 0 ]; then
-              echo "Service has stabilized successfully!"
-              break
-            fi
-            
-            # Check for failed tasks
-            EVENTS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region $AWS_REGION | jq -r '.services[0].events[0:5]')
-            echo "Recent service events:"
-            echo "$EVENTS" | jq -r '.[] | .message' | head -5
-            
-            # Check for task failures
-            FAILED_TASKS=$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --service-name "$ECS_SERVICE" --desired-status STOPPED --region $AWS_REGION | jq -r '.taskArns[]')
-            
-            if [ ! -z "$FAILED_TASKS" ]; then
-              echo "Checking stopped tasks for failures..."
-              for TASK in $FAILED_TASKS; do
-                TASK_DETAIL=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks $TASK --region $AWS_REGION)
-                STOP_REASON=$(echo $TASK_DETAIL | jq -r '.tasks[0].stoppedReason // "No reason provided"')
-                STOP_CODE=$(echo $TASK_DETAIL | jq -r '.tasks[0].stopCode // "Unknown"')
-                
-                if [[ "$STOP_REASON" != "Scaling activity initiated by deployment"* ]] && [[ "$STOP_CODE" != "ServiceSchedulerInitiated" ]]; then
-                  echo "ERROR: Task failed with reason: $STOP_REASON (Code: $STOP_CODE)"
-                  
-                  # Get container exit reasons
-                  CONTAINER_REASONS=$(echo $TASK_DETAIL | jq -r '.tasks[0].containers[] | select(.exitCode != null and .exitCode != 0) | "Container \(.name) exited with code \(.exitCode): \(.reason // "No reason")"')
-                  if [ ! -z "$CONTAINER_REASONS" ]; then
-                    echo "$CONTAINER_REASONS"
-                  fi
-                  
-                  exit 1
-                fi
-              done
-            fi
-            
-            sleep $INTERVAL
-            ELAPSED=$((ELAPSED + INTERVAL))
-          done
-
-          if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "ERROR: Service failed to stabilize within $TIMEOUT seconds!"
-            exit 1
+          if aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION"; then
+            echo "Service has stabilized successfully!"
+            exit 0
           fi
+
+          echo "ERROR: Service failed to stabilize."
+          SERVICE_STATUS=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION")
+          echo "Recent service events:"
+          echo "$SERVICE_STATUS" | jq -r '.services[0].events[0:10][] | .message' || true
+          exit 1
 
       - name: Verify deployment health
         env:

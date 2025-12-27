@@ -34,7 +34,6 @@ import {
 } from "@tabler/icons-react";
 import { format } from "date-fns";
 import Surface from "../components/Surface";
-import EvidenceCard from "../components/EvidenceCard";
 import PageHeader from "../components/PageHeader";
 import FormSelect from "../components/FormSelect";
 import { trpc } from "../services/trpc";
@@ -696,28 +695,6 @@ export default function Library() {
                       {meeting.notes}
                     </Text>
                   </ScrollArea>
-                  <Divider my="sm" />
-                  {meeting.events.find((event) => event.type === "voice") ? (
-                    <Stack gap="xs">
-                      <Text fw={600} size="sm">
-                        Receipt
-                      </Text>
-                      {(() => {
-                        const receipt = meeting.events.find(
-                          (event) => event.type === "voice",
-                        );
-                        if (!receipt) return null;
-                        return (
-                          <EvidenceCard
-                            quote={receipt.text}
-                            speaker={receipt.speaker || "Unknown"}
-                            time={receipt.time}
-                            channel={meeting.channel}
-                          />
-                        );
-                      })()}
-                    </Stack>
-                  ) : null}
                 </Surface>
 
                 <Surface p="md">

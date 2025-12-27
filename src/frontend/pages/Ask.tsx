@@ -369,7 +369,7 @@ export default function Ask() {
     >
       <PageHeader
         title="Ask"
-        description="Query recent meetings with receipts. Conversations stay scoped to the selected server."
+        description="Query recent meetings with links back to your notes. Conversations stay scoped to the selected server."
       />
 
       <div

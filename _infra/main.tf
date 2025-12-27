@@ -538,6 +538,27 @@ resource "aws_kms_key" "app_general" {
         Resource = "*"
       },
       {
+        Sid    = "AllowECR",
+        Effect = "Allow",
+        Principal = {
+          Service = "ecr.amazonaws.com"
+        },
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ],
+        Resource = "*",
+        Condition = {
+          StringEquals = {
+            "kms:CallerAccount" = data.aws_caller_identity.current.account_id
+            "kms:ViaService"    = "ecr.us-east-1.amazonaws.com"
+          }
+        }
+      },
+      {
         Sid    = "AllowCloudFrontOAC",
         Effect = "Allow",
         Principal = {
@@ -970,22 +991,7 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           containerPort = 3001
           hostPort      = 3001
-        },
-        {
-          Action = [
-            "kms:Encrypt",
-            "kms:Decrypt",
-            "kms:ReEncrypt*",
-            "kms:GenerateDataKey*",
-            "kms:DescribeKey",
-          ]
-          Effect = "Allow"
-          Principal = {
-            Service = "ecr.amazonaws.com"
-          }
-          Resource = "*"
-          Sid      = "AllowECR"
-        },
+        }
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -1128,12 +1134,12 @@ resource "aws_ecs_service" "app_service" {
   name            = "${local.name_prefix}-bot-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app_task.arn
-  # COMMENT THIS OUT TO DEPLOY ANY CHNAGES TO THE TASK DEFINITION - SUPER JANK LOL
-  #lifecycle {
-  #  ignore_changes = [
-  #    task_definition
-  #  ]
-  #}
+
+  # Deployments update the ECS service task definition outside Terraform.
+  # Avoid Terraform reverting task definition revisions during infra applies.
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 
   enable_execute_command = true
 

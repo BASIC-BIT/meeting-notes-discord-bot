@@ -60,7 +60,7 @@ const features = [
     icon: <IconFileText size={22} />,
   },
   {
-    title: "Search with receipts",
+    title: "Search with quotes",
     description:
       "Ask across recent sessions with quotes and timestamps attached.",
     icon: <IconSearch size={22} />,
@@ -102,7 +102,7 @@ const howItWorks = [
   {
     step: "03",
     title: "Search it later",
-    description: "Ask questions later, with receipts.",
+    description: "Ask questions later, with links back to your notes.",
   },
 ];
 
@@ -207,10 +207,10 @@ export default function Home() {
                 </ThemeIcon>
                 <Stack gap={0}>
                   <Text size="sm" fw={600}>
-                    Receipts
+                    Quotes
                   </Text>
                   <Text size="xs" c="dimmed">
-                    Know who said what
+                    See who said what
                   </Text>
                 </Stack>
               </Group>
@@ -273,7 +273,7 @@ export default function Home() {
                   <Text fw={600}>Quote + context</Text>
                 </Group>
                 <Text size="sm" c="dimmed">
-                  Receipts tie back to the exact moment in the conversation.
+                  Quotes tie back to the exact moment in the conversation.
                 </Text>
                 <Group gap="xs" wrap="wrap">
                   <Text size="xs" c="dimmed" fw={600}>
@@ -359,7 +359,7 @@ export default function Home() {
 
       <Section
         eyebrow="Evidence-first"
-        title="Answers come with receipts"
+        title="Answers come with context"
         description="Every answer points to quotes, speakers, and timestamps."
       >
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
