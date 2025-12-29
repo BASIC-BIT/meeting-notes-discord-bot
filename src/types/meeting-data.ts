@@ -20,6 +20,12 @@ export type LiveVoiceCommandPending = {
   expiresAt: number;
 };
 
+export type LiveVoiceThinkingCueState = {
+  activeCount: number;
+  timer?: ReturnType<typeof setInterval>;
+  loggedStart?: boolean;
+};
+
 export interface MeetingData {
   meetingId: string;
   chatLog: ChatEntry[];
@@ -43,6 +49,7 @@ export interface MeetingData {
   liveVoiceCommandsEnabled?: boolean;
   liveVoiceTtsVoice?: string;
   liveVoiceCommandPending?: LiveVoiceCommandPending;
+  liveVoiceThinkingCueState?: LiveVoiceThinkingCueState;
 
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string;

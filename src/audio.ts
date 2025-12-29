@@ -231,20 +231,41 @@ function getAudioDuration(audio: AudioSnippet): number {
 export async function compileTranscriptions(
   client: Client,
   meeting: MeetingData,
+  options: { includeCues?: boolean } = {},
 ): Promise<string> {
-  const transcription = meeting.audioData.audioFiles
+  const segments = meeting.audioData.audioFiles
     .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
-    .map((fileData) => {
-      const participant = meeting.participants.get(fileData.userId);
-      const member = meeting.guild.members.cache.get(fileData.userId);
-      const user = client.users.cache.get(fileData.userId);
+    .map((fileData) => ({
+      userId: fileData.userId,
+      timestamp: fileData.timestamp,
+      text: fileData.transcript ?? "",
+    }));
+
+  if (options.includeCues && meeting.audioData.cueEvents) {
+    for (const cue of meeting.audioData.cueEvents) {
+      if (!cue.text) continue;
+      segments.push({
+        userId: cue.userId,
+        timestamp: cue.timestamp,
+        text: cue.text,
+      });
+    }
+  }
+
+  segments.sort((a, b) => a.timestamp - b.timestamp);
+
+  const transcription = segments
+    .map((segment) => {
+      const participant = meeting.participants.get(segment.userId);
+      const member = meeting.guild.members.cache.get(segment.userId);
+      const user = client.users.cache.get(segment.userId);
       const fallbackName =
         member?.nickname ||
         member?.user.globalName ||
         member?.user.username ||
         user?.globalName ||
         user?.username ||
-        fileData.userId;
+        segment.userId;
       const fallbackUsername =
         member?.user.username || user?.username || undefined;
       const speakerLabel = formatParticipantLabel(participant, {
@@ -254,8 +275,8 @@ export async function compileTranscriptions(
       });
 
       return `[${speakerLabel} @ ${new Date(
-        fileData.timestamp,
-      ).toLocaleString()}]: ${fileData.transcript}`;
+        segment.timestamp,
+      ).toLocaleString()}]: ${segment.text}`;
     })
     .join("\n");
 

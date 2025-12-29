@@ -27,6 +27,7 @@ import { renderChatEntryLine } from "../utils/chatLog";
 import { uploadMeetingArtifacts } from "../services/uploadService";
 import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
 import { getGuildLimits } from "../services/subscriptionService";
+import { stopThinkingCueLoop } from "../audio/soundCues";
 import {
   getNextAvailableAt,
   getRollingUsageForGuild,
@@ -64,6 +65,7 @@ export async function handleEndMeetingButton(
   const channelId = interaction.channelId;
 
   const meeting = getMeeting(guildId);
+  let transcriptForUpload: string | undefined;
 
   try {
     if (!meeting) {
@@ -95,6 +97,7 @@ export async function handleEndMeetingButton(
 
     meeting.finishing = true;
     meeting.endTime = new Date();
+    stopThinkingCueLoop(meeting);
     meeting.ttsQueue?.stopAndClear();
 
     // Acknowledge the interaction immediately
@@ -175,6 +178,10 @@ export async function handleEndMeetingButton(
         await waitingForMeetingNotesMessage.delete();
       }
 
+      transcriptForUpload = await compileTranscriptions(client, meeting, {
+        includeCues: true,
+      });
+
       // if(meeting.finalTranscript && meeting.finalTranscript.length > 0) {
       //     await sendPostMeetingOptions(meeting);
       // }
@@ -184,7 +191,7 @@ export async function handleEndMeetingButton(
     await uploadMeetingArtifacts(meeting, {
       audioFilePath: meeting.audioData.outputFileName!,
       chatFilePath: chatLogFilePath,
-      transcriptText: meeting.finalTranscript,
+      transcriptText: transcriptForUpload,
     });
 
     deleteIfExists(chatLogFilePath);
@@ -226,6 +233,7 @@ export async function handleEndMeetingOther(
   meeting: MeetingData,
 ) {
   try {
+    let transcriptForUpload: string | undefined;
     if (meeting.timeoutTimer) {
       clearTimeout(meeting.timeoutTimer);
       meeting.timeoutTimer = undefined;
@@ -233,6 +241,7 @@ export async function handleEndMeetingOther(
 
     meeting.finishing = true;
     meeting.endTime = new Date();
+    stopThinkingCueLoop(meeting);
     meeting.ttsQueue?.stopAndClear();
 
     if (meeting.initialInteraction) {
@@ -310,6 +319,10 @@ export async function handleEndMeetingOther(
         await waitingForMeetingNotesMessage.delete();
       }
 
+      transcriptForUpload = await compileTranscriptions(client, meeting, {
+        includeCues: true,
+      });
+
       // if(meeting.finalTranscript && meeting.finalTranscript.length > 0) {
       //     await sendPostMeetingOptions(meeting);
       // }
@@ -319,7 +332,7 @@ export async function handleEndMeetingOther(
     await uploadMeetingArtifacts(meeting, {
       audioFilePath: meeting.audioData.outputFileName!,
       chatFilePath: chatLogFilePath,
-      transcriptText: meeting.finalTranscript,
+      transcriptText: transcriptForUpload,
     });
 
     deleteIfExists(chatLogFilePath);
