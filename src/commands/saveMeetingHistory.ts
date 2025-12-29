@@ -9,7 +9,12 @@ async function resolveMeetingNotes(
 ): Promise<string | undefined> {
   if (!meeting.generateNotes) return meeting.notesText;
   if (meeting.notesText) return meeting.notesText;
-  if (!meeting.finalTranscript) return meeting.notesText;
+  if (!meeting.finalTranscript) {
+    console.warn(
+      "Skipping notes generation for meeting history because final transcript is missing.",
+    );
+    return meeting.notesText;
+  }
 
   try {
     const notes = await getNotes(meeting);

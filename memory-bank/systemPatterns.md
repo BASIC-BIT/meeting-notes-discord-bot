@@ -117,3 +117,5 @@ The Meeting Notes Discord Bot is a Node.js application built with TypeScript. It
 - **Single Point of Failure:** If the bot instance crashes, all in-progress meeting data (not yet written to files or external services) is lost.
 - **File Handling:** Managing many temporary audio files could be complex; ensuring robust cleanup is essential.
 - **Cache Scaling and Request Coalescing:** Current caches are per-process or per-session. Consider Redis for shared caching with namespaces for user-scoped vs global data, plus a unified cache layer that supports TTLs and in-flight request de-duplication to avoid parallel requests for the same Discord data.
+- **Cache Size Limits:** In-memory and session caches should add max sizes or eviction policies to avoid unbounded growth.
+- **Permissions and Timeline Tests:** Add unit tests for Discord permission resolution and timeline event building to lock in edge cases.

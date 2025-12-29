@@ -69,3 +69,15 @@ export async function updateMeetingTagsService(
     tags,
   );
 }
+
+export async function updateMeetingStatusService(params: {
+  guildId: string;
+  channelId_timestamp: string;
+  status: "in_progress" | "processing" | "complete";
+}) {
+  return getMeetingHistoryRepository().updateStatus(
+    params.guildId,
+    params.channelId_timestamp,
+    params.status,
+  );
+}

@@ -2,14 +2,13 @@ import express from "express";
 import { getMeeting } from "../meetings";
 import { ensureUserInGuild } from "../services/guildAccessService";
 import { ensureUserCanConnectChannel } from "../services/discordPermissionsService";
-import {
-  buildLiveMeetingMeta,
-  buildLiveMeetingSegments,
-} from "../services/liveMeetingService";
+import { buildLiveMeetingMeta } from "../services/liveMeetingService";
+import { buildLiveMeetingTimelineEvents } from "../services/meetingTimelineService";
 import type { AuthedProfile } from "../trpc/context";
 import type {
   LiveMeetingInitPayload,
-  LiveMeetingSegmentsPayload,
+  LiveMeetingEventsPayload,
+  LiveMeetingAttendeesPayload,
   LiveMeetingStatusPayload,
 } from "../types/liveMeeting";
 
@@ -81,44 +80,66 @@ export function registerLiveMeetingRoutes(app: express.Express) {
       req.socket.setTimeout(0);
 
       const seen = new Set<string>();
+      let lastAttendeesKey = "";
+      let lastStatus: LiveMeetingStatusPayload["status"] | null = null;
 
       const sendEvent = (event: string, data: unknown) => {
         res.write(`event: ${event}\n`);
         res.write(`data: ${JSON.stringify(data)}\n\n`);
       };
 
-      const emitSegments = (
-        segments: ReturnType<typeof buildLiveMeetingSegments>,
+      const emitEvents = (
+        events: ReturnType<typeof buildLiveMeetingTimelineEvents>,
       ) => {
-        const fresh = segments.filter((segment) => {
-          if (seen.has(segment.id)) return false;
-          seen.add(segment.id);
+        const fresh = events.filter((event) => {
+          if (seen.has(event.id)) return false;
+          seen.add(event.id);
           return true;
         });
         if (fresh.length === 0) return;
-        const payload: LiveMeetingSegmentsPayload = { segments: fresh };
-        sendEvent("segments", payload);
+        const payload: LiveMeetingEventsPayload = { events: fresh };
+        sendEvent("events", payload);
+      };
+
+      const emitAttendees = () => {
+        const attendees = Array.from(meeting.attendance);
+        const key = attendees.join("|");
+        if (key === lastAttendeesKey) return;
+        lastAttendeesKey = key;
+        const payload: LiveMeetingAttendeesPayload = { attendees };
+        sendEvent("attendees", payload);
       };
 
       const initPayload: LiveMeetingInitPayload = {
         meeting: buildLiveMeetingMeta(meeting),
-        segments: [],
+        events: [],
       };
-      const initialSegments = buildLiveMeetingSegments(meeting);
-      for (const segment of initialSegments) {
-        seen.add(segment.id);
+      const initialEvents = buildLiveMeetingTimelineEvents(meeting);
+      for (const event of initialEvents) {
+        seen.add(event.id);
       }
-      initPayload.segments = initialSegments;
+      initPayload.events = initialEvents;
       sendEvent("init", initPayload);
+      emitAttendees();
+      lastStatus = initPayload.meeting.status;
 
       const tick = () => {
-        emitSegments(buildLiveMeetingSegments(meeting));
-        if (meeting.finished) {
+        emitEvents(buildLiveMeetingTimelineEvents(meeting));
+        emitAttendees();
+        const nextStatus = meeting.finished
+          ? "complete"
+          : meeting.finishing
+            ? "processing"
+            : "in_progress";
+        if (nextStatus !== lastStatus) {
+          lastStatus = nextStatus;
           const payload: LiveMeetingStatusPayload = {
-            status: "complete",
+            status: nextStatus,
             endedAt: meeting.endTime?.toISOString(),
           };
           sendEvent("status", payload);
+        }
+        if (nextStatus === "complete") {
           cleanup();
         }
       };

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -24,50 +24,36 @@ import {
   IconChevronRight,
   IconDownload,
   IconFilter,
-  IconMessageCircle,
   IconMicrophone,
   IconNote,
   IconRefresh,
   IconSearch,
-  IconSpeakerphone,
-  IconSparkles,
   IconUsers,
 } from "@tabler/icons-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { format } from "date-fns";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
 import FormSelect from "../components/FormSelect";
+import MeetingTimeline, {
+  MEETING_TIMELINE_FILTERS,
+} from "../components/MeetingTimeline";
 import { trpc } from "../services/trpc";
 import { useGuildContext } from "../contexts/GuildContext";
 import { uiOverlays } from "../uiTokens";
-
-type MeetingEvent = {
-  id: string;
-  type: "voice" | "chat" | "tts" | "presence" | "bot";
-  time: string;
-  speaker?: string;
-  text: string;
-};
-
-type MeetingDetails = {
-  id: string;
-  meetingId: string;
-  title: string;
-  summary: string;
-  summaryLabel?: string;
-  notes: string;
-  dateLabel: string;
-  durationLabel: string;
-  tags: string[];
-  channel: string;
-  audioUrl?: string | null;
-  attendees: string[];
-  decisions: string[];
-  actions: string[];
-  events: MeetingEvent[];
-  status?: "in_progress" | "complete";
-};
+import { useLiveMeetingStream } from "../hooks/useLiveMeetingStream";
+import {
+  buildMeetingDetails,
+  deriveSummary,
+  deriveTitle,
+  filterMeetingItems,
+  formatChannelLabel,
+  formatDateLabel,
+  formatDurationLabel,
+} from "../utils/meetingLibrary";
+import type {
+  MeetingEvent,
+  MeetingEventType,
+} from "../../types/meetingTimeline";
 
 type MeetingExport = {
   meeting: {
@@ -109,7 +95,7 @@ type MeetingSummaryRow = {
   notesMessageId?: string;
   audioAvailable: boolean;
   transcriptAvailable: boolean;
-  status?: "in_progress" | "complete";
+  status?: "in_progress" | "processing" | "complete";
 };
 
 type MeetingListItem = MeetingSummaryRow & {
@@ -119,186 +105,6 @@ type MeetingListItem = MeetingSummaryRow & {
   dateLabel: string;
   durationLabel: string;
   channelLabel: string;
-};
-
-type RawMeetingDetail = {
-  id: string;
-  meetingId: string;
-  channelId: string;
-  timestamp: string;
-  duration: number;
-  tags?: string[];
-  notes?: string | null;
-  summarySentence?: string | null;
-  summaryLabel?: string | null;
-  audioUrl?: string | null;
-  attendees?: string[];
-  events?: MeetingEvent[];
-  status?: "in_progress" | "complete";
-};
-
-const FILTER_OPTIONS = [
-  { value: "voice", label: "Voice" },
-  { value: "chat", label: "Chat" },
-  { value: "tts", label: "Spoken chat" },
-  { value: "presence", label: "Joins/Leaves" },
-  { value: "bot", label: "Bot" },
-];
-
-const EVENT_META: Record<
-  MeetingEvent["type"],
-  { color: string; label: string; icon: ComponentType<{ size?: number }> }
-> = {
-  voice: { color: "brand", label: "Voice", icon: IconMicrophone },
-  chat: { color: "cyan", label: "Chat", icon: IconMessageCircle },
-  tts: { color: "teal", label: "Spoken chat", icon: IconSpeakerphone },
-  presence: { color: "gray", label: "Join/leave", icon: IconUsers },
-  bot: { color: "violet", label: "Chronote", icon: IconSparkles },
-};
-
-const formatChannelLabel = (name?: string, fallback?: string) => {
-  const raw = name ?? fallback ?? "Unknown channel";
-  return raw.startsWith("#") ? raw : `#${raw}`;
-};
-
-const formatDurationLabel = (seconds: number) => {
-  const safe = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  if (hours > 0) {
-    return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-  }
-  return `${minutes}m`;
-};
-
-const formatDateLabel = (timestamp: string) => {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return "Unknown date";
-  }
-  return format(date, "MMM d, yyyy");
-};
-
-const normalizeNotes = (notes: string) => notes.replace(/\r/g, "").trim();
-
-const deriveTitle = (notes: string, channelLabel: string) => {
-  const lines = normalizeNotes(notes)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const skip = new Set([
-    "highlights",
-    "decisions",
-    "action items",
-    "actions",
-    "recap",
-    "summary",
-  ]);
-  const candidate = lines.find((line) => !skip.has(line.toLowerCase()));
-  if (candidate) {
-    return candidate.replace(/^[-*#]\s*/, "");
-  }
-  return `Meeting in ${channelLabel.replace(/^#/, "")}`;
-};
-
-const deriveSummary = (notes: string, summarySentence?: string | null) => {
-  if (summarySentence && summarySentence.trim().length > 0) {
-    return summarySentence.trim();
-  }
-  const normalized = normalizeNotes(notes);
-  if (!normalized) {
-    return "Notes will appear after the meeting is processed.";
-  }
-  const lines = normalized
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const summaryLine = lines.find((line) =>
-    line.toLowerCase().includes("summary"),
-  );
-  if (summaryLine) {
-    return summaryLine.replace(/^summary[:\s-]*/i, "");
-  }
-  const singleLine = lines.join(" ").replace(/\s+/g, " ");
-  if (singleLine.length <= 180) {
-    return singleLine;
-  }
-  return `${singleLine.slice(0, 180)}...`;
-};
-
-const filterMeetings = (
-  meetingItems: MeetingListItem[],
-  options: {
-    query: string;
-    selectedTags: string[];
-    selectedChannel: string | null;
-    selectedRange: string;
-  },
-) => {
-  const { query, selectedTags, selectedChannel, selectedRange } = options;
-  const rangeDays =
-    selectedRange === "all" ? null : Number.parseInt(selectedRange, 10);
-  const now = Date.now();
-  const needle = query.toLowerCase();
-
-  return meetingItems.filter((meetingItem) => {
-    if (query) {
-      const text = `${meetingItem.title} ${meetingItem.summary}`.toLowerCase();
-      if (!text.includes(needle)) return false;
-    }
-    if (selectedTags.length) {
-      const matches = selectedTags.every((tag) =>
-        meetingItem.tags.includes(tag),
-      );
-      if (!matches) return false;
-    }
-    if (selectedChannel && meetingItem.channelId !== selectedChannel) {
-      return false;
-    }
-    if (rangeDays) {
-      const ts = Date.parse(meetingItem.timestamp);
-      if (Number.isFinite(ts)) {
-        const diffDays = (now - ts) / (1000 * 60 * 60 * 24);
-        if (diffDays > rangeDays) return false;
-      }
-    }
-    return true;
-  });
-};
-
-const buildMeetingDetails = (
-  detail: RawMeetingDetail,
-  channelNameMap: Map<string, string>,
-): MeetingDetails => {
-  const channelLabel = formatChannelLabel(
-    channelNameMap.get(detail.channelId),
-    detail.channelId,
-  );
-  const dateLabel = formatDateLabel(detail.timestamp);
-  const durationLabel = formatDurationLabel(detail.duration);
-  const title = deriveTitle(detail.notes ?? "", channelLabel);
-  const summary = deriveSummary(detail.notes ?? "", detail.summarySentence);
-  return {
-    id: detail.id,
-    meetingId: detail.meetingId,
-    title,
-    summary,
-    summaryLabel: detail.summaryLabel ?? undefined,
-    notes: detail.notes || "No notes recorded.",
-    dateLabel,
-    durationLabel,
-    tags: detail.tags ?? [],
-    channel: channelLabel,
-    audioUrl: detail.audioUrl ?? null,
-    attendees:
-      detail.attendees && detail.attendees.length > 0
-        ? detail.attendees
-        : ["Unknown"],
-    decisions: [],
-    actions: [],
-    events: detail.events ?? [],
-    status: detail.status ?? "complete",
-  } satisfies MeetingDetails;
 };
 
 export default function Library() {
@@ -313,8 +119,8 @@ export default function Library() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedRange, setSelectedRange] = useState("30");
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
-  const [activeFilters, setActiveFilters] = useState<string[]>(
-    FILTER_OPTIONS.map((filter) => filter.value),
+  const [activeFilters, setActiveFilters] = useState<MeetingEventType[]>(
+    MEETING_TIMELINE_FILTERS.map((filter) => filter.value),
   );
   const [fullScreen, setFullScreen] = useState(false);
 
@@ -399,7 +205,7 @@ export default function Library() {
 
   const filtered = useMemo(
     () =>
-      filterMeetings(meetingItems, {
+      filterMeetingItems(meetingItems, {
         query,
         selectedTags,
         selectedChannel,
@@ -412,16 +218,53 @@ export default function Library() {
     const detail = detailQuery.data?.meeting;
     return detail ? buildMeetingDetails(detail, channelNameMap) : null;
   }, [detailQuery.data, channelNameMap]);
-
-  const visibleEvents = useMemo(() => {
-    if (!meeting) return [];
-    return meeting.events.filter((event) => activeFilters.includes(event.type));
-  }, [meeting, activeFilters]);
+  const liveStreamEnabled = Boolean(
+    meeting &&
+      selectedGuildId &&
+      (meeting.status === "in_progress" || meeting.status === "processing"),
+  );
+  const liveStream = useLiveMeetingStream({
+    guildId: selectedGuildId ?? "",
+    meetingId: meeting?.meetingId ?? "",
+    enabled: liveStreamEnabled,
+  });
+  const displayStatus =
+    liveStream.meeting?.status ?? meeting?.status ?? "complete";
+  const displayAttendees = liveStreamEnabled
+    ? liveStream.attendees
+    : (meeting?.attendees ?? []);
+  const displayEvents = liveStreamEnabled
+    ? liveStream.events
+    : (meeting?.events ?? []);
+  const timelineEmptyLabel = liveStreamEnabled
+    ? liveStream.status === "processing"
+      ? "Meeting finished. Waiting for notes and timeline updates."
+      : "Waiting for the first transcript line..."
+    : "Timeline data will appear after the meeting finishes processing.";
 
   const listLoading = meetingsQuery.isLoading || channelsQuery.isLoading;
   const listError = meetingsQuery.error ?? channelsQuery.error;
   const detailLoading = detailQuery.isLoading || detailQuery.isFetching;
   const [refreshing, setRefreshing] = useState(false);
+  const refetchedMeetingRef = useRef<string | null>(null);
+
+  const meetingKey = meeting?.id ?? null;
+  useEffect(() => {
+    if (!liveStreamEnabled) return;
+    if (liveStream.status !== "complete") return;
+    if (!selectedGuildId || !meetingKey) return;
+    if (refetchedMeetingRef.current === meetingKey) return;
+    refetchedMeetingRef.current = meetingKey;
+    void trpcUtils.meetings.detail.invalidate();
+    void trpcUtils.meetings.list.invalidate({ serverId: selectedGuildId });
+  }, [
+    liveStream.status,
+    liveStreamEnabled,
+    meetingKey,
+    selectedGuildId,
+    trpcUtils.meetings.detail,
+    trpcUtils.meetings.list,
+  ]);
 
   const handleRefresh = async () => {
     if (!selectedGuildId) return;
@@ -602,6 +445,10 @@ export default function Library() {
                         <Badge color="red" variant="light">
                           Live
                         </Badge>
+                      ) : meetingItem.status === "processing" ? (
+                        <Badge color="yellow" variant="light">
+                          Processing
+                        </Badge>
                       ) : null}
                     </Group>
                     {meetingItem.summaryLabel ? (
@@ -672,9 +519,13 @@ export default function Library() {
                   <Group justify="space-between" align="center" wrap="wrap">
                     <Group gap="xs" align="center" wrap="wrap">
                       <Title order={3}>{meeting.title}</Title>
-                      {meeting.status === "in_progress" ? (
+                      {displayStatus === "in_progress" ? (
                         <Badge color="red" variant="light">
                           Live transcript
+                        </Badge>
+                      ) : displayStatus === "processing" ? (
+                        <Badge color="yellow" variant="light">
+                          Processing
                         </Badge>
                       ) : null}
                     </Group>
@@ -767,108 +618,32 @@ export default function Library() {
                     <Text fw={600}>Attendees</Text>
                   </Group>
                   <Text size="sm" c="dimmed">
-                    {meeting.attendees.join(", ")}
+                    {displayAttendees.join(", ")}
                   </Text>
                 </Surface>
 
                 <Surface p="md">
-                  <Group
-                    justify="space-between"
-                    align="center"
-                    mb="sm"
-                    wrap="wrap"
-                  >
-                    <Group gap="sm">
-                      <ThemeIcon variant="light" color="brand">
-                        <IconFilter size={16} />
-                      </ThemeIcon>
-                      <Text fw={600}>Timeline</Text>
-                    </Group>
-                    <Group gap="xs">
-                      {FILTER_OPTIONS.map((filter) => {
-                        const isActive = activeFilters.includes(filter.value);
-                        return (
-                          <Button
-                            key={filter.value}
-                            size="xs"
-                            variant={isActive ? "light" : "subtle"}
-                            color={isActive ? "cyan" : "gray"}
-                            onClick={() => {
-                              setActiveFilters((current) =>
-                                current.includes(filter.value)
-                                  ? current.filter(
-                                      (value) => value !== filter.value,
-                                    )
-                                  : [...current, filter.value],
-                              );
-                            }}
-                          >
-                            {filter.label}
-                          </Button>
-                        );
-                      })}
-                    </Group>
-                  </Group>
-                  <ScrollArea h={fullScreen ? 620 : 360} offsetScrollbars>
-                    {visibleEvents.length === 0 ? (
-                      <Center py="xl">
-                        <Text size="sm" c="dimmed">
-                          Timeline data will appear after the meeting finishes
-                          processing.
-                        </Text>
-                      </Center>
-                    ) : (
-                      <Stack gap={0}>
-                        {visibleEvents.map((event) => {
-                          const meta = EVENT_META[event.type];
-                          const Icon = meta.icon;
-                          const showMetaLabel = Boolean(event.speaker);
-                          return (
-                            <Box
-                              key={event.id}
-                              px="sm"
-                              py="sm"
-                              style={{
-                                borderBottom: `1px solid ${
-                                  isDark
-                                    ? theme.colors.dark[5]
-                                    : theme.colors.gray[2]
-                                }`,
-                              }}
-                            >
-                              <Group gap="sm" align="flex-start" wrap="nowrap">
-                                <ThemeIcon
-                                  variant="light"
-                                  color={meta.color}
-                                  size={32}
-                                >
-                                  <Icon size={16} />
-                                </ThemeIcon>
-                                <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
-                                  <Group gap="xs" align="baseline" wrap="wrap">
-                                    <Text fw={700} size="sm">
-                                      {event.speaker ?? meta.label}
-                                    </Text>
-                                    <Text size="xs" c="dimmed">
-                                      {event.time}
-                                    </Text>
-                                    {showMetaLabel ? (
-                                      <Text size="xs" c="dimmed">
-                                        • {meta.label}
-                                      </Text>
-                                    ) : null}
-                                  </Group>
-                                  <Text size="sm" c="dimmed">
-                                    {event.text}
-                                  </Text>
-                                </Stack>
-                              </Group>
-                            </Box>
-                          );
-                        })}
-                      </Stack>
-                    )}
-                  </ScrollArea>
+                  <Stack gap="sm">
+                    {liveStreamEnabled && liveStream.status === "error" ? (
+                      <Text size="sm" c="dimmed">
+                        Unable to connect to the live transcript. Try
+                        refreshing.
+                      </Text>
+                    ) : null}
+                    <MeetingTimeline
+                      events={displayEvents}
+                      activeFilters={activeFilters}
+                      onToggleFilter={(value) =>
+                        setActiveFilters((current) =>
+                          current.includes(value)
+                            ? current.filter((filter) => filter !== value)
+                            : [...current, value],
+                        )
+                      }
+                      height={fullScreen ? 620 : 360}
+                      emptyLabel={timelineEmptyLabel}
+                    />
+                  </Stack>
                 </Surface>
               </Stack>
             ) : null}

@@ -27,6 +27,7 @@
 - Express routes expect `Promise<void>` handlers; return after responses.
 - Live voice gate returns only a boolean; no fallback; temperature/max_tokens not supported on gpt-5-mini.
 - Short-lived session and in-memory caches reduce Discord API calls for guild lists, channels, roles, and members. Discord API requests use `cockatiel` retries with exponential backoff (max 3 attempts).
+- Shared helpers belong in `src/utils`; use `src/utils/time.ts` for ISO conversion, duration formatting, and long date labels, and add unit tests when utilities are reused.
 - Thinking cue loops until TTS playback begins; interval configurable (`LIVE_VOICE_THINKING_CUE_INTERVAL_MS`).
 - ECS service SG currently allows wide egress temporarily for voice debug; must be tightened later.
 - Frontend is static via CloudFront; APIs served by Express separately.

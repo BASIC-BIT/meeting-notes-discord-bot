@@ -18,6 +18,7 @@ import { deleteDirectoryRecursively, deleteIfExists } from "../util";
 import { MeetingData } from "../types/meeting-data";
 import { generateAndSendNotes } from "./generateNotes";
 import { saveMeetingHistoryToDatabase } from "./saveMeetingHistory";
+import { updateMeetingStatusService } from "../services/meetingHistoryService";
 import { renderChatEntryLine } from "../utils/chatLog";
 import { uploadMeetingArtifacts } from "../services/uploadService";
 import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
@@ -70,6 +71,7 @@ export async function handleEndMeetingButton(
 
     meeting.finishing = true;
     meeting.endTime = new Date();
+    await markMeetingProcessing(meeting);
     stopThinkingCueLoop(meeting);
     meeting.ttsQueue?.stopAndClear();
 
@@ -189,6 +191,19 @@ export async function handleEndMeetingButton(
   }
 }
 
+async function markMeetingProcessing(meeting: MeetingData) {
+  if (!meeting.transcribeMeeting) return;
+  try {
+    await updateMeetingStatusService({
+      guildId: meeting.guildId,
+      channelId_timestamp: `${meeting.voiceChannel.id}#${meeting.startTime.toISOString()}`,
+      status: "processing",
+    });
+  } catch (error) {
+    console.warn("Failed to mark meeting as processing", error);
+  }
+}
+
 async function clearStartMessageComponents(meeting: MeetingData) {
   if (!meeting.startMessageId) return;
   try {
@@ -214,6 +229,7 @@ export async function handleEndMeetingOther(
 
     meeting.finishing = true;
     meeting.endTime = new Date();
+    await markMeetingProcessing(meeting);
     stopThinkingCueLoop(meeting);
     meeting.ttsQueue?.stopAndClear();
 

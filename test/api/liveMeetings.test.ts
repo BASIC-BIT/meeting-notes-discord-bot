@@ -6,14 +6,10 @@ import { registerLiveMeetingRoutes } from "../../src/api/liveMeetings";
 import { getMeeting } from "../../src/meetings";
 import { ensureUserInGuild } from "../../src/services/guildAccessService";
 import { ensureUserCanConnectChannel } from "../../src/services/discordPermissionsService";
-import {
-  buildLiveMeetingMeta,
-  buildLiveMeetingSegments,
-} from "../../src/services/liveMeetingService";
-import type {
-  LiveMeetingMeta,
-  LiveMeetingSegment,
-} from "../../src/types/liveMeeting";
+import { buildLiveMeetingMeta } from "../../src/services/liveMeetingService";
+import { buildLiveMeetingTimelineEvents } from "../../src/services/meetingTimelineService";
+import type { LiveMeetingMeta } from "../../src/types/liveMeeting";
+import type { MeetingEvent } from "../../src/types/meetingTimeline";
 import type { MeetingData } from "../../src/types/meeting-data";
 
 jest.mock("../../src/meetings", () => ({
@@ -27,7 +23,9 @@ jest.mock("../../src/services/discordPermissionsService", () => ({
 }));
 jest.mock("../../src/services/liveMeetingService", () => ({
   buildLiveMeetingMeta: jest.fn(),
-  buildLiveMeetingSegments: jest.fn(),
+}));
+jest.mock("../../src/services/meetingTimelineService", () => ({
+  buildLiveMeetingTimelineEvents: jest.fn(),
 }));
 
 const mockedGetMeeting = getMeeting as jest.MockedFunction<typeof getMeeting>;
@@ -41,9 +39,9 @@ const mockedEnsureUserCanConnectChannel =
 const mockedBuildLiveMeetingMeta = buildLiveMeetingMeta as jest.MockedFunction<
   typeof buildLiveMeetingMeta
 >;
-const mockedBuildLiveMeetingSegments =
-  buildLiveMeetingSegments as jest.MockedFunction<
-    typeof buildLiveMeetingSegments
+const mockedBuildLiveMeetingTimelineEvents =
+  buildLiveMeetingTimelineEvents as jest.MockedFunction<
+    typeof buildLiveMeetingTimelineEvents
   >;
 
 const makeMeeting = (overrides?: Partial<MeetingData>): MeetingData =>
@@ -52,6 +50,8 @@ const makeMeeting = (overrides?: Partial<MeetingData>): MeetingData =>
     meetingId: "meeting-1",
     voiceChannel: { id: "voice-1", name: "General" },
     startTime: new Date("2025-01-01T00:00:00.000Z"),
+    attendance: new Set<string>(),
+    finishing: false,
     finished: false,
     ...overrides,
   }) as MeetingData;
@@ -68,14 +68,11 @@ const makeMeta = (overrides?: Partial<LiveMeetingMeta>): LiveMeetingMeta => ({
   ...overrides,
 });
 
-const makeSegment = (
-  overrides?: Partial<LiveMeetingSegment>,
-): LiveMeetingSegment => ({
-  id: "segment-1",
-  userId: "user-1",
-  startedAt: "2025-01-01T00:00:01.000Z",
+const makeEvent = (overrides?: Partial<MeetingEvent>): MeetingEvent => ({
+  id: "event-1",
+  type: "voice",
+  time: "0:01",
   text: "hello",
-  source: "voice",
   ...overrides,
 });
 
@@ -165,7 +162,7 @@ test("streams init payload for live meeting", async () => {
   mockedEnsureUserInGuild.mockResolvedValue(true);
   mockedEnsureUserCanConnectChannel.mockResolvedValue(true);
   mockedBuildLiveMeetingMeta.mockReturnValue(makeMeta());
-  mockedBuildLiveMeetingSegments.mockReturnValue([makeSegment()]);
+  mockedBuildLiveMeetingTimelineEvents.mockReturnValue([makeEvent()]);
 
   const { server, baseUrl } = createServer(true);
   try {

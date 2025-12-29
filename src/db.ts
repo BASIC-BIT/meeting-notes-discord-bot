@@ -708,6 +708,33 @@ export async function updateMeetingNotes(
   }
 }
 
+export async function updateMeetingStatus(
+  guildId: string,
+  channelId_timestamp: string,
+  status: "in_progress" | "processing" | "complete",
+): Promise<void> {
+  const now = new Date().toISOString();
+  const params: UpdateItemCommand["input"] = {
+    TableName: tableName("MeetingHistoryTable"),
+    Key: marshall({ guildId, channelId_timestamp }),
+    UpdateExpression: "SET #status = :status, #updatedAt = :updatedAt",
+    ExpressionAttributeNames: {
+      "#status": "status",
+      "#updatedAt": "updatedAt",
+    },
+    ExpressionAttributeValues: marshall(
+      {
+        ":status": status,
+        ":updatedAt": now,
+      },
+      { removeUndefinedValues: true },
+    ),
+  };
+
+  const command = new UpdateItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
 function buildAskPartitionKey(userId: string, guildId: string) {
   return `USER#${userId}#GUILD#${guildId}`;
 }
