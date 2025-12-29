@@ -64,6 +64,12 @@ variable "OPENAI_PROJECT_ID" {
   default   = ""
 }
 
+variable "NOTES_MODEL" {
+  description = "OpenAI model for notes and summaries"
+  type        = string
+  default     = "gpt-5.2"
+}
+
 variable "TRANSCRIPTS_BUCKET" {
   description = "S3 bucket name for storing full meeting transcripts (leave blank to auto-generate)"
   type        = string
@@ -1021,6 +1027,10 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "OPENAI_PROJECT_ID"
           value = var.OPENAI_PROJECT_ID
+        },
+        {
+          name  = "NOTES_MODEL"
+          value = var.NOTES_MODEL
         },
         {
           name  = "TRANSCRIPTS_BUCKET"
