@@ -1,3 +1,7 @@
+/**
+ * Prepends optional summary lines to notes in a plain text format.
+ * If summaries are missing, returns the trimmed notes as-is.
+ */
 export function formatNotesWithSummary(
   notes: string,
   summarySentence?: string,

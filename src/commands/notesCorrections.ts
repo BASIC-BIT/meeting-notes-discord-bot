@@ -409,12 +409,23 @@ async function buildCorrectionSummaries(
     previousSummarySentence: pending.summarySentence,
     previousSummaryLabel: pending.summaryLabel,
   });
+  const summarySentence = summaries.summarySentence ?? pending.summarySentence;
+  const summaryLabel = summaries.summaryLabel ?? pending.summaryLabel;
+  if (
+    !summaries.summarySentence &&
+    !summaries.summaryLabel &&
+    (pending.summarySentence || pending.summaryLabel)
+  ) {
+    console.warn(
+      "Meeting summary generation returned empty, keeping previous summaries.",
+    );
+  }
   const notesBody = formatNotesWithSummary(
     pending.newNotes,
-    summaries.summarySentence,
-    summaries.summaryLabel,
+    summarySentence,
+    summaryLabel,
   );
-  return { notesBody, summaries };
+  return { notesBody, summaries: { summarySentence, summaryLabel } };
 }
 
 async function updateNotesEmbedsForCorrection(

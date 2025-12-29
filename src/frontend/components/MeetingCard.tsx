@@ -38,14 +38,14 @@ export function MeetingCard({ meeting, onOpen }: MeetingCardProps) {
             View
           </Button>
         </Group>
-        <Text size="sm" c="dimmed">
-          {meeting.summary}
-        </Text>
         {meeting.summaryLabel ? (
           <Text size="xs" c="dimmed">
             {meeting.summaryLabel}
           </Text>
         ) : null}
+        <Text size="sm" c="dimmed">
+          {meeting.summary}
+        </Text>
         <Group gap="xs">
           <Group gap={6}>
             <ThemeIcon size={22} variant="light" color="gray">

@@ -25,6 +25,29 @@ function formatFullDate(date: Date): string {
   });
 }
 
+function normalizeSummarySentence(value?: string): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const sentenceMarkers = trimmed.match(/[.!?]/g);
+  if (sentenceMarkers && sentenceMarkers.length > 1) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function normalizeSummaryLabel(value?: string): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length > 5) return undefined;
+  if (!/^[A-Za-z0-9 ]+$/.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 export function parseMeetingSummaryResponse(
   content: string,
 ): MeetingSummaries | undefined {
@@ -34,17 +57,14 @@ export function parseMeetingSummaryResponse(
       summarySentence?: string;
       summaryLabel?: string;
     };
-    const summarySentence =
-      typeof parsed.summarySentence === "string"
-        ? parsed.summarySentence.trim()
-        : undefined;
-    const summaryLabel =
-      typeof parsed.summaryLabel === "string"
-        ? parsed.summaryLabel.trim()
-        : undefined;
+    const summarySentence = normalizeSummarySentence(parsed.summarySentence);
+    const summaryLabel = normalizeSummaryLabel(parsed.summaryLabel);
+    if (!summarySentence && !summaryLabel) {
+      return undefined;
+    }
     return {
-      summarySentence: summarySentence || undefined,
-      summaryLabel: summaryLabel || undefined,
+      summarySentence,
+      summaryLabel,
     };
   } catch (error) {
     console.error("Failed to parse meeting summaries:", error);
@@ -52,6 +72,10 @@ export function parseMeetingSummaryResponse(
   }
 }
 
+/**
+ * Generates AI-based summaries for a meeting from notes and context.
+ * Returns an empty object when the model response is missing or invalid.
+ */
 export async function generateMeetingSummaries(
   input: MeetingSummaryInput,
 ): Promise<MeetingSummaries> {
