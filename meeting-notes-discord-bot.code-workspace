@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "path": ".",
+    },
+    {
+      "path": "../meeting-notes-discord-bot-chat-tts",
+    },
+  ],
+  "settings": {
+    "chatgpt.commentCodeLensEnabled": true,
+  },
+}
