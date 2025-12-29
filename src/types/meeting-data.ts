@@ -13,6 +13,13 @@ import { Participant } from "./participants";
 import type { UserSpeechSettings } from "./db";
 import type { TtsQueue } from "../ttsQueue";
 
+export type LiveVoiceCommandPending = {
+  type: "end_meeting";
+  userId: string;
+  requestedAt: number;
+  expiresAt: number;
+};
+
 export interface MeetingData {
   meetingId: string;
   chatLog: ChatEntry[];
@@ -33,7 +40,9 @@ export interface MeetingData {
 
   liveAudioPlayer?: AudioPlayer;
   liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
   liveVoiceTtsVoice?: string;
+  liveVoiceCommandPending?: LiveVoiceCommandPending;
 
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string;
@@ -49,6 +58,7 @@ export interface MeetingData {
   transcribeMeeting: boolean;
   generateNotes: boolean;
   meetingContext?: string;
+  onEndMeeting?: (meeting: MeetingData) => Promise<void> | void;
 
   finalTranscript?: string;
   transcriptS3Key?: string;

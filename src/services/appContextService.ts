@@ -7,6 +7,7 @@ export type ServerContextUpdate = {
   defaultNotesChannelId?: string | null;
   defaultTags?: string[];
   liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
   liveVoiceTtsVoice?: string | null;
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string | null;
@@ -36,6 +37,10 @@ export async function setServerContext(
     update.liveVoiceEnabled !== undefined
       ? update.liveVoiceEnabled
       : existing?.liveVoiceEnabled;
+  const nextLiveVoiceCommandsEnabled =
+    update.liveVoiceCommandsEnabled !== undefined
+      ? update.liveVoiceCommandsEnabled
+      : existing?.liveVoiceCommandsEnabled;
   const nextLiveVoiceTtsVoice =
     update.liveVoiceTtsVoice === null
       ? undefined
@@ -60,6 +65,9 @@ export async function setServerContext(
     ...(nextDefaultTags ? { defaultTags: nextDefaultTags } : {}),
     ...(nextLiveVoiceEnabled !== undefined
       ? { liveVoiceEnabled: nextLiveVoiceEnabled }
+      : {}),
+    ...(nextLiveVoiceCommandsEnabled !== undefined
+      ? { liveVoiceCommandsEnabled: nextLiveVoiceCommandsEnabled }
       : {}),
     ...(nextLiveVoiceTtsVoice
       ? { liveVoiceTtsVoice: nextLiveVoiceTtsVoice }

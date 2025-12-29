@@ -141,6 +141,7 @@ function buildDefaultStore(): MockStore {
     defaultNotesChannelId: "text-1",
     defaultTags: ["campaign", "recap"],
     liveVoiceEnabled: false,
+    liveVoiceCommandsEnabled: false,
     updatedAt: nowIso(),
     updatedBy: mockUser.id,
   });
@@ -151,6 +152,7 @@ function buildDefaultStore(): MockStore {
     channelId: "voice-3",
     context: "Tabletop voice channel for D&D sessions and campaign recaps.",
     liveVoiceEnabled: true,
+    liveVoiceCommandsEnabled: false,
     updatedAt: nowIso(),
     updatedBy: mockUser.id,
   });

@@ -33,6 +33,10 @@ function generateNewSnippet(userId: string): AudioSnippet {
   };
 }
 
+type SnippetProcessingOptions = {
+  forceTranscribe?: boolean;
+};
+
 // Handle snippets based on the user speaking
 export function updateSnippetsIfNecessary(
   meeting: MeetingData,
@@ -54,7 +58,11 @@ export function updateSnippetsIfNecessary(
 }
 
 // Start processing a specific user's snippet
-export function startProcessingSnippet(meeting: MeetingData, userId: string) {
+export function startProcessingSnippet(
+  meeting: MeetingData,
+  userId: string,
+  options: SnippetProcessingOptions = {},
+) {
   const snippet = meeting.audioData.currentSnippets.get(userId);
   if (!snippet) return;
 
@@ -68,7 +76,12 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
 
   const promises: Promise<void>[] = [];
 
-  if (getAudioDuration(snippet) > MINIMUM_TRANSCRIPTION_LENGTH) {
+  const duration = getAudioDuration(snippet);
+  const hasAudio = snippet.chunks.length > 0;
+  if (
+    hasAudio &&
+    (duration > MINIMUM_TRANSCRIPTION_LENGTH || options.forceTranscribe)
+  ) {
     promises.push(
       transcribeSnippet(meeting, snippet).then((transcription) => {
         audioFileData.transcript = transcription;
@@ -183,6 +196,12 @@ export async function subscribeToUserVoice(
 }
 
 export function userStopTalking(meeting: MeetingData, userId: string) {
+  const pending = meeting.liveVoiceCommandPending;
+  if (pending && pending.expiresAt > Date.now() && pending.userId === userId) {
+    clearSnippetTimer(meeting, userId);
+    startProcessingSnippet(meeting, userId, { forceTranscribe: true });
+    return;
+  }
   setSnippetTimer(meeting, userId);
 }
 

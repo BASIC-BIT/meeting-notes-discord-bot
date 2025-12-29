@@ -83,11 +83,13 @@ export interface MeetingInitOptions {
   onTimeout?: (meeting: MeetingData) => void;
   tags?: string[];
   liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
   liveVoiceTtsVoice?: string;
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string;
   maxMeetingDurationMs?: number;
   maxMeetingDurationPretty?: string;
+  onEndMeeting?: (meeting: MeetingData) => Promise<void> | void;
 }
 
 /**
@@ -114,11 +116,13 @@ export async function initializeMeeting(
     onTimeout,
     tags,
     liveVoiceEnabled: liveVoiceOverride,
+    liveVoiceCommandsEnabled: liveVoiceCommandsOverride,
     liveVoiceTtsVoice,
     chatTtsEnabled: chatTtsOverride,
     chatTtsVoice,
     maxMeetingDurationMs,
     maxMeetingDurationPretty,
+    onEndMeeting,
   } = options;
 
   // Join the voice channel
@@ -143,8 +147,11 @@ export async function initializeMeeting(
   const attendance: Set<string> = new Set<string>();
   const liveVoiceEnabled =
     config.liveVoice.mode === "tts_gate" && liveVoiceOverride !== false;
+  const liveVoiceCommandsEnabled =
+    config.liveVoice.mode === "tts_gate" && liveVoiceCommandsOverride === true;
   const chatTtsEnabled = chatTtsOverride ?? false;
-  const botAudioEnabled = liveVoiceEnabled || chatTtsEnabled;
+  const botAudioEnabled =
+    liveVoiceEnabled || chatTtsEnabled || liveVoiceCommandsEnabled;
   const liveAudioPlayer = botAudioEnabled
     ? createAudioPlayer({
         behaviors: {
@@ -179,6 +186,7 @@ export async function initializeMeeting(
     creator,
     liveAudioPlayer,
     liveVoiceEnabled,
+    liveVoiceCommandsEnabled,
     liveVoiceTtsVoice,
     chatTtsEnabled,
     chatTtsVoice,
@@ -192,6 +200,7 @@ export async function initializeMeeting(
     transcribeMeeting,
     generateNotes,
     meetingContext,
+    onEndMeeting: onEndMeeting ?? onTimeout,
     isAutoRecording,
     participants: new Map(),
     tags,

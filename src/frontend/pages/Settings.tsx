@@ -50,6 +50,7 @@ type ChannelOverride = {
   context?: string;
   autoRecordEnabled: boolean;
   liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
   chatTtsEnabled?: boolean;
 };
 
@@ -58,6 +59,7 @@ type GlobalContextData = {
   defaultTags?: string[] | null;
   defaultNotesChannelId?: string | null;
   liveVoiceEnabled?: boolean | null;
+  liveVoiceCommandsEnabled?: boolean | null;
   liveVoiceTtsVoice?: string | null;
   chatTtsEnabled?: boolean | null;
   chatTtsVoice?: string | null;
@@ -147,6 +149,7 @@ const toChannelOverride = (options: {
     context: entry.context?.context,
     autoRecordEnabled: Boolean(entry.rule?.enabled),
     liveVoiceEnabled: entry.context?.liveVoiceEnabled,
+    liveVoiceCommandsEnabled: entry.context?.liveVoiceCommandsEnabled,
     chatTtsEnabled: entry.context?.chatTtsEnabled,
   };
 };
@@ -203,6 +206,7 @@ const resetGlobalDefaults = (options: {
   setDefaultTags: (value: string) => void;
   setDefaultNotesChannelId: (value: string | null) => void;
   setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
   setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
   setGlobalChatTtsEnabled: (value: boolean) => void;
   setGlobalChatTtsVoice: (value: string | null) => void;
@@ -214,6 +218,7 @@ const resetGlobalDefaults = (options: {
     setDefaultTags,
     setDefaultNotesChannelId,
     setGlobalLiveVoiceEnabled,
+    setGlobalLiveVoiceCommandsEnabled,
     setGlobalLiveVoiceTtsVoice,
     setGlobalChatTtsEnabled,
     setGlobalChatTtsVoice,
@@ -224,6 +229,7 @@ const resetGlobalDefaults = (options: {
   setDefaultNotesChannelId(null);
   setDefaultTags("");
   setGlobalLiveVoiceEnabled(false);
+  setGlobalLiveVoiceCommandsEnabled(false);
   setGlobalLiveVoiceTtsVoice(null);
   setGlobalChatTtsEnabled(false);
   setGlobalChatTtsVoice(null);
@@ -238,6 +244,7 @@ const applyGlobalDefaults = (options: {
   setDefaultTags: (value: string) => void;
   setDefaultNotesChannelId: (value: string | null) => void;
   setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
   setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
   setGlobalChatTtsEnabled: (value: boolean) => void;
   setGlobalChatTtsVoice: (value: string | null) => void;
@@ -250,6 +257,7 @@ const applyGlobalDefaults = (options: {
     setDefaultTags,
     setDefaultNotesChannelId,
     setGlobalLiveVoiceEnabled,
+    setGlobalLiveVoiceCommandsEnabled,
     setGlobalLiveVoiceTtsVoice,
     setGlobalChatTtsEnabled,
     setGlobalChatTtsVoice,
@@ -261,6 +269,9 @@ const applyGlobalDefaults = (options: {
     resolveDefaultNotesChannelId({ contextData, recordAllRule }),
   );
   setGlobalLiveVoiceEnabled(coalesce(contextData.liveVoiceEnabled, false));
+  setGlobalLiveVoiceCommandsEnabled(
+    coalesce(contextData.liveVoiceCommandsEnabled, false),
+  );
   setGlobalLiveVoiceTtsVoice(coalesce(contextData.liveVoiceTtsVoice, null));
   setGlobalChatTtsEnabled(coalesce(contextData.chatTtsEnabled, false));
   setGlobalChatTtsVoice(coalesce(contextData.chatTtsVoice, null));
@@ -276,6 +287,7 @@ const syncGlobalDefaults = (options: {
   setDefaultTags: (value: string) => void;
   setDefaultNotesChannelId: (value: string | null) => void;
   setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
   setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
   setGlobalChatTtsEnabled: (value: boolean) => void;
   setGlobalChatTtsVoice: (value: string | null) => void;
@@ -291,6 +303,7 @@ const syncGlobalDefaults = (options: {
     setDefaultTags,
     setDefaultNotesChannelId,
     setGlobalLiveVoiceEnabled,
+    setGlobalLiveVoiceCommandsEnabled,
     setGlobalLiveVoiceTtsVoice,
     setGlobalChatTtsEnabled,
     setGlobalChatTtsVoice,
@@ -304,6 +317,7 @@ const syncGlobalDefaults = (options: {
       setDefaultNotesChannelId,
       setDefaultTags,
       setGlobalLiveVoiceEnabled,
+      setGlobalLiveVoiceCommandsEnabled,
       setGlobalLiveVoiceTtsVoice,
       setGlobalChatTtsEnabled,
       setGlobalChatTtsVoice,
@@ -320,6 +334,7 @@ const syncGlobalDefaults = (options: {
     setDefaultTags,
     setDefaultNotesChannelId,
     setGlobalLiveVoiceEnabled,
+    setGlobalLiveVoiceCommandsEnabled,
     setGlobalLiveVoiceTtsVoice,
     setGlobalChatTtsEnabled,
     setGlobalChatTtsVoice,
@@ -359,6 +374,8 @@ export default function Settings() {
   >(null);
   const [defaultTags, setDefaultTags] = useState("");
   const [globalLiveVoiceEnabled, setGlobalLiveVoiceEnabled] = useState(false);
+  const [globalLiveVoiceCommandsEnabled, setGlobalLiveVoiceCommandsEnabled] =
+    useState(false);
   const [globalLiveVoiceTtsVoice, setGlobalLiveVoiceTtsVoice] = useState<
     string | null
   >(null);
@@ -384,6 +401,8 @@ export default function Settings() {
   const [channelLiveVoiceMode, setChannelLiveVoiceMode] = useState<
     "inherit" | "on" | "off"
   >("inherit");
+  const [channelLiveVoiceCommandsMode, setChannelLiveVoiceCommandsMode] =
+    useState<"inherit" | "on" | "off">("inherit");
   const [channelChatTtsMode, setChannelChatTtsMode] = useState<
     "inherit" | "on" | "off"
   >("inherit");
@@ -397,6 +416,7 @@ export default function Settings() {
     setChannelTags("");
     setChannelContext("");
     setChannelLiveVoiceMode("inherit");
+    setChannelLiveVoiceCommandsMode("inherit");
     setChannelChatTtsMode("inherit");
     channelModal.close();
   }, [selectedGuildId]);
@@ -504,6 +524,7 @@ export default function Settings() {
       setDefaultTags,
       setDefaultNotesChannelId,
       setGlobalLiveVoiceEnabled,
+      setGlobalLiveVoiceCommandsEnabled,
       setGlobalLiveVoiceTtsVoice,
       setGlobalChatTtsEnabled,
       setGlobalChatTtsVoice,
@@ -538,6 +559,7 @@ export default function Settings() {
     setChannelTags("");
     setChannelContext("");
     setChannelLiveVoiceMode("inherit");
+    setChannelLiveVoiceCommandsMode("inherit");
     setChannelChatTtsMode("inherit");
     channelModal.open();
   };
@@ -553,6 +575,13 @@ export default function Settings() {
       override.liveVoiceEnabled === undefined
         ? "inherit"
         : override.liveVoiceEnabled
+          ? "on"
+          : "off",
+    );
+    setChannelLiveVoiceCommandsMode(
+      override.liveVoiceCommandsEnabled === undefined
+        ? "inherit"
+        : override.liveVoiceCommandsEnabled
           ? "on"
           : "off",
     );
@@ -608,6 +637,7 @@ export default function Settings() {
         defaultNotesChannelId: defaultNotesChannelId ?? null,
         defaultTags: parsedDefaultTags,
         liveVoiceEnabled: globalLiveVoiceEnabled,
+        liveVoiceCommandsEnabled: globalLiveVoiceCommandsEnabled,
         liveVoiceTtsVoice: globalLiveVoiceTtsVoice,
         chatTtsEnabled: globalChatTtsEnabled,
         chatTtsVoice: globalChatTtsVoice,
@@ -648,6 +678,10 @@ export default function Settings() {
     const tasks: Promise<unknown>[] = [];
     const liveVoiceOverride =
       channelLiveVoiceMode === "inherit" ? null : channelLiveVoiceMode === "on";
+    const liveVoiceCommandsOverride =
+      channelLiveVoiceCommandsMode === "inherit"
+        ? null
+        : channelLiveVoiceCommandsMode === "on";
     const chatTtsOverride =
       channelChatTtsMode === "inherit" ? null : channelChatTtsMode === "on";
     const shouldUpdateContext =
@@ -655,6 +689,8 @@ export default function Settings() {
       existingOverride?.context ||
       liveVoiceOverride !== null ||
       existingOverride?.liveVoiceEnabled !== undefined ||
+      liveVoiceCommandsOverride !== null ||
+      existingOverride?.liveVoiceCommandsEnabled !== undefined ||
       chatTtsOverride !== null ||
       existingOverride?.chatTtsEnabled !== undefined;
     if (shouldUpdateContext) {
@@ -664,6 +700,7 @@ export default function Settings() {
           channelId: channelVoiceChannelId,
           context: trimmedContext.length > 0 ? trimmedContext : undefined,
           liveVoiceEnabled: liveVoiceOverride,
+          liveVoiceCommandsEnabled: liveVoiceCommandsOverride,
           chatTtsEnabled: chatTtsOverride,
         }),
       );
@@ -716,6 +753,7 @@ export default function Settings() {
     if (
       override.context ||
       override.liveVoiceEnabled !== undefined ||
+      override.liveVoiceCommandsEnabled !== undefined ||
       override.chatTtsEnabled !== undefined
     ) {
       tasks.push(
@@ -780,6 +818,15 @@ export default function Settings() {
             checked={globalLiveVoiceEnabled}
             onChange={(event) => {
               setGlobalLiveVoiceEnabled(event.currentTarget.checked);
+              setGlobalDirty(true);
+            }}
+            disabled={globalBusy}
+          />
+          <Switch
+            label="Enable live voice commands by default"
+            checked={globalLiveVoiceCommandsEnabled}
+            onChange={(event) => {
+              setGlobalLiveVoiceCommandsEnabled(event.currentTarget.checked);
               setGlobalDirty(true);
             }}
             disabled={globalBusy}
@@ -971,6 +1018,14 @@ export default function Settings() {
                     <Text size="sm" c="dimmed" key="live-voice">
                       Live voice responder:{" "}
                       {override.liveVoiceEnabled ? "On" : "Off"}
+                    </Text>,
+                  );
+                }
+                if (override.liveVoiceCommandsEnabled !== undefined) {
+                  detailLines.push(
+                    <Text size="sm" c="dimmed" key="live-voice-commands">
+                      Live voice commands:{" "}
+                      {override.liveVoiceCommandsEnabled ? "On" : "Off"}
                     </Text>,
                   );
                 }
@@ -1167,6 +1222,28 @@ export default function Settings() {
               value={channelLiveVoiceMode}
               onChange={(value) =>
                 setChannelLiveVoiceMode(value as "inherit" | "on" | "off")
+              }
+              data={[
+                { label: "Use default", value: "inherit" },
+                { label: "On", value: "on" },
+                { label: "Off", value: "off" },
+              ]}
+              fullWidth
+            />
+            <Text size="xs" c="dimmed">
+              Use default to inherit the server-wide setting.
+            </Text>
+          </Stack>
+          <Stack gap={6}>
+            <Text size="sm" fw={600}>
+              Live voice commands
+            </Text>
+            <SegmentedControl
+              value={channelLiveVoiceCommandsMode}
+              onChange={(value) =>
+                setChannelLiveVoiceCommandsMode(
+                  value as "inherit" | "on" | "off",
+                )
               }
               data={[
                 { label: "Use default", value: "inherit" },
