@@ -83,6 +83,13 @@ Notes:
 - Helpers: `yarn terraform:init | plan | apply`.
 - IaC scanning: `yarn checkov` (Checkov) locally; also runs in CI.
 
+## GitHub personal access token rotation
+
+- Create a new classic token with required scopes using the prefilled URL: [https://github.com/settings/personal-access-tokens/new?scopes=repo,workflow,admin:repo_hook&description=Chronote%20Terraform](https://github.com/settings/personal-access-tokens/new?scopes=repo,workflow,admin:repo_hook&description=Chronote%20Terraform). The query string sets the description and scopes; set the expiration and confirm the Chronote organization if GitHub prompts for it because the URL cannot pre-select an owner.
+- If you prefer a fine-grained token, start from [https://github.com/settings/tokens?type=beta](https://github.com/settings/tokens?type=beta) and click **Generate new token**; pick the Chronote organization and repository scope on the form before creating the token.
+- After generating the token, set `GITHUB_TOKEN` in `_infra/terraform.tfvars` (and `_infra/terraform.staging.tfvars` if you use staging), or export `TF_VAR_GITHUB_TOKEN` in your shell before running `terraform plan` or `terraform apply`. Keep the token out of version control.
+- Revoke the old token at [https://github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens) once Terraform is applying successfully with the new credentials.
+
 ### Observability (hosted)
 
 - AMP (Amazon Managed Prometheus) and AMG (Amazon Managed Grafana) are provisioned by Terraform. AMG requires IAM Identity Center (AWS SSO) to be enabled in the account.
