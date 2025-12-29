@@ -14,16 +14,3 @@ export function stripCodeFences(text: string): string {
   }
   return lines.join("\n").trim();
 }
-
-export function scrubForSpeech(text: string): string {
-  const withoutMarkdownLinks = text.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi,
-    "$1",
-  );
-  return withoutMarkdownLinks
-    .replace(/https?:\/\/\S+/gi, "")
-    .replace(/<[@#][!&]?\d+>/g, "")
-    .replace(/\b\d{6,}\b/g, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
