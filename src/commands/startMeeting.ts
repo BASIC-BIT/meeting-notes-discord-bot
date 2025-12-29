@@ -204,8 +204,13 @@ export async function handleRequestStartMeeting(
     return;
   }
 
-  const { liveVoiceEnabled, chatTtsEnabled, chatTtsVoice, liveVoiceTtsVoice } =
-    await resolveMeetingVoiceSettings(guildId, voiceChannel.id, limits);
+  const {
+    liveVoiceEnabled,
+    liveVoiceCommandsEnabled,
+    chatTtsEnabled,
+    chatTtsVoice,
+    liveVoiceTtsVoice,
+  } = await resolveMeetingVoiceSettings(guildId, voiceChannel.id, limits);
 
   // Initialize the meeting using the core function
   const meeting = await initializeMeeting({
@@ -220,7 +225,10 @@ export async function handleRequestStartMeeting(
     isAutoRecording: false,
     tags,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
+    onEndMeeting: (meeting) =>
+      handleEndMeetingOther(interaction.client, meeting),
     liveVoiceEnabled,
+    liveVoiceCommandsEnabled,
     liveVoiceTtsVoice,
     chatTtsEnabled,
     chatTtsVoice,
@@ -275,6 +283,7 @@ export async function handleAutoStartMeeting(
   options?: {
     tags?: string[];
     liveVoiceEnabled?: boolean;
+    liveVoiceCommandsEnabled?: boolean;
     liveVoiceTtsVoice?: string;
     chatTtsEnabled?: boolean;
     chatTtsVoice?: string;
@@ -345,6 +354,7 @@ export async function handleAutoStartMeeting(
     tags: options?.tags,
     onTimeout: (meeting) => handleEndMeetingOther(client, meeting),
     liveVoiceEnabled: options?.liveVoiceEnabled,
+    liveVoiceCommandsEnabled: options?.liveVoiceCommandsEnabled,
     liveVoiceTtsVoice: options?.liveVoiceTtsVoice,
     chatTtsEnabled: options?.chatTtsEnabled,
     chatTtsVoice: options?.chatTtsVoice,

@@ -4,6 +4,7 @@ import { nowIso } from "../utils/time";
 export type ChannelContextUpdate = {
   context?: string | null;
   liveVoiceEnabled?: boolean | null;
+  liveVoiceCommandsEnabled?: boolean | null;
   chatTtsEnabled?: boolean | null;
 };
 
@@ -21,6 +22,10 @@ export async function setChannelContext(
     update.liveVoiceEnabled === null
       ? undefined
       : (update.liveVoiceEnabled ?? existing?.liveVoiceEnabled);
+  const nextLiveVoiceCommandsEnabled =
+    update.liveVoiceCommandsEnabled === null
+      ? undefined
+      : (update.liveVoiceCommandsEnabled ?? existing?.liveVoiceCommandsEnabled);
   const nextChatTtsEnabled =
     update.chatTtsEnabled === null
       ? undefined
@@ -29,6 +34,7 @@ export async function setChannelContext(
   if (
     !nextContext &&
     nextLiveVoiceEnabled === undefined &&
+    nextLiveVoiceCommandsEnabled === undefined &&
     nextChatTtsEnabled === undefined
   ) {
     await repo.remove(guildId, channelId);
@@ -40,6 +46,7 @@ export async function setChannelContext(
     channelId,
     context: nextContext,
     liveVoiceEnabled: nextLiveVoiceEnabled,
+    liveVoiceCommandsEnabled: nextLiveVoiceCommandsEnabled,
     chatTtsEnabled: nextChatTtsEnabled,
     updatedAt: nowIso(),
     updatedBy: userId,

@@ -13,6 +13,7 @@ describe("meetingVoiceSettingsService", () => {
       guildId: "guild-1",
       context: "server",
       liveVoiceEnabled: true,
+      liveVoiceCommandsEnabled: true,
       chatTtsEnabled: false,
       liveVoiceTtsVoice: "alloy",
       chatTtsVoice: "nova",
@@ -34,6 +35,7 @@ describe("meetingVoiceSettingsService", () => {
 
     expect(settings.chatTtsEnabled).toBe(true);
     expect(settings.liveVoiceEnabled).toBe(true);
+    expect(settings.liveVoiceCommandsEnabled).toBe(true);
     expect(settings.chatTtsVoice).toBe("nova");
     expect(settings.liveVoiceTtsVoice).toBe("alloy");
   });
@@ -43,6 +45,7 @@ describe("meetingVoiceSettingsService", () => {
     store.serverContexts.set("guild-2", {
       guildId: "guild-2",
       context: "server",
+      liveVoiceCommandsEnabled: true,
       chatTtsEnabled: true,
       updatedAt: nowIso(),
       updatedBy: "user-2",
@@ -55,5 +58,6 @@ describe("meetingVoiceSettingsService", () => {
 
     expect(settings.chatTtsEnabled).toBe(false);
     expect(settings.liveVoiceEnabled).toBe(false);
+    expect(settings.liveVoiceCommandsEnabled).toBe(false);
   });
 });

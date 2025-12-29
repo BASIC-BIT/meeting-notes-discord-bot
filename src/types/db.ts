@@ -90,6 +90,7 @@ export interface ServerContext {
   defaultNotesChannelId?: string;
   defaultTags?: string[];
   liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
   liveVoiceTtsVoice?: string;
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string;
@@ -103,6 +104,7 @@ export interface ChannelContext {
   channelId: string; // Sort key
   context?: string; // The context/instructions for the channel
   liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
   chatTtsEnabled?: boolean;
   updatedAt: string; // ISO timestamp
   updatedBy: string; // User ID who last updated

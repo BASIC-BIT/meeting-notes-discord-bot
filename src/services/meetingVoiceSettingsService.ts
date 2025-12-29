@@ -4,10 +4,34 @@ import type { TierLimits } from "./subscriptionService";
 
 export type MeetingVoiceSettings = {
   liveVoiceEnabled: boolean;
+  liveVoiceCommandsEnabled: boolean;
   chatTtsEnabled: boolean;
   liveVoiceTtsVoice?: string;
   chatTtsVoice?: string;
 };
+
+type VoiceToggleKey =
+  | "liveVoiceEnabled"
+  | "liveVoiceCommandsEnabled"
+  | "chatTtsEnabled";
+
+type VoiceToggleContext = {
+  liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
+  chatTtsEnabled?: boolean;
+};
+
+function resolveVoiceToggle(
+  limits: TierLimits,
+  serverContext: VoiceToggleContext | null | undefined,
+  channelContext: VoiceToggleContext | null | undefined,
+  key: VoiceToggleKey,
+): boolean {
+  if (!limits.liveVoiceEnabled) return false;
+  const serverDefault = serverContext?.[key] ?? false;
+  const override = channelContext?.[key];
+  return override ?? serverDefault;
+}
 
 export async function resolveMeetingVoiceSettings(
   guildId: string,
@@ -18,16 +42,27 @@ export async function resolveMeetingVoiceSettings(
     fetchServerContext(guildId),
     fetchChannelContext(guildId, channelId),
   ]);
-  const liveVoiceDefault = serverContext?.liveVoiceEnabled ?? false;
-  const liveVoiceOverride = channelContext?.liveVoiceEnabled;
-  const chatTtsDefault = serverContext?.chatTtsEnabled ?? false;
-  const chatTtsOverride = channelContext?.chatTtsEnabled;
-  const liveVoiceEnabled =
-    limits.liveVoiceEnabled && (liveVoiceOverride ?? liveVoiceDefault);
-  const chatTtsEnabled =
-    limits.liveVoiceEnabled && (chatTtsOverride ?? chatTtsDefault);
+  const liveVoiceEnabled = resolveVoiceToggle(
+    limits,
+    serverContext,
+    channelContext,
+    "liveVoiceEnabled",
+  );
+  const liveVoiceCommandsEnabled = resolveVoiceToggle(
+    limits,
+    serverContext,
+    channelContext,
+    "liveVoiceCommandsEnabled",
+  );
+  const chatTtsEnabled = resolveVoiceToggle(
+    limits,
+    serverContext,
+    channelContext,
+    "chatTtsEnabled",
+  );
   return {
     liveVoiceEnabled,
+    liveVoiceCommandsEnabled,
     chatTtsEnabled,
     liveVoiceTtsVoice: serverContext?.liveVoiceTtsVoice,
     chatTtsVoice: serverContext?.chatTtsVoice,

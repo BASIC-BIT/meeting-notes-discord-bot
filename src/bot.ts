@@ -410,6 +410,7 @@ async function handleUserJoin(newState: VoiceState) {
           const { limits } = await getGuildLimits(newState.guild.id);
           const {
             liveVoiceEnabled,
+            liveVoiceCommandsEnabled,
             liveVoiceTtsVoice,
             chatTtsEnabled,
             chatTtsVoice,
@@ -422,6 +423,7 @@ async function handleUserJoin(newState: VoiceState) {
           await handleAutoStartMeeting(client, newState.channel, textChannel, {
             tags,
             liveVoiceEnabled,
+            liveVoiceCommandsEnabled,
             liveVoiceTtsVoice,
             chatTtsEnabled,
             chatTtsVoice,

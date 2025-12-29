@@ -22,6 +22,7 @@ const set = manageGuildProcedure
       channelId: z.string(),
       context: z.string().optional(),
       liveVoiceEnabled: z.boolean().optional().nullable(),
+      liveVoiceCommandsEnabled: z.boolean().optional().nullable(),
       chatTtsEnabled: z.boolean().optional().nullable(),
     }),
   )
@@ -34,6 +35,10 @@ const set = manageGuildProcedure
         input.liveVoiceEnabled === undefined
           ? undefined
           : input.liveVoiceEnabled,
+      liveVoiceCommandsEnabled:
+        input.liveVoiceCommandsEnabled === undefined
+          ? undefined
+          : input.liveVoiceCommandsEnabled,
       chatTtsEnabled:
         input.chatTtsEnabled === undefined ? undefined : input.chatTtsEnabled,
     });

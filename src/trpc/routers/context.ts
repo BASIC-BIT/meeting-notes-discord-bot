@@ -3,24 +3,89 @@ import {
   clearServerContextService,
   fetchServerContext,
   setServerContext,
+  type ServerContextUpdate,
 } from "../../services/appContextService";
 import { ensureBotPresence } from "./ensureBotPresence";
 import { manageGuildProcedure, router } from "../trpc";
+
+type ServerContextSnapshot = {
+  context?: string;
+  defaultNotesChannelId?: string | null;
+  defaultTags?: string[];
+  liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
+  liveVoiceTtsVoice?: string | null;
+  chatTtsEnabled?: boolean;
+  chatTtsVoice?: string | null;
+};
+
+type ServerContextUpdateInput = {
+  context?: string;
+  defaultNotesChannelId?: string | null;
+  defaultTags?: string[];
+  liveVoiceEnabled?: boolean;
+  liveVoiceCommandsEnabled?: boolean;
+  liveVoiceTtsVoice?: string | null;
+  chatTtsEnabled?: boolean;
+  chatTtsVoice?: string | null;
+};
+
+const normalizeServerContext = (ctxRecord?: ServerContextSnapshot | null) => {
+  const {
+    context = "",
+    defaultNotesChannelId = null,
+    defaultTags = [],
+    liveVoiceEnabled = false,
+    liveVoiceCommandsEnabled = false,
+    liveVoiceTtsVoice = null,
+    chatTtsEnabled = false,
+    chatTtsVoice = null,
+  } = ctxRecord ?? {};
+  return {
+    context,
+    defaultNotesChannelId,
+    defaultTags,
+    liveVoiceEnabled,
+    liveVoiceCommandsEnabled,
+    liveVoiceTtsVoice,
+    chatTtsEnabled,
+    chatTtsVoice,
+  };
+};
+
+const buildServerContextUpdate = (
+  input: ServerContextUpdateInput,
+): ServerContextUpdate => {
+  const update: ServerContextUpdate = {};
+  if (input.context !== undefined) update.context = input.context;
+  if (input.defaultNotesChannelId !== undefined) {
+    update.defaultNotesChannelId = input.defaultNotesChannelId;
+  }
+  if (input.defaultTags !== undefined) update.defaultTags = input.defaultTags;
+  if (input.liveVoiceEnabled !== undefined) {
+    update.liveVoiceEnabled = input.liveVoiceEnabled;
+  }
+  if (input.liveVoiceCommandsEnabled !== undefined) {
+    update.liveVoiceCommandsEnabled = input.liveVoiceCommandsEnabled;
+  }
+  if (input.liveVoiceTtsVoice !== undefined) {
+    update.liveVoiceTtsVoice = input.liveVoiceTtsVoice;
+  }
+  if (input.chatTtsEnabled !== undefined) {
+    update.chatTtsEnabled = input.chatTtsEnabled;
+  }
+  if (input.chatTtsVoice !== undefined) {
+    update.chatTtsVoice = input.chatTtsVoice;
+  }
+  return update;
+};
 
 const get = manageGuildProcedure
   .input(z.object({ serverId: z.string() }))
   .query(async ({ ctx, input }) => {
     await ensureBotPresence(ctx, input.serverId);
     const ctxRecord = await fetchServerContext(input.serverId);
-    return {
-      context: ctxRecord?.context ?? "",
-      defaultNotesChannelId: ctxRecord?.defaultNotesChannelId ?? null,
-      defaultTags: ctxRecord?.defaultTags ?? [],
-      liveVoiceEnabled: ctxRecord?.liveVoiceEnabled ?? false,
-      liveVoiceTtsVoice: ctxRecord?.liveVoiceTtsVoice ?? null,
-      chatTtsEnabled: ctxRecord?.chatTtsEnabled ?? false,
-      chatTtsVoice: ctxRecord?.chatTtsVoice ?? null,
-    };
+    return normalizeServerContext(ctxRecord);
   });
 
 const set = manageGuildProcedure
@@ -31,6 +96,7 @@ const set = manageGuildProcedure
       defaultNotesChannelId: z.string().nullable().optional(),
       defaultTags: z.array(z.string()).optional(),
       liveVoiceEnabled: z.boolean().optional(),
+      liveVoiceCommandsEnabled: z.boolean().optional(),
       liveVoiceTtsVoice: z.string().nullable().optional(),
       chatTtsEnabled: z.boolean().optional(),
       chatTtsVoice: z.string().nullable().optional(),
@@ -38,27 +104,7 @@ const set = manageGuildProcedure
   )
   .mutation(async ({ ctx, input }) => {
     await ensureBotPresence(ctx, input.serverId);
-    const update = {
-      ...(input.context !== undefined ? { context: input.context } : {}),
-      ...(input.defaultNotesChannelId !== undefined
-        ? { defaultNotesChannelId: input.defaultNotesChannelId }
-        : {}),
-      ...(input.defaultTags !== undefined
-        ? { defaultTags: input.defaultTags }
-        : {}),
-      ...(input.liveVoiceEnabled !== undefined
-        ? { liveVoiceEnabled: input.liveVoiceEnabled }
-        : {}),
-      ...(input.liveVoiceTtsVoice !== undefined
-        ? { liveVoiceTtsVoice: input.liveVoiceTtsVoice }
-        : {}),
-      ...(input.chatTtsEnabled !== undefined
-        ? { chatTtsEnabled: input.chatTtsEnabled }
-        : {}),
-      ...(input.chatTtsVoice !== undefined
-        ? { chatTtsVoice: input.chatTtsVoice }
-        : {}),
-    };
+    const update = buildServerContextUpdate(input);
     if (Object.keys(update).length === 0) {
       return { ok: true };
     }
