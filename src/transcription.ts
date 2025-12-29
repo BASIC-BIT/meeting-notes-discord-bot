@@ -260,13 +260,17 @@ type ChatInput = Omit<
   "model" | "user"
 >;
 
-async function chat(meeting: MeetingData, body: ChatInput): Promise<string> {
+async function chat(
+  meeting: MeetingData,
+  body: ChatInput,
+  model = config.notes.model,
+): Promise<string> {
   let output: string = "";
   let done: boolean = false;
   let count = 0;
   while (!done) {
     const response = await openAIClient.chat.completions.create({
-      model: "gpt-5.1",
+      model,
       user: meeting.creator.id,
       ...body,
     });

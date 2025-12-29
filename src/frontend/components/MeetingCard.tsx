@@ -6,6 +6,7 @@ export type MeetingCardData = {
   id: string;
   title: string;
   summary: string;
+  summaryLabel?: string;
   dateLabel: string;
   durationLabel: string;
   tags: string[];
@@ -40,6 +41,11 @@ export function MeetingCard({ meeting, onOpen }: MeetingCardProps) {
         <Text size="sm" c="dimmed">
           {meeting.summary}
         </Text>
+        {meeting.summaryLabel ? (
+          <Text size="xs" c="dimmed">
+            {meeting.summaryLabel}
+          </Text>
+        ) : null}
         <Group gap="xs">
           <Group gap={6}>
             <ThemeIcon size={22} variant="light" color="gray">

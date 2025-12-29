@@ -152,6 +152,8 @@ export interface MeetingHistory {
   timestamp: string; // ISO timestamp (denormalized)
   tags?: string[]; // Freeform tags for filtering / search
   notes?: string; // AI-generated notes (comprehensive, includes everything)
+  summarySentence?: string; // One-sentence summary for UI
+  summaryLabel?: string; // Short label (5 words or fewer)
   context?: string; // Meeting-specific context if provided
   participants: Participant[]; // Snapshot of participant identities
   attendees?: string[]; // Legacy list of attendee user tags

@@ -1096,6 +1096,10 @@ resource "aws_ecs_task_definition" "app_task" {
           value = var.OPENAI_PROJECT_ID
         },
         {
+          name  = "NOTES_MODEL"
+          value = "gpt-5.2"
+        },
+        {
           name  = "TRANSCRIPTS_BUCKET"
           value = local.transcripts_bucket_name
         },

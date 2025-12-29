@@ -34,6 +34,7 @@
 - Improve responder context (running window + selected past meetings) and start light retrieval.
 - Enhance tag surfacing and cite tags/meetings in recall answers.
 - Add richer Stripe/OAuth onboarding UX to frontend; tighten SG egress post-voice stabilization.
+- Backfill summarySentence/summaryLabel for legacy meetings.
 
 ## Testing status
 

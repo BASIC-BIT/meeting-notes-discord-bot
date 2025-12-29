@@ -23,14 +23,20 @@ import { buildPaginatedEmbeds } from "../utils/embedPagination";
 import { MeetingHistory, SuggestionHistoryEntry } from "../types/db";
 import { fetchJsonFromS3 } from "../services/storageService";
 import { formatParticipantLabel } from "../utils/participants";
+import { generateMeetingSummaries } from "../services/meetingSummaryService";
+import { formatNotesWithSummary } from "../utils/notesSummary";
 
 type PendingCorrection = {
   guildId: string;
   channelIdTimestamp: string;
+  channelId?: string;
   notesMessageIds?: string[];
   notesChannelId?: string;
   meetingCreatorId?: string;
   isAutoRecording?: boolean;
+  tags?: string[];
+  summarySentence?: string;
+  summaryLabel?: string;
   originalNotes: string;
   newNotes: string;
   notesVersion: number;
@@ -145,7 +151,7 @@ Return updated notes.`;
 
   try {
     const completion = await openAIClient.chat.completions.create({
-      model: "gpt-5.1",
+      model: config.notes.model,
       temperature: 0,
       messages: [
         { role: "system", content: systemPrompt },
@@ -291,10 +297,14 @@ export async function handleNotesCorrectionModal(
   pendingCorrections.set(token, {
     guildId,
     channelIdTimestamp,
+    channelId: history.channelId,
     notesMessageIds: history.notesMessageIds,
     notesChannelId: history.notesChannelId,
     meetingCreatorId: history.meetingCreatorId,
     isAutoRecording: history.isAutoRecording,
+    tags: history.tags,
+    summarySentence: history.summarySentence,
+    summaryLabel: history.summaryLabel,
     originalNotes: history.notes,
     newNotes,
     notesVersion: history.notesVersion ?? 1,
@@ -332,39 +342,23 @@ async function applyCorrection(
 ): Promise<boolean> {
   const newVersion = (pending.notesVersion ?? 1) + 1;
   const row = buildCorrectionRow(pending.guildId, pending.channelIdTimestamp);
-
-  let newMessageIds: string[] | undefined;
-  let channel: Awaited<ReturnType<typeof interactionChannelFetch>> | null =
-    null;
-
-  if (pending.notesChannelId) {
-    channel = await interactionChannelFetch(
-      pending.notesChannelId,
-      interaction,
-    );
-    const existingIds = pending.notesMessageIds ?? [];
-    const color = await resolveEmbedColor(channel, existingIds[0]);
-    const embeds = buildUpdatedEmbeds(
-      pending.newNotes,
-      newVersion,
-      interaction.user.tag,
-      color,
-    );
-    newMessageIds = await sendUpdatedEmbeds(channel, embeds, row);
-  }
-
-  const updateSucceeded = await updateMeetingNotesService({
-    guildId: pending.guildId,
-    channelId_timestamp: pending.channelIdTimestamp,
-    notes: pending.newNotes,
-    notesVersion: newVersion,
+  const { notesBody, summaries } = await buildCorrectionSummaries(
+    interaction,
+    pending,
+  );
+  const { newMessageIds, channel } = await updateNotesEmbedsForCorrection(
+    interaction,
+    pending,
+    row,
+    notesBody,
+    newVersion,
+  );
+  const updateSucceeded = await persistCorrectionUpdate({
+    pending,
+    newVersion,
     editedBy: interaction.user.id,
-    suggestion: pending.suggestion,
-    expectedPreviousVersion: pending.notesVersion,
-    metadata: {
-      notesMessageIds: newMessageIds,
-      notesChannelId: pending.notesChannelId,
-    },
+    summaries,
+    newMessageIds,
   });
 
   if (!updateSucceeded) {
@@ -377,19 +371,119 @@ async function applyCorrection(
   }
 
   // Update succeeded - remove old messages if we posted replacements
-  if (pending.notesChannelId && newMessageIds?.length && channel) {
-    try {
-      const existingIds = pending.notesMessageIds ?? [];
-      await deleteOldNotesMessages(channel, existingIds);
-    } catch (error) {
-      console.error(
-        "Failed to clean up old notes messages after update:",
-        error,
-      );
-    }
-  }
+  await cleanupOldNotesMessages(
+    channel,
+    pending.notesMessageIds,
+    newMessageIds,
+  );
 
   return true;
+}
+
+function resolveChannelName(
+  interaction: ButtonInteraction,
+  channelId: string,
+): string {
+  const channel = interaction.guild?.channels.cache.get(channelId);
+  return channel?.name ?? channelId;
+}
+
+async function buildCorrectionSummaries(
+  interaction: ButtonInteraction,
+  pending: PendingCorrection,
+): Promise<{
+  notesBody: string;
+  summaries: { summarySentence?: string; summaryLabel?: string };
+}> {
+  const serverName = interaction.guild?.name ?? "Unknown server";
+  const channelName = resolveChannelName(
+    interaction,
+    pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
+  );
+  const summaries = await generateMeetingSummaries({
+    notes: pending.newNotes,
+    serverName,
+    channelName,
+    tags: pending.tags,
+    now: new Date(),
+    previousSummarySentence: pending.summarySentence,
+    previousSummaryLabel: pending.summaryLabel,
+  });
+  const notesBody = formatNotesWithSummary(
+    pending.newNotes,
+    summaries.summarySentence,
+    summaries.summaryLabel,
+  );
+  return { notesBody, summaries };
+}
+
+async function updateNotesEmbedsForCorrection(
+  interaction: ButtonInteraction,
+  pending: PendingCorrection,
+  row: ActionRowBuilder<ButtonBuilder>,
+  notesBody: string,
+  newVersion: number,
+): Promise<{
+  newMessageIds?: string[];
+  channel: Awaited<ReturnType<typeof interactionChannelFetch>> | null;
+}> {
+  if (!pending.notesChannelId) {
+    return { channel: null };
+  }
+  const channel = await interactionChannelFetch(
+    pending.notesChannelId,
+    interaction,
+  );
+  const existingIds = pending.notesMessageIds ?? [];
+  const color = await resolveEmbedColor(channel, existingIds[0]);
+  const embeds = buildUpdatedEmbeds(
+    notesBody,
+    newVersion,
+    interaction.user.tag,
+    color,
+  );
+  const newMessageIds = await sendUpdatedEmbeds(channel, embeds, row);
+  return { newMessageIds, channel };
+}
+
+async function persistCorrectionUpdate(params: {
+  pending: PendingCorrection;
+  newVersion: number;
+  editedBy: string;
+  summaries: { summarySentence?: string; summaryLabel?: string };
+  newMessageIds?: string[];
+}): Promise<boolean> {
+  const { pending, newVersion, editedBy, summaries, newMessageIds } = params;
+  return updateMeetingNotesService({
+    guildId: pending.guildId,
+    channelId_timestamp: pending.channelIdTimestamp,
+    notes: pending.newNotes,
+    notesVersion: newVersion,
+    editedBy,
+    summarySentence: summaries.summarySentence,
+    summaryLabel: summaries.summaryLabel,
+    suggestion: pending.suggestion,
+    expectedPreviousVersion: pending.notesVersion,
+    metadata: {
+      notesMessageIds: newMessageIds,
+      notesChannelId: pending.notesChannelId,
+    },
+  });
+}
+
+async function cleanupOldNotesMessages(
+  channel: Awaited<ReturnType<typeof interactionChannelFetch>> | null,
+  existingIds?: string[],
+  newMessageIds?: string[],
+): Promise<void> {
+  if (!channel || !existingIds?.length || !newMessageIds?.length) {
+    return;
+  }
+  try {
+    await deleteOldNotesMessages(channel, existingIds);
+  } catch (error) {
+    console.error("Failed to clean up old notes messages after update:", error);
+  }
 }
 
 async function getPendingOrNotify(

@@ -1,7 +1,6 @@
 import OpenAI from "openai";
 import { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
-import { answerQuestionService } from "./services/askService";
 import {
   buildLiveResponderContext,
   LatestUtterance,
@@ -73,7 +72,7 @@ async function shouldSpeak(
   );
   const systemPrompt =
     "You are Chronote, the meeting notes bot. Decide if you should speak aloud in the voice channel. " +
-    "Only respond when a short verbal reply would be helpful (answering a question, clarifying, acknowledging action items). " +
+    "Only respond when the speaker is directly addressing you and a short verbal reply would be helpful (answering a question, clarifying, acknowledging action items). " +
     'Return EXACTLY one JSON object, no prose. Schema: {"respond": boolean}. ' +
     "If you should NOT speak, set respond:false. If you should speak, set respond:true. " +
     "Never return empty content. Never omit fields. Never add extra keys.";
@@ -136,9 +135,20 @@ async function generateReply(
     latest,
   );
 
+  const todayLabel = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
   const systemPrompt =
-    "You are Chronote, the meeting notes bot. Respond out loud to the speaker in a concise, friendly way (1–3 sentences). " +
-    "Use the supplied context sections; stay on-topic to the latest line. Do not add markdown or code fences.";
+    "You are Chronote, the meeting notes bot. You speak responses aloud via text-to-speech. " +
+    "Respond in a concise, friendly way, usually 1 to 2 sentences, use 3 to 4 only if needed. " +
+    "Do not include URLs, links, citations, IDs, or markdown. " +
+    "Avoid long numbers. " +
+    "Use the supplied context sections and stay on-topic to the latest line. " +
+    "When referring to past meetings, prefer friendly relative phrasing while keeping dates accurate. " +
+    `Today is ${todayLabel}.`;
 
   try {
     const completion = await openAIClient.chat.completions.create({
@@ -170,20 +180,13 @@ export async function maybeRespondLive(
   segment: LiveSegment,
 ): Promise<void> {
   if (!meeting.liveVoiceEnabled || !segment.text.trim()) return;
+  if (!isAddressed(segment.text, meeting)) return;
 
+  // TODO: consider partial in-progress snippet context once latency allows.
   const decision = await shouldSpeak(meeting, segment);
   if (!decision.respond) return;
 
-  const reply = isAddressed(segment.text, meeting)
-    ? (
-        await answerQuestionService({
-          guildId: meeting.guildId,
-          channelId: meeting.channelId,
-          question: segment.text,
-          scope: "guild",
-        })
-      ).answer
-    : await generateReply(meeting, segment);
+  const reply = await generateReply(meeting, segment);
   if (!reply) return;
 
   console.log(
