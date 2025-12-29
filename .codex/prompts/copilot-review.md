@@ -22,3 +22,5 @@ At the end, of implementation and checks, output a short report. For each copilo
 - Respond with `text` and resolve - fill in `text` with a comment to respond with, and resolve the comment thread. Comments should usually be short, but may need to be longer depending on decisions made and nuance.
 - Respond with `text` and don't resolve - for anything we didn't resolve yet but have something to talk about. Comments should usually be short, but may need to be longer depending on decisions made and nuance.
 - Do nothing - if we haven't resolved the comment and don't have a clear path forward yet
+
+Additionally, evaluate if any updates to documentation, copy, translations, repo rules, or any higher level structural changes should be made that seems to "fall out" naturally from this changeset and any review comments and your findings along the way. For anything "functional" (non-documentation), these should default to no action. For documentation, feel free to decide your default freely.
