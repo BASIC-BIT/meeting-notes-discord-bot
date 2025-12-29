@@ -80,6 +80,7 @@
 - Avoid `in`/`instanceof`/`typeof` hedging for core platform APIs; we target a known Node/SDK set. Prefer simple, direct calls with minimal branching.
 - Comment hygiene: don’t leave transient or change-log style comments (e.g., “SDK v3 exposes transformToString”). Use comments only to clarify non-obvious logic, constraints, or intent.
 - Writing style: do not use em dashes in copy/docs/comments; prefer commas, parentheses, or hyphens.
+- README should stay high signal for users, avoid listing research outcomes like query parameter details. Put rationale or research notes in planning documentation files instead.
 - “Remember that …” shorthand: when the user says “remember that <rule>”, add it to AGENTS.md under the relevant section as a standing rule.
 - Do not suppress runtime warnings by monkey-patching globals (e.g., overriding console.error). Fix the underlying issue or accept the warning; never silence it via code hacks.
 - Stripe webhook parsing: keep a single `express.raw({ type: "application/json" })` at app-level in `webserver.ts`; do not add per-route raw parsers elsewhere.
@@ -100,12 +101,28 @@
 - Create a dedicated Discord text channel and voice channel for the branch, then use those for testing.
 - If `.env` changes on main, re-run the script or copy `.env` into the worktree.
 
-## Testing / lint
+## Checks
 
-- Local: `npm run check` / `yarn run check` (lint --fix, prettier --write, test, build, code stats). CI-safe: `npm run check:ci` / `yarn run check:ci` (no auto-fix, uses prettier:check + lint:check, build, code stats). Avoid `yarn check` (built-in Yarn integrity command).
-- AI coding agents: after making code changes, run `yarn run check`; if you must avoid auto-fix (e.g., reviewing only), run `yarn run check:ci`. Report the command outcomes in your handoff. If you reformat, re-run the checks.
-- Code stats: `yarn code:stats` prints LOC + complexity. Install `scc` via Chocolatey (`choco install scc`) so it’s on PATH. Install lizard via `python -m pip install lizard` (script uses `python -m lizard`, no PATH tweak needed). `.sccignore` controls scc excludes; `whitelizard.txt` can whitelist known complexity offenders. CI also prints this report on deploy.
+- Local full gate: `yarn run check` (lint --fix, prettier --write, test, build:all, code:stats).
+- CI-safe local gate: `yarn run check:ci` (lint:check, prettier:check, test, build, code:stats). Avoid `yarn check` (built-in Yarn integrity command).
+- CI also runs: `yarn test:e2e` and `yarn checkov` (see `.github/workflows/ci.yml`).
 
+Why each check exists:
+
+- Lint (ESLint) catches common errors and keeps code quality consistent. Docs: https://eslint.org/docs/latest/use/command-line-interface
+- Format (Prettier) enforces a consistent style and removes formatting churn. Docs: https://prettier.io/docs/cli
+- Tests and coverage (Jest) protect behavior and enforce coverage thresholds defined in `jest.config.ts`. Current global thresholds: statements 30%, branches 60%, functions 40%, lines 30%. Docs: https://jestjs.io/docs/29.7/configuration
+- Build (TypeScript + Vite) validates type safety and ensures the frontend bundles. Docs: https://www.typescriptlang.org/docs/handbook/compiler-options.html and https://vite.dev/guide/
+- E2E (Playwright) validates core user flows against the UI. Docs: https://playwright.dev/docs/running-tests
+- Code stats and complexity (scc + lizard) keep size and complexity visible in CI. Lizard uses its default warning thresholds (CCN > 15, length > 1000, nloc > 1000000, parameter_count > 100). Use `.sccignore` for scc exclusions and `whitelizard.txt` to suppress known complexity offenders. Docs: https://github.com/boyter/scc and https://github.com/terryyin/lizard
+- IaC scan (Checkov via uvx) catches Terraform misconfigurations. Docs: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html and https://docs.astral.sh/uv/concepts/tools/
+
+Coverage guidance:
+
+- Prefer adding tests over coverage ignores.
+- If a coverage ignore is unavoidable, use c8 ignore directives with a short justification comment.
+- After coverage improvements or coverage scope changes, round each threshold down to the nearest 10 and keep it in sync with `jest.config.ts`. Do not lower a threshold below its pre-PR value unless the coverage scope meaningfully expands, in which case reset to the new rounded baseline and call it out in the PR.
 ## Non-idiomatic typing
 
 If you find yourself using keywords like `tyepof`, `as`, etc. you should then pause and think about how you can improve that code. This might involve a web search to go search online for the idiomatic way of using the library/framework/etc. Look for a way that leverages typescript best practices, such as type narrowing, to write clean maintainable code
+

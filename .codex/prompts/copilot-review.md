@@ -13,7 +13,7 @@ Then, generate a plan to address any comments/recycle the codebase based upon an
 
 Generate a plan, then ask any open questions to me to clarify implementation before we begin work. Where possible. provide default answers so I can be brief in my response if I chose.
 
-Once the plan is agreed upon, you execute, you're done with your initial implementation (and occasionally throughout if deemed valuable) ensure that our checks pass - tests, build, lint, etc. By the end, ensure all of them pass along with the e2e and complexity stuff such that the PR would go green.
+Once the plan is agreed upon, you execute; when you're done with your initial implementation (and occasionally throughout if deemed valuable) ensure that our checks pass - tests, build, lint, etc. By the end, ensure all of them pass along with the e2e and complexity stuff such that the PR would go green.
 
 At the end, of implementation and checks, output a short report. For each copilot comment, suggest the following action based upon your analysis performed changes made:
 

@@ -29,12 +29,23 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 - `yarn db:init` – create tables locally
 - `yarn dev:clean` – wipe local Dynamo data and restart
 
-## Quality gates
+## Checks
 
-- Full local gate (auto-fix): `yarn run check` → eslint --fix, prettier --write, tests, backend build, Vite build.
-- CI-safe: `yarn run check:ci` → lint:check, prettier:check, tests, backend build, Vite build.
-- Individual: `yarn lint`, `yarn prettier`, `yarn test`, `yarn build`, `yarn build:web`.
-- Code stats (ad-hoc): `yarn code:stats` (requires `scc` on PATH; CI prints this report on deploy). Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can be used to suppress known complexity offenders.
+These checks run before PR merge and deployment. Use `yarn run check` for the full local gate with auto-fix. CI runs the same checks using non fixing commands, plus e2e and IaC scans.
+
+- Lint (ESLint) keeps code quality and catches common bugs. Commands: `yarn lint` (auto-fix) or `yarn lint:check` (CI). Docs: https://eslint.org/docs/latest/use/command-line-interface
+- Format (Prettier) enforces consistent formatting. Commands: `yarn prettier` (write) or `yarn prettier:check` (CI). Docs: https://prettier.io/docs/cli
+- Unit and integration tests (Jest) protect behavior and enforce coverage thresholds in `jest.config.ts`. Command: `yarn test`. Coverage requirements (global): statements 30%, branches 60%, functions 40%, lines 30%. Docs: https://jestjs.io/docs/29.7/configuration
+- Build (TypeScript + Vite) validates type safety and production bundles. Commands: `yarn build` (tsc) and `yarn build:web` (vite build). Docs: https://www.typescriptlang.org/docs/handbook/compiler-options.html and https://vite.dev/guide/
+- E2E tests (Playwright) validate critical user flows. Command: `yarn test:e2e`. Docs: https://playwright.dev/docs/running-tests
+- Code stats and complexity (scc + lizard) keep size and complexity visible. Command: `yarn code:stats`. Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can suppress known complexity offenders. Docs: https://github.com/boyter/scc and https://github.com/terryyin/lizard
+- IaC scan (Checkov via uvx) catches Terraform misconfigurations. Command: `yarn checkov`. Docs: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html and https://docs.astral.sh/uv/concepts/tools/
+
+CI runs: `lint:check`, `prettier:check`, `test`, `build:all`, `test:e2e`, `code:stats`, and `checkov` (see `.github/workflows/ci.yml`).
+
+Coverage update rule:
+
+- After coverage improvements or coverage scope changes, round each threshold down to the nearest 10 and keep it in sync with `jest.config.ts`. Do not lower a threshold below its pre-PR value unless the coverage scope meaningfully expands, in which case reset to the new rounded baseline and call it out in the PR.
 
 ## Frontend
 
@@ -83,12 +94,23 @@ Notes:
 - Helpers: `yarn terraform:init | plan | apply`.
 - IaC scanning: `yarn checkov` (Checkov) locally; also runs in CI.
 
-## GitHub personal access token rotation
+### GitHub personal access token rotation
 
-- Generate a new **fine-grained** token from the prefilled Chronote link: [https://github.com/organizations/BASIC-BIT/settings/personal-access-tokens/new?name=Chronote%20Terraform&permissions[actions]=write&permissions[administration]=write&permissions[metadata]=read&permissions[contents]=read](https://github.com/organizations/BASIC-BIT/settings/personal-access-tokens/new?name=Chronote%20Terraform&permissions%5Bactions%5D=write&permissions%5Badministration%5D=write&permissions%5Bmetadata%5D=read&permissions%5Bcontents%5D=read). On the form, select the **chronote** repository (required for Terraform), set an expiration, and confirm the Chronote organization if GitHub prompts. The query string pre-sets the description and recommended permissions for managing environments and Actions variables through Terraform.
-- Required repository permissions for Terraform: **Actions: Read and write**, **Administration: Read and write** (covers repository environments), **Contents: Read** (for repo metadata), and **Metadata: Read**. Other permissions can stay at **No access**.
-- After generating the token, set `GITHUB_TOKEN` in `_infra/terraform.tfvars` (and `_infra/terraform.staging.tfvars` if you use staging), or export `TF_VAR_GITHUB_TOKEN` in your shell before running `terraform plan` or `terraform apply`. Keep the token out of version control.
-- Revoke the old token at [https://github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens) once Terraform is applying successfully with the new credentials.
+Terraform uses a GitHub provider to manage the Actions environment and variables for this repo. Rotate the PAT when it expires or after moving the repo to a new org.
+
+1. Generate a fine-grained token using the GitHub URL template (pre-fills the form):
+   ```
+   https://github.com/settings/personal-access-tokens/new?name=Chronote+Terraform&description=Terraform+GitHub+provider&target_name=BASIC-BIT&expires_in=90
+   ```
+2. In the token UI, set **Repository access** to **Only select repositories** and choose `meeting-notes-discord-bot` (manual step), then grant these **Repository permissions**:
+   - **Actions**: Read (Terraform reads environments).
+   - **Administration**: Read and write (Terraform creates/updates environments).
+   - **Environments**: Read and write (Terraform manages environment variables).
+   - **Metadata**: Read (Terraform reads repo metadata).
+3. Set the new token in the active Terraform vars file:
+   - `_infra/terraform.tfvars` for prod.
+   - `_infra/terraform.staging.tfvars` if you use a separate staging var file.
+4. Re-run `yarn terraform:plan` and `yarn terraform:apply` (or `terraform -chdir=_infra plan` and `terraform -chdir=_infra apply`) to confirm the GitHub provider can read the repo and update Actions env variables.
 
 ### Observability (hosted)
 

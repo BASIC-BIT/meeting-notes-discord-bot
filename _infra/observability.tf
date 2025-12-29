@@ -88,10 +88,16 @@ resource "aws_iam_policy" "grafana_amp_discovery" {
       {
         Effect = "Allow",
         Action = [
-          "aps:ListWorkspaces",
-          "aps:DescribeWorkspace"
+          "aps:ListWorkspaces"
         ],
         Resource = "*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "aps:DescribeWorkspace"
+        ],
+        Resource = aws_prometheus_workspace.amp.arn
       }
     ]
   })
