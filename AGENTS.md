@@ -122,7 +122,7 @@ Coverage guidance:
 - Prefer adding tests over coverage ignores.
 - If a coverage ignore is unavoidable, use c8 ignore directives with a short justification comment.
 - After coverage improvements or coverage scope changes, round each threshold down to the nearest 10 and keep it in sync with `jest.config.ts`. Do not lower a threshold below its pre-PR value unless the coverage scope meaningfully expands, in which case reset to the new rounded baseline and call it out in the PR.
+
 ## Non-idiomatic typing
 
 If you find yourself using keywords like `tyepof`, `as`, etc. you should then pause and think about how you can improve that code. This might involve a web search to go search online for the idiomatic way of using the library/framework/etc. Look for a way that leverages typescript best practices, such as type narrowing, to write clean maintainable code
-
