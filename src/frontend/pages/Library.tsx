@@ -33,6 +33,7 @@ import {
   IconSparkles,
   IconUsers,
 } from "@tabler/icons-react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { format } from "date-fns";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
@@ -51,6 +52,7 @@ type MeetingEvent = {
 
 type MeetingDetails = {
   id: string;
+  meetingId: string;
   title: string;
   summary: string;
   summaryLabel?: string;
@@ -121,6 +123,7 @@ type MeetingListItem = MeetingSummaryRow & {
 
 type RawMeetingDetail = {
   id: string;
+  meetingId: string;
   channelId: string;
   timestamp: string;
   duration: number;
@@ -277,6 +280,7 @@ const buildMeetingDetails = (
   const summary = deriveSummary(detail.notes ?? "", detail.summarySentence);
   return {
     id: detail.id,
+    meetingId: detail.meetingId,
     title,
     summary,
     summaryLabel: detail.summaryLabel ?? undefined,
@@ -302,14 +306,13 @@ export default function Library() {
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
   const trpcUtils = trpc.useUtils();
+  const navigate = useNavigate({ from: "/portal/server/$serverId/library" });
+  const search = useSearch({ from: "/portal/server/$serverId/library" });
 
   const [query, setQuery] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedRange, setSelectedRange] = useState("30");
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
-  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(
-    null,
-  );
   const [activeFilters, setActiveFilters] = useState<string[]>(
     FILTER_OPTIONS.map((filter) => filter.value),
   );
@@ -327,6 +330,7 @@ export default function Library() {
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) },
   );
+  const selectedMeetingId = search.meetingId ?? null;
   const detailQuery = trpc.meetings.detail.useQuery(
     {
       serverId: selectedGuildId ?? "",
@@ -570,7 +574,14 @@ export default function Library() {
                 key={meetingItem.id}
                 px={{ base: "md", md: "lg" }}
                 py="md"
-                onClick={() => setSelectedMeetingId(meetingItem.id)}
+                onClick={() => {
+                  navigate({
+                    search: (prev) => ({
+                      ...prev,
+                      meetingId: meetingItem.id,
+                    }),
+                  });
+                }}
                 data-testid="library-meeting-row"
                 data-meeting-id={meetingItem.id}
                 style={{
@@ -630,7 +641,9 @@ export default function Library() {
       <Drawer
         opened={!!selectedMeetingId}
         onClose={() => {
-          setSelectedMeetingId(null);
+          navigate({
+            search: (prev) => ({ ...prev, meetingId: undefined }),
+          });
           setFullScreen(false);
         }}
         position="right"
@@ -661,7 +674,7 @@ export default function Library() {
                       <Title order={3}>{meeting.title}</Title>
                       {meeting.status === "in_progress" ? (
                         <Badge color="red" variant="light">
-                          Live
+                          Live transcript
                         </Badge>
                       ) : null}
                     </Group>

@@ -1,3 +1,4 @@
+import { ExponentialBackoff, handleWhen, retry } from "cockatiel";
 import { config } from "../services/configService";
 import { getMockStore } from "./mockStore";
 import type {
@@ -16,6 +17,21 @@ export class DiscordApiError extends Error {
   }
 }
 
+const shouldRetryDiscordError = (error: Error) => {
+  if (isDiscordApiError(error)) {
+    return error.status === 429 || error.status >= 500;
+  }
+  return true;
+};
+
+const discordRetryPolicy = retry(handleWhen(shouldRetryDiscordError), {
+  maxAttempts: 3,
+  backoff: new ExponentialBackoff(),
+});
+
+const withDiscordRetry = async <T>(operation: () => Promise<T>) =>
+  discordRetryPolicy.execute(operation);
+
 export type DiscordRepository = {
   listUserGuilds: (accessToken: string) => Promise<DiscordGuild[]>;
   listBotGuilds: () => Promise<DiscordGuild[]>;
@@ -29,58 +45,71 @@ export type DiscordRepository = {
 
 const realRepository: DiscordRepository = {
   async listUserGuilds(accessToken: string) {
-    const resp = await fetch("https://discord.com/api/users/@me/guilds", {
-      headers: { Authorization: `Bearer ${accessToken}` },
+    return withDiscordRetry(async () => {
+      const resp = await fetch("https://discord.com/api/users/@me/guilds", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!resp.ok) {
+        throw new DiscordApiError(resp.status, "Unable to fetch user guilds");
+      }
+      return (await resp.json()) as DiscordGuild[];
     });
-    if (!resp.ok) {
-      throw new DiscordApiError(resp.status, "Unable to fetch user guilds");
-    }
-    return (await resp.json()) as DiscordGuild[];
   },
   async listBotGuilds() {
-    const resp = await fetch("https://discord.com/api/users/@me/guilds", {
-      headers: { Authorization: `Bot ${config.discord.botToken}` },
+    return withDiscordRetry(async () => {
+      const resp = await fetch("https://discord.com/api/users/@me/guilds", {
+        headers: { Authorization: `Bot ${config.discord.botToken}` },
+      });
+      if (!resp.ok) {
+        throw new DiscordApiError(resp.status, "Unable to fetch bot guilds");
+      }
+      return (await resp.json()) as DiscordGuild[];
     });
-    if (!resp.ok) {
-      throw new DiscordApiError(resp.status, "Unable to fetch bot guilds");
-    }
-    return (await resp.json()) as DiscordGuild[];
   },
   async listGuildChannels(guildId: string) {
-    const resp = await fetch(
-      `https://discord.com/api/guilds/${guildId}/channels`,
-      {
-        headers: { Authorization: `Bot ${config.discord.botToken}` },
-      },
-    );
-    if (!resp.ok) {
-      throw new DiscordApiError(resp.status, "Unable to fetch guild channels");
-    }
-    return (await resp.json()) as DiscordChannel[];
+    return withDiscordRetry(async () => {
+      const resp = await fetch(
+        `https://discord.com/api/guilds/${guildId}/channels`,
+        {
+          headers: { Authorization: `Bot ${config.discord.botToken}` },
+        },
+      );
+      if (!resp.ok) {
+        throw new DiscordApiError(
+          resp.status,
+          "Unable to fetch guild channels",
+        );
+      }
+      return (await resp.json()) as DiscordChannel[];
+    });
   },
   async listGuildRoles(guildId: string) {
-    const resp = await fetch(
-      `https://discord.com/api/guilds/${guildId}/roles`,
-      {
-        headers: { Authorization: `Bot ${config.discord.botToken}` },
-      },
-    );
-    if (!resp.ok) {
-      throw new DiscordApiError(resp.status, "Unable to fetch guild roles");
-    }
-    return (await resp.json()) as DiscordRole[];
+    return withDiscordRetry(async () => {
+      const resp = await fetch(
+        `https://discord.com/api/guilds/${guildId}/roles`,
+        {
+          headers: { Authorization: `Bot ${config.discord.botToken}` },
+        },
+      );
+      if (!resp.ok) {
+        throw new DiscordApiError(resp.status, "Unable to fetch guild roles");
+      }
+      return (await resp.json()) as DiscordRole[];
+    });
   },
   async getGuildMember(guildId: string, userId: string) {
-    const resp = await fetch(
-      `https://discord.com/api/guilds/${guildId}/members/${userId}`,
-      {
-        headers: { Authorization: `Bot ${config.discord.botToken}` },
-      },
-    );
-    if (!resp.ok) {
-      throw new DiscordApiError(resp.status, "Unable to fetch guild member");
-    }
-    return (await resp.json()) as DiscordGuildMember;
+    return withDiscordRetry(async () => {
+      const resp = await fetch(
+        `https://discord.com/api/guilds/${guildId}/members/${userId}`,
+        {
+          headers: { Authorization: `Bot ${config.discord.botToken}` },
+        },
+      );
+      if (!resp.ok) {
+        throw new DiscordApiError(resp.status, "Unable to fetch guild member");
+      }
+      return (await resp.json()) as DiscordGuildMember;
+    });
   },
 };
 

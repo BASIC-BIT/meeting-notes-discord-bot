@@ -59,6 +59,7 @@ The Meeting Notes Discord Bot is a Node.js application built with TypeScript. It
 - **Event-Driven:** Relies on events from `discord.js` (e.g., `interactionCreate`, `voiceStateUpdate`, `speaking`) to trigger actions.
 - **Modular Design:** Code is broken down into modules based on functionality (e.g., `audio`, `transcription`, `commands`).
 - **Error Handling:** Basic `try/catch` blocks are present, and `cockatiel` provides robust error handling for API calls.
+- **Caching and Retries:** Uses short-lived session caches for Discord guild eligibility checks and in-memory caches for Discord channels, roles, and members to reduce API calls. Discord API calls are wrapped with `cockatiel` retries (max 3 attempts, exponential backoff) for 429, 5xx, and transient network errors. When rate limits still occur, API routes return 429 responses with retry guidance.
 - **Stream Processing:** Audio data is processed using streams (`PassThrough`, `prism.opus.Decoder`, `fluent-ffmpeg` input).
 - **Dependency Management:** Uses Yarn for package management.
 - **TypeScript:** Provides static typing for better code quality and maintainability.
@@ -115,3 +116,4 @@ The Meeting Notes Discord Bot is a Node.js application built with TypeScript. It
 - **OpenAI API Costs/Limits:** Heavy usage of transcription and GPT models can incur significant costs and hit API limits.
 - **Single Point of Failure:** If the bot instance crashes, all in-progress meeting data (not yet written to files or external services) is lost.
 - **File Handling:** Managing many temporary audio files could be complex; ensuring robust cleanup is essential.
+- **Cache Scaling and Request Coalescing:** Current caches are per-process or per-session. Consider Redis for shared caching with namespaces for user-scoped vs global data, plus a unified cache layer that supports TTLs and in-flight request de-duplication to avoid parallel requests for the same Discord data.

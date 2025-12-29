@@ -1,7 +1,7 @@
 import express from "express";
 import { getMeeting } from "../meetings";
 import { ensureUserInGuild } from "../services/guildAccessService";
-import { ensureUserCanViewChannel } from "../services/discordPermissionsService";
+import { ensureUserCanConnectChannel } from "../services/discordPermissionsService";
 import {
   buildLiveMeetingMeta,
   buildLiveMeetingSegments,
@@ -12,6 +12,13 @@ import type {
   LiveMeetingSegmentsPayload,
   LiveMeetingStatusPayload,
 } from "../types/liveMeeting";
+
+type SessionGuildCache = {
+  guildIds?: string[];
+  guildIdsFetchedAt?: number;
+};
+
+const GUILD_CACHE_TTL_MS = 60_000;
 
 export function registerLiveMeetingRoutes(app: express.Express) {
   app.get(
@@ -25,25 +32,41 @@ export function registerLiveMeetingRoutes(app: express.Express) {
         res.status(404).json({ error: "Meeting not found" });
         return;
       }
-      const inGuild = await ensureUserInGuild(user.accessToken, guildId);
-      if (inGuild === null) {
-        res.status(429).json({ error: "Discord rate limited. Please retry." });
-        return;
+      const sessionData = req.session as typeof req.session & SessionGuildCache;
+      const cacheAgeMs =
+        sessionData.guildIdsFetchedAt != null
+          ? Date.now() - sessionData.guildIdsFetchedAt
+          : Number.POSITIVE_INFINITY;
+      const cacheFresh = cacheAgeMs < GUILD_CACHE_TTL_MS;
+      const cachedGuilds = sessionData.guildIds ?? [];
+      const cachedHasGuild = cacheFresh && cachedGuilds.includes(guildId);
+      if (!cachedHasGuild) {
+        const inGuild = await ensureUserInGuild(user.accessToken, guildId);
+        if (inGuild === null) {
+          res
+            .status(429)
+            .json({ error: "Discord rate limited. Please retry." });
+          return;
+        }
+        if (!inGuild) {
+          res.status(403).json({ error: "Guild access required" });
+          return;
+        }
+        sessionData.guildIds = Array.from(
+          new Set([...(sessionData.guildIds ?? []), guildId]),
+        );
+        sessionData.guildIdsFetchedAt = Date.now();
       }
-      if (!inGuild) {
-        res.status(403).json({ error: "Guild access required" });
-        return;
-      }
-      const canView = await ensureUserCanViewChannel({
+      const canConnect = await ensureUserCanConnectChannel({
         guildId,
         channelId: meeting.voiceChannel.id,
         userId: user.id,
       });
-      if (canView === null) {
+      if (canConnect === null) {
         res.status(429).json({ error: "Discord rate limited. Please retry." });
         return;
       }
-      if (!canView) {
+      if (!canConnect) {
         res.status(403).json({ error: "Channel access required" });
         return;
       }

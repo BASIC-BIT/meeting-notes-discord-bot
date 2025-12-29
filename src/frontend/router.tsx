@@ -6,6 +6,7 @@ import {
   Route,
   Router,
 } from "@tanstack/react-router";
+import { z } from "zod";
 import MarketingLayout from "./layouts/MarketingLayout";
 
 const PortalLayout = lazyRouteComponent(() => import("./layouts/PortalLayout"));
@@ -84,6 +85,7 @@ const portalLibraryRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "library",
   component: Library,
+  validateSearch: z.object({ meetingId: z.string().optional() }).parse,
 });
 
 const portalAskRoute = new Route({

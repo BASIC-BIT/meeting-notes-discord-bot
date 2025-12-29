@@ -21,9 +21,14 @@ import { authedProcedure, manageGuildProcedure, router } from "../trpc";
 type SessionGuildCache = {
   guildIds?: string[];
   guildIdsFetchedAt?: number;
+  userGuilds?: DiscordGuild[];
+  userGuildsFetchedAt?: number;
   botGuildIds?: string[];
   botGuildIdsFetchedAt?: number;
 };
+
+const USER_GUILD_CACHE_TTL_MS = 60_000;
+const BOT_GUILD_CACHE_TTL_MS = 60_000;
 
 const createRateLimitError = () =>
   new TRPCError({
@@ -103,50 +108,74 @@ const fetchPermissionSnapshot = async (serverId: string, botUserId: string) => {
   }
 };
 
-const listEligible = authedProcedure.query(async ({ ctx }) => {
-  let userGuilds: DiscordGuild[];
+const isCacheFresh = (fetchedAt: number | undefined, ttlMs: number) =>
+  fetchedAt != null ? Date.now() - fetchedAt < ttlMs : false;
+
+const fetchUserGuilds = async (accessToken: string) => {
   try {
-    userGuilds = await listUserGuilds(ctx.user.accessToken ?? "");
+    return await listUserGuilds(accessToken);
   } catch (err) {
     if (isDiscordApiError(err) && err.status === 429) {
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: "Discord rate limited. Please retry.",
-      });
+      throw createRateLimitError();
     }
-    throw new TRPCError({
-      code: "BAD_GATEWAY",
-      message: "Unable to fetch guilds",
-    });
+    throw createBadGatewayError("Unable to fetch guilds");
+  }
+};
+
+const fetchBotGuilds = async () => {
+  try {
+    return await listBotGuilds();
+  } catch (err) {
+    if (isDiscordApiError(err) && err.status === 429) {
+      throw createRateLimitError();
+    }
+    throw createBadGatewayError("Unable to fetch bot guilds");
+  }
+};
+
+const getUserGuildsWithCache = async (
+  accessToken: string,
+  sessionData: SessionGuildCache,
+) => {
+  if (
+    isCacheFresh(sessionData.userGuildsFetchedAt, USER_GUILD_CACHE_TTL_MS) &&
+    sessionData.userGuilds
+  ) {
+    sessionData.guildIds = sessionData.userGuilds.map((guild) => guild.id);
+    sessionData.guildIdsFetchedAt = sessionData.userGuildsFetchedAt;
+    return sessionData.userGuilds;
   }
 
-  const sessionData = ctx.req.session as typeof ctx.req.session & {
-    guildIds?: string[];
-    guildIdsFetchedAt?: number;
-    botGuildIds?: string[];
-    botGuildIdsFetchedAt?: number;
-  };
+  const userGuilds = await fetchUserGuilds(accessToken);
+  sessionData.userGuilds = userGuilds;
+  sessionData.userGuildsFetchedAt = Date.now();
   sessionData.guildIds = userGuilds.map((guild) => guild.id);
-  sessionData.guildIdsFetchedAt = Date.now();
+  sessionData.guildIdsFetchedAt = sessionData.userGuildsFetchedAt;
+  return userGuilds;
+};
 
-  let botGuilds: DiscordGuild[];
-  try {
-    botGuilds = await listBotGuilds();
-  } catch (err) {
-    if (isDiscordApiError(err) && err.status === 429) {
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: "Discord rate limited. Please retry.",
-      });
-    }
-    throw new TRPCError({
-      code: "BAD_GATEWAY",
-      message: "Unable to fetch bot guilds",
-    });
+const getBotGuildIdsWithCache = async (sessionData: SessionGuildCache) => {
+  if (
+    isCacheFresh(sessionData.botGuildIdsFetchedAt, BOT_GUILD_CACHE_TTL_MS) &&
+    sessionData.botGuildIds
+  ) {
+    return new Set(sessionData.botGuildIds);
   }
-  const botGuildIds = new Set(botGuilds.map((g) => g.id));
-  sessionData.botGuildIds = botGuilds.map((guild) => guild.id);
+
+  const botGuilds = await fetchBotGuilds();
+  const ids = botGuilds.map((guild) => guild.id);
+  sessionData.botGuildIds = ids;
   sessionData.botGuildIdsFetchedAt = Date.now();
+  return new Set(ids);
+};
+
+const listEligible = authedProcedure.query(async ({ ctx }) => {
+  const sessionData = getSessionCache(ctx);
+  const userGuilds = await getUserGuildsWithCache(
+    ctx.user.accessToken ?? "",
+    sessionData,
+  );
+  const botGuildIds = await getBotGuildIdsWithCache(sessionData);
 
   const MANAGE_GUILD = 1 << 5;
   const ADMIN = 1 << 3;
