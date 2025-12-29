@@ -50,8 +50,6 @@ function ensureTtsQueue(meeting: MeetingData) {
 
 type SayMessage = {
   text: string;
-  shouldTrim: boolean;
-  maxChars: number;
 };
 
 async function requireGuild(
@@ -132,9 +130,14 @@ async function requireSayMessage(
     return null;
   }
   const maxChars = config.chatTts.maxChars;
-  const shouldTrim = maxChars > 0 && rawText.length > maxChars;
-  const text = shouldTrim ? rawText.slice(0, maxChars) : rawText;
-  return { text, shouldTrim, maxChars };
+  if (maxChars > 0 && rawText.length > maxChars) {
+    await interaction.reply({
+      content: `Message too long (max ${maxChars} characters). Please shorten it.`,
+      ephemeral: true,
+    });
+    return null;
+  }
+  return { text: rawText };
 }
 
 async function requireQueue(
@@ -239,9 +242,7 @@ export async function handleSayCommand(
   meeting.chatLog.push(entry);
 
   await interaction.reply({
-    content: message.shouldTrim
-      ? `Queued your message (trimmed to ${message.maxChars} characters).`
-      : "Queued your message to be spoken.",
+    content: "Queued your message to be spoken.",
     ephemeral: true,
   });
 }

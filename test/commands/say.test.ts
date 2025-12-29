@@ -5,6 +5,7 @@ import { getMeeting } from "../../src/meetings";
 import { getGuildLimits } from "../../src/services/subscriptionService";
 import { fetchUserSpeechSettings } from "../../src/services/userSpeechSettingsService";
 import { buildUpgradePrompt } from "../../src/utils/upgradePrompt";
+import { config } from "../../src/services/configService";
 
 jest.mock("../../src/meetings", () => ({
   getMeeting: jest.fn(),
@@ -173,5 +174,30 @@ describe("handleSayCommand", () => {
     expect(interaction.reply).toHaveBeenCalledWith(
       expect.objectContaining({ content: "Queued your message to be spoken." }),
     );
+  });
+
+  it("rejects messages that exceed the max length", async () => {
+    if (config.chatTts.maxChars <= 0) return;
+    const member = makeMember("voice-1");
+    const interaction = makeInteraction(
+      member,
+      "a".repeat(config.chatTts.maxChars + 1),
+    );
+    const meeting = makeMeeting();
+    mockedGetMeeting.mockReturnValue(meeting);
+    mockedGetGuildLimits.mockResolvedValue({
+      subscription: { tier: "basic", status: "active", source: "stripe" },
+      limits: { liveVoiceEnabled: true, imagesEnabled: true },
+    });
+
+    await handleSayCommand(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("Message too long"),
+      }),
+    );
+    expect(meeting.ttsQueue?.enqueue).not.toHaveBeenCalled();
+    expect(meeting.chatLog).toHaveLength(0);
   });
 });
