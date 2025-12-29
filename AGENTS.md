@@ -50,6 +50,8 @@
 - Production OAuth should use the API domain callback (e.g., `https://api.chronote.gg/auth/discord/callback`). When `API_DOMAIN` is set in Terraform, the backend is behind an ALB and the frontend build uses `VITE_API_BASE_URL` from GitHub Actions env vars.
 - OpenAI org/project IDs are optional (defaults empty).
 - Other env defaults: `PORT` (3001), `NODE_ENV`, Dynamo local toggles via `USE_LOCAL_DYNAMODB`.
+- Cloud dev bootstrap: run `./scripts/setup-cloud-dev.sh` to sync uv, install scc into `.bin/`, install lizard into `.venv/bin/`, and install Playwright browsers (no flags needed). Add `.bin` and `.venv/bin` to `PATH` for `yarn code:stats`.
+- Mock-friendly env file: copy `scripts/mock.env.example` to `.env` or source it directly (`set -a; source scripts/mock.env.example; set +a`) instead of exporting many vars manually. The file keeps mock mode enabled, disables OAuth, points at local DynamoDB, and supplies dummy tokens.
 - Transcript storage: set `TRANSCRIPTS_BUCKET` (required for S3 uploads), optional `TRANSCRIPTS_PREFIX`, `AWS_REGION` (defaults to `us-east-1`).
 
 ## Data model highlights (see `src/types/db.ts`)

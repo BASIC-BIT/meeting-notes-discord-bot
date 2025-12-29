@@ -21,6 +21,7 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
    - Deployed ECS uses **AWS Secrets Manager** for secrets (see `_infra/README.md`).
 4. Start everything (local Dynamo + table init + bot): `yarn dev`
 5. Frontend (Vite + Mantine) hot reload: `yarn frontend:dev`
+6. Cloud workspace prep and mock-friendly env snippets: see `AGENTS.md` and `scripts/mock.env.example`
 
 ### DynamoDB local helpers
 
