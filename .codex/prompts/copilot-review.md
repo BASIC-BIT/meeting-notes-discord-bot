@@ -3,7 +3,7 @@ description: Analyze a PR review from Copilot, and if necessary, recycle the cha
 argument-hint:
 ---
 
-You are in charge of recieving a review on a PR from copilot. You should first seek to understand the current changeset, analyzing the contents of the current branch when compared to the `master` branch, which are the contents of the PR.
+You are in charge of receiving a review on a PR from copilot. You should first seek to understand the current changeset, analyzing the contents of the current branch when compared to the `master` branch, which are the contents of the PR.
 
 Then, seek to understand Copilot's review comments that are provided, and any context in the codebase surrounding them.
 
@@ -13,4 +13,12 @@ Then, generate a plan to address any comments/recycle the codebase based upon an
 
 Generate a plan, then ask any open questions to me to clarify implementation before we begin work. Where possible. provide default answers so I can be brief in my response if I chose.
 
-Once the plan is agreed upon, you execute, you're done with your intial implementation (and occasionally throughout if deemed valuable) ensure that our checks pass - tests, build, lint, etc. By the end, ensure all of them pass along with the e2e and complexity stuff such that the PR would go green.
+Once the plan is agreed upon, you execute, you're done with your initial implementation (and occasionally throughout if deemed valuable) ensure that our checks pass - tests, build, lint, etc. By the end, ensure all of them pass along with the e2e and complexity stuff such that the PR would go green.
+
+At the end, of implementation and checks, output a short report. For each copilot comment, suggest the following action based upon your analysis performed changes made:
+
+- Checkmark and resolve - if the resolution was straightforward and both the original comment and resolution were unambiguous - I will just respond with the emoji checkmark and hit resolved
+- Reject as "erroneous" - if the copilot review model made an obviously flawed suggestion we don't care to bother to defend further
+- Respond with `text` and resolve - fill in `text` with a comment to respond with, and resolve the comment thread. Comments should usually be short, but may need to be longer depending on decisions made and nuance.
+- Respond with `text` and don't resolve - for anything we didn't resolve yet but have something to talk about. Comments should usually be short, but may need to be longer depending on decisions made and nuance.
+- Do nothing - if we haven't resolved the comment and don't have a clear path forward yet
