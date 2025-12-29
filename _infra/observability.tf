@@ -27,7 +27,7 @@ output "amp_workspace_id" {
 variable "grafana_suffix_seed" {
   description = "Change this value to force a new AMG workspace name suffix"
   type        = string
-  default     = ""
+  default     = "reset-2025-12-29-2"
 }
 
 resource "random_id" "grafana_suffix" {
@@ -41,9 +41,12 @@ resource "aws_grafana_workspace" "amg" {
   name                     = "${local.name_prefix}-grafana-${random_id.grafana_suffix.hex}"
   account_access_type      = "CURRENT_ACCOUNT"
   authentication_providers = ["AWS_SSO"] # Requires IAM Identity Center configured
-  permission_type          = "SERVICE_MANAGED"
+  permission_type          = "CUSTOMER_MANAGED"
   data_sources             = ["PROMETHEUS", "CLOUDWATCH"]
   role_arn                 = aws_iam_role.grafana_workspace_role.arn
+  lifecycle {
+    replace_triggered_by = [random_id.grafana_suffix]
+  }
   tags = {
     Project     = "${var.project_name}-discord-bot"
     Environment = var.environment
