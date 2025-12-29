@@ -5,6 +5,7 @@ resource "aws_ce_cost_category" "chronote_project" {
 
   rule {
     value = var.project_name
+    type  = "REGULAR"
     rule {
       tags {
         key    = "Project"
@@ -23,6 +24,7 @@ resource "aws_ce_cost_category" "chronote_environment" {
 
   rule {
     value = "prod"
+    type  = "REGULAR"
     rule {
       tags {
         key    = "Environment"
@@ -33,6 +35,7 @@ resource "aws_ce_cost_category" "chronote_environment" {
 
   rule {
     value = "staging"
+    type  = "REGULAR"
     rule {
       tags {
         key    = "Environment"
