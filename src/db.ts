@@ -578,6 +578,8 @@ export async function updateMeetingNotes(
   notes: string,
   notesVersion: number,
   editedBy: string,
+  summarySentence?: string,
+  summaryLabel?: string,
   suggestion?: SuggestionHistoryEntry,
   expectedPreviousVersion?: number,
   metadata?: {
@@ -646,6 +648,18 @@ export async function updateMeetingNotes(
     ":notesHistoryEntry": [notesHistoryEntry],
     ":emptyList": [],
   };
+
+  if (summarySentence !== undefined) {
+    updateParts.push("#summarySentence = :summarySentence");
+    expressionAttributeNames["#summarySentence"] = "summarySentence";
+    values[":summarySentence"] = summarySentence;
+  }
+
+  if (summaryLabel !== undefined) {
+    updateParts.push("#summaryLabel = :summaryLabel");
+    expressionAttributeNames["#summaryLabel"] = "summaryLabel";
+    values[":summaryLabel"] = summaryLabel;
+  }
 
   if (suggestion) {
     values[":suggestionEntry"] = [suggestion];

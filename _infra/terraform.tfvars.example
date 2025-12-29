@@ -13,6 +13,7 @@ NODE_ENV="production"                         # recommended for ECS task
 ENABLE_ONBOARDING="false"
 OPENAI_ORGANIZATION_ID=""                     # optional
 OPENAI_PROJECT_ID=""                          # optional
+NOTES_MODEL="gpt-5.2"                         # optional; model for notes and summaries
 FRONTEND_BUCKET=""                            # auto-named if blank
 FRONTEND_DOMAIN=""                            # no custom domain if blank
 FRONTEND_CERT_ARN=""                          # only when FRONTEND_DOMAIN is set

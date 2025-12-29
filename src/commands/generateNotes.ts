@@ -5,8 +5,10 @@ import {
   Message,
 } from "discord.js";
 import { getNotes } from "../transcription";
+import { generateMeetingSummaries } from "../services/meetingSummaryService";
 import { MeetingData } from "../types/meeting-data";
 import { buildPaginatedEmbeds } from "../utils/embedPagination";
+import { formatNotesWithSummary } from "../utils/notesSummary";
 
 export async function generateAndSendNotes(meeting: MeetingData) {
   // const [notes, image] = await Promise.all([getNotes(meeting), getImage(meeting)]);
@@ -14,6 +16,22 @@ export async function generateAndSendNotes(meeting: MeetingData) {
   meeting.notesText = notes;
 
   if (notes && notes.length) {
+    const summaries = await generateMeetingSummaries({
+      notes,
+      serverName: meeting.guild.name,
+      channelName: meeting.voiceChannel.name,
+      tags: meeting.tags,
+      now: new Date(),
+      previousSummarySentence: meeting.summarySentence,
+      previousSummaryLabel: meeting.summaryLabel,
+    });
+    meeting.summarySentence = summaries.summarySentence;
+    meeting.summaryLabel = summaries.summaryLabel;
+    const notesBody = formatNotesWithSummary(
+      notes,
+      summaries.summarySentence,
+      summaries.summaryLabel,
+    );
     const channelIdTimestamp = `${meeting.voiceChannel.id}#${meeting.startTime.toISOString()}`;
     const encodedKey =
       typeof Buffer !== "undefined"
@@ -37,7 +55,7 @@ export async function generateAndSendNotes(meeting: MeetingData) {
 
     const footerText = `v1 • Posted by ${meeting.creator.tag}`;
     const embeds = buildPaginatedEmbeds({
-      text: notes,
+      text: notesBody,
       baseTitle: "Meeting Notes (AI Generated)",
       footerText,
     });

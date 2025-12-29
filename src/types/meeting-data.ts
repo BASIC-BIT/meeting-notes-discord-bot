@@ -58,6 +58,8 @@ export interface MeetingData {
   notesLastEditedBy?: string;
   notesLastEditedAt?: string;
   notesText?: string;
+  summarySentence?: string;
+  summaryLabel?: string;
   participants: Map<string, Participant>;
   audioS3Key?: string;
   chatS3Key?: string;

@@ -49,6 +49,8 @@ export async function updateMeetingNotesService(params: {
   notes: string;
   notesVersion: number;
   editedBy: string;
+  summarySentence?: string;
+  summaryLabel?: string;
   suggestion?: SuggestionHistoryEntry;
   expectedPreviousVersion?: number;
   metadata?: { notesMessageIds?: string[]; notesChannelId?: string };

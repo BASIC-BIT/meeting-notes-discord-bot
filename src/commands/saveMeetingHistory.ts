@@ -2,6 +2,7 @@ import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
 import { writeMeetingHistoryService } from "../services/meetingHistoryService";
 import { getNotes } from "../transcription";
+import { generateMeetingSummaries } from "../services/meetingSummaryService";
 
 async function resolveMeetingNotes(
   meeting: MeetingData,
@@ -96,6 +97,31 @@ function buildNotesHistory(options: {
   ];
 }
 
+async function resolveMeetingSummaries(
+  meeting: MeetingData,
+  notes: string | undefined,
+): Promise<{ summarySentence?: string; summaryLabel?: string }> {
+  if (meeting.summarySentence || meeting.summaryLabel) {
+    return {
+      summarySentence: meeting.summarySentence,
+      summaryLabel: meeting.summaryLabel,
+    };
+  }
+  if (!notes || !notes.trim()) {
+    return {};
+  }
+  const summaries = await generateMeetingSummaries({
+    notes,
+    serverName: meeting.guild.name,
+    channelName: meeting.voiceChannel.name,
+    tags: meeting.tags,
+    now: new Date(),
+  });
+  meeting.summarySentence = summaries.summarySentence;
+  meeting.summaryLabel = summaries.summaryLabel;
+  return summaries;
+}
+
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   // Only save if transcription was enabled (we need something to save)
   if (!meeting.transcribeMeeting || !meeting.finalTranscript) {
@@ -111,6 +137,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       : 0;
 
     const notes = await resolveMeetingNotes(meeting);
+    const summaries = await resolveMeetingSummaries(meeting, notes);
     const transcriptS3Key = meeting.transcriptS3Key;
     const { notesVersion, notesLastEditedBy, notesLastEditedAt, notesHistory } =
       buildNotesMetadata(meeting, notes, timestamp);
@@ -123,6 +150,8 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       timestamp,
       tags: meeting.tags,
       notes,
+      summarySentence: summaries.summarySentence,
+      summaryLabel: summaries.summaryLabel,
       context: meeting.meetingContext,
       participants: Array.from(meeting.participants.values()),
       duration,

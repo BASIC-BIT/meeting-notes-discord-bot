@@ -53,6 +53,7 @@ type MeetingDetails = {
   id: string;
   title: string;
   summary: string;
+  summaryLabel?: string;
   notes: string;
   dateLabel: string;
   durationLabel: string;
@@ -82,6 +83,8 @@ type MeetingExport = {
     events: MeetingEvent[];
     title: string;
     summary: string;
+    summaryLabel?: string;
+    summarySentence?: string;
     dateLabel: string;
     durationLabel: string;
     channel: string;
@@ -97,6 +100,8 @@ type MeetingSummaryRow = {
   duration: number;
   tags: string[];
   notes: string;
+  summarySentence?: string;
+  summaryLabel?: string;
   notesChannelId?: string;
   notesMessageId?: string;
   audioAvailable: boolean;
@@ -106,6 +111,7 @@ type MeetingSummaryRow = {
 type MeetingListItem = MeetingSummaryRow & {
   title: string;
   summary: string;
+  summaryLabel?: string;
   dateLabel: string;
   durationLabel: string;
   channelLabel: string;
@@ -118,6 +124,8 @@ type RawMeetingDetail = {
   duration: number;
   tags?: string[];
   notes?: string | null;
+  summarySentence?: string | null;
+  summaryLabel?: string | null;
   audioUrl?: string | null;
   attendees?: string[];
   events?: MeetingEvent[];
@@ -187,7 +195,10 @@ const deriveTitle = (notes: string, channelLabel: string) => {
   return `Meeting in ${channelLabel.replace(/^#/, "")}`;
 };
 
-const deriveSummary = (notes: string) => {
+const deriveSummary = (notes: string, summarySentence?: string | null) => {
+  if (summarySentence && summarySentence.trim().length > 0) {
+    return summarySentence.trim();
+  }
   const normalized = normalizeNotes(notes);
   if (!normalized) {
     return "Notes will appear after the meeting is processed.";
@@ -260,11 +271,12 @@ const buildMeetingDetails = (
   const dateLabel = formatDateLabel(detail.timestamp);
   const durationLabel = formatDurationLabel(detail.duration);
   const title = deriveTitle(detail.notes ?? "", channelLabel);
-  const summary = deriveSummary(detail.notes ?? "");
+  const summary = deriveSummary(detail.notes ?? "", detail.summarySentence);
   return {
     id: detail.id,
     title,
     summary,
+    summaryLabel: detail.summaryLabel ?? undefined,
     notes: detail.notes || "No notes recorded.",
     dateLabel,
     durationLabel,
@@ -343,11 +355,15 @@ export default function Library() {
       const dateLabel = formatDateLabel(meetingRow.timestamp);
       const durationLabel = formatDurationLabel(meetingRow.duration);
       const title = deriveTitle(meetingRow.notes, channelLabel);
-      const summary = deriveSummary(meetingRow.notes);
+      const summary = deriveSummary(
+        meetingRow.notes,
+        meetingRow.summarySentence,
+      );
       return {
         ...meetingRow,
         title,
         summary,
+        summaryLabel: meetingRow.summaryLabel ?? undefined,
         dateLabel,
         durationLabel,
         channelLabel,
@@ -433,6 +449,8 @@ export default function Library() {
         events: detail.events ?? [],
         title: meeting.title,
         summary: meeting.summary,
+        summarySentence: detail.summarySentence ?? undefined,
+        summaryLabel: meeting.summaryLabel,
         dateLabel: meeting.dateLabel,
         durationLabel: meeting.durationLabel,
         channel: meeting.channel,
@@ -564,6 +582,11 @@ export default function Library() {
                 <Group justify="space-between" align="flex-start" wrap="nowrap">
                   <Stack gap={6} style={{ flex: 1 }}>
                     <Text fw={650}>{meetingItem.title}</Text>
+                    {meetingItem.summaryLabel ? (
+                      <Text size="xs" c="dimmed">
+                        {meetingItem.summaryLabel}
+                      </Text>
+                    ) : null}
                     <Text size="sm" c="dimmed">
                       {meetingItem.summary}
                     </Text>
@@ -689,6 +712,11 @@ export default function Library() {
                     </ThemeIcon>
                     <Text fw={600}>Summary</Text>
                   </Group>
+                  {meeting.summaryLabel ? (
+                    <Text size="xs" c="dimmed" mb={6}>
+                      {meeting.summaryLabel}
+                    </Text>
+                  ) : null}
                   <Text size="sm" c="dimmed">
                     {meeting.summary}
                   </Text>

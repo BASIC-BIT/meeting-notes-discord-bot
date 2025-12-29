@@ -11,6 +11,24 @@ export type LatestUtterance = {
   timestamp: number;
 };
 
+function formatMeetingDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown date";
+  }
+  return date.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+function truncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen).trimEnd() + "...";
+}
+
 function formatLine(line: Line): string {
   const time = new Date(line.ts).toISOString();
   return `${time} ${line.speaker}: ${line.text}`;
@@ -80,16 +98,16 @@ export async function buildLiveResponderContext(
   pastMeetings = pastMeetings.slice(0, maxPast);
 
   const pastBlocks = pastMeetings.map((m) => {
-    const date = new Date(m.timestamp).toLocaleDateString();
+    const date = formatMeetingDate(m.timestamp);
     const tagText = m.tags?.length ? `Tags: ${m.tags.join(", ")}` : "";
     const summary =
-      (m.notes || "").trim().slice(0, config.liveVoice.pastMeetingsMaxChars) ||
+      m.summarySentence?.trim() ||
+      truncate((m.notes || "").trim(), config.liveVoice.pastMeetingsMaxChars) ||
       "(no notes)";
-    const sourceLink =
-      m.notesChannelId && m.notesMessageIds?.length
-        ? `https://discord.com/channels/${meeting.guildId}/${m.notesChannelId}/${m.notesMessageIds[0]}`
-        : "n/a";
-    return `- ${date} • ${m.meetingId}\n  ${tagText}\n  Summary: ${summary}\n  Source: ${sourceLink}`;
+    const label = m.summaryLabel?.trim();
+    const tagLine = tagText ? `  ${tagText}\n` : "";
+    const labelLine = label ? `  Label: ${label}\n` : "";
+    return `- Meeting ${date}\n${tagLine}${labelLine}  Summary: ${summary}`;
   });
 
   const windowBlock =

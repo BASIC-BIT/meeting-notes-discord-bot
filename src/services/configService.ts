@@ -40,6 +40,7 @@ class ConfigService {
 
   // Notes generation / testing configuration
   readonly notes = {
+    model: process.env.NOTES_MODEL || "gpt-5.2",
     longStoryTestMode: process.env.NOTES_LONG_STORY_TEST_MODE === "true",
     longStoryTargetChars:
       parseInt(process.env.NOTES_LONG_STORY_TARGET_CHARS || "20000", 10) ||

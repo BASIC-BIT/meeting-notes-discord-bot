@@ -37,6 +37,8 @@ export type MeetingHistoryRepository = {
     notes: string;
     notesVersion: number;
     editedBy: string;
+    summarySentence?: string;
+    summaryLabel?: string;
     suggestion?: SuggestionHistoryEntry;
     expectedPreviousVersion?: number;
     metadata?: { notesMessageIds?: string[]; notesChannelId?: string };
@@ -61,6 +63,8 @@ const realRepository: MeetingHistoryRepository = {
       params.notes,
       params.notesVersion,
       params.editedBy,
+      params.summarySentence,
+      params.summaryLabel,
       params.suggestion,
       params.expectedPreviousVersion,
       params.metadata,
@@ -120,6 +124,8 @@ const mockRepository: MeetingHistoryRepository = {
     items[idx] = {
       ...existing,
       notes: params.notes,
+      summarySentence: params.summarySentence ?? existing.summarySentence,
+      summaryLabel: params.summaryLabel ?? existing.summaryLabel,
       notesVersion: params.notesVersion,
       notesLastEditedBy: params.editedBy,
       notesLastEditedAt: now,
