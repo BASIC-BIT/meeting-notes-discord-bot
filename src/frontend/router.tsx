@@ -6,6 +6,7 @@ import {
   Route,
   Router,
 } from "@tanstack/react-router";
+import { z } from "zod";
 import MarketingLayout from "./layouts/MarketingLayout";
 
 const PortalLayout = lazyRouteComponent(() => import("./layouts/PortalLayout"));
@@ -17,6 +18,7 @@ const Library = lazyRouteComponent(() => import("./pages/Library"));
 const Ask = lazyRouteComponent(() => import("./pages/Ask"));
 const Billing = lazyRouteComponent(() => import("./pages/Billing"));
 const Settings = lazyRouteComponent(() => import("./pages/Settings"));
+const LiveMeeting = lazyRouteComponent(() => import("./pages/LiveMeeting"));
 import { useGuildContext } from "./contexts/GuildContext";
 import { usePortalStore } from "./stores/portalStore";
 
@@ -32,6 +34,12 @@ const homeRoute = new Route({
   getParentRoute: () => rootRoute,
   path: "/",
   component: MarketingLayout,
+});
+
+const liveMeetingRoute = new Route({
+  getParentRoute: () => rootRoute,
+  path: "live/$guildId/$meetingId",
+  component: LiveMeeting,
 });
 
 const portalRoute = new Route({
@@ -77,6 +85,7 @@ const portalLibraryRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "library",
   component: Library,
+  validateSearch: z.object({ meetingId: z.string().optional() }).parse,
 });
 
 const portalAskRoute = new Route({
@@ -99,6 +108,7 @@ const portalSettingsRoute = new Route({
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
+  liveMeetingRoute,
   portalRoute.addChildren([
     portalIndexRoute,
     portalSelectRoute,

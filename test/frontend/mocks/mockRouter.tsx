@@ -1,5 +1,31 @@
 import React from "react";
-import { navigateSpy, routeParams, routerState } from "./routerState";
+import {
+  getRouteSearch,
+  navigateSpy,
+  routeParams,
+  routerState,
+  setRouteSearch,
+  subscribeRouteSearch,
+} from "./routerState";
+
+type NavigateOptions = {
+  search?:
+    | ((prev: { meetingId?: string }) => { meetingId?: string })
+    | { meetingId?: string };
+};
+
+const navigate = (options?: NavigateOptions) => {
+  navigateSpy(options);
+  if (!options || options.search === undefined) {
+    return;
+  }
+  const prev = getRouteSearch();
+  const nextSearch =
+    typeof options.search === "function"
+      ? options.search({ ...prev })
+      : options.search;
+  setRouteSearch(nextSearch ?? {});
+};
 
 jest.mock("@tanstack/react-router", () => ({
   Link: ({ children, ...props }: { children: React.ReactNode }) => (
@@ -9,8 +35,14 @@ jest.mock("@tanstack/react-router", () => ({
     <span data-testid="navigate" data-to={to} />
   ),
   Outlet: () => <div data-testid="router-outlet" />,
-  useNavigate: () => navigateSpy,
+  useNavigate: () => navigate,
   useParams: () => routeParams,
+  useSearch: () =>
+    React.useSyncExternalStore(
+      subscribeRouteSearch,
+      getRouteSearch,
+      getRouteSearch,
+    ),
   useRouterState: (options?: {
     select?: (state: { location: { pathname: string } }) => string;
   }) =>

@@ -9,6 +9,7 @@ async function resolveMeetingNotes(
 ): Promise<string | undefined> {
   if (!meeting.generateNotes) return meeting.notesText;
   if (meeting.notesText) return meeting.notesText;
+  if (!meeting.finalTranscript) return meeting.notesText;
 
   try {
     const notes = await getNotes(meeting);
@@ -123,8 +124,7 @@ async function resolveMeetingSummaries(
 }
 
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
-  // Only save if transcription was enabled (we need something to save)
-  if (!meeting.transcribeMeeting || !meeting.finalTranscript) {
+  if (!meeting.transcribeMeeting) {
     return;
   }
 
@@ -159,6 +159,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       generateNotes: meeting.generateNotes,
       meetingCreatorId: meeting.creator.id,
       isAutoRecording: meeting.isAutoRecording,
+      status: "complete",
       notesMessageIds: meeting.notesMessageIds,
       notesChannelId: meeting.notesChannelId,
       notesVersion,
@@ -177,5 +178,33 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   } catch (error) {
     console.error("Failed to save meeting history:", error);
     // Don't throw - we don't want to fail the meeting end process if history save fails
+  }
+}
+
+export async function saveMeetingStartToDatabase(
+  meeting: MeetingData,
+): Promise<void> {
+  if (!meeting.transcribeMeeting) return;
+  try {
+    const timestamp = meeting.startTime.toISOString();
+    const history: MeetingHistory = {
+      guildId: meeting.guildId,
+      channelId_timestamp: `${meeting.voiceChannel.id}#${timestamp}`,
+      meetingId: meeting.meetingId,
+      channelId: meeting.voiceChannel.id,
+      timestamp,
+      tags: meeting.tags,
+      context: meeting.meetingContext,
+      participants: Array.from(meeting.participants.values()),
+      duration: 0,
+      transcribeMeeting: meeting.transcribeMeeting,
+      generateNotes: meeting.generateNotes,
+      meetingCreatorId: meeting.creator.id,
+      isAutoRecording: meeting.isAutoRecording,
+      status: "in_progress",
+    };
+    await writeMeetingHistoryService(history);
+  } catch (error) {
+    console.error("Failed to save meeting start history:", error);
   }
 }

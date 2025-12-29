@@ -102,12 +102,19 @@ const list = manageGuildProcedure
 
     return {
       meetings: meetings.map((meeting) => ({
+        status: meeting.status ?? "complete",
         id: meeting.channelId_timestamp,
         meetingId: meeting.meetingId,
         channelId: meeting.channelId,
         channelName: channelMap.get(meeting.channelId) ?? meeting.channelId,
         timestamp: meeting.timestamp,
-        duration: meeting.duration,
+        duration:
+          meeting.status === "in_progress"
+            ? Math.max(
+                0,
+                Math.floor((Date.now() - Date.parse(meeting.timestamp)) / 1000),
+              )
+            : meeting.duration,
         tags: meeting.tags ?? [],
         notes: meeting.notes ?? "",
         summarySentence: meeting.summarySentence,
@@ -282,11 +289,18 @@ const detail = manageGuildProcedure
 
     return {
       meeting: {
+        status: history.status ?? "complete",
         id: history.channelId_timestamp,
         meetingId: history.meetingId,
         channelId: history.channelId,
         timestamp: history.timestamp,
-        duration: history.duration,
+        duration:
+          history.status === "in_progress"
+            ? Math.max(
+                0,
+                Math.floor((Date.now() - Date.parse(history.timestamp)) / 1000),
+              )
+            : history.duration,
         tags: history.tags ?? [],
         notes: history.notes ?? "",
         summarySentence: history.summarySentence,

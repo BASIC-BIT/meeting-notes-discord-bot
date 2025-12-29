@@ -14,6 +14,10 @@ Scope: Mocked portal flows + home page (dark/light)
 - Settings: "Add rule" action feels slightly detached from the form (bottom-right). Consider a footer row with action + helper text, or inline button near fields.
 - Several secondary text blocks on dark backgrounds are low contrast (home, library, billing). Slightly bump dimmed color or card contrast.
 
+## Future ideas
+
+- Consider an optional "Generate public share URL" for live meetings (explicit action, Manage Server), so users can share without OAuth while keeping privacy controls.
+
 ## Screenshots captured
 
 - screens/home-dark.png
