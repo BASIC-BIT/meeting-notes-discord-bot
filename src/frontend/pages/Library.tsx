@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -24,13 +24,10 @@ import {
   IconChevronRight,
   IconDownload,
   IconFilter,
-  IconMessageCircle,
   IconMicrophone,
   IconNote,
   IconRefresh,
   IconSearch,
-  IconSpeakerphone,
-  IconSparkles,
   IconUsers,
 } from "@tabler/icons-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -38,17 +35,17 @@ import { format } from "date-fns";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
 import FormSelect from "../components/FormSelect";
+import MeetingTimeline, {
+  MEETING_TIMELINE_FILTERS,
+} from "../components/MeetingTimeline";
 import { trpc } from "../services/trpc";
 import { useGuildContext } from "../contexts/GuildContext";
 import { uiOverlays } from "../uiTokens";
-
-type MeetingEvent = {
-  id: string;
-  type: "voice" | "chat" | "tts" | "presence" | "bot";
-  time: string;
-  speaker?: string;
-  text: string;
-};
+import { useLiveMeetingStream } from "../hooks/useLiveMeetingStream";
+import type {
+  MeetingEvent,
+  MeetingEventType,
+} from "../../types/meetingTimeline";
 
 type MeetingDetails = {
   id: string;
@@ -66,7 +63,7 @@ type MeetingDetails = {
   decisions: string[];
   actions: string[];
   events: MeetingEvent[];
-  status?: "in_progress" | "complete";
+  status?: "in_progress" | "processing" | "complete";
 };
 
 type MeetingExport = {
@@ -109,7 +106,7 @@ type MeetingSummaryRow = {
   notesMessageId?: string;
   audioAvailable: boolean;
   transcriptAvailable: boolean;
-  status?: "in_progress" | "complete";
+  status?: "in_progress" | "processing" | "complete";
 };
 
 type MeetingListItem = MeetingSummaryRow & {
@@ -134,26 +131,7 @@ type RawMeetingDetail = {
   audioUrl?: string | null;
   attendees?: string[];
   events?: MeetingEvent[];
-  status?: "in_progress" | "complete";
-};
-
-const FILTER_OPTIONS = [
-  { value: "voice", label: "Voice" },
-  { value: "chat", label: "Chat" },
-  { value: "tts", label: "Spoken chat" },
-  { value: "presence", label: "Joins/Leaves" },
-  { value: "bot", label: "Bot" },
-];
-
-const EVENT_META: Record<
-  MeetingEvent["type"],
-  { color: string; label: string; icon: ComponentType<{ size?: number }> }
-> = {
-  voice: { color: "brand", label: "Voice", icon: IconMicrophone },
-  chat: { color: "cyan", label: "Chat", icon: IconMessageCircle },
-  tts: { color: "teal", label: "Spoken chat", icon: IconSpeakerphone },
-  presence: { color: "gray", label: "Join/leave", icon: IconUsers },
-  bot: { color: "violet", label: "Chronote", icon: IconSparkles },
+  status?: "in_progress" | "processing" | "complete";
 };
 
 const formatChannelLabel = (name?: string, fallback?: string) => {
@@ -313,8 +291,8 @@ export default function Library() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedRange, setSelectedRange] = useState("30");
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
-  const [activeFilters, setActiveFilters] = useState<string[]>(
-    FILTER_OPTIONS.map((filter) => filter.value),
+  const [activeFilters, setActiveFilters] = useState<MeetingEventType[]>(
+    MEETING_TIMELINE_FILTERS.map((filter) => filter.value),
   );
   const [fullScreen, setFullScreen] = useState(false);
 
@@ -412,16 +390,53 @@ export default function Library() {
     const detail = detailQuery.data?.meeting;
     return detail ? buildMeetingDetails(detail, channelNameMap) : null;
   }, [detailQuery.data, channelNameMap]);
-
-  const visibleEvents = useMemo(() => {
-    if (!meeting) return [];
-    return meeting.events.filter((event) => activeFilters.includes(event.type));
-  }, [meeting, activeFilters]);
+  const liveStreamEnabled = Boolean(
+    meeting &&
+      selectedGuildId &&
+      (meeting.status === "in_progress" || meeting.status === "processing"),
+  );
+  const liveStream = useLiveMeetingStream({
+    guildId: selectedGuildId ?? "",
+    meetingId: meeting?.meetingId ?? "",
+    enabled: liveStreamEnabled,
+  });
+  const displayStatus =
+    liveStream.meeting?.status ?? meeting?.status ?? "complete";
+  const displayAttendees = liveStreamEnabled
+    ? liveStream.attendees
+    : (meeting?.attendees ?? []);
+  const displayEvents = liveStreamEnabled
+    ? liveStream.events
+    : (meeting?.events ?? []);
+  const timelineEmptyLabel = liveStreamEnabled
+    ? liveStream.status === "processing"
+      ? "Meeting finished. Waiting for notes and timeline updates."
+      : "Waiting for the first transcript line..."
+    : "Timeline data will appear after the meeting finishes processing.";
 
   const listLoading = meetingsQuery.isLoading || channelsQuery.isLoading;
   const listError = meetingsQuery.error ?? channelsQuery.error;
   const detailLoading = detailQuery.isLoading || detailQuery.isFetching;
   const [refreshing, setRefreshing] = useState(false);
+  const refetchedMeetingRef = useRef<string | null>(null);
+
+  const meetingKey = meeting?.id ?? null;
+  useEffect(() => {
+    if (!liveStreamEnabled) return;
+    if (liveStream.status !== "complete") return;
+    if (!selectedGuildId || !meetingKey) return;
+    if (refetchedMeetingRef.current === meetingKey) return;
+    refetchedMeetingRef.current = meetingKey;
+    void trpcUtils.meetings.detail.invalidate();
+    void trpcUtils.meetings.list.invalidate({ serverId: selectedGuildId });
+  }, [
+    liveStream.status,
+    liveStreamEnabled,
+    meetingKey,
+    selectedGuildId,
+    trpcUtils.meetings.detail,
+    trpcUtils.meetings.list,
+  ]);
 
   const handleRefresh = async () => {
     if (!selectedGuildId) return;
@@ -602,6 +617,10 @@ export default function Library() {
                         <Badge color="red" variant="light">
                           Live
                         </Badge>
+                      ) : meetingItem.status === "processing" ? (
+                        <Badge color="yellow" variant="light">
+                          Processing
+                        </Badge>
                       ) : null}
                     </Group>
                     {meetingItem.summaryLabel ? (
@@ -672,9 +691,13 @@ export default function Library() {
                   <Group justify="space-between" align="center" wrap="wrap">
                     <Group gap="xs" align="center" wrap="wrap">
                       <Title order={3}>{meeting.title}</Title>
-                      {meeting.status === "in_progress" ? (
+                      {displayStatus === "in_progress" ? (
                         <Badge color="red" variant="light">
                           Live transcript
+                        </Badge>
+                      ) : displayStatus === "processing" ? (
+                        <Badge color="yellow" variant="light">
+                          Processing
                         </Badge>
                       ) : null}
                     </Group>
@@ -767,108 +790,32 @@ export default function Library() {
                     <Text fw={600}>Attendees</Text>
                   </Group>
                   <Text size="sm" c="dimmed">
-                    {meeting.attendees.join(", ")}
+                    {displayAttendees.join(", ")}
                   </Text>
                 </Surface>
 
                 <Surface p="md">
-                  <Group
-                    justify="space-between"
-                    align="center"
-                    mb="sm"
-                    wrap="wrap"
-                  >
-                    <Group gap="sm">
-                      <ThemeIcon variant="light" color="brand">
-                        <IconFilter size={16} />
-                      </ThemeIcon>
-                      <Text fw={600}>Timeline</Text>
-                    </Group>
-                    <Group gap="xs">
-                      {FILTER_OPTIONS.map((filter) => {
-                        const isActive = activeFilters.includes(filter.value);
-                        return (
-                          <Button
-                            key={filter.value}
-                            size="xs"
-                            variant={isActive ? "light" : "subtle"}
-                            color={isActive ? "cyan" : "gray"}
-                            onClick={() => {
-                              setActiveFilters((current) =>
-                                current.includes(filter.value)
-                                  ? current.filter(
-                                      (value) => value !== filter.value,
-                                    )
-                                  : [...current, filter.value],
-                              );
-                            }}
-                          >
-                            {filter.label}
-                          </Button>
-                        );
-                      })}
-                    </Group>
-                  </Group>
-                  <ScrollArea h={fullScreen ? 620 : 360} offsetScrollbars>
-                    {visibleEvents.length === 0 ? (
-                      <Center py="xl">
-                        <Text size="sm" c="dimmed">
-                          Timeline data will appear after the meeting finishes
-                          processing.
-                        </Text>
-                      </Center>
-                    ) : (
-                      <Stack gap={0}>
-                        {visibleEvents.map((event) => {
-                          const meta = EVENT_META[event.type];
-                          const Icon = meta.icon;
-                          const showMetaLabel = Boolean(event.speaker);
-                          return (
-                            <Box
-                              key={event.id}
-                              px="sm"
-                              py="sm"
-                              style={{
-                                borderBottom: `1px solid ${
-                                  isDark
-                                    ? theme.colors.dark[5]
-                                    : theme.colors.gray[2]
-                                }`,
-                              }}
-                            >
-                              <Group gap="sm" align="flex-start" wrap="nowrap">
-                                <ThemeIcon
-                                  variant="light"
-                                  color={meta.color}
-                                  size={32}
-                                >
-                                  <Icon size={16} />
-                                </ThemeIcon>
-                                <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
-                                  <Group gap="xs" align="baseline" wrap="wrap">
-                                    <Text fw={700} size="sm">
-                                      {event.speaker ?? meta.label}
-                                    </Text>
-                                    <Text size="xs" c="dimmed">
-                                      {event.time}
-                                    </Text>
-                                    {showMetaLabel ? (
-                                      <Text size="xs" c="dimmed">
-                                        • {meta.label}
-                                      </Text>
-                                    ) : null}
-                                  </Group>
-                                  <Text size="sm" c="dimmed">
-                                    {event.text}
-                                  </Text>
-                                </Stack>
-                              </Group>
-                            </Box>
-                          );
-                        })}
-                      </Stack>
-                    )}
-                  </ScrollArea>
+                  <Stack gap="sm">
+                    {liveStreamEnabled && liveStream.status === "error" ? (
+                      <Text size="sm" c="dimmed">
+                        Unable to connect to the live transcript. Try
+                        refreshing.
+                      </Text>
+                    ) : null}
+                    <MeetingTimeline
+                      events={displayEvents}
+                      activeFilters={activeFilters}
+                      onToggleFilter={(value) =>
+                        setActiveFilters((current) =>
+                          current.includes(value)
+                            ? current.filter((filter) => filter !== value)
+                            : [...current, value],
+                        )
+                      }
+                      height={fullScreen ? 620 : 360}
+                      emptyLabel={timelineEmptyLabel}
+                    />
+                  </Stack>
                 </Surface>
               </Stack>
             ) : null}

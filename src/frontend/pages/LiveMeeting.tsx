@@ -1,72 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Badge,
-  Box,
   Button,
   Center,
   Divider,
   Group,
   Loader,
-  ScrollArea,
   Stack,
   Switch,
   Text,
-  ThemeIcon,
   Title,
-  useComputedColorScheme,
-  useMantineTheme,
 } from "@mantine/core";
-import {
-  IconMicrophone,
-  IconRefresh,
-  IconSpeakerphone,
-  IconSparkles,
-} from "@tabler/icons-react";
+import { IconRefresh } from "@tabler/icons-react";
 import { format } from "date-fns";
 import { useParams } from "@tanstack/react-router";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
+import MeetingTimeline, {
+  MEETING_TIMELINE_FILTERS,
+} from "../components/MeetingTimeline";
 import { buildApiUrl } from "../services/apiClient";
 import { useAuth } from "../contexts/AuthContext";
-import type {
-  LiveMeetingInitPayload,
-  LiveMeetingMeta,
-  LiveMeetingSegment,
-  LiveMeetingSegmentsPayload,
-  LiveMeetingStatusPayload,
-} from "../../types/liveMeeting";
-
-const SOURCE_META = {
-  voice: { color: "brand", label: "Voice", icon: IconMicrophone },
-  chat_tts: { color: "teal", label: "Spoken chat", icon: IconSpeakerphone },
-  bot: { color: "violet", label: "Chronote", icon: IconSparkles },
-} as const;
-
-const formatElapsed = (seconds: number) => {
-  const safe = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  const secs = safe % 60;
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(
-      secs,
-    ).padStart(2, "0")}`;
-  }
-  return `${minutes}:${String(secs).padStart(2, "0")}`;
-};
-
-const resolveSpeakerLabel = (segment: LiveMeetingSegment) => {
-  if (segment.source === "bot") {
-    return "Chronote";
-  }
-  return (
-    segment.serverNickname ||
-    segment.displayName ||
-    segment.username ||
-    segment.tag ||
-    "Unknown"
-  );
-};
+import { useLiveMeetingStream } from "../hooks/useLiveMeetingStream";
+import type { MeetingEventType } from "../../types/meetingTimeline";
 
 const buildLoginUrl = () => {
   const base = buildApiUrl("/auth/discord");
@@ -81,71 +37,23 @@ export default function LiveMeeting() {
     from: "/live/$guildId/$meetingId",
   });
   const { state: authState, loading: authLoading } = useAuth();
-  const theme = useMantineTheme();
-  const scheme = useComputedColorScheme("dark");
-  const isDark = scheme === "dark";
-  const [meeting, setMeeting] = useState<LiveMeetingMeta | null>(null);
-  const [segments, setSegments] = useState<LiveMeetingSegment[]>([]);
-  const [status, setStatus] = useState<
-    "connecting" | "live" | "complete" | "error"
-  >("connecting");
   const [autoScroll, setAutoScroll] = useState(true);
-  const [retryKey, setRetryKey] = useState(0);
-  const seenRef = useRef<Set<string>>(new Set());
+  const [activeFilters, setActiveFilters] = useState<MeetingEventType[]>(
+    MEETING_TIMELINE_FILTERS.map((filter) => filter.value),
+  );
   const viewportRef = useRef<HTMLDivElement | null>(null);
-
-  const meetingStartMs = useMemo(() => {
-    if (!meeting) return null;
-    const value = Date.parse(meeting.startedAt);
-    return Number.isFinite(value) ? value : null;
-  }, [meeting]);
-
-  useEffect(() => {
-    if (authState !== "authenticated") return;
-    const url = buildApiUrl(
-      `/api/live/${params.guildId}/${params.meetingId}/stream`,
-    );
-    const source = new EventSource(url, { withCredentials: true });
-    setStatus("connecting");
-    source.addEventListener("init", (event) => {
-      const payload = JSON.parse(event.data) as LiveMeetingInitPayload;
-      setMeeting(payload.meeting);
-      seenRef.current = new Set(payload.segments.map((seg) => seg.id));
-      setSegments(payload.segments);
-      setStatus(payload.meeting.status === "complete" ? "complete" : "live");
-    });
-    source.addEventListener("segments", (event) => {
-      const payload = JSON.parse(event.data) as LiveMeetingSegmentsPayload;
-      const next = payload.segments.filter((segment) => {
-        if (seenRef.current.has(segment.id)) return false;
-        seenRef.current.add(segment.id);
-        return true;
-      });
-      if (next.length > 0) {
-        setSegments((current) => [...current, ...next]);
-      }
-    });
-    source.addEventListener("status", (event) => {
-      const payload = JSON.parse(event.data) as LiveMeetingStatusPayload;
-      if (payload.status === "complete") {
-        setStatus("complete");
-      }
-    });
-    source.onerror = () => {
-      setStatus((current) => (current === "complete" ? current : "error"));
-      source.close();
-    };
-    return () => {
-      source.close();
-    };
-  }, [authState, params.guildId, params.meetingId, retryKey]);
+  const stream = useLiveMeetingStream({
+    guildId: params.guildId,
+    meetingId: params.meetingId,
+    enabled: authState === "authenticated",
+  });
 
   useEffect(() => {
     if (!autoScroll) return;
     const viewport = viewportRef.current;
     if (!viewport) return;
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
-  }, [segments, autoScroll]);
+  }, [stream.events, autoScroll]);
 
   if (authState === "unauthenticated") {
     return (
@@ -180,6 +88,16 @@ export default function LiveMeeting() {
     );
   }
 
+  const meeting = stream.meeting;
+  const statusLabel =
+    stream.status === "processing"
+      ? "Processing"
+      : stream.status === "complete"
+        ? "Complete"
+        : stream.status === "live"
+          ? "Live"
+          : null;
+
   return (
     <Stack gap="lg" data-testid="live-meeting-page">
       <PageHeader
@@ -193,13 +111,18 @@ export default function LiveMeeting() {
               <Title order={3}>
                 {meeting ? `#${meeting.channelName}` : "Loading meeting..."}
               </Title>
-              {status === "live" ? (
-                <Badge color="red" variant="light">
-                  Live
-                </Badge>
-              ) : status === "complete" ? (
-                <Badge color="gray" variant="light">
-                  Complete
+              {statusLabel ? (
+                <Badge
+                  color={
+                    statusLabel === "Live"
+                      ? "red"
+                      : statusLabel === "Processing"
+                        ? "yellow"
+                        : "gray"
+                  }
+                  variant="light"
+                >
+                  {statusLabel}
                 </Badge>
               ) : null}
             </Group>
@@ -209,84 +132,52 @@ export default function LiveMeeting() {
                 : "Connecting to live stream..."}
             </Text>
           </Stack>
-          <Group gap="sm" align="center">
-            <Switch
-              label="Auto-scroll"
-              checked={autoScroll}
-              onChange={(event) => setAutoScroll(event.currentTarget.checked)}
-            />
-            <Button
-              size="xs"
-              variant="subtle"
-              leftSection={<IconRefresh size={14} />}
-              onClick={() => setRetryKey((current) => current + 1)}
-            >
-              Retry
-            </Button>
-          </Group>
         </Group>
         <Divider my="sm" />
-        {status === "error" ? (
-          <Center py="xl">
+        {stream.status === "error" ? (
+          <Center py="sm">
             <Text size="sm" c="dimmed">
               Unable to connect. Check your access to the voice channel and try
               again.
             </Text>
           </Center>
         ) : null}
-        <ScrollArea h={520} viewportRef={viewportRef} offsetScrollbars>
-          {segments.length === 0 ? (
-            <Center py="xl">
-              <Text size="sm" c="dimmed">
-                Waiting for the first transcript line...
-              </Text>
-            </Center>
-          ) : (
-            <Stack gap={0}>
-              {segments.map((segment) => {
-                const meta = SOURCE_META[segment.source];
-                const Icon = meta.icon;
-                const elapsed = meetingStartMs
-                  ? (Date.parse(segment.startedAt) - meetingStartMs) / 1000
-                  : 0;
-                return (
-                  <Box
-                    key={segment.id}
-                    px="sm"
-                    py="sm"
-                    style={{
-                      borderBottom: `1px solid ${
-                        isDark ? theme.colors.dark[5] : theme.colors.gray[2]
-                      }`,
-                    }}
-                  >
-                    <Group gap="sm" align="flex-start" wrap="nowrap">
-                      <ThemeIcon variant="light" color={meta.color} size={32}>
-                        <Icon size={16} />
-                      </ThemeIcon>
-                      <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
-                        <Group gap="xs" align="baseline" wrap="wrap">
-                          <Text fw={700} size="sm">
-                            {resolveSpeakerLabel(segment)}
-                          </Text>
-                          <Text size="xs" c="dimmed">
-                            {formatElapsed(elapsed)}
-                          </Text>
-                          <Text size="xs" c="dimmed">
-                            {meta.label}
-                          </Text>
-                        </Group>
-                        <Text size="sm" c="dimmed">
-                          {segment.text}
-                        </Text>
-                      </Stack>
-                    </Group>
-                  </Box>
-                );
-              })}
-            </Stack>
-          )}
-        </ScrollArea>
+        <MeetingTimeline
+          events={stream.events}
+          activeFilters={activeFilters}
+          onToggleFilter={(value) =>
+            setActiveFilters((current) =>
+              current.includes(value)
+                ? current.filter((filter) => filter !== value)
+                : [...current, value],
+            )
+          }
+          height={520}
+          title="Live transcript"
+          emptyLabel={
+            stream.status === "processing"
+              ? "Meeting finished. Waiting for notes and timeline updates."
+              : "Waiting for the first transcript line..."
+          }
+          headerActions={
+            <>
+              <Switch
+                label="Auto-scroll"
+                checked={autoScroll}
+                onChange={(event) => setAutoScroll(event.currentTarget.checked)}
+              />
+              <Button
+                size="xs"
+                variant="subtle"
+                leftSection={<IconRefresh size={14} />}
+                onClick={stream.retry}
+              >
+                Retry
+              </Button>
+            </>
+          }
+          viewportRef={viewportRef}
+        />
       </Surface>
     </Stack>
   );

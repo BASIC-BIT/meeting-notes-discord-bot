@@ -1,17 +1,6 @@
-export type LiveMeetingStatus = "in_progress" | "complete";
+import type { MeetingEvent } from "./meetingTimeline";
 
-export type LiveMeetingSegment = {
-  id: string;
-  userId: string;
-  username?: string;
-  displayName?: string;
-  serverNickname?: string;
-  tag?: string;
-  startedAt: string;
-  text: string;
-  source: "voice" | "chat_tts" | "bot";
-  messageId?: string;
-};
+export type LiveMeetingStatus = "in_progress" | "processing" | "complete";
 
 export type LiveMeetingMeta = {
   guildId: string;
@@ -26,11 +15,15 @@ export type LiveMeetingMeta = {
 
 export type LiveMeetingInitPayload = {
   meeting: LiveMeetingMeta;
-  segments: LiveMeetingSegment[];
+  events: MeetingEvent[];
 };
 
-export type LiveMeetingSegmentsPayload = {
-  segments: LiveMeetingSegment[];
+export type LiveMeetingEventsPayload = {
+  events: MeetingEvent[];
+};
+
+export type LiveMeetingAttendeesPayload = {
+  attendees: string[];
 };
 
 export type LiveMeetingStatusPayload = {

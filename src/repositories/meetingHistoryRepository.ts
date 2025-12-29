@@ -5,6 +5,7 @@ import {
   getRecentMeetingsForChannel,
   getRecentMeetingsForGuild,
   updateMeetingNotes,
+  updateMeetingStatus,
   updateMeetingTags,
   writeMeetingHistory,
 } from "../db";
@@ -43,6 +44,11 @@ export type MeetingHistoryRepository = {
     expectedPreviousVersion?: number;
     metadata?: { notesMessageIds?: string[]; notesChannelId?: string };
   }) => Promise<boolean>;
+  updateStatus: (
+    guildId: string,
+    channelIdTimestamp: string,
+    status: "in_progress" | "processing" | "complete",
+  ) => Promise<void>;
   updateTags: (
     guildId: string,
     channelIdTimestamp: string,
@@ -69,6 +75,7 @@ const realRepository: MeetingHistoryRepository = {
       params.expectedPreviousVersion,
       params.metadata,
     ),
+  updateStatus: updateMeetingStatus,
   updateTags: updateMeetingTags,
 };
 
@@ -145,6 +152,19 @@ const mockRepository: MeetingHistoryRepository = {
     );
     if (idx === -1) return;
     items[idx] = { ...items[idx], tags: tags ?? [] };
+    getMockStore().meetingHistoryByGuild.set(guildId, items);
+  },
+  async updateStatus(guildId, channelIdTimestamp, status) {
+    const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
+    const idx = items.findIndex(
+      (item) => item.channelId_timestamp === channelIdTimestamp,
+    );
+    if (idx === -1) return;
+    items[idx] = {
+      ...items[idx],
+      status,
+      updatedAt: new Date().toISOString(),
+    };
     getMockStore().meetingHistoryByGuild.set(guildId, items);
   },
 };

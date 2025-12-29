@@ -6,6 +6,7 @@ import {
 } from "../../services/meetingHistoryService";
 import { ensureBotInGuild } from "../../services/guildAccessService";
 import { config } from "../../services/configService";
+import { buildMeetingTimelineEventsFromHistory } from "../../services/meetingTimelineService";
 import {
   fetchJsonFromS3,
   getSignedObjectUrl,
@@ -14,44 +15,18 @@ import {
   isDiscordApiError,
   listGuildChannels,
 } from "../../services/discordService";
+import type { ChatEntry } from "../../types/chat";
+import type { MeetingEvent } from "../../types/meetingTimeline";
 import type { Participant } from "../../types/participants";
+import type { TranscriptPayload } from "../../types/transcript";
 import { manageGuildProcedure, router } from "../trpc";
 
-type TranscriptSegment = {
-  userId: string;
-  username?: string;
-  displayName?: string;
-  serverNickname?: string;
-  tag?: string;
-  startedAt: string;
-  text?: string;
-  source?: "voice" | "chat_tts" | "bot";
-  messageId?: string;
-};
-
-type TranscriptPayload = {
-  generatedAt?: string;
-  segments?: TranscriptSegment[];
-  text?: string;
-};
-
-type ChatEntry = {
-  type: "message" | "join" | "leave";
-  source?: "chat" | "chat_tts";
-  user: Participant;
-  channelId: string;
-  content?: string;
-  messageId?: string;
-  timestamp: string;
-};
-
-type MeetingEvent = {
-  id: string;
-  type: "voice" | "chat" | "tts" | "presence" | "bot";
-  time: string;
-  speaker?: string;
-  text: string;
-};
+const resolveParticipantLabel = (participant: Participant) =>
+  participant.serverNickname ||
+  participant.displayName ||
+  participant.username ||
+  participant.tag ||
+  "Unknown";
 
 const list = manageGuildProcedure
   .input(
@@ -109,7 +84,7 @@ const list = manageGuildProcedure
         channelName: channelMap.get(meeting.channelId) ?? meeting.channelId,
         timestamp: meeting.timestamp,
         duration:
-          meeting.status === "in_progress"
+          meeting.status === "in_progress" || meeting.status === "processing"
             ? Math.max(
                 0,
                 Math.floor((Date.now() - Date.parse(meeting.timestamp)) / 1000),
@@ -152,135 +127,10 @@ const detail = manageGuildProcedure
     if (history.chatS3Key) {
       chatEntries = await fetchJsonFromS3<ChatEntry[]>(history.chatS3Key);
     }
-
-    const meetingStart = Date.parse(history.timestamp);
-    const events: MeetingEvent[] = [];
-    let counter = 0;
-    const formatElapsed = (seconds: number) => {
-      const safe = Math.max(0, Math.floor(seconds));
-      const hours = Math.floor(safe / 3600);
-      const minutes = Math.floor((safe % 3600) / 60);
-      const secs = safe % 60;
-      if (hours > 0) {
-        return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-      }
-      return `${minutes}:${String(secs).padStart(2, "0")}`;
-    };
-    const speakerName = (participant?: Participant, fallback?: string) =>
-      participant?.serverNickname ||
-      participant?.displayName ||
-      participant?.username ||
-      participant?.tag ||
-      fallback ||
-      "Unknown";
-
-    const transcriptSegments = transcriptPayload?.segments ?? [];
-    const spokenChatIds = new Set<string>();
-    if (transcriptSegments.length > 0) {
-      for (const segment of transcriptSegments) {
-        if (!segment.text) continue;
-        const startedAt = Date.parse(segment.startedAt);
-        const elapsed = Number.isFinite(startedAt)
-          ? (startedAt - meetingStart) / 1000
-          : 0;
-        if (segment.source === "chat_tts") {
-          if (segment.messageId) {
-            spokenChatIds.add(segment.messageId);
-          }
-          events.push({
-            id: `tts-${counter++}`,
-            type: "tts",
-            time: formatElapsed(elapsed),
-            speaker:
-              segment.serverNickname ||
-              segment.displayName ||
-              segment.username ||
-              segment.tag ||
-              "Unknown",
-            text: segment.text,
-          });
-          continue;
-        }
-        if (segment.source === "bot") {
-          events.push({
-            id: `bot-${counter++}`,
-            type: "bot",
-            time: formatElapsed(elapsed),
-            text: segment.text,
-          });
-          continue;
-        }
-        events.push({
-          id: `voice-${counter++}`,
-          type: "voice",
-          time: formatElapsed(elapsed),
-          speaker:
-            segment.serverNickname ||
-            segment.displayName ||
-            segment.username ||
-            segment.tag ||
-            "Unknown",
-          text: segment.text,
-        });
-      }
-    } else if (!transcript.trim()) {
-      events.push({
-        id: `bot-${counter++}`,
-        type: "bot",
-        time: formatElapsed(0),
-        speaker: "Chronote",
-        text: "Transcript unavailable.",
-      });
-    }
-
-    for (const entry of chatEntries ?? []) {
-      if (entry.messageId && spokenChatIds.has(entry.messageId)) {
-        continue;
-      }
-      const startedAt = Date.parse(entry.timestamp);
-      const elapsed = Number.isFinite(startedAt)
-        ? (startedAt - meetingStart) / 1000
-        : 0;
-      if (entry.type === "message") {
-        if (!entry.content) continue;
-        events.push({
-          id: `chat-${counter++}`,
-          type: "chat",
-          time: formatElapsed(elapsed),
-          speaker: speakerName(entry.user),
-          text: entry.content,
-        });
-      } else {
-        events.push({
-          id: `presence-${counter++}`,
-          type: "presence",
-          time: formatElapsed(elapsed),
-          speaker: speakerName(entry.user),
-          text:
-            entry.type === "join" ? "joined the channel" : "left the channel",
-        });
-      }
-    }
-
-    if (history.notesChannelId) {
-      events.push({
-        id: `bot-${counter++}`,
-        type: "bot",
-        time: formatElapsed(history.duration),
-        speaker: "Chronote",
-        text: "Meeting summary posted to Discord.",
-      });
-    }
-
-    events.sort((a, b) => {
-      const toSeconds = (time: string) => {
-        const parts = time.split(":").map(Number);
-        if (parts.length === 3) {
-          return parts[0] * 3600 + parts[1] * 60 + parts[2];
-        }
-        return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
-      };
-      return toSeconds(a.time) - toSeconds(b.time);
+    const events: MeetingEvent[] = buildMeetingTimelineEventsFromHistory({
+      history,
+      transcriptPayload,
+      chatEntries,
     });
 
     const audioUrl = history.audioS3Key
@@ -295,7 +145,7 @@ const detail = manageGuildProcedure
         channelId: history.channelId,
         timestamp: history.timestamp,
         duration:
-          history.status === "in_progress"
+          history.status === "in_progress" || history.status === "processing"
             ? Math.max(
                 0,
                 Math.floor((Date.now() - Date.parse(history.timestamp)) / 1000),
@@ -311,7 +161,7 @@ const detail = manageGuildProcedure
         audioUrl,
         attendees:
           history.participants?.map((participant) =>
-            speakerName(participant, participant.username ?? participant.tag),
+            resolveParticipantLabel(participant),
           ) ??
           history.attendees ??
           [],

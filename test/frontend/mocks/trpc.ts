@@ -47,6 +47,7 @@ export type MeetingSummaryRow = {
   notesMessageId?: string;
   audioAvailable: boolean;
   transcriptAvailable: boolean;
+  status?: "in_progress" | "processing" | "complete";
 };
 
 export type MeetingEvent = {
@@ -55,6 +56,7 @@ export type MeetingEvent = {
   time: string;
   speaker?: string;
   text: string;
+  messageId?: string;
 };
 
 export type MeetingDetail = {
@@ -70,6 +72,7 @@ export type MeetingDetail = {
   audioUrl?: string | null;
   attendees?: string[];
   events?: MeetingEvent[];
+  status?: "in_progress" | "processing" | "complete";
 };
 
 type PricingPlansData = { plans: PaidPlan[] };
