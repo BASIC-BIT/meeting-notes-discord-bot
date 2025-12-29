@@ -1,9 +1,4 @@
-import {
-  ButtonInteraction,
-  Client,
-  PermissionFlagsBits,
-  PermissionResolvable,
-} from "discord.js";
+import { ButtonInteraction, Client } from "discord.js";
 import { deleteMeeting, getMeeting, hasMeeting } from "../meetings";
 import { writeFileSync } from "node:fs";
 import {
@@ -28,34 +23,12 @@ import { uploadMeetingArtifacts } from "../services/uploadService";
 import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
 import { getGuildLimits } from "../services/subscriptionService";
 import { stopThinkingCueLoop } from "../audio/soundCues";
+import { canUserEndMeeting } from "../utils/meetingPermissions";
 import {
   getNextAvailableAt,
   getRollingUsageForGuild,
   getRollingWindowMs,
 } from "../services/meetingUsageService";
-
-function doesUserHavePermissionToEndMeeting(
-  meeting: MeetingData,
-  userId: string,
-): boolean {
-  if (meeting.creator.id === userId) {
-    return true; // Creator of a meeting can always end it
-  }
-
-  const member = meeting.guild.members.cache.get(userId);
-  if (!member) {
-    return false;
-  }
-
-  const requiresAnyPermission =
-    PermissionFlagsBits.ModerateMembers +
-    PermissionFlagsBits.Administrator +
-    PermissionFlagsBits.ManageMessages;
-
-  return member.permissions.any(
-    requiresAnyPermission as unknown as PermissionResolvable,
-  );
-}
 
 export async function handleEndMeetingButton(
   client: Client,
@@ -73,7 +46,7 @@ export async function handleEndMeetingButton(
       return;
     }
 
-    if (!doesUserHavePermissionToEndMeeting(meeting, interaction.user.id)) {
+    if (!canUserEndMeeting(meeting, interaction.user.id)) {
       await interaction.reply(
         "You do not have permission to end this meeting.",
       );

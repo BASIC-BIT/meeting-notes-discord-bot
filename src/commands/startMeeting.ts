@@ -353,6 +353,7 @@ export async function handleAutoStartMeeting(
     isAutoRecording: true,
     tags: options?.tags,
     onTimeout: (meeting) => handleEndMeetingOther(client, meeting),
+    onEndMeeting: (meeting) => handleEndMeetingOther(client, meeting),
     liveVoiceEnabled: options?.liveVoiceEnabled,
     liveVoiceCommandsEnabled: options?.liveVoiceCommandsEnabled,
     liveVoiceTtsVoice: options?.liveVoiceTtsVoice,

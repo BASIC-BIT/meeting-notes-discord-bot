@@ -13,6 +13,7 @@ import {
   startThinkingCueLoop,
   stopThinkingCueLoop,
 } from "./audio/soundCues";
+import { canUserEndMeeting } from "./utils/meetingPermissions";
 
 type GateAction = "respond" | "command_end" | "none";
 
@@ -297,6 +298,12 @@ function startCommandConfirmation(meeting: MeetingData, segment: LiveSegment) {
   if (meeting.liveVoiceCommandPending) {
     return;
   }
+  if (!canUserEndMeeting(meeting, segment.userId)) {
+    console.warn(
+      `[live-voice][confirm] user ${segment.userId} lacks permission to end meeting.`,
+    );
+    return;
+  }
   const now = Date.now();
   meeting.liveVoiceCommandPending = {
     type: "end_meeting",
@@ -307,6 +314,9 @@ function startCommandConfirmation(meeting: MeetingData, segment: LiveSegment) {
   const enqueued = enqueueLiveVoice(meeting, COMMAND_CONFIRM_PROMPT, "high");
   if (!enqueued) {
     meeting.liveVoiceCommandPending = undefined;
+    console.error(
+      "[live-voice][confirm] Failed to enqueue end-meeting confirmation prompt. Dropping pending command.",
+    );
   }
 }
 
@@ -333,6 +343,12 @@ async function handlePendingCommandIfAny(
   if (confirmation.decision === "confirm") {
     meeting.liveVoiceCommandPending = undefined;
     if (meeting.finishing || meeting.finished) return true;
+    if (!canUserEndMeeting(meeting, segment.userId)) {
+      console.warn(
+        `[live-voice][confirm] user ${segment.userId} lacks permission to end meeting.`,
+      );
+      return true;
+    }
     if (meeting.onEndMeeting) {
       await meeting.onEndMeeting(meeting);
     } else {
