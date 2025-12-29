@@ -31,6 +31,7 @@ import FormSelect from "../components/FormSelect";
 import { trpc } from "../services/trpc";
 import { uiOverlays } from "../uiTokens";
 import { parseTags } from "../../utils/tags";
+import { TTS_VOICE_OPTIONS } from "../../utils/ttsVoices";
 import type { AutoRecordSettings, ChannelContext } from "../../types/db";
 
 type ChannelOption = {
@@ -49,6 +50,17 @@ type ChannelOverride = {
   context?: string;
   autoRecordEnabled: boolean;
   liveVoiceEnabled?: boolean;
+  chatTtsEnabled?: boolean;
+};
+
+type GlobalContextData = {
+  context?: string | null;
+  defaultTags?: string[] | null;
+  defaultNotesChannelId?: string | null;
+  liveVoiceEnabled?: boolean | null;
+  liveVoiceTtsVoice?: string | null;
+  chatTtsEnabled?: boolean | null;
+  chatTtsVoice?: string | null;
 };
 
 const formatChannelLabel = (channel: ChannelOption) =>
@@ -135,6 +147,7 @@ const toChannelOverride = (options: {
     context: entry.context?.context,
     autoRecordEnabled: Boolean(entry.rule?.enabled),
     liveVoiceEnabled: entry.context?.liveVoiceEnabled,
+    chatTtsEnabled: entry.context?.chatTtsEnabled,
   };
 };
 
@@ -170,9 +183,7 @@ const buildChannelOverrides = (options: {
 };
 
 const resolveDefaultNotesChannelId = (options: {
-  contextData?: {
-    defaultNotesChannelId?: string | null;
-  } | null;
+  contextData?: GlobalContextData | null;
   recordAllRule: AutoRecordSettings | null;
 }) => {
   const { contextData, recordAllRule } = options;
@@ -181,17 +192,20 @@ const resolveDefaultNotesChannelId = (options: {
   );
 };
 
-const resolveDefaultTags = (
-  contextData?: {
-    defaultTags?: string[] | null;
-  } | null,
-) => (contextData?.defaultTags ?? []).join(", ");
+const resolveDefaultTags = (contextData?: GlobalContextData | null) =>
+  (contextData?.defaultTags ?? []).join(", ");
+
+const coalesce = <T,>(value: T | null | undefined, fallback: T) =>
+  value ?? fallback;
 
 const resetGlobalDefaults = (options: {
   setServerContext: (value: string) => void;
   setDefaultTags: (value: string) => void;
   setDefaultNotesChannelId: (value: string | null) => void;
   setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
+  setGlobalChatTtsEnabled: (value: boolean) => void;
+  setGlobalChatTtsVoice: (value: string | null) => void;
   setRecordAllEnabled: (value: boolean) => void;
   setGlobalDirty: (value: boolean) => void;
 }) => {
@@ -200,6 +214,9 @@ const resetGlobalDefaults = (options: {
     setDefaultTags,
     setDefaultNotesChannelId,
     setGlobalLiveVoiceEnabled,
+    setGlobalLiveVoiceTtsVoice,
+    setGlobalChatTtsEnabled,
+    setGlobalChatTtsVoice,
     setRecordAllEnabled,
     setGlobalDirty,
   } = options;
@@ -207,22 +224,23 @@ const resetGlobalDefaults = (options: {
   setDefaultNotesChannelId(null);
   setDefaultTags("");
   setGlobalLiveVoiceEnabled(false);
+  setGlobalLiveVoiceTtsVoice(null);
+  setGlobalChatTtsEnabled(false);
+  setGlobalChatTtsVoice(null);
   setRecordAllEnabled(false);
   setGlobalDirty(false);
 };
 
 const applyGlobalDefaults = (options: {
-  contextData: {
-    context?: string | null;
-    defaultTags?: string[] | null;
-    defaultNotesChannelId?: string | null;
-    liveVoiceEnabled?: boolean | null;
-  };
+  contextData: GlobalContextData;
   recordAllRule: AutoRecordSettings | null;
   setServerContext: (value: string) => void;
   setDefaultTags: (value: string) => void;
   setDefaultNotesChannelId: (value: string | null) => void;
   setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
+  setGlobalChatTtsEnabled: (value: boolean) => void;
+  setGlobalChatTtsVoice: (value: string | null) => void;
   setRecordAllEnabled: (value: boolean) => void;
 }) => {
   const {
@@ -232,31 +250,35 @@ const applyGlobalDefaults = (options: {
     setDefaultTags,
     setDefaultNotesChannelId,
     setGlobalLiveVoiceEnabled,
+    setGlobalLiveVoiceTtsVoice,
+    setGlobalChatTtsEnabled,
+    setGlobalChatTtsVoice,
     setRecordAllEnabled,
   } = options;
-  setServerContext(contextData.context ?? "");
+  setServerContext(coalesce(contextData.context, ""));
   setDefaultTags(resolveDefaultTags(contextData));
   setDefaultNotesChannelId(
     resolveDefaultNotesChannelId({ contextData, recordAllRule }),
   );
-  setGlobalLiveVoiceEnabled(contextData.liveVoiceEnabled ?? false);
+  setGlobalLiveVoiceEnabled(coalesce(contextData.liveVoiceEnabled, false));
+  setGlobalLiveVoiceTtsVoice(coalesce(contextData.liveVoiceTtsVoice, null));
+  setGlobalChatTtsEnabled(coalesce(contextData.chatTtsEnabled, false));
+  setGlobalChatTtsVoice(coalesce(contextData.chatTtsVoice, null));
   setRecordAllEnabled(Boolean(recordAllRule));
 };
 
 const syncGlobalDefaults = (options: {
   selectedGuildId: string | null;
-  contextData?: {
-    context?: string | null;
-    defaultTags?: string[] | null;
-    defaultNotesChannelId?: string | null;
-    liveVoiceEnabled?: boolean | null;
-  } | null;
+  contextData?: GlobalContextData | null;
   recordAllRule: AutoRecordSettings | null;
   globalDirty: boolean;
   setServerContext: (value: string) => void;
   setDefaultTags: (value: string) => void;
   setDefaultNotesChannelId: (value: string | null) => void;
   setGlobalLiveVoiceEnabled: (value: boolean) => void;
+  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
+  setGlobalChatTtsEnabled: (value: boolean) => void;
+  setGlobalChatTtsVoice: (value: string | null) => void;
   setRecordAllEnabled: (value: boolean) => void;
   setGlobalDirty: (value: boolean) => void;
 }) => {
@@ -269,6 +291,9 @@ const syncGlobalDefaults = (options: {
     setDefaultTags,
     setDefaultNotesChannelId,
     setGlobalLiveVoiceEnabled,
+    setGlobalLiveVoiceTtsVoice,
+    setGlobalChatTtsEnabled,
+    setGlobalChatTtsVoice,
     setRecordAllEnabled,
     setGlobalDirty,
   } = options;
@@ -279,6 +304,9 @@ const syncGlobalDefaults = (options: {
       setDefaultNotesChannelId,
       setDefaultTags,
       setGlobalLiveVoiceEnabled,
+      setGlobalLiveVoiceTtsVoice,
+      setGlobalChatTtsEnabled,
+      setGlobalChatTtsVoice,
       setRecordAllEnabled,
       setGlobalDirty,
     });
@@ -292,6 +320,9 @@ const syncGlobalDefaults = (options: {
     setDefaultTags,
     setDefaultNotesChannelId,
     setGlobalLiveVoiceEnabled,
+    setGlobalLiveVoiceTtsVoice,
+    setGlobalChatTtsEnabled,
+    setGlobalChatTtsVoice,
     setRecordAllEnabled,
   });
 };
@@ -328,6 +359,13 @@ export default function Settings() {
   >(null);
   const [defaultTags, setDefaultTags] = useState("");
   const [globalLiveVoiceEnabled, setGlobalLiveVoiceEnabled] = useState(false);
+  const [globalLiveVoiceTtsVoice, setGlobalLiveVoiceTtsVoice] = useState<
+    string | null
+  >(null);
+  const [globalChatTtsEnabled, setGlobalChatTtsEnabled] = useState(false);
+  const [globalChatTtsVoice, setGlobalChatTtsVoice] = useState<string | null>(
+    null,
+  );
   const [recordAllEnabled, setRecordAllEnabled] = useState(false);
   const [globalDirty, setGlobalDirty] = useState(false);
   const [savingGlobal, setSavingGlobal] = useState(false);
@@ -346,6 +384,9 @@ export default function Settings() {
   const [channelLiveVoiceMode, setChannelLiveVoiceMode] = useState<
     "inherit" | "on" | "off"
   >("inherit");
+  const [channelChatTtsMode, setChannelChatTtsMode] = useState<
+    "inherit" | "on" | "off"
+  >("inherit");
 
   useEffect(() => {
     setGlobalDirty(false);
@@ -356,6 +397,7 @@ export default function Settings() {
     setChannelTags("");
     setChannelContext("");
     setChannelLiveVoiceMode("inherit");
+    setChannelChatTtsMode("inherit");
     channelModal.close();
   }, [selectedGuildId]);
 
@@ -462,6 +504,9 @@ export default function Settings() {
       setDefaultTags,
       setDefaultNotesChannelId,
       setGlobalLiveVoiceEnabled,
+      setGlobalLiveVoiceTtsVoice,
+      setGlobalChatTtsEnabled,
+      setGlobalChatTtsVoice,
       setRecordAllEnabled,
       setGlobalDirty,
     });
@@ -493,6 +538,7 @@ export default function Settings() {
     setChannelTags("");
     setChannelContext("");
     setChannelLiveVoiceMode("inherit");
+    setChannelChatTtsMode("inherit");
     channelModal.open();
   };
 
@@ -507,6 +553,13 @@ export default function Settings() {
       override.liveVoiceEnabled === undefined
         ? "inherit"
         : override.liveVoiceEnabled
+          ? "on"
+          : "off",
+    );
+    setChannelChatTtsMode(
+      override.chatTtsEnabled === undefined
+        ? "inherit"
+        : override.chatTtsEnabled
           ? "on"
           : "off",
     );
@@ -555,6 +608,9 @@ export default function Settings() {
         defaultNotesChannelId: defaultNotesChannelId ?? null,
         defaultTags: parsedDefaultTags,
         liveVoiceEnabled: globalLiveVoiceEnabled,
+        liveVoiceTtsVoice: globalLiveVoiceTtsVoice,
+        chatTtsEnabled: globalChatTtsEnabled,
+        chatTtsVoice: globalChatTtsVoice,
       });
       if (recordAllEnabled) {
         if (!defaultNotesChannelId) return;
@@ -592,11 +648,15 @@ export default function Settings() {
     const tasks: Promise<unknown>[] = [];
     const liveVoiceOverride =
       channelLiveVoiceMode === "inherit" ? null : channelLiveVoiceMode === "on";
+    const chatTtsOverride =
+      channelChatTtsMode === "inherit" ? null : channelChatTtsMode === "on";
     const shouldUpdateContext =
       trimmedContext.length > 0 ||
       existingOverride?.context ||
       liveVoiceOverride !== null ||
-      existingOverride?.liveVoiceEnabled !== undefined;
+      existingOverride?.liveVoiceEnabled !== undefined ||
+      chatTtsOverride !== null ||
+      existingOverride?.chatTtsEnabled !== undefined;
     if (shouldUpdateContext) {
       tasks.push(
         setChannelContextMutation.mutateAsync({
@@ -604,6 +664,7 @@ export default function Settings() {
           channelId: channelVoiceChannelId,
           context: trimmedContext.length > 0 ? trimmedContext : undefined,
           liveVoiceEnabled: liveVoiceOverride,
+          chatTtsEnabled: chatTtsOverride,
         }),
       );
     }
@@ -652,7 +713,11 @@ export default function Settings() {
         }),
       );
     }
-    if (override.context || override.liveVoiceEnabled !== undefined) {
+    if (
+      override.context ||
+      override.liveVoiceEnabled !== undefined ||
+      override.chatTtsEnabled !== undefined
+    ) {
       tasks.push(
         clearChannelContextMutation.mutateAsync({
           serverId: selectedGuildId,
@@ -718,6 +783,39 @@ export default function Settings() {
               setGlobalDirty(true);
             }}
             disabled={globalBusy}
+          />
+          <Switch
+            label="Enable chat-to-speech by default"
+            checked={globalChatTtsEnabled}
+            onChange={(event) => {
+              setGlobalChatTtsEnabled(event.currentTarget.checked);
+              setGlobalDirty(true);
+            }}
+            disabled={globalBusy}
+          />
+          <FormSelect
+            label="Default Chronote voice"
+            placeholder="Use platform default"
+            data={TTS_VOICE_OPTIONS}
+            value={globalLiveVoiceTtsVoice}
+            onChange={(value) => {
+              setGlobalLiveVoiceTtsVoice(value);
+              setGlobalDirty(true);
+            }}
+            disabled={globalBusy}
+            clearable
+          />
+          <FormSelect
+            label="Default chat-to-speech voice"
+            placeholder="Use platform default"
+            data={TTS_VOICE_OPTIONS}
+            value={globalChatTtsVoice}
+            onChange={(value) => {
+              setGlobalChatTtsVoice(value);
+              setGlobalDirty(true);
+            }}
+            disabled={globalBusy}
+            clearable
           />
           {recordAllEnabled ? (
             <Alert
@@ -854,8 +952,8 @@ export default function Settings() {
                 const detailLines: ReactNode[] = [];
                 if (override.autoRecordEnabled) {
                   const summary = override.tags?.length
-                    ? `Auto-recorded ? ${resolvedNotesLabel ?? "Default notes channel"} � Tags: ${override.tags.join(", ")}`
-                    : `Auto-recorded ? ${resolvedNotesLabel ?? "Default notes channel"}`;
+                    ? `Auto-recorded in ${resolvedNotesLabel ?? "Default notes channel"}. Tags: ${override.tags.join(", ")}`
+                    : `Auto-recorded in ${resolvedNotesLabel ?? "Default notes channel"}.`;
                   detailLines.push(
                     <Text size="sm" c="dimmed" key="auto">
                       {summary}
@@ -873,6 +971,13 @@ export default function Settings() {
                     <Text size="sm" c="dimmed" key="live-voice">
                       Live voice responder:{" "}
                       {override.liveVoiceEnabled ? "On" : "Off"}
+                    </Text>,
+                  );
+                }
+                if (override.chatTtsEnabled !== undefined) {
+                  detailLines.push(
+                    <Text size="sm" c="dimmed" key="chat-tts">
+                      Chat-to-speech: {override.chatTtsEnabled ? "On" : "Off"}
                     </Text>,
                   );
                 }
@@ -1062,6 +1167,26 @@ export default function Settings() {
               value={channelLiveVoiceMode}
               onChange={(value) =>
                 setChannelLiveVoiceMode(value as "inherit" | "on" | "off")
+              }
+              data={[
+                { label: "Use default", value: "inherit" },
+                { label: "On", value: "on" },
+                { label: "Off", value: "off" },
+              ]}
+              fullWidth
+            />
+            <Text size="xs" c="dimmed">
+              Use default to inherit the server-wide setting.
+            </Text>
+          </Stack>
+          <Stack gap={6}>
+            <Text size="sm" fw={600}>
+              Chat-to-speech
+            </Text>
+            <SegmentedControl
+              value={channelChatTtsMode}
+              onChange={(value) =>
+                setChannelChatTtsMode(value as "inherit" | "on" | "off")
               }
               data={[
                 { label: "Use default", value: "inherit" },

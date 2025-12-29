@@ -22,6 +22,7 @@ const set = manageGuildProcedure
       channelId: z.string(),
       context: z.string().optional(),
       liveVoiceEnabled: z.boolean().optional().nullable(),
+      chatTtsEnabled: z.boolean().optional().nullable(),
     }),
   )
   .mutation(async ({ ctx, input }) => {
@@ -33,6 +34,8 @@ const set = manageGuildProcedure
         input.liveVoiceEnabled === undefined
           ? undefined
           : input.liveVoiceEnabled,
+      chatTtsEnabled:
+        input.chatTtsEnabled === undefined ? undefined : input.chatTtsEnabled,
     });
     return { ok: true };
   });

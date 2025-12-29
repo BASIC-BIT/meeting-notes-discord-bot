@@ -32,6 +32,24 @@ export const liveVoiceResponses = new Counter({
   registers: [metricsRegistry],
 });
 
+export const chatTtsEnqueued = new Counter({
+  name: "chat_tts_enqueued_total",
+  help: "Total chat-to-speech messages enqueued",
+  registers: [metricsRegistry],
+});
+
+export const chatTtsSpoken = new Counter({
+  name: "chat_tts_spoken_total",
+  help: "Total chat-to-speech messages spoken",
+  registers: [metricsRegistry],
+});
+
+export const chatTtsDropped = new Counter({
+  name: "chat_tts_dropped_total",
+  help: "Total chat-to-speech messages dropped",
+  registers: [metricsRegistry],
+});
+
 // Express middleware to time requests
 export function metricsMiddleware(
   req: Request,

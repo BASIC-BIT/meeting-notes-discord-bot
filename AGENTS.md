@@ -89,6 +89,15 @@
 - Copy `.env.example` to `.env`; set required tokens.
 - `yarn dev` to start local Dynamo + init tables + bot.
 
+## Worktrees (standard flow)
+
+- Use `scripts/new-worktree.ps1` from the main repo to create a worktree and branch, and copy the main `.env`.
+  - Example: `.\scripts\new-worktree.ps1 -Branch feature-chat-tts`
+  - If you run the script from a non-main worktree, pass `-SourceEnv ..\meeting-notes-discord-bot\.env`.
+  - Default worktree path is `..\meeting-notes-discord-bot-<branch>`.
+- Create a dedicated Discord text channel and voice channel for the branch, then use those for testing.
+- If `.env` changes on main, re-run the script or copy `.env` into the worktree.
+
 ## Testing / lint
 
 - Local: `npm run check` / `yarn run check` (lint --fix, prettier --write, test, build, code stats). CI-safe: `npm run check:ci` / `yarn run check:ci` (no auto-fix, uses prettier:check + lint:check, build, code stats). Avoid `yarn check` (built-in Yarn integrity command).

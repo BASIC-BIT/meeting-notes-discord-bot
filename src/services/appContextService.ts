@@ -7,6 +7,9 @@ export type ServerContextUpdate = {
   defaultNotesChannelId?: string | null;
   defaultTags?: string[];
   liveVoiceEnabled?: boolean;
+  liveVoiceTtsVoice?: string | null;
+  chatTtsEnabled?: boolean;
+  chatTtsVoice?: string | null;
 };
 
 export async function setServerContext(
@@ -33,6 +36,18 @@ export async function setServerContext(
     update.liveVoiceEnabled !== undefined
       ? update.liveVoiceEnabled
       : existing?.liveVoiceEnabled;
+  const nextLiveVoiceTtsVoice =
+    update.liveVoiceTtsVoice === null
+      ? undefined
+      : (update.liveVoiceTtsVoice ?? existing?.liveVoiceTtsVoice);
+  const nextChatTtsEnabled =
+    update.chatTtsEnabled !== undefined
+      ? update.chatTtsEnabled
+      : existing?.chatTtsEnabled;
+  const nextChatTtsVoice =
+    update.chatTtsVoice === null
+      ? undefined
+      : (update.chatTtsVoice ?? existing?.chatTtsVoice);
 
   const next: ServerContext = {
     guildId,
@@ -46,6 +61,13 @@ export async function setServerContext(
     ...(nextLiveVoiceEnabled !== undefined
       ? { liveVoiceEnabled: nextLiveVoiceEnabled }
       : {}),
+    ...(nextLiveVoiceTtsVoice
+      ? { liveVoiceTtsVoice: nextLiveVoiceTtsVoice }
+      : {}),
+    ...(nextChatTtsEnabled !== undefined
+      ? { chatTtsEnabled: nextChatTtsEnabled }
+      : {}),
+    ...(nextChatTtsVoice ? { chatTtsVoice: nextChatTtsVoice } : {}),
   };
   await getServerContextRepository().write(next);
 }

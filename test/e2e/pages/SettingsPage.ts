@@ -72,4 +72,34 @@ export class SettingsPage {
   saveChannelButton(): Locator {
     return this.modal().getByTestId(testIds.settings.saveChannel);
   }
+
+  saveDefaultsButton(): Locator {
+    return this.page.getByTestId("settings-save-defaults");
+  }
+
+  chatTtsToggle(): Locator {
+    return this.page.getByText(/enable chat-to-speech by default/i);
+  }
+
+  chronoteVoiceSelect(): Locator {
+    return this.page.getByRole("textbox", {
+      name: /default chronote voice/i,
+    });
+  }
+
+  chatTtsVoiceSelect(): Locator {
+    return this.page.getByRole("textbox", {
+      name: /default chat-to-speech voice/i,
+    });
+  }
+
+  async selectChronoteVoice(label: string): Promise<void> {
+    await this.chronoteVoiceSelect().click();
+    await this.page.getByRole("option", { name: label }).click();
+  }
+
+  async selectChatTtsVoice(label: string): Promise<void> {
+    await this.chatTtsVoiceSelect().click();
+    await this.page.getByRole("option", { name: label }).click();
+  }
 }

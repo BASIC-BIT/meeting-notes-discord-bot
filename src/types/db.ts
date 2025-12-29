@@ -90,6 +90,9 @@ export interface ServerContext {
   defaultNotesChannelId?: string;
   defaultTags?: string[];
   liveVoiceEnabled?: boolean;
+  liveVoiceTtsVoice?: string;
+  chatTtsEnabled?: boolean;
+  chatTtsVoice?: string;
   updatedAt: string; // ISO timestamp
   updatedBy: string; // User ID who last updated
 }
@@ -100,6 +103,16 @@ export interface ChannelContext {
   channelId: string; // Sort key
   context?: string; // The context/instructions for the channel
   liveVoiceEnabled?: boolean;
+  chatTtsEnabled?: boolean;
+  updatedAt: string; // ISO timestamp
+  updatedBy: string; // User ID who last updated
+}
+
+export interface UserSpeechSettings {
+  guildId: string; // Partition key
+  userId: string; // Sort key
+  chatTtsDisabled?: boolean;
+  chatTtsVoice?: string;
   updatedAt: string; // ISO timestamp
   updatedBy: string; // User ID who last updated
 }

@@ -61,6 +61,7 @@ export function startProcessingSnippet(meeting: MeetingData, userId: string) {
   const audioFileData: AudioFileData = {
     timestamp: snippet.timestamp,
     userId: snippet.userId,
+    source: "voice",
     processing: true,
     audioOnlyProcessing: false, // Audio already written in real-time
   };

@@ -25,6 +25,20 @@ HOSTED_ZONE_NAME=""                           # e.g., chronote.gg. (required if 
 FRONTEND_ALLOWED_ORIGINS=""                   # comma-separated origins, no trailing slash
 FRONTEND_SITE_URL=""                          # primary frontend URL
 
+# Live voice (optional)
+LIVE_VOICE_MODE="off"                         # off | tts_gate
+LIVE_VOICE_GATE_MODEL="gpt-5-mini"
+LIVE_VOICE_RESPONDER_MODEL="gpt-4o-mini"
+LIVE_VOICE_TTS_MODEL="gpt-4o-mini-tts"
+LIVE_VOICE_TTS_VOICE="alloy"
+LIVE_VOICE_WINDOW_SECONDS="90"
+LIVE_VOICE_WINDOW_LINES="40"
+LIVE_VOICE_PAST_MEETINGS_MAX="3"
+LIVE_VOICE_PAST_MEETINGS_MAX_CHARS="400"
+LIVE_VOICE_GATE_MAX_OUTPUT_TOKENS="256"
+LIVE_VOICE_THINKING_CUE="true"
+LIVE_VOICE_THINKING_CUE_INTERVAL_MS="500"
+
 # Stripe (non-secret config; secrets are in AWS Secrets Manager)
 STRIPE_MODE="test"
 STRIPE_PRICE_BASIC=""                         # optional legacy fallback

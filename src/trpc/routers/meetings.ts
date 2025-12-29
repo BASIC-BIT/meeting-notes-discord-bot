@@ -25,6 +25,8 @@ type TranscriptSegment = {
   tag?: string;
   startedAt: string;
   text?: string;
+  source?: "voice" | "chat_tts" | "bot";
+  messageId?: string;
 };
 
 type TranscriptPayload = {
@@ -35,15 +37,17 @@ type TranscriptPayload = {
 
 type ChatEntry = {
   type: "message" | "join" | "leave";
+  source?: "chat" | "chat_tts";
   user: Participant;
   channelId: string;
   content?: string;
+  messageId?: string;
   timestamp: string;
 };
 
 type MeetingEvent = {
   id: string;
-  type: "voice" | "chat" | "presence" | "bot";
+  type: "voice" | "chat" | "tts" | "presence" | "bot";
   time: string;
   speaker?: string;
   text: string;
@@ -162,6 +166,7 @@ const detail = manageGuildProcedure
       "Unknown";
 
     const transcriptSegments = transcriptPayload?.segments ?? [];
+    const spokenChatIds = new Set<string>();
     if (transcriptSegments.length > 0) {
       for (const segment of transcriptSegments) {
         if (!segment.text) continue;
@@ -169,6 +174,33 @@ const detail = manageGuildProcedure
         const elapsed = Number.isFinite(startedAt)
           ? (startedAt - meetingStart) / 1000
           : 0;
+        if (segment.source === "chat_tts") {
+          if (segment.messageId) {
+            spokenChatIds.add(segment.messageId);
+          }
+          events.push({
+            id: `tts-${counter++}`,
+            type: "tts",
+            time: formatElapsed(elapsed),
+            speaker:
+              segment.serverNickname ||
+              segment.displayName ||
+              segment.username ||
+              segment.tag ||
+              "Unknown",
+            text: segment.text,
+          });
+          continue;
+        }
+        if (segment.source === "bot") {
+          events.push({
+            id: `bot-${counter++}`,
+            type: "bot",
+            time: formatElapsed(elapsed),
+            text: segment.text,
+          });
+          continue;
+        }
         events.push({
           id: `voice-${counter++}`,
           type: "voice",
@@ -193,6 +225,9 @@ const detail = manageGuildProcedure
     }
 
     for (const entry of chatEntries ?? []) {
+      if (entry.messageId && spokenChatIds.has(entry.messageId)) {
+        continue;
+      }
       const startedAt = Date.parse(entry.timestamp);
       const elapsed = Number.isFinite(startedAt)
         ? (startedAt - meetingStart) / 1000
