@@ -8,6 +8,12 @@ export interface AudioSnippet {
 }
 
 export type AudioSegmentSource = "voice" | "chat_tts" | "bot";
+export interface AudioCueEvent {
+  userId: string;
+  timestamp: number;
+  text: string;
+  source?: AudioSegmentSource;
+}
 
 export interface AudioFileData {
   userId: string;
@@ -25,6 +31,7 @@ export interface AudioData {
   currentSnippets: Map<string, AudioSnippet>; // Map of userId to their current AudioSnippet
   silenceTimers?: Map<string, NodeJS.Timeout>; // Optional: Map of userId to their silence timer
   audioFiles: AudioFileData[];
+  cueEvents?: AudioCueEvent[];
   audioPassThrough?: PassThrough;
   outputFileName?: string;
   ffmpegProcess?: FfmpegCommand;

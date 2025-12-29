@@ -11,22 +11,40 @@ import { Readable } from "node:stream";
 import { ReadableStream as WebReadableStream } from "node:stream/web";
 import type { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
-import type { AudioFileData } from "./types/audio";
+import type {
+  AudioCueEvent,
+  AudioFileData,
+  AudioSegmentSource,
+} from "./types/audio";
 import { chatTtsSpoken } from "./metrics";
 
 export type TtsQueueSource = "live_voice" | "chat_tts";
-
-export type TtsQueueItem = {
+export type TtsQueueTtsItem = {
+  kind?: "tts";
   text: string;
   voice: string;
   userId: string;
   source: TtsQueueSource;
   messageId?: string;
   priority?: "high" | "normal";
+  onBeforePlay?: (meeting: MeetingData) => void;
 };
+
+export type TtsQueueSfxItem = {
+  kind: "sfx";
+  filePath: string;
+  userId: string;
+  label: string;
+  transcriptText?: string;
+  audioSource?: AudioSegmentSource;
+  priority?: "high" | "normal";
+};
+
+export type TtsQueueItem = TtsQueueTtsItem | TtsQueueSfxItem;
 
 export type TtsQueue = {
   enqueue: (item: TtsQueueItem) => boolean;
+  playCueIfIdle: (item: TtsQueueSfxItem) => boolean;
   stopAndClear: () => void;
   size: () => number;
 };
@@ -38,6 +56,9 @@ const openAIClient = new OpenAI({
 });
 
 const OUTPUT_SAMPLE_RATE = 48000;
+
+const isSfxItem = (item: TtsQueueItem): item is TtsQueueSfxItem =>
+  item.kind === "sfx";
 
 function waitForIdle(player: AudioPlayer) {
   return new Promise<void>((resolve, reject) => {
@@ -58,10 +79,49 @@ function waitForIdle(player: AudioPlayer) {
   });
 }
 
+function waitForIdleIfPlaying(player: AudioPlayer) {
+  if (player.state.status === AudioPlayerStatus.Idle) {
+    return Promise.resolve();
+  }
+  return waitForIdle(player);
+}
+
+function createOpusResource(pcmStream: Readable) {
+  const opusEncoder = new prism.opus.Encoder({
+    rate: OUTPUT_SAMPLE_RATE,
+    channels: 2,
+    frameSize: 960,
+  });
+  const opusStream = pcmStream.pipe(opusEncoder);
+  return createAudioResource(opusStream, {
+    inputType: StreamType.Opus,
+  });
+}
+
+function appendCueEvent(
+  meeting: MeetingData,
+  item: TtsQueueSfxItem,
+  timestamp: number,
+) {
+  if (!item.transcriptText) return;
+  const entry: AudioCueEvent = {
+    userId: item.userId,
+    timestamp,
+    text: item.transcriptText,
+    source: item.audioSource ?? "bot",
+  };
+  if (!meeting.audioData.cueEvents) {
+    meeting.audioData.cueEvents = [];
+  }
+  meeting.audioData.cueEvents.push(entry);
+}
+
 async function playTtsItem(
   meeting: MeetingData,
   player: AudioPlayer,
-  item: TtsQueueItem,
+  item: TtsQueueTtsItem,
+  onPlaybackStart: () => void,
+  onPlaybackEnd: () => void,
 ): Promise<void> {
   const speechResponse = await openAIClient.audio.speech.create({
     model: config.liveVoice.ttsModel,
@@ -85,7 +145,7 @@ async function playTtsItem(
     .audioChannels(2)
     .format("s16le")
     .on("error", (err) => console.error("ffmpeg TTS pipeline error:", err))
-    .pipe();
+    .pipe() as Readable;
 
   // Tee the PCM to the meeting recording so bot audio is captured in the MP3.
   resampledPcm.on("data", (chunk: Buffer) => {
@@ -98,20 +158,15 @@ async function playTtsItem(
     }
   });
 
-  const opusEncoder = new prism.opus.Encoder({
-    rate: OUTPUT_SAMPLE_RATE,
-    channels: 2,
-    frameSize: 960,
-  });
-
-  const opusStream = resampledPcm.pipe(opusEncoder);
-  const resource = createAudioResource(opusStream, {
-    inputType: StreamType.Opus,
-  });
+  const resource = createOpusResource(resampledPcm);
 
   const start = Date.now();
+  await waitForIdleIfPlaying(player);
+  item.onBeforePlay?.(meeting);
+  onPlaybackStart();
   player.play(resource);
   await waitForIdle(player);
+  onPlaybackEnd();
 
   const entry: AudioFileData = {
     userId: item.userId,
@@ -129,27 +184,77 @@ async function playTtsItem(
   }
 }
 
+async function playSfxItem(
+  meeting: MeetingData,
+  player: AudioPlayer,
+  item: TtsQueueSfxItem,
+  options: { waitForIdle?: boolean } = {},
+): Promise<void> {
+  const resampledPcm = ffmpeg(item.filePath)
+    .audioFrequency(OUTPUT_SAMPLE_RATE)
+    .audioChannels(2)
+    .format("s16le")
+    .on("error", (err) =>
+      console.error(`ffmpeg cue pipeline error (${item.label}):`, err),
+    )
+    .pipe() as Readable;
+
+  const resource = createOpusResource(resampledPcm);
+
+  const start = Date.now();
+  if (options.waitForIdle ?? true) {
+    await waitForIdleIfPlaying(player);
+  }
+  player.play(resource);
+  await waitForIdle(player);
+  appendCueEvent(meeting, item, start);
+}
+
 export function createTtsQueue(
   meeting: MeetingData,
   player: AudioPlayer,
 ): TtsQueue {
   const queue: TtsQueueItem[] = [];
   let playing = false;
+  let preparing = false;
 
   const playNext = async () => {
-    if (playing || queue.length === 0) return;
-    playing = true;
+    if (playing || preparing || queue.length === 0) return;
     const item = queue.shift();
-    if (!item) {
-      playing = false;
+    if (!item) return;
+
+    if (isSfxItem(item)) {
+      playing = true;
+      try {
+        await playSfxItem(meeting, player, item, { waitForIdle: true });
+      } catch (error) {
+        console.error("Failed to play audio cue:", error);
+      } finally {
+        playing = false;
+        if (queue.length > 0) {
+          void playNext();
+        }
+      }
       return;
     }
+
+    preparing = true;
     try {
-      await playTtsItem(meeting, player, item);
+      await playTtsItem(
+        meeting,
+        player,
+        item,
+        () => {
+          playing = true;
+        },
+        () => {
+          playing = false;
+        },
+      );
     } catch (error) {
       console.error("Failed to stream TTS to Discord:", error);
     } finally {
-      playing = false;
+      preparing = false;
       if (queue.length > 0) {
         void playNext();
       }
@@ -169,6 +274,30 @@ export function createTtsQueue(
     return true;
   };
 
+  const playCueIfIdle = (item: TtsQueueSfxItem) => {
+    if (playing || queue.length > 0) return false;
+    if (player.state.status !== AudioPlayerStatus.Idle) return false;
+
+    playing = true;
+    void (async () => {
+      try {
+        if (player.state.status !== AudioPlayerStatus.Idle) {
+          return;
+        }
+        await playSfxItem(meeting, player, item, { waitForIdle: false });
+      } catch (error) {
+        console.error("Failed to play audio cue:", error);
+      } finally {
+        playing = false;
+        if (!preparing && queue.length > 0) {
+          void playNext();
+        }
+      }
+    })();
+
+    return true;
+  };
+
   const stopAndClear = () => {
     queue.length = 0;
     player.stop(true);
@@ -176,6 +305,7 @@ export function createTtsQueue(
 
   return {
     enqueue,
+    playCueIfIdle,
     stopAndClear,
     size: () => queue.length,
   };

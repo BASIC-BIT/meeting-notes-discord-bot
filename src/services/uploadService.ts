@@ -44,13 +44,22 @@ function buildTranscriptJson(
 ) {
   const builtSegments =
     segments ??
-    meeting.audioData.audioFiles.map((file) => ({
-      userId: file.userId,
-      timestamp: file.timestamp,
-      text: file.transcript,
-      source: file.source,
-      messageId: file.messageId,
-    }));
+    [
+      ...meeting.audioData.audioFiles.map((file) => ({
+        userId: file.userId,
+        timestamp: file.timestamp,
+        text: file.transcript,
+        source: file.source,
+        messageId: file.messageId,
+      })),
+      ...(meeting.audioData.cueEvents?.map((cue) => ({
+        userId: cue.userId,
+        timestamp: cue.timestamp,
+        text: cue.text,
+        source: cue.source,
+        messageId: undefined,
+      })) ?? []),
+    ].sort((a, b) => a.timestamp - b.timestamp);
 
   const formattedSegments = builtSegments.map((seg) => {
     const participant = meeting.participants.get(seg.userId);
@@ -109,6 +118,11 @@ export async function uploadMeetingArtifacts(
   // Ensure participants for any audio speakers
   for (const file of meeting.audioData.audioFiles) {
     await ensureParticipant(meeting, file.userId);
+  }
+  if (meeting.audioData.cueEvents) {
+    for (const cue of meeting.audioData.cueEvents) {
+      await ensureParticipant(meeting, cue.userId);
+    }
   }
 
   // Audio

@@ -8,6 +8,12 @@ import {
 import { formatParticipantLabel } from "./utils/participants";
 import { getBotNameVariants } from "./utils/botNames";
 import { resolveTtsVoice } from "./utils/ttsVoices";
+import {
+  enqueueDenialCue,
+  startThinkingCueLoop,
+  stopThinkingCueLoop,
+} from "./audio/soundCues";
+import { canUserEndMeeting } from "./utils/meetingPermissions";
 
 type GateAction = "respond" | "command_end" | "none";
 
@@ -200,6 +206,7 @@ function enqueueLiveVoice(
   meeting: MeetingData,
   text: string,
   priority: "high" | "normal" = "normal",
+  onBeforePlay?: (meeting: MeetingData) => void,
 ): boolean {
   const botUserId = resolveBotUserId(meeting);
   if (!botUserId) {
@@ -220,6 +227,7 @@ function enqueueLiveVoice(
     userId: botUserId,
     source: "live_voice",
     priority,
+    onBeforePlay,
   });
   if (!enqueued) {
     console.warn("Live voice reply dropped because TTS queue is full.");
@@ -290,6 +298,12 @@ function startCommandConfirmation(meeting: MeetingData, segment: LiveSegment) {
   if (meeting.liveVoiceCommandPending) {
     return;
   }
+  if (!canUserEndMeeting(meeting, segment.userId)) {
+    console.warn(
+      `[live-voice][confirm] user ${segment.userId} lacks permission to end meeting.`,
+    );
+    return;
+  }
   const now = Date.now();
   meeting.liveVoiceCommandPending = {
     type: "end_meeting",
@@ -300,6 +314,9 @@ function startCommandConfirmation(meeting: MeetingData, segment: LiveSegment) {
   const enqueued = enqueueLiveVoice(meeting, COMMAND_CONFIRM_PROMPT, "high");
   if (!enqueued) {
     meeting.liveVoiceCommandPending = undefined;
+    console.error(
+      "[live-voice][confirm] Failed to enqueue end-meeting confirmation prompt. Dropping pending command.",
+    );
   }
 }
 
@@ -326,6 +343,12 @@ async function handlePendingCommandIfAny(
   if (confirmation.decision === "confirm") {
     meeting.liveVoiceCommandPending = undefined;
     if (meeting.finishing || meeting.finished) return true;
+    if (!canUserEndMeeting(meeting, segment.userId)) {
+      console.warn(
+        `[live-voice][confirm] user ${segment.userId} lacks permission to end meeting.`,
+      );
+      return true;
+    }
     if (meeting.onEndMeeting) {
       await meeting.onEndMeeting(meeting);
     } else {
@@ -335,7 +358,13 @@ async function handlePendingCommandIfAny(
   }
   if (confirmation.decision === "deny") {
     meeting.liveVoiceCommandPending = undefined;
-    enqueueLiveVoice(meeting, COMMAND_DENY_PROMPT, "high");
+    const botUserId = resolveBotUserId(meeting);
+    const cueEnqueued = botUserId
+      ? enqueueDenialCue(meeting, botUserId)
+      : false;
+    if (!cueEnqueued) {
+      enqueueLiveVoice(meeting, COMMAND_DENY_PROMPT, "high");
+    }
   }
   return true;
 }
@@ -354,7 +383,19 @@ async function handleGateDecision(
   if (decision.action !== "respond") return;
   if (!flags.liveVoiceEnabled) return;
 
-  const reply = await generateReply(meeting, segment);
+  const botUserId = resolveBotUserId(meeting);
+  if (botUserId) {
+    startThinkingCueLoop(meeting, botUserId);
+  }
+
+  let reply: string | undefined;
+  try {
+    reply = await generateReply(meeting, segment);
+  } finally {
+    if (!reply && botUserId) {
+      stopThinkingCueLoop(meeting);
+    }
+  }
   if (!reply) return;
 
   console.log(
@@ -362,7 +403,15 @@ async function handleGateDecision(
       reply.length > 120 ? "..." : ""
     }`,
   );
-  enqueueLiveVoice(meeting, reply, "high");
+  const enqueued = enqueueLiveVoice(
+    meeting,
+    reply,
+    "high",
+    botUserId ? stopThinkingCueLoop : undefined,
+  );
+  if (!enqueued && botUserId) {
+    stopThinkingCueLoop(meeting);
+  }
 }
 
 export async function maybeRespondLive(
