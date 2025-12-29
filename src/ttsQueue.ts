@@ -188,6 +188,7 @@ async function playSfxItem(
   meeting: MeetingData,
   player: AudioPlayer,
   item: TtsQueueSfxItem,
+  options: { waitForIdle?: boolean } = {},
 ): Promise<void> {
   const resampledPcm = ffmpeg(item.filePath)
     .audioFrequency(OUTPUT_SAMPLE_RATE)
@@ -201,6 +202,9 @@ async function playSfxItem(
   const resource = createOpusResource(resampledPcm);
 
   const start = Date.now();
+  if (options.waitForIdle ?? true) {
+    await waitForIdleIfPlaying(player);
+  }
   player.play(resource);
   await waitForIdle(player);
   appendCueEvent(meeting, item, start);
@@ -222,7 +226,7 @@ export function createTtsQueue(
     if (isSfxItem(item)) {
       playing = true;
       try {
-        await playSfxItem(meeting, player, item);
+        await playSfxItem(meeting, player, item, { waitForIdle: true });
       } catch (error) {
         console.error("Failed to play audio cue:", error);
       } finally {
@@ -277,7 +281,10 @@ export function createTtsQueue(
     playing = true;
     void (async () => {
       try {
-        await playSfxItem(meeting, player, item);
+        if (player.state.status !== AudioPlayerStatus.Idle) {
+          return;
+        }
+        await playSfxItem(meeting, player, item, { waitForIdle: false });
       } catch (error) {
         console.error("Failed to play audio cue:", error);
       } finally {
