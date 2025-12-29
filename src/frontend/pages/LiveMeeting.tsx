@@ -12,7 +12,6 @@ import {
   Title,
 } from "@mantine/core";
 import { IconRefresh } from "@tabler/icons-react";
-import { format } from "date-fns";
 import { useParams } from "@tanstack/react-router";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
@@ -22,6 +21,7 @@ import MeetingTimeline, {
 import { buildApiUrl } from "../services/apiClient";
 import { useAuth } from "../contexts/AuthContext";
 import { useLiveMeetingStream } from "../hooks/useLiveMeetingStream";
+import { formatDateTimeLabel } from "../utils/meetingLibrary";
 import type { MeetingEventType } from "../../types/meetingTimeline";
 
 const buildLoginUrl = () => {
@@ -128,7 +128,7 @@ export default function LiveMeeting() {
             </Group>
             <Text size="sm" c="dimmed">
               {meeting
-                ? `Started ${format(new Date(meeting.startedAt), "PPpp")}`
+                ? `Started ${formatDateTimeLabel(meeting.startedAt)}`
                 : "Connecting to live stream..."}
             </Text>
           </Stack>

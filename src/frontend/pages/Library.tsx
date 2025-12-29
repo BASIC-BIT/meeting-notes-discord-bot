@@ -31,7 +31,6 @@ import {
   IconUsers,
 } from "@tabler/icons-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { format } from "date-fns";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
 import FormSelect from "../components/FormSelect";
@@ -42,29 +41,19 @@ import { trpc } from "../services/trpc";
 import { useGuildContext } from "../contexts/GuildContext";
 import { uiOverlays } from "../uiTokens";
 import { useLiveMeetingStream } from "../hooks/useLiveMeetingStream";
+import {
+  buildMeetingDetails,
+  deriveSummary,
+  deriveTitle,
+  filterMeetingItems,
+  formatChannelLabel,
+  formatDateLabel,
+  formatDurationLabel,
+} from "../utils/meetingLibrary";
 import type {
   MeetingEvent,
   MeetingEventType,
 } from "../../types/meetingTimeline";
-
-type MeetingDetails = {
-  id: string;
-  meetingId: string;
-  title: string;
-  summary: string;
-  summaryLabel?: string;
-  notes: string;
-  dateLabel: string;
-  durationLabel: string;
-  tags: string[];
-  channel: string;
-  audioUrl?: string | null;
-  attendees: string[];
-  decisions: string[];
-  actions: string[];
-  events: MeetingEvent[];
-  status?: "in_progress" | "processing" | "complete";
-};
 
 type MeetingExport = {
   meeting: {
@@ -116,167 +105,6 @@ type MeetingListItem = MeetingSummaryRow & {
   dateLabel: string;
   durationLabel: string;
   channelLabel: string;
-};
-
-type RawMeetingDetail = {
-  id: string;
-  meetingId: string;
-  channelId: string;
-  timestamp: string;
-  duration: number;
-  tags?: string[];
-  notes?: string | null;
-  summarySentence?: string | null;
-  summaryLabel?: string | null;
-  audioUrl?: string | null;
-  attendees?: string[];
-  events?: MeetingEvent[];
-  status?: "in_progress" | "processing" | "complete";
-};
-
-const formatChannelLabel = (name?: string, fallback?: string) => {
-  const raw = name ?? fallback ?? "Unknown channel";
-  return raw.startsWith("#") ? raw : `#${raw}`;
-};
-
-const formatDurationLabel = (seconds: number) => {
-  const safe = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  if (hours > 0) {
-    return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-  }
-  return `${minutes}m`;
-};
-
-const formatDateLabel = (timestamp: string) => {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return "Unknown date";
-  }
-  return format(date, "MMM d, yyyy");
-};
-
-const normalizeNotes = (notes: string) => notes.replace(/\r/g, "").trim();
-
-const deriveTitle = (notes: string, channelLabel: string) => {
-  const lines = normalizeNotes(notes)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const skip = new Set([
-    "highlights",
-    "decisions",
-    "action items",
-    "actions",
-    "recap",
-    "summary",
-  ]);
-  const candidate = lines.find((line) => !skip.has(line.toLowerCase()));
-  if (candidate) {
-    return candidate.replace(/^[-*#]\s*/, "");
-  }
-  return `Meeting in ${channelLabel.replace(/^#/, "")}`;
-};
-
-const deriveSummary = (notes: string, summarySentence?: string | null) => {
-  if (summarySentence && summarySentence.trim().length > 0) {
-    return summarySentence.trim();
-  }
-  const normalized = normalizeNotes(notes);
-  if (!normalized) {
-    return "Notes will appear after the meeting is processed.";
-  }
-  const lines = normalized
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const summaryLine = lines.find((line) =>
-    line.toLowerCase().includes("summary"),
-  );
-  if (summaryLine) {
-    return summaryLine.replace(/^summary[:\s-]*/i, "");
-  }
-  const singleLine = lines.join(" ").replace(/\s+/g, " ");
-  if (singleLine.length <= 180) {
-    return singleLine;
-  }
-  return `${singleLine.slice(0, 180)}...`;
-};
-
-const filterMeetings = (
-  meetingItems: MeetingListItem[],
-  options: {
-    query: string;
-    selectedTags: string[];
-    selectedChannel: string | null;
-    selectedRange: string;
-  },
-) => {
-  const { query, selectedTags, selectedChannel, selectedRange } = options;
-  const rangeDays =
-    selectedRange === "all" ? null : Number.parseInt(selectedRange, 10);
-  const now = Date.now();
-  const needle = query.toLowerCase();
-
-  return meetingItems.filter((meetingItem) => {
-    if (query) {
-      const text = `${meetingItem.title} ${meetingItem.summary}`.toLowerCase();
-      if (!text.includes(needle)) return false;
-    }
-    if (selectedTags.length) {
-      const matches = selectedTags.every((tag) =>
-        meetingItem.tags.includes(tag),
-      );
-      if (!matches) return false;
-    }
-    if (selectedChannel && meetingItem.channelId !== selectedChannel) {
-      return false;
-    }
-    if (rangeDays) {
-      const ts = Date.parse(meetingItem.timestamp);
-      if (Number.isFinite(ts)) {
-        const diffDays = (now - ts) / (1000 * 60 * 60 * 24);
-        if (diffDays > rangeDays) return false;
-      }
-    }
-    return true;
-  });
-};
-
-const buildMeetingDetails = (
-  detail: RawMeetingDetail,
-  channelNameMap: Map<string, string>,
-): MeetingDetails => {
-  const channelLabel = formatChannelLabel(
-    channelNameMap.get(detail.channelId),
-    detail.channelId,
-  );
-  const dateLabel = formatDateLabel(detail.timestamp);
-  const durationLabel = formatDurationLabel(detail.duration);
-  const title = deriveTitle(detail.notes ?? "", channelLabel);
-  const summary = deriveSummary(detail.notes ?? "", detail.summarySentence);
-  return {
-    id: detail.id,
-    meetingId: detail.meetingId,
-    title,
-    summary,
-    summaryLabel: detail.summaryLabel ?? undefined,
-    notes: detail.notes || "No notes recorded.",
-    dateLabel,
-    durationLabel,
-    tags: detail.tags ?? [],
-    channel: channelLabel,
-    audioUrl: detail.audioUrl ?? null,
-    attendees:
-      detail.attendees && detail.attendees.length > 0
-        ? detail.attendees
-        : ["Unknown"],
-    decisions: [],
-    actions: [],
-    events: detail.events ?? [],
-    status: detail.status ?? "complete",
-  } satisfies MeetingDetails;
 };
 
 export default function Library() {
@@ -377,7 +205,7 @@ export default function Library() {
 
   const filtered = useMemo(
     () =>
-      filterMeetings(meetingItems, {
+      filterMeetingItems(meetingItems, {
         query,
         selectedTags,
         selectedChannel,

@@ -8,6 +8,7 @@ import {
 import { formatParticipantLabel } from "./utils/participants";
 import { getBotNameVariants } from "./utils/botNames";
 import { resolveTtsVoice } from "./utils/ttsVoices";
+import { formatLongDate, toIsoString } from "./utils/time";
 import {
   enqueueDenialCue,
   startThinkingCueLoop,
@@ -96,7 +97,7 @@ async function shouldAct(
     "Never return empty content. Never omit fields. Never add extra keys.";
 
   const userPrompt = [
-    `Latest line (${new Date(segment.timestamp).toISOString()}): ${speaker}: ${segment.text}`,
+    `Latest line (${toIsoString(segment.timestamp)}): ${speaker}: ${segment.text}`,
     recent.length > 0
       ? `Recent context:\n${recent.join("\n")}`
       : "No prior transcript context.",
@@ -158,12 +159,7 @@ async function generateReply(
     latest,
   );
 
-  const todayLabel = new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const todayLabel = formatLongDate(new Date());
   const systemPrompt =
     "You are Chronote, the meeting notes bot. You speak responses aloud via text-to-speech. " +
     "Respond in a concise, friendly way, usually 1 to 2 sentences, use 3 to 4 only if needed. " +
@@ -254,7 +250,7 @@ async function classifyConfirmation(
     "You are a confirmation classifier for Chronote. Determine if the speaker confirms, denies, or is unclear about ending the meeting. " +
     'Return EXACTLY one JSON object, no prose. Schema: {"decision": "confirm" | "deny" | "unclear"}. ' +
     "Do not require the bot name to be mentioned. If the response is unrelated or ambiguous, return unclear.";
-  const userPrompt = `Response (${new Date(segment.timestamp).toISOString()}): ${speaker}: ${segment.text}`;
+  const userPrompt = `Response (${toIsoString(segment.timestamp)}): ${speaker}: ${segment.text}`;
 
   try {
     const completion = await openAIClient.chat.completions.create({

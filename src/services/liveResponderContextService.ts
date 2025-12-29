@@ -3,6 +3,7 @@ import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
 import { config } from "./configService";
 import { normalizeTags } from "../utils/tags";
 import { formatParticipantLabel } from "../utils/participants";
+import { formatLongDate, toIsoString } from "../utils/time";
 
 type Line = { ts: number; speaker: string; text: string };
 export type LatestUtterance = {
@@ -11,26 +12,13 @@ export type LatestUtterance = {
   timestamp: number;
 };
 
-function formatMeetingDate(timestamp: string): string {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return "Unknown date";
-  }
-  return date.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
-
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen).trimEnd() + "...";
 }
 
 function formatLine(line: Line): string {
-  const time = new Date(line.ts).toISOString();
+  const time = toIsoString(line.ts);
   return `${time} ${line.speaker}: ${line.text}`;
 }
 
@@ -98,7 +86,7 @@ export async function buildLiveResponderContext(
   pastMeetings = pastMeetings.slice(0, maxPast);
 
   const pastBlocks = pastMeetings.map((m) => {
-    const date = formatMeetingDate(m.timestamp);
+    const date = formatLongDate(m.timestamp);
     const tagText = m.tags?.length ? `Tags: ${m.tags.join(", ")}` : "";
     const summary =
       m.summarySentence?.trim() ||

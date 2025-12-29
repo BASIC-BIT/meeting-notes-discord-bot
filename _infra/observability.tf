@@ -41,7 +41,7 @@ resource "aws_grafana_workspace" "amg" {
   name                     = "${local.name_prefix}-grafana-${random_id.grafana_suffix.hex}"
   account_access_type      = "CURRENT_ACCOUNT"
   authentication_providers = ["AWS_SSO"] # Requires IAM Identity Center configured
-  permission_type          = "CUSTOMER_MANAGED"
+  permission_type          = "SERVICE_MANAGED"
   data_sources             = ["PROMETHEUS", "CLOUDWATCH"]
   role_arn                 = aws_iam_role.grafana_workspace_role.arn
   tags = {

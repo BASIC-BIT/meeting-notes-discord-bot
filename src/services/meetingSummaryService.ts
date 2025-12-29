@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { config } from "./configService";
+import { formatLongDate } from "../utils/time";
 
 export type MeetingSummaries = {
   summarySentence?: string;
@@ -15,15 +16,6 @@ type MeetingSummaryInput = {
   previousSummarySentence?: string;
   previousSummaryLabel?: string;
 };
-
-function formatFullDate(date: Date): string {
-  return date.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
 
 function normalizeSummarySentence(value?: string): string | undefined {
   if (!value) return undefined;
@@ -95,7 +87,7 @@ export async function generateMeetingSummaries(
     'Return ONLY JSON: {"summarySentence":"...","summaryLabel":"..."}';
 
   const userPrompt = [
-    `Today is ${formatFullDate(now)}.`,
+    `Today is ${formatLongDate(now)}.`,
     `Server: ${input.serverName}`,
     `Channel: ${input.channelName}`,
     `Tags: ${tagLine}`,

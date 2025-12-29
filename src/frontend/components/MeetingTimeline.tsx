@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from "react";
+import type { ComponentType, ReactNode, RefObject } from "react";
 import {
   Box,
   Button,
@@ -40,7 +40,7 @@ const EVENT_META: Record<
   {
     color: string;
     label: string;
-    icon: (props: { size?: number }) => JSX.Element;
+    icon: ComponentType<{ size?: number }>;
   }
 > = {
   voice: { color: "brand", label: "Voice", icon: IconMicrophone },
@@ -59,7 +59,7 @@ type MeetingTimelineProps = {
   title?: string;
   headerActions?: ReactNode;
   showFilters?: boolean;
-  viewportRef?: RefObject<HTMLDivElement>;
+  viewportRef?: RefObject<HTMLDivElement | null>;
 };
 
 export default function MeetingTimeline({

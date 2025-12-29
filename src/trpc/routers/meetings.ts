@@ -84,7 +84,9 @@ const list = manageGuildProcedure
         channelName: channelMap.get(meeting.channelId) ?? meeting.channelId,
         timestamp: meeting.timestamp,
         duration:
-          meeting.status === "in_progress" || meeting.status === "processing"
+          meeting.status === "in_progress" ||
+          meeting.status === "processing" ||
+          (meeting.status == null && meeting.duration === 0)
             ? Math.max(
                 0,
                 Math.floor((Date.now() - Date.parse(meeting.timestamp)) / 1000),
@@ -145,7 +147,9 @@ const detail = manageGuildProcedure
         channelId: history.channelId,
         timestamp: history.timestamp,
         duration:
-          history.status === "in_progress" || history.status === "processing"
+          history.status === "in_progress" ||
+          history.status === "processing" ||
+          (history.status == null && history.duration === 0)
             ? Math.max(
                 0,
                 Math.floor((Date.now() - Date.parse(history.timestamp)) / 1000),

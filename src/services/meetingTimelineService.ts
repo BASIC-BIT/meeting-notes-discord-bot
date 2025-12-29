@@ -5,24 +5,18 @@ import type { MeetingData } from "../types/meeting-data";
 import type { MeetingEvent } from "../types/meetingTimeline";
 import type { Participant } from "../types/participants";
 import type { TranscriptPayload, TranscriptSegment } from "../types/transcript";
+import {
+  formatElapsedSeconds,
+  toIsoString,
+  toTimestampMs,
+} from "../utils/time";
 
 type EventWithSeconds = {
   seconds: number;
   event: MeetingEvent;
 };
 
-const formatElapsed = (seconds: number) => {
-  const safe = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  const secs = safe % 60;
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(
-      secs,
-    ).padStart(2, "0")}`;
-  }
-  return `${minutes}:${String(secs).padStart(2, "0")}`;
-};
+const formatElapsed = formatElapsedSeconds;
 
 const resolveParticipantLabel = (
   participant?: Participant,
@@ -60,16 +54,8 @@ const addEvent = (
   events.push({ seconds, event });
 };
 
-const toSeconds = (value: number | string | Date, fallbackSeconds = 0) => {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : fallbackSeconds;
-  }
-  const parsed = Date.parse(
-    value instanceof Date ? value.toISOString() : value,
-  );
-  if (!Number.isFinite(parsed)) return fallbackSeconds;
-  return parsed;
-};
+const toTimestampMsSafe = (value: number | string | Date, fallbackMs = 0) =>
+  toTimestampMs(value, fallbackMs);
 
 const sortEvents = (events: EventWithSeconds[]) =>
   events.sort((a, b) => a.seconds - b.seconds).map((item) => item.event);
@@ -82,7 +68,7 @@ const buildNotesPostedEvent = (
   idSuffix: string | undefined,
 ) => {
   const timeSeconds = timestamp
-    ? (Date.parse(timestamp) - meetingStartMs) / 1000
+    ? (toTimestampMs(timestamp, meetingStartMs) - meetingStartMs) / 1000
     : durationSeconds;
   const safeSeconds = Number.isFinite(timeSeconds)
     ? timeSeconds
@@ -115,7 +101,7 @@ const buildTranscriptEvents = (
 
   for (const segment of transcriptSegments) {
     if (!segment.text) continue;
-    const startedAtMs = toSeconds(segment.startedAt, meetingStartMs);
+    const startedAtMs = toTimestampMsSafe(segment.startedAt, meetingStartMs);
     const elapsedSeconds = (startedAtMs - meetingStartMs) / 1000;
     const seconds = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
     if (segment.source === "chat_tts") {
@@ -167,7 +153,7 @@ const buildChatEvents = (
     if (entry.messageId && spokenChatIds.has(entry.messageId)) {
       continue;
     }
-    const startedAtMs = toSeconds(entry.timestamp, meetingStartMs);
+    const startedAtMs = toTimestampMsSafe(entry.timestamp, meetingStartMs);
     const elapsedSeconds = (startedAtMs - meetingStartMs) / 1000;
     const seconds = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
     if (entry.type === "message") {
@@ -205,7 +191,7 @@ export function buildMeetingTimelineEventsFromHistory(options: {
   chatEntries?: ChatEntry[];
 }): MeetingEvent[] {
   const { history, transcriptPayload, chatEntries } = options;
-  const meetingStartMs = Date.parse(history.timestamp);
+  const meetingStartMs = toTimestampMsSafe(history.timestamp);
   const events: EventWithSeconds[] = [];
 
   const transcriptSegments = transcriptPayload?.segments ?? [];
@@ -257,7 +243,7 @@ const buildTranscriptSegmentsFromMeeting = (meeting: MeetingData) => {
     if (!text || !text.trim()) return;
     segments.push({
       userId: entry.userId,
-      startedAt: new Date(entry.timestamp).toISOString(),
+      startedAt: toIsoString(entry.timestamp),
       text,
       source,
       messageId,
@@ -271,7 +257,9 @@ const buildTranscriptSegmentsFromMeeting = (meeting: MeetingData) => {
     addSegment(cue, cue.text, cue.source ?? "bot");
   }
 
-  segments.sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+  segments.sort(
+    (a, b) => toTimestampMs(a.startedAt) - toTimestampMs(b.startedAt),
+  );
   return segments;
 };
 
@@ -285,7 +273,7 @@ export function buildLiveMeetingTimelineEvents(
   const spokenChatIds = new Set<string>();
   for (const segment of transcriptSegments) {
     if (!segment.text) continue;
-    const startedAtMs = toSeconds(segment.startedAt, meetingStartMs);
+    const startedAtMs = toTimestampMsSafe(segment.startedAt, meetingStartMs);
     const elapsedSeconds = (startedAtMs - meetingStartMs) / 1000;
     const seconds = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
     if (segment.source === "chat_tts") {

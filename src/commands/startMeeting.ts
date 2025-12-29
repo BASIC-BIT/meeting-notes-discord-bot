@@ -35,7 +35,12 @@ type GuildLimits = Awaited<ReturnType<typeof getGuildLimits>>["limits"];
 
 const buildLiveMeetingUrl = (guildId: string, meetingId: string) => {
   const base = config.frontend.siteUrl?.replace(/\/$/, "");
-  if (!base) return null;
+  if (!base) {
+    console.warn(
+      `Cannot build live meeting URL for guild ${guildId} and meeting ${meetingId}: config.frontend.siteUrl is not configured.`,
+    );
+    return null;
+  }
   return `${base}/live/${guildId}/${meetingId}`;
 };
 
