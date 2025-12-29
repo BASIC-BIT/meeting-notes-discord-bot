@@ -41,7 +41,7 @@ resource "aws_grafana_workspace" "amg" {
   name                     = "${local.name_prefix}-grafana-${random_id.grafana_suffix.hex}"
   account_access_type      = "CURRENT_ACCOUNT"
   authentication_providers = ["AWS_SSO"] # Requires IAM Identity Center configured
-  permission_type          = "SERVICE_MANAGED"
+  permission_type          = "CUSTOMER_MANAGED"
   data_sources             = ["PROMETHEUS", "CLOUDWATCH"]
   role_arn                 = aws_iam_role.grafana_workspace_role.arn
   tags = {
@@ -76,6 +76,30 @@ resource "aws_iam_role_policy_attachment" "grafana_cloudwatch_access" {
 resource "aws_iam_role_policy_attachment" "grafana_prometheus_access" {
   role       = aws_iam_role.grafana_workspace_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonPrometheusQueryAccess"
+}
+
+resource "aws_iam_policy" "grafana_amp_discovery" {
+  name        = "${local.name_prefix}-grafana-amp-discovery"
+  description = "Allow AMG to list and describe AMP workspaces for discovery"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "aps:ListWorkspaces",
+          "aps:DescribeWorkspace"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "grafana_amp_discovery_access" {
+  role       = aws_iam_role.grafana_workspace_role.name
+  policy_arn = aws_iam_policy.grafana_amp_discovery.arn
 }
 
 output "amg_endpoint" {
