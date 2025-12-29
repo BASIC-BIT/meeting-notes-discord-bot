@@ -33,6 +33,8 @@ import {
   fromUser,
 } from "./utils/participants";
 import { config } from "./services/configService";
+import { createTtsQueue } from "./ttsQueue";
+import { maybeSpeakChatMessage } from "./chatTts";
 
 const meetings = new Map<string, MeetingData>();
 
@@ -81,6 +83,9 @@ export interface MeetingInitOptions {
   onTimeout?: (meeting: MeetingData) => void;
   tags?: string[];
   liveVoiceEnabled?: boolean;
+  liveVoiceTtsVoice?: string;
+  chatTtsEnabled?: boolean;
+  chatTtsVoice?: string;
   maxMeetingDurationMs?: number;
   maxMeetingDurationPretty?: string;
 }
@@ -109,6 +114,9 @@ export async function initializeMeeting(
     onTimeout,
     tags,
     liveVoiceEnabled: liveVoiceOverride,
+    liveVoiceTtsVoice,
+    chatTtsEnabled: chatTtsOverride,
+    chatTtsVoice,
     maxMeetingDurationMs,
     maxMeetingDurationPretty,
   } = options;
@@ -135,7 +143,9 @@ export async function initializeMeeting(
   const attendance: Set<string> = new Set<string>();
   const liveVoiceEnabled =
     config.liveVoice.mode === "tts_gate" && liveVoiceOverride !== false;
-  const liveAudioPlayer = liveVoiceEnabled
+  const chatTtsEnabled = chatTtsOverride ?? false;
+  const botAudioEnabled = liveVoiceEnabled || chatTtsEnabled;
+  const liveAudioPlayer = botAudioEnabled
     ? createAudioPlayer({
         behaviors: {
           noSubscriber: NoSubscriberBehavior.Pause,
@@ -169,6 +179,10 @@ export async function initializeMeeting(
     creator,
     liveAudioPlayer,
     liveVoiceEnabled,
+    liveVoiceTtsVoice,
+    chatTtsEnabled,
+    chatTtsVoice,
+    chatTtsUserSettings: new Map(),
     isFinished,
     setFinished: () => setFinished && setFinished(),
     finishing: false,
@@ -182,6 +196,10 @@ export async function initializeMeeting(
     participants: new Map(),
     tags,
   };
+
+  if (liveAudioPlayer) {
+    meeting.ttsQueue = createTtsQueue(meeting, liveAudioPlayer);
+  }
 
   // Open output file for audio recording
   openOutputFile(meeting);
@@ -243,9 +261,11 @@ export async function initializeMeeting(
 
     const entry: ChatEntry = {
       type: "message",
+      source: "chat",
       user: participant,
       channelId: message.channelId,
       content: message.content,
+      messageId: message.id,
       timestamp: new Date(message.createdTimestamp).toISOString(),
     };
 
@@ -256,6 +276,8 @@ export async function initializeMeeting(
         fallbackName: message.author.username,
       }),
     );
+
+    void maybeSpeakChatMessage(meeting, message, entry);
   });
 
   // Add meeting to the global map

@@ -40,6 +40,7 @@ import {
 } from "./services/contextService";
 import { config } from "./services/configService";
 import { formatParticipantLabel } from "./utils/participants";
+import { getBotNameVariants } from "./utils/botNames";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 const openAIClient = new OpenAI({
@@ -301,6 +302,14 @@ Channel: ${channelName}`;
 
   content += `\nAttendees: ${attendees}`;
 
+  const botNames = getBotNameVariants(
+    meeting.guild.members.me,
+    meeting.guild.client.user,
+  );
+  if (botNames.length > 0) {
+    content += `\nBot Names: ${botNames.join(", ")}`;
+  }
+
   return content;
 }
 
@@ -412,8 +421,7 @@ export async function getImage(meeting: MeetingData): Promise<string> {
   return output || "";
 }
 
-const MAX_CHAT_LOG_PROMPT_LENGTH = 1500;
-const MAX_CHAT_LOG_LINES = 20;
+const MAX_CHAT_LOG_PROMPT_LENGTH = 20000;
 
 function formatChatLogForPrompt(
   chatLog: ChatEntry[],
@@ -427,12 +435,10 @@ function formatChatLogForPrompt(
   const filtered = chatLog.filter((entry) => entry.type === "message");
 
   const relevant = filtered.length > 0 ? filtered : chatLog;
-  const recent = relevant.slice(-MAX_CHAT_LOG_LINES);
-  if (recent.length === 0) {
+  const combinedLines = relevant.map((e) => renderChatEntryLine(e)).join("\n");
+  if (!combinedLines) {
     return undefined;
   }
-
-  const combinedLines = recent.map((e) => renderChatEntryLine(e)).join("\n");
 
   if (combinedLines.length > maxLength) {
     const trimmed = combinedLines.slice(combinedLines.length - maxLength);

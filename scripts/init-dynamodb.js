@@ -3,6 +3,8 @@ const {
   CreateTableCommand,
 } = require("@aws-sdk/client-dynamodb");
 
+require("dotenv").config();
+
 const client = new DynamoDBClient({
   endpoint: "http://localhost:8000",
   region: "local",
@@ -11,6 +13,9 @@ const client = new DynamoDBClient({
     secretAccessKey: "dummy",
   },
 });
+
+const tablePrefix = process.env.DDB_TABLE_PREFIX || "";
+const tableName = (name) => `${tablePrefix}${name}`;
 
 const tables = [
   {
@@ -81,6 +86,18 @@ const tables = [
     AttributeDefinitions: [
       { AttributeName: "guildId", AttributeType: "S" },
       { AttributeName: "channelId", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "UserSpeechSettingsTable",
+    KeySchema: [
+      { AttributeName: "guildId", KeyType: "HASH" },
+      { AttributeName: "userId", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "guildId", AttributeType: "S" },
+      { AttributeName: "userId", AttributeType: "S" },
     ],
     BillingMode: "PAY_PER_REQUEST",
   },
@@ -184,15 +201,19 @@ async function createTables() {
   }
 
   for (const table of tables) {
+    const tableWithPrefix = {
+      ...table,
+      TableName: tableName(table.TableName),
+    };
     try {
-      await client.send(new CreateTableCommand(table));
-      console.log(`✅ Created table: ${table.TableName}`);
+      await client.send(new CreateTableCommand(tableWithPrefix));
+      console.log(`✅ Created table: ${tableWithPrefix.TableName}`);
     } catch (error) {
       if (error.name === "ResourceInUseException") {
-        console.log(`⚠️  Table ${table.TableName} already exists`);
+        console.log(`⚠️  Table ${tableWithPrefix.TableName} already exists`);
       } else {
         console.error(
-          `❌ Error creating table ${table.TableName}:`,
+          `❌ Error creating table ${tableWithPrefix.TableName}:`,
           error.message,
         );
       }

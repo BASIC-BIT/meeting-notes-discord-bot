@@ -7,10 +7,14 @@ export interface AudioSnippet {
   userId: string;
 }
 
+export type AudioSegmentSource = "voice" | "chat_tts" | "bot";
+
 export interface AudioFileData {
   userId: string;
   timestamp: number;
   transcript?: string;
+  source?: AudioSegmentSource;
+  messageId?: string;
   processing: boolean;
   processingPromise?: Promise<void>;
   audioOnlyProcessing: boolean; //Is just the audio finished (don't worry about transcriptions which may be slower)

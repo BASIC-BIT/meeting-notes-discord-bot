@@ -95,6 +95,7 @@ export async function handleEndMeetingButton(
 
     meeting.finishing = true;
     meeting.endTime = new Date();
+    meeting.ttsQueue?.stopAndClear();
 
     // Acknowledge the interaction immediately
     await interaction.deferReply();
@@ -232,6 +233,7 @@ export async function handleEndMeetingOther(
 
     meeting.finishing = true;
     meeting.endTime = new Date();
+    meeting.ttsQueue?.stopAndClear();
 
     if (meeting.initialInteraction) {
       try {

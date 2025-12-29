@@ -146,6 +146,78 @@ variable "FRONTEND_SITE_URL" {
   default     = ""
 }
 
+variable "LIVE_VOICE_MODE" {
+  description = "Live voice mode (off or tts_gate)"
+  type        = string
+  default     = "off"
+}
+
+variable "LIVE_VOICE_GATE_MODEL" {
+  description = "Live voice gate model"
+  type        = string
+  default     = "gpt-5-mini"
+}
+
+variable "LIVE_VOICE_RESPONDER_MODEL" {
+  description = "Live voice responder model"
+  type        = string
+  default     = "gpt-4o-mini"
+}
+
+variable "LIVE_VOICE_TTS_MODEL" {
+  description = "Live voice TTS model"
+  type        = string
+  default     = "gpt-4o-mini-tts"
+}
+
+variable "LIVE_VOICE_TTS_VOICE" {
+  description = "Live voice TTS voice"
+  type        = string
+  default     = "alloy"
+}
+
+variable "LIVE_VOICE_WINDOW_SECONDS" {
+  description = "Live voice context window seconds"
+  type        = string
+  default     = "90"
+}
+
+variable "LIVE_VOICE_WINDOW_LINES" {
+  description = "Live voice context window lines"
+  type        = string
+  default     = "40"
+}
+
+variable "LIVE_VOICE_PAST_MEETINGS_MAX" {
+  description = "Live voice past meetings max count"
+  type        = string
+  default     = "3"
+}
+
+variable "LIVE_VOICE_PAST_MEETINGS_MAX_CHARS" {
+  description = "Live voice past meetings max chars"
+  type        = string
+  default     = "400"
+}
+
+variable "LIVE_VOICE_GATE_MAX_OUTPUT_TOKENS" {
+  description = "Live voice gate max output tokens"
+  type        = string
+  default     = "256"
+}
+
+variable "LIVE_VOICE_THINKING_CUE" {
+  description = "Live voice thinking cue enabled"
+  type        = string
+  default     = "true"
+}
+
+variable "LIVE_VOICE_THINKING_CUE_INTERVAL_MS" {
+  description = "Live voice thinking cue interval ms"
+  type        = string
+  default     = "500"
+}
+
 variable "STRIPE_MODE" {
   description = "Stripe mode (test or live)"
   type        = string
@@ -877,6 +949,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.session_table.arn,
           aws_dynamodb_table.server_context_table.arn,
           aws_dynamodb_table.channel_context_table.arn,
+          aws_dynamodb_table.user_speech_settings_table.arn,
           aws_dynamodb_table.ask_conversation_table.arn,
           aws_dynamodb_table.meeting_history_table.arn,
           "${aws_dynamodb_table.meeting_history_table.arn}/index/*",
@@ -1049,6 +1122,54 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "FRONTEND_SITE_URL"
           value = var.FRONTEND_SITE_URL
+        },
+        {
+          name  = "LIVE_VOICE_MODE"
+          value = var.LIVE_VOICE_MODE
+        },
+        {
+          name  = "LIVE_VOICE_GATE_MODEL"
+          value = var.LIVE_VOICE_GATE_MODEL
+        },
+        {
+          name  = "LIVE_VOICE_RESPONDER_MODEL"
+          value = var.LIVE_VOICE_RESPONDER_MODEL
+        },
+        {
+          name  = "LIVE_VOICE_TTS_MODEL"
+          value = var.LIVE_VOICE_TTS_MODEL
+        },
+        {
+          name  = "LIVE_VOICE_TTS_VOICE"
+          value = var.LIVE_VOICE_TTS_VOICE
+        },
+        {
+          name  = "LIVE_VOICE_WINDOW_SECONDS"
+          value = var.LIVE_VOICE_WINDOW_SECONDS
+        },
+        {
+          name  = "LIVE_VOICE_WINDOW_LINES"
+          value = var.LIVE_VOICE_WINDOW_LINES
+        },
+        {
+          name  = "LIVE_VOICE_PAST_MEETINGS_MAX"
+          value = var.LIVE_VOICE_PAST_MEETINGS_MAX
+        },
+        {
+          name  = "LIVE_VOICE_PAST_MEETINGS_MAX_CHARS"
+          value = var.LIVE_VOICE_PAST_MEETINGS_MAX_CHARS
+        },
+        {
+          name  = "LIVE_VOICE_GATE_MAX_OUTPUT_TOKENS"
+          value = var.LIVE_VOICE_GATE_MAX_OUTPUT_TOKENS
+        },
+        {
+          name  = "LIVE_VOICE_THINKING_CUE"
+          value = var.LIVE_VOICE_THINKING_CUE
+        },
+        {
+          name  = "LIVE_VOICE_THINKING_CUE_INTERVAL_MS"
+          value = var.LIVE_VOICE_THINKING_CUE_INTERVAL_MS
         },
         {
           name  = "STRIPE_MODE"
@@ -1501,6 +1622,37 @@ resource "aws_dynamodb_table" "channel_context_table" {
 
   tags = {
     Name = "ChannelContextTable"
+  }
+}
+
+# User Speech Settings Table
+resource "aws_dynamodb_table" "user_speech_settings_table" {
+  name         = "${local.name_prefix}-UserSpeechSettingsTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+  range_key    = "userId"
+
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+
+  attribute {
+    name = "userId"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "UserSpeechSettingsTable"
   }
 }
 

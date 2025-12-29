@@ -10,6 +10,8 @@ import {
 import { AudioData } from "./audio";
 import { ChatEntry } from "./chat";
 import { Participant } from "./participants";
+import type { UserSpeechSettings } from "./db";
+import type { TtsQueue } from "../ttsQueue";
 
 export interface MeetingData {
   meetingId: string;
@@ -31,6 +33,12 @@ export interface MeetingData {
 
   liveAudioPlayer?: AudioPlayer;
   liveVoiceEnabled?: boolean;
+  liveVoiceTtsVoice?: string;
+
+  chatTtsEnabled?: boolean;
+  chatTtsVoice?: string;
+  chatTtsUserSettings?: Map<string, UserSpeechSettings | null>;
+  ttsQueue?: TtsQueue;
 
   finishing: boolean;
   // Used for functions that are waiting for the meeting to be completely over

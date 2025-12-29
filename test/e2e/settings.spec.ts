@@ -15,6 +15,12 @@ test("settings page shows overrides and updates tags (mock)", async ({
     mockSettings.overrideChannelName || undefined,
   );
 
+  await expect(settingsPage.chatTtsToggle()).toBeVisible();
+  await settingsPage.chatTtsToggle().click();
+  await settingsPage.selectChronoteVoice("Nova");
+  await settingsPage.selectChatTtsVoice("Alloy");
+  await settingsPage.saveDefaultsButton().click();
+
   const override = mockSettings.overrideChannelName
     ? settingsPage.overrideByName(mockSettings.overrideChannelName)
     : settingsPage.firstOverride();

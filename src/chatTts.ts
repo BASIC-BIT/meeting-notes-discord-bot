@@ -1,0 +1,63 @@
+import type { Message } from "discord.js";
+import { config } from "./services/configService";
+import type { MeetingData } from "./types/meeting-data";
+import type { ChatEntry } from "./types/chat";
+import { fetchUserSpeechSettings } from "./services/userSpeechSettingsService";
+import { chatTtsDropped, chatTtsEnqueued } from "./metrics";
+import { resolveTtsVoice } from "./utils/ttsVoices";
+
+async function resolveUserSettings(meeting: MeetingData, userId: string) {
+  if (!meeting.chatTtsUserSettings) {
+    meeting.chatTtsUserSettings = new Map();
+  }
+  if (meeting.chatTtsUserSettings.has(userId)) {
+    return meeting.chatTtsUserSettings.get(userId) ?? undefined;
+  }
+  const settings = await fetchUserSpeechSettings(meeting.guildId, userId);
+  meeting.chatTtsUserSettings.set(userId, settings ?? null);
+  return settings;
+}
+
+export async function maybeSpeakChatMessage(
+  meeting: MeetingData,
+  message: Message,
+  entry: ChatEntry,
+): Promise<void> {
+  if (!meeting.chatTtsEnabled) return;
+  if (!meeting.ttsQueue) return;
+  if (!meeting.voiceChannel.members.has(message.author.id)) return;
+
+  const trimmed = message.content.trim();
+  if (!trimmed) return;
+
+  const settings = await resolveUserSettings(meeting, message.author.id);
+  if (settings?.chatTtsDisabled) return;
+
+  const maxChars = config.chatTts.maxChars;
+  const text =
+    maxChars > 0 && trimmed.length > maxChars
+      ? trimmed.slice(0, maxChars)
+      : trimmed;
+
+  const meetingDefault = meeting.chatTtsVoice ?? config.chatTts.defaultVoice;
+  const voice = resolveTtsVoice(settings?.chatTtsVoice, meetingDefault);
+
+  const enqueued = meeting.ttsQueue.enqueue({
+    text,
+    voice,
+    userId: message.author.id,
+    source: "chat_tts",
+    messageId: message.id,
+  });
+
+  if (!enqueued) {
+    chatTtsDropped.inc();
+    console.warn(
+      `Chat TTS queue full, dropping message ${message.id} from ${message.author.id}`,
+    );
+    return;
+  }
+
+  chatTtsEnqueued.inc();
+  entry.source = "chat_tts";
+}

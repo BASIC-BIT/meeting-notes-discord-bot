@@ -22,7 +22,7 @@ import { handleAutoRecordCommand } from "./commands/autorecord";
 import { handleContextCommand } from "./commands/context";
 import { getAutoRecordSettingByChannel } from "./services/autorecordService";
 import { fetchServerContext } from "./services/appContextService";
-import { fetchChannelContext } from "./services/channelContextService";
+import { resolveMeetingVoiceSettings } from "./services/meetingVoiceSettingsService";
 import { getGuildLimits } from "./services/subscriptionService";
 import { formatParticipantLabel, fromMember } from "./utils/participants";
 import {
@@ -54,6 +54,9 @@ import {
 } from "./commands/tags";
 import { handleAskCommand } from "./commands/ask";
 import { billingCommand, handleBillingCommand } from "./commands/billing";
+import { handleSayCommand } from "./commands/say";
+import { handleTtsCommand } from "./commands/tts";
+import { TTS_VOICE_OPTIONS } from "./utils/ttsVoices";
 import {
   handleOnboardButtonInteraction,
   handleOnboardChannelSelect,
@@ -68,6 +71,13 @@ import { fetchGuildInstaller } from "./services/guildInstallerService";
 
 const TOKEN = config.discord.botToken;
 const CLIENT_ID = config.discord.clientId;
+const TTS_VOICE_CHOICES = [
+  { name: "Default (server)", value: "default" },
+  ...TTS_VOICE_OPTIONS.map(({ label, value }) => ({
+    name: label,
+    value,
+  })),
+];
 
 const client = new Client({
   intents: [
@@ -95,6 +105,8 @@ const commandHandlers: Record<
   ask: handleAskCommand,
   context: handleContextCommand,
   billing: handleBillingCommand,
+  say: handleSayCommand,
+  tts: handleTtsCommand,
 };
 
 const handleCommandInteraction = async (
@@ -377,10 +389,7 @@ async function handleUserJoin(newState: VoiceState) {
 
       // If auto-record is enabled, start recording
       if (autoRecordSetting && autoRecordSetting.enabled) {
-        const [serverContext, channelContext] = await Promise.all([
-          fetchServerContext(newState.guild.id),
-          fetchChannelContext(newState.guild.id, newState.channelId!),
-        ]);
+        const serverContext = await fetchServerContext(newState.guild.id);
         const resolvedTextChannelId =
           autoRecordSetting.textChannelId ??
           serverContext?.defaultNotesChannelId;
@@ -399,14 +408,23 @@ async function handleUserJoin(newState: VoiceState) {
             `Auto-starting recording in ${newState.channel.name} due to auto-record settings`,
           );
           const { limits } = await getGuildLimits(newState.guild.id);
-          const liveVoiceDefault = serverContext?.liveVoiceEnabled ?? false;
-          const liveVoiceOverride = channelContext?.liveVoiceEnabled;
-          const liveVoiceEnabled =
-            limits.liveVoiceEnabled && (liveVoiceOverride ?? liveVoiceDefault);
+          const {
+            liveVoiceEnabled,
+            liveVoiceTtsVoice,
+            chatTtsEnabled,
+            chatTtsVoice,
+          } = await resolveMeetingVoiceSettings(
+            newState.guild.id,
+            newState.channelId!,
+            limits,
+          );
           const tags = autoRecordSetting.tags ?? serverContext?.defaultTags;
           await handleAutoStartMeeting(client, newState.channel, textChannel, {
             tags,
             liveVoiceEnabled,
+            liveVoiceTtsVoice,
+            chatTtsEnabled,
+            chatTtsVoice,
           });
         } else {
           console.error(
@@ -570,6 +588,51 @@ async function setupApplicationCommands() {
           )
           .setRequired(false),
       ),
+    new SlashCommandBuilder()
+      .setName("tts")
+      .setDescription("Control chat-to-speech preferences")
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("disable")
+          .setDescription("Do not speak your chat messages in meetings"),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("enable")
+          .setDescription("Allow your chat messages to be spoken in meetings"),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("voice")
+          .setDescription("Set your chat-to-speech voice for this server")
+          .addStringOption((option) =>
+            option
+              .setName("voice")
+              .setDescription('Voice name (or "default" to reset)')
+              .setRequired(true)
+              .setMaxLength(32)
+              .addChoices(...TTS_VOICE_CHOICES),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("stop")
+          .setDescription("Stop current bot playback and clear the queue"),
+      ),
+    new SlashCommandBuilder()
+      .setName("say")
+      .setDescription("Speak a message aloud in the meeting voice channel")
+      .addStringOption((option) => {
+        option
+          .setName("message")
+          .setDescription("Message to speak aloud")
+          .setRequired(true);
+        const maxLength = config.chatTts.maxChars;
+        if (maxLength > 0 && maxLength <= 6000) {
+          option.setMaxLength(maxLength);
+        }
+        return option;
+      }),
     billingCommand,
     new SlashCommandBuilder()
       .setName("context")

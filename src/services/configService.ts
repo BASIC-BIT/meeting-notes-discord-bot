@@ -74,6 +74,13 @@ class ConfigService {
     ),
   };
 
+  // Chat-to-speech configuration
+  readonly chatTts = {
+    maxChars: parseInt(process.env.CHAT_TTS_MAX_CHARS || "400", 10),
+    queueLimit: parseInt(process.env.CHAT_TTS_QUEUE_LIMIT || "10", 10),
+    defaultVoice: process.env.CHAT_TTS_DEFAULT_VOICE || "alloy",
+  };
+
   // Ask/Recall configuration
   readonly ask = {
     maxMeetings: parseInt(process.env.ASK_MAX_MEETINGS || "25", 10),

@@ -34,7 +34,13 @@ async function ensureParticipant(
 function buildTranscriptJson(
   meeting: MeetingData,
   transcriptText?: string,
-  segments?: { userId: string; timestamp: number; text?: string }[],
+  segments?: {
+    userId: string;
+    timestamp: number;
+    text?: string;
+    source?: string;
+    messageId?: string;
+  }[],
 ) {
   const builtSegments =
     segments ??
@@ -42,6 +48,8 @@ function buildTranscriptJson(
       userId: file.userId,
       timestamp: file.timestamp,
       text: file.transcript,
+      source: file.source,
+      messageId: file.messageId,
     }));
 
   const formattedSegments = builtSegments.map((seg) => {
@@ -54,6 +62,8 @@ function buildTranscriptJson(
       tag: participant?.tag,
       startedAt: new Date(seg.timestamp).toISOString(),
       text: seg.text,
+      source: seg.source,
+      messageId: seg.messageId,
     };
   });
 
@@ -70,9 +80,11 @@ function buildTranscriptJson(
 function chatEntriesToJson(chatLog: ChatEntry[]) {
   return chatLog.map((entry) => ({
     type: entry.type,
+    source: entry.source,
     user: entry.user,
     channelId: entry.channelId,
     content: entry.content,
+    messageId: entry.messageId,
     timestamp: entry.timestamp,
   }));
 }

@@ -22,8 +22,7 @@ import { handleEndMeetingOther } from "./endMeeting";
 import { parseTags } from "../utils/tags";
 import { getGuildLimits } from "../services/subscriptionService";
 import { buildUpgradePrompt } from "../utils/upgradePrompt";
-import { fetchServerContext } from "../services/appContextService";
-import { fetchChannelContext } from "../services/channelContextService";
+import { resolveMeetingVoiceSettings } from "../services/meetingVoiceSettingsService";
 import {
   getNextAvailableAt,
   getRollingUsageForGuild,
@@ -58,20 +57,6 @@ async function getLimitNotice(
   );
   return buildLimitReachedMessage(nextAvailableAtIso);
 }
-
-const resolveLiveVoiceEnabled = async (
-  guildId: string,
-  channelId: string,
-  limits: GuildLimits,
-) => {
-  const [serverContext, channelContext] = await Promise.all([
-    fetchServerContext(guildId),
-    fetchChannelContext(guildId, channelId),
-  ]);
-  const liveVoiceDefault = serverContext?.liveVoiceEnabled ?? false;
-  const liveVoiceOverride = channelContext?.liveVoiceEnabled;
-  return limits.liveVoiceEnabled && (liveVoiceOverride ?? liveVoiceDefault);
-};
 
 const getMeetingRequestOptions = (interaction: CommandInteraction) => {
   if (!interaction.isChatInputCommand()) {
@@ -219,11 +204,8 @@ export async function handleRequestStartMeeting(
     return;
   }
 
-  const liveVoiceEnabled = await resolveLiveVoiceEnabled(
-    guildId,
-    voiceChannel.id,
-    limits,
-  );
+  const { liveVoiceEnabled, chatTtsEnabled, chatTtsVoice, liveVoiceTtsVoice } =
+    await resolveMeetingVoiceSettings(guildId, voiceChannel.id, limits);
 
   // Initialize the meeting using the core function
   const meeting = await initializeMeeting({
@@ -239,6 +221,9 @@ export async function handleRequestStartMeeting(
     tags,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
     liveVoiceEnabled,
+    liveVoiceTtsVoice,
+    chatTtsEnabled,
+    chatTtsVoice,
     maxMeetingDurationMs: limits.maxMeetingDurationMs,
     maxMeetingDurationPretty: limits.maxMeetingDurationPretty,
   });
@@ -287,7 +272,13 @@ export async function handleAutoStartMeeting(
   client: Client,
   voiceChannel: VoiceBasedChannel,
   textChannel: TextChannel,
-  options?: { tags?: string[]; liveVoiceEnabled?: boolean },
+  options?: {
+    tags?: string[];
+    liveVoiceEnabled?: boolean;
+    liveVoiceTtsVoice?: string;
+    chatTtsEnabled?: boolean;
+    chatTtsVoice?: string;
+  },
 ) {
   const guildId = voiceChannel.guild.id;
   const { limits } = await getGuildLimits(guildId);
@@ -354,6 +345,9 @@ export async function handleAutoStartMeeting(
     tags: options?.tags,
     onTimeout: (meeting) => handleEndMeetingOther(client, meeting),
     liveVoiceEnabled: options?.liveVoiceEnabled,
+    liveVoiceTtsVoice: options?.liveVoiceTtsVoice,
+    chatTtsEnabled: options?.chatTtsEnabled,
+    chatTtsVoice: options?.chatTtsVoice,
   });
 
   // Send notification that auto-recording has started

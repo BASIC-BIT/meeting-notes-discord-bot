@@ -29,6 +29,7 @@ import {
   IconNote,
   IconRefresh,
   IconSearch,
+  IconSpeakerphone,
   IconSparkles,
   IconUsers,
 } from "@tabler/icons-react";
@@ -42,7 +43,7 @@ import { uiOverlays } from "../uiTokens";
 
 type MeetingEvent = {
   id: string;
-  type: "voice" | "chat" | "presence" | "bot";
+  type: "voice" | "chat" | "tts" | "presence" | "bot";
   time: string;
   speaker?: string;
   text: string;
@@ -125,6 +126,7 @@ type RawMeetingDetail = {
 const FILTER_OPTIONS = [
   { value: "voice", label: "Voice" },
   { value: "chat", label: "Chat" },
+  { value: "tts", label: "Spoken chat" },
   { value: "presence", label: "Joins/Leaves" },
   { value: "bot", label: "Bot" },
 ];
@@ -135,6 +137,7 @@ const EVENT_META: Record<
 > = {
   voice: { color: "brand", label: "Voice", icon: IconMicrophone },
   chat: { color: "cyan", label: "Chat", icon: IconMessageCircle },
+  tts: { color: "teal", label: "Spoken chat", icon: IconSpeakerphone },
   presence: { color: "gray", label: "Join/leave", icon: IconUsers },
   bot: { color: "violet", label: "Chronote", icon: IconSparkles },
 };

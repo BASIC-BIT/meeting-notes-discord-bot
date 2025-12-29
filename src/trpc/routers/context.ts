@@ -17,6 +17,9 @@ const get = manageGuildProcedure
       defaultNotesChannelId: ctxRecord?.defaultNotesChannelId ?? null,
       defaultTags: ctxRecord?.defaultTags ?? [],
       liveVoiceEnabled: ctxRecord?.liveVoiceEnabled ?? false,
+      liveVoiceTtsVoice: ctxRecord?.liveVoiceTtsVoice ?? null,
+      chatTtsEnabled: ctxRecord?.chatTtsEnabled ?? false,
+      chatTtsVoice: ctxRecord?.chatTtsVoice ?? null,
     };
   });
 
@@ -28,6 +31,9 @@ const set = manageGuildProcedure
       defaultNotesChannelId: z.string().nullable().optional(),
       defaultTags: z.array(z.string()).optional(),
       liveVoiceEnabled: z.boolean().optional(),
+      liveVoiceTtsVoice: z.string().nullable().optional(),
+      chatTtsEnabled: z.boolean().optional(),
+      chatTtsVoice: z.string().nullable().optional(),
     }),
   )
   .mutation(async ({ ctx, input }) => {
@@ -42,6 +48,15 @@ const set = manageGuildProcedure
         : {}),
       ...(input.liveVoiceEnabled !== undefined
         ? { liveVoiceEnabled: input.liveVoiceEnabled }
+        : {}),
+      ...(input.liveVoiceTtsVoice !== undefined
+        ? { liveVoiceTtsVoice: input.liveVoiceTtsVoice }
+        : {}),
+      ...(input.chatTtsEnabled !== undefined
+        ? { chatTtsEnabled: input.chatTtsEnabled }
+        : {}),
+      ...(input.chatTtsVoice !== undefined
+        ? { chatTtsVoice: input.chatTtsVoice }
         : {}),
     };
     if (Object.keys(update).length === 0) {

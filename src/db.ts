@@ -26,6 +26,7 @@ import {
   ServerContext,
   StripeWebhookEvent,
   SuggestionHistoryEntry,
+  UserSpeechSettings,
 } from "./types/db";
 
 const dynamoDbClient = new DynamoDBClient(
@@ -323,6 +324,46 @@ export async function getChannelContext(
     return unmarshall(result.Item) as ChannelContext;
   }
   return undefined;
+}
+
+// User Speech Settings
+export async function writeUserSpeechSettings(
+  settings: UserSpeechSettings,
+): Promise<void> {
+  const params = {
+    TableName: tableName("UserSpeechSettingsTable"),
+    Item: marshall(settings, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getUserSpeechSettings(
+  guildId: string,
+  userId: string,
+): Promise<UserSpeechSettings | undefined> {
+  const params = {
+    TableName: tableName("UserSpeechSettingsTable"),
+    Key: marshall({ guildId, userId }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as UserSpeechSettings;
+  }
+  return undefined;
+}
+
+export async function deleteUserSpeechSettings(
+  guildId: string,
+  userId: string,
+): Promise<void> {
+  const params = {
+    TableName: tableName("UserSpeechSettingsTable"),
+    Key: marshall({ guildId, userId }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
 }
 
 export async function getAllChannelContexts(
