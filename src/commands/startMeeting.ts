@@ -19,10 +19,12 @@ import {
 import { GuildChannel } from "discord.js/typings";
 import { checkBotPermissions } from "../utils/permissions";
 import { handleEndMeetingOther } from "./endMeeting";
+import { saveMeetingStartToDatabase } from "./saveMeetingHistory";
 import { parseTags } from "../utils/tags";
 import { getGuildLimits } from "../services/subscriptionService";
 import { buildUpgradePrompt } from "../utils/upgradePrompt";
 import { resolveMeetingVoiceSettings } from "../services/meetingVoiceSettingsService";
+import { config } from "../services/configService";
 import {
   getNextAvailableAt,
   getRollingUsageForGuild,
@@ -30,6 +32,12 @@ import {
 } from "../services/meetingUsageService";
 
 type GuildLimits = Awaited<ReturnType<typeof getGuildLimits>>["limits"];
+
+const buildLiveMeetingUrl = (guildId: string, meetingId: string) => {
+  const base = config.frontend.siteUrl?.replace(/\/$/, "");
+  if (!base) return null;
+  return `${base}/live/${guildId}/${meetingId}`;
+};
 
 const buildLimitReachedMessage = (nextAvailableAtIso?: string | null) => {
   const nextLabel = nextAvailableAtIso
@@ -235,6 +243,7 @@ export async function handleRequestStartMeeting(
     maxMeetingDurationMs: limits.maxMeetingDurationMs,
     maxMeetingDurationPretty: limits.maxMeetingDurationPretty,
   });
+  void saveMeetingStartToDatabase(meeting);
 
   const embed = new EmbedBuilder()
     .setTitle("Meeting Started")
@@ -263,9 +272,22 @@ export async function handleRequestStartMeeting(
     .setLabel("Edit Tags")
     .setStyle(ButtonStyle.Secondary);
 
+  const liveMeetingUrl = buildLiveMeetingUrl(
+    meeting.guildId,
+    meeting.meetingId,
+  );
+  const liveMeetingButton = liveMeetingUrl
+    ? new ButtonBuilder()
+        .setLabel("Live transcript")
+        .setStyle(ButtonStyle.Link)
+        .setURL(liveMeetingUrl)
+    : null;
+  const components = [endButton, editTagsButton];
+  if (liveMeetingButton) {
+    components.push(liveMeetingButton);
+  }
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    endButton,
-    editTagsButton,
+    ...components,
   );
 
   const reply = await interaction.reply({
@@ -360,6 +382,7 @@ export async function handleAutoStartMeeting(
     chatTtsEnabled: options?.chatTtsEnabled,
     chatTtsVoice: options?.chatTtsVoice,
   });
+  void saveMeetingStartToDatabase(meeting);
 
   // Send notification that auto-recording has started
   const embed = new EmbedBuilder()
@@ -382,9 +405,22 @@ export async function handleAutoStartMeeting(
     .setLabel("Edit Tags")
     .setStyle(ButtonStyle.Secondary);
 
+  const liveMeetingUrl = buildLiveMeetingUrl(
+    meeting.guildId,
+    meeting.meetingId,
+  );
+  const liveMeetingButton = liveMeetingUrl
+    ? new ButtonBuilder()
+        .setLabel("Live transcript")
+        .setStyle(ButtonStyle.Link)
+        .setURL(liveMeetingUrl)
+    : null;
+  const components = [endButton, editTagsButton];
+  if (liveMeetingButton) {
+    components.push(liveMeetingButton);
+  }
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    endButton,
-    editTagsButton,
+    ...components,
   );
 
   const message = await textChannel.send({

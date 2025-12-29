@@ -64,6 +64,7 @@ type MeetingDetails = {
   decisions: string[];
   actions: string[];
   events: MeetingEvent[];
+  status?: "in_progress" | "complete";
 };
 
 type MeetingExport = {
@@ -106,6 +107,7 @@ type MeetingSummaryRow = {
   notesMessageId?: string;
   audioAvailable: boolean;
   transcriptAvailable: boolean;
+  status?: "in_progress" | "complete";
 };
 
 type MeetingListItem = MeetingSummaryRow & {
@@ -129,6 +131,7 @@ type RawMeetingDetail = {
   audioUrl?: string | null;
   attendees?: string[];
   events?: MeetingEvent[];
+  status?: "in_progress" | "complete";
 };
 
 const FILTER_OPTIONS = [
@@ -290,6 +293,7 @@ const buildMeetingDetails = (
     decisions: [],
     actions: [],
     events: detail.events ?? [],
+    status: detail.status ?? "complete",
   } satisfies MeetingDetails;
 };
 
@@ -581,7 +585,14 @@ export default function Library() {
               >
                 <Group justify="space-between" align="flex-start" wrap="nowrap">
                   <Stack gap={6} style={{ flex: 1 }}>
-                    <Text fw={650}>{meetingItem.title}</Text>
+                    <Group gap="xs" align="center" wrap="wrap">
+                      <Text fw={650}>{meetingItem.title}</Text>
+                      {meetingItem.status === "in_progress" ? (
+                        <Badge color="red" variant="light">
+                          Live
+                        </Badge>
+                      ) : null}
+                    </Group>
                     {meetingItem.summaryLabel ? (
                       <Text size="xs" c="dimmed">
                         {meetingItem.summaryLabel}
@@ -646,7 +657,14 @@ export default function Library() {
               <Stack gap="md">
                 <Stack gap={4}>
                   <Group justify="space-between" align="center" wrap="wrap">
-                    <Title order={3}>{meeting.title}</Title>
+                    <Group gap="xs" align="center" wrap="wrap">
+                      <Title order={3}>{meeting.title}</Title>
+                      {meeting.status === "in_progress" ? (
+                        <Badge color="red" variant="light">
+                          Live
+                        </Badge>
+                      ) : null}
+                    </Group>
                     <Group gap="sm">
                       <Button
                         variant="light"

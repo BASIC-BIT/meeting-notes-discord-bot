@@ -7,6 +7,7 @@ import { User } from "discord.js";
 import * as trpcExpress from "@trpc/server/adapters/express";
 import { registerBillingRoutes } from "./api/billing";
 import { registerGuildRoutes } from "./api/guilds";
+import { registerLiveMeetingRoutes } from "./api/liveMeetings";
 import { config } from "./services/configService";
 import { DynamoSessionStore } from "./services/sessionStore";
 import { getStripeClient } from "./services/stripeClient";
@@ -261,6 +262,7 @@ export function setupWebServer() {
 
   registerBillingRoutes(app, stripe);
   registerGuildRoutes(app);
+  registerLiveMeetingRoutes(app);
 
   app.listen(PORT, () => {
     console.log(`Server is running and listening on port ${PORT}`);

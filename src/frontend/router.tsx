@@ -17,6 +17,7 @@ const Library = lazyRouteComponent(() => import("./pages/Library"));
 const Ask = lazyRouteComponent(() => import("./pages/Ask"));
 const Billing = lazyRouteComponent(() => import("./pages/Billing"));
 const Settings = lazyRouteComponent(() => import("./pages/Settings"));
+const LiveMeeting = lazyRouteComponent(() => import("./pages/LiveMeeting"));
 import { useGuildContext } from "./contexts/GuildContext";
 import { usePortalStore } from "./stores/portalStore";
 
@@ -32,6 +33,12 @@ const homeRoute = new Route({
   getParentRoute: () => rootRoute,
   path: "/",
   component: MarketingLayout,
+});
+
+const liveMeetingRoute = new Route({
+  getParentRoute: () => rootRoute,
+  path: "live/$guildId/$meetingId",
+  component: LiveMeeting,
 });
 
 const portalRoute = new Route({
@@ -99,6 +106,7 @@ const portalSettingsRoute = new Route({
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
+  liveMeetingRoute,
   portalRoute.addChildren([
     portalIndexRoute,
     portalSelectRoute,

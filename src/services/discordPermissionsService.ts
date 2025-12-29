@@ -1,0 +1,117 @@
+import {
+  getGuildMember,
+  isDiscordApiError,
+  listGuildChannels,
+  listGuildRoles,
+} from "./discordService";
+import type {
+  DiscordChannel,
+  DiscordPermissionOverwrite,
+} from "../repositories/types";
+
+const PERMISSION_ADMIN = 1n << 3n;
+const PERMISSION_VIEW_CHANNEL = 1n << 10n;
+
+const parsePermissions = (value?: string | null): bigint => {
+  if (!value) return 0n;
+  try {
+    return BigInt(value);
+  } catch (error) {
+    console.warn("Failed to parse permissions value", error);
+    return 0n;
+  }
+};
+
+const getOverwriteBits = (overwrite: DiscordPermissionOverwrite) => ({
+  allow: parsePermissions(overwrite.allow),
+  deny: parsePermissions(overwrite.deny),
+});
+
+const applyOverwrite = (
+  base: bigint,
+  overwrite?: DiscordPermissionOverwrite,
+) => {
+  if (!overwrite) return base;
+  const { allow, deny } = getOverwriteBits(overwrite);
+  return (base & ~deny) | allow;
+};
+
+const applyRoleOverwrites = (
+  base: bigint,
+  overwrites: DiscordPermissionOverwrite[],
+  roleIds: string[],
+) => {
+  let allow = 0n;
+  let deny = 0n;
+  for (const overwrite of overwrites) {
+    if (overwrite.type !== 0) continue;
+    if (!roleIds.includes(overwrite.id)) continue;
+    const bits = getOverwriteBits(overwrite);
+    allow |= bits.allow;
+    deny |= bits.deny;
+  }
+  return (base & ~deny) | allow;
+};
+
+const resolveChannel = (
+  channels: DiscordChannel[],
+  channelId: string,
+): DiscordChannel | undefined =>
+  channels.find((channel) => channel.id === channelId);
+
+export async function ensureUserCanViewChannel(options: {
+  guildId: string;
+  channelId: string;
+  userId: string;
+}): Promise<boolean | null> {
+  const { guildId, channelId, userId } = options;
+  try {
+    const [channels, roles, member] = await Promise.all([
+      listGuildChannels(guildId),
+      listGuildRoles(guildId),
+      getGuildMember(guildId, userId),
+    ]);
+
+    const channel = resolveChannel(channels, channelId);
+    if (!channel) return false;
+
+    const rolePermissions = new Map(
+      roles.map((role) => [role.id, parsePermissions(role.permissions)]),
+    );
+    let permissions = rolePermissions.get(guildId) ?? 0n;
+    for (const roleId of member.roles) {
+      permissions |= rolePermissions.get(roleId) ?? 0n;
+    }
+
+    if ((permissions & PERMISSION_ADMIN) !== 0n) {
+      return true;
+    }
+
+    const overwrites = channel.permission_overwrites ?? [];
+    permissions = applyOverwrite(
+      permissions,
+      overwrites.find(
+        (overwrite) => overwrite.type === 0 && overwrite.id === guildId,
+      ),
+    );
+    permissions = applyRoleOverwrites(permissions, overwrites, member.roles);
+    permissions = applyOverwrite(
+      permissions,
+      overwrites.find(
+        (overwrite) => overwrite.type === 1 && overwrite.id === userId,
+      ),
+    );
+
+    return (permissions & PERMISSION_VIEW_CHANNEL) !== 0n;
+  } catch (error) {
+    if (isDiscordApiError(error) && error.status === 429) {
+      console.warn("ensureUserCanViewChannel rate limited", {
+        guildId,
+        channelId,
+      });
+      return null;
+    }
+    console.error("ensureUserCanViewChannel error", error);
+    return false;
+  }
+}
