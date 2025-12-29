@@ -83,6 +83,13 @@ Notes:
 - Helpers: `yarn terraform:init | plan | apply`.
 - IaC scanning: `yarn checkov` (Checkov) locally; also runs in CI.
 
+## GitHub personal access token rotation
+
+- Generate a new **fine-grained** token from the prefilled Chronote link: [https://github.com/organizations/BASIC-BIT/settings/personal-access-tokens/new?name=Chronote%20Terraform&permissions[actions]=write&permissions[administration]=write&permissions[metadata]=read&permissions[contents]=read](https://github.com/organizations/BASIC-BIT/settings/personal-access-tokens/new?name=Chronote%20Terraform&permissions%5Bactions%5D=write&permissions%5Badministration%5D=write&permissions%5Bmetadata%5D=read&permissions%5Bcontents%5D=read). On the form, select the **chronote** repository (required for Terraform), set an expiration, and confirm the Chronote organization if GitHub prompts. The query string pre-sets the description and recommended permissions for managing environments and Actions variables through Terraform.
+- Required repository permissions for Terraform: **Actions: Read and write**, **Administration: Read and write** (covers repository environments), **Contents: Read** (for repo metadata), and **Metadata: Read**. Other permissions can stay at **No access**.
+- After generating the token, set `GITHUB_TOKEN` in `_infra/terraform.tfvars` (and `_infra/terraform.staging.tfvars` if you use staging), or export `TF_VAR_GITHUB_TOKEN` in your shell before running `terraform plan` or `terraform apply`. Keep the token out of version control.
+- Revoke the old token at [https://github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens) once Terraform is applying successfully with the new credentials.
+
 ### Observability (hosted)
 
 - AMP (Amazon Managed Prometheus) and AMG (Amazon Managed Grafana) are provisioned by Terraform. AMG requires IAM Identity Center (AWS SSO) to be enabled in the account.
