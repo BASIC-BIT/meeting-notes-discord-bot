@@ -111,6 +111,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Get Python version
+        id: py-version
+        run: |
+          python_version=$(python3 -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
+          echo "version=$python_version" >> $GITHUB_OUTPUT
+
+      - name: Cache pip (lizard)
+        id: pip-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ steps.py-version.outputs.version }}-lizard
+
       - name: Code stats (scc + lizard)
         run: |
           docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
@@ -128,7 +141,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
 
       - name: Run Checkov
         run: yarn checkov
@@ -174,6 +189,19 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: pw-version
+        run: |
+          pw_version=$(node -p 'require("@playwright/test/package.json").version')
+          echo "version=$pw_version" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw-version.outputs.version }}
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
