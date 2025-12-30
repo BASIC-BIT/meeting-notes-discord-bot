@@ -54,12 +54,6 @@ test("renders app shell without crashing", async () => {
     </MantineProvider>
   );
 
-  try {
-    render(<App />, { wrapper });
-    await waitFor(() => expect(fetch).toHaveBeenCalled());
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error(err);
-    throw err;
-  }
+  render(<App />, { wrapper });
+  await waitFor(() => expect(fetch).toHaveBeenCalled());
 });

@@ -37,6 +37,9 @@ export function isEditTagsHistoryModal(customId: string) {
 export async function handleEditTagsButton(interaction: ButtonInteraction) {
   const meeting = interaction.guildId ? getMeeting(interaction.guildId) : null;
   const currentTags = meeting?.tags?.join(", ") ?? "";
+  const basePlaceholder = currentTags.length
+    ? currentTags
+    : "e.g., sprint, ttrpg, Q1-planning";
 
   let suggested = "";
   if (interaction.guildId) {
@@ -54,33 +57,20 @@ export async function handleEditTagsButton(interaction: ButtonInteraction) {
     }
   }
 
+  const hint = suggested ? ` | ${suggested}`.slice(0, 90) : "";
+  const textInput = new TextInputBuilder()
+    .setCustomId(TAG_INPUT_ID)
+    .setLabel("Tags (comma-separated)")
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setPlaceholder(basePlaceholder + hint);
+
   const modal = new ModalBuilder()
     .setCustomId(TAG_MODAL_ID)
     .setTitle("Edit Tags")
     .addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId(TAG_INPUT_ID)
-          .setLabel("Tags (comma-separated)")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(false)
-          .setPlaceholder(
-            currentTags.length
-              ? currentTags
-              : "e.g., sprint, ttrpg, Q1-planning",
-          ),
-      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(textInput),
     );
-
-  if (suggested) {
-    // Add suggestions to placeholder to avoid title length limits
-    const hint = ` | ${suggested}`.slice(0, 90);
-    const ti = modal.components[0].components[0] as TextInputBuilder;
-    ti.setPlaceholder(
-      (currentTags.length ? currentTags : "e.g., sprint, ttrpg, Q1-planning") +
-        hint,
-    );
-  }
 
   await interaction.showModal(modal);
 }

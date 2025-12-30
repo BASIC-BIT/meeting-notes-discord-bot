@@ -267,9 +267,9 @@ export default function Library() {
   }, [detailQuery.data, channelNameMap]);
   const liveStreamEnabled = Boolean(
     meeting &&
-      selectedGuildId &&
-      (meeting.status === MEETING_STATUS.IN_PROGRESS ||
-        meeting.status === MEETING_STATUS.PROCESSING),
+    selectedGuildId &&
+    (meeting.status === MEETING_STATUS.IN_PROGRESS ||
+      meeting.status === MEETING_STATUS.PROCESSING),
   );
   const liveStream = useLiveMeetingStream({
     guildId: selectedGuildId ?? "",

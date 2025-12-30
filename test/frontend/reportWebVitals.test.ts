@@ -1,10 +1,9 @@
 import { describe, expect, jest, test } from "@jest/globals";
 import reportWebVitals from "../../src/frontend/reportWebVitals";
-import { onCLS, onFCP, onFID, onINP, onLCP, onTTFB } from "web-vitals";
+import { onCLS, onFCP, onINP, onLCP, onTTFB } from "web-vitals";
 
 jest.mock("web-vitals", () => ({
   onCLS: jest.fn(),
-  onFID: jest.fn(),
   onFCP: jest.fn(),
   onLCP: jest.fn(),
   onTTFB: jest.fn(),
@@ -16,7 +15,6 @@ describe("reportWebVitals", () => {
     const handler = jest.fn();
     reportWebVitals(handler);
     expect(onCLS).toHaveBeenCalledWith(handler);
-    expect(onFID).toHaveBeenCalledWith(handler);
     expect(onFCP).toHaveBeenCalledWith(handler);
     expect(onLCP).toHaveBeenCalledWith(handler);
     expect(onTTFB).toHaveBeenCalledWith(handler);
@@ -25,7 +23,6 @@ describe("reportWebVitals", () => {
 
   test("does nothing when handler is missing", () => {
     if (jest.isMockFunction(onCLS)) onCLS.mockClear();
-    if (jest.isMockFunction(onFID)) onFID.mockClear();
     if (jest.isMockFunction(onFCP)) onFCP.mockClear();
     if (jest.isMockFunction(onLCP)) onLCP.mockClear();
     if (jest.isMockFunction(onTTFB)) onTTFB.mockClear();
@@ -33,7 +30,6 @@ describe("reportWebVitals", () => {
 
     reportWebVitals();
     expect(onCLS).not.toHaveBeenCalled();
-    expect(onFID).not.toHaveBeenCalled();
     expect(onFCP).not.toHaveBeenCalled();
     expect(onLCP).not.toHaveBeenCalled();
     expect(onTTFB).not.toHaveBeenCalled();

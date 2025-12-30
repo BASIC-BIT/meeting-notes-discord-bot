@@ -16,12 +16,10 @@ This stack provisions:
 ### Bootstrap steps (Grafana service account token)
 
 1. **First apply** (creates AMP + AMG):
-
    - Leave `grafana_api_key` and `grafana_url` empty in `terraform.tfvars`.
    - Run: `terraform apply`
 
 2. **Create a Grafana service account + token** (preferred):
-
    - Open the Grafana workspace URL.
    - In Grafana: _Administration → Service accounts_ → **New service account** (role: Admin).
    - Create a **token** and copy it.
