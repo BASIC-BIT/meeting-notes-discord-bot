@@ -58,6 +58,8 @@ resource "aws_appconfig_deployment" "chronote_config_deployment" {
 }
 
 resource "aws_iam_policy" "appconfig_access_policy" {
+  #checkov:skip=CKV_AWS_355 reason: AppConfigData session actions require resource "*" and are scoped by app/env/profile IDs.
+  #checkov:skip=CKV_AWS_290 reason: AppConfigData access is read-only and session scoped.
   name        = "${local.name_prefix}-bot-appconfig-policy"
   description = "Policy for Meeting Notes Bot to access AppConfig data"
   policy = jsonencode({

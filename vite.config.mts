@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react-swc";
 import tsconfigPaths from "vite-tsconfig-paths";
 import path from "node:path";
 
+process.env.VITE_MOCK_FIXED_NOW ??= "";
+
 export default defineConfig({
   root: path.resolve(__dirname, "src", "frontend"),
   envDir: path.resolve(__dirname),

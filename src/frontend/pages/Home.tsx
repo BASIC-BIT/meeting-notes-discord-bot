@@ -88,24 +88,6 @@ const features = [
   },
 ];
 
-const howItWorks = [
-  {
-    step: "01",
-    title: "Start recording",
-    description: "Use a command or enable auto-recording for a channel.",
-  },
-  {
-    step: "02",
-    title: "Notes land in Discord",
-    description: "Transcript + summary post to your chosen channel.",
-  },
-  {
-    step: "03",
-    title: "Search it later",
-    description: "Ask questions later, with links back to your notes.",
-  },
-];
-
 const useCases = [
   {
     title: "Communities",
@@ -337,6 +319,7 @@ export default function Home() {
         </SimpleGrid>
       </Section>
 
+      {/*
       <Section
         eyebrow="Workflow"
         title="From voice channel to logbook in minutes"
@@ -356,7 +339,9 @@ export default function Home() {
           ))}
         </SimpleGrid>
       </Section>
+      */}
 
+      {/*
       <Section
         eyebrow="Evidence-first"
         title="Answers come with context"
@@ -403,6 +388,7 @@ export default function Home() {
           </Surface>
         </SimpleGrid>
       </Section>
+      */}
 
       <Section
         eyebrow="Pricing"

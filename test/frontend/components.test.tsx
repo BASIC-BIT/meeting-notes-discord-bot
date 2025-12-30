@@ -184,7 +184,8 @@ describe("frontend components", () => {
 
   test("renders SiteFooter variants", () => {
     renderWithMantine(<SiteFooter />);
-    expect(screen.getByText("Chronote by BASICBIT")).toBeInTheDocument();
+    expect(screen.getByText(/Chronote by/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "BASICBIT" })).toBeInTheDocument();
     renderWithMantine(<SiteFooter variant="compact" />);
   });
 
