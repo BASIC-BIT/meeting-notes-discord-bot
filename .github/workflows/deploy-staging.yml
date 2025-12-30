@@ -66,7 +66,9 @@ jobs:
 
       - name: Get Python version
         id: py-version
-        run: echo "version=$(python3 -c \"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')\")" >> $GITHUB_OUTPUT
+        run: |
+          python_version=$(python3 -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
+          echo "version=$python_version" >> $GITHUB_OUTPUT
 
       - name: Cache pip (lizard)
         id: pip-cache
