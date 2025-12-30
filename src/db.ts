@@ -27,7 +27,9 @@ import {
   StripeWebhookEvent,
   SuggestionHistoryEntry,
   UserSpeechSettings,
+  AskConversationShareRecord,
 } from "./types/db";
+import type { MeetingStatus } from "./types/meetingLifecycle";
 
 const dynamoDbClient = new DynamoDBClient(
   config.database.useLocalDynamoDB
@@ -711,7 +713,7 @@ export async function updateMeetingNotes(
 export async function updateMeetingStatus(
   guildId: string,
   channelId_timestamp: string,
-  status: "in_progress" | "processing" | "complete",
+  status: MeetingStatus,
 ): Promise<void> {
   const now = new Date().toISOString();
   const params: UpdateItemCommand["input"] = {
@@ -737,6 +739,10 @@ export async function updateMeetingStatus(
 
 function buildAskPartitionKey(userId: string, guildId: string) {
   return `USER#${userId}#GUILD#${guildId}`;
+}
+
+function buildAskSharePartitionKey(guildId: string) {
+  return `GUILD#${guildId}`;
 }
 
 export async function listAskConversations(
@@ -820,6 +826,71 @@ export async function writeAskMessage(record: AskMessageRecord): Promise<void> {
     Item: marshall(record, { removeUndefinedValues: true }),
   };
   const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function listAskConversationShares(
+  guildId: string,
+): Promise<AskConversationShareRecord[]> {
+  const pk = buildAskSharePartitionKey(guildId);
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    KeyConditionExpression: "pk = :pk and begins_with(sk, :prefix)",
+    ExpressionAttributeValues: marshall({
+      ":pk": pk,
+      ":prefix": "SHARE#",
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map(
+      (item) => unmarshall(item) as AskConversationShareRecord,
+    );
+  }
+  return [];
+}
+
+export async function getAskConversationShare(
+  guildId: string,
+  conversationId: string,
+): Promise<AskConversationShareRecord | undefined> {
+  const pk = buildAskSharePartitionKey(guildId);
+  const sk = `SHARE#${conversationId}`;
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    Key: marshall({ pk, sk }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as AskConversationShareRecord;
+  }
+  return undefined;
+}
+
+export async function writeAskConversationShare(
+  record: AskConversationShareRecord,
+): Promise<void> {
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function deleteAskConversationShare(
+  guildId: string,
+  conversationId: string,
+): Promise<void> {
+  const pk = buildAskSharePartitionKey(guildId);
+  const sk = `SHARE#${conversationId}`;
+  const params = {
+    TableName: tableName("AskConversationTable"),
+    Key: marshall({ pk, sk }),
+  };
+  const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);
 }
 

@@ -1,0 +1,18 @@
+[
+  {
+    "input": {
+      "file": "audio/clip.wav",
+      "language": "en",
+      "promptFile": "prompts/chronote-transcription-cleanup-chat.md",
+      "glossaryFile": "docs/evals/transcription-glossary.txt",
+      "runs": 5,
+      "temperature": 0
+    },
+    "expectedOutput": {
+      "transcript": "Reference transcript text"
+    },
+    "metadata": {
+      "label": "sample-clip"
+    }
+  }
+]

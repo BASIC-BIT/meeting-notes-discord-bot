@@ -1,9 +1,20 @@
 import React from "react";
 import { beforeEach, describe, expect, test } from "@jest/globals";
-import { screen, waitFor } from "@testing-library/react";
-import { renderWithMantine, resetFrontendMocks } from "./testUtils";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  renderWithMantine,
+  resetFrontendMocks,
+  setRouteParams,
+} from "./testUtils";
 import { guildState } from "./testUtils";
-import { setAskConversationQuery, setAskListQuery } from "./mocks/trpc";
+import {
+  setAskConversationQuery,
+  setAskListQuery,
+  setAskSettingsQuery,
+  setAskSharedConversationQuery,
+  setAskSharedListQuery,
+} from "./mocks/trpc";
+import { setRouteSearch } from "./mocks/routerState";
 import Ask from "../../src/frontend/pages/Ask";
 
 describe("Ask page", () => {
@@ -23,6 +34,7 @@ describe("Ask page", () => {
 
   test("renders conversation messages for selected server", async () => {
     guildState.selectedGuildId = "g1";
+    setRouteParams({ conversationId: "c1" });
     setAskListQuery({
       data: {
         conversations: [
@@ -69,5 +81,157 @@ describe("Ask page", () => {
     });
     expect(screen.getByTestId("ask-rename")).toBeInTheDocument();
     expect(screen.getByText(/ship next week/i)).toBeInTheDocument();
+  });
+
+  test("shows public share link when public sharing is enabled", async () => {
+    guildState.selectedGuildId = "g1";
+    setRouteParams({ conversationId: "c1" });
+    setAskSettingsQuery({
+      data: { askMembersEnabled: true, askSharingPolicy: "public" },
+    });
+    setAskListQuery({
+      data: {
+        conversations: [
+          {
+            id: "c1",
+            title: "Design notes",
+            summary: "Design sync",
+            createdAt: "2025-12-01T00:00:00.000Z",
+            updatedAt: "2025-12-02T00:00:00.000Z",
+            visibility: "public",
+          },
+        ],
+      },
+    });
+    setAskConversationQuery({
+      data: {
+        conversation: {
+          id: "c1",
+          title: "Design notes",
+          summary: "Design sync",
+          createdAt: "2025-12-01T00:00:00.000Z",
+          updatedAt: "2025-12-02T00:00:00.000Z",
+          visibility: "public",
+        },
+        messages: [],
+      },
+    });
+
+    renderWithMantine(<Ask />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("ask-share")).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId("ask-share"));
+
+    const linkInput = (await screen.findByLabelText(
+      "Public link",
+    )) as HTMLInputElement;
+    expect(linkInput.value).toContain("/share/ask/g1/c1");
+    expect(screen.getByText("Make server-only")).toBeInTheDocument();
+  });
+
+  test("falls back to server share when public sharing is disabled", async () => {
+    guildState.selectedGuildId = "g1";
+    setRouteParams({ conversationId: "c1" });
+    setAskSettingsQuery({
+      data: { askMembersEnabled: true, askSharingPolicy: "server" },
+    });
+    setAskListQuery({
+      data: {
+        conversations: [
+          {
+            id: "c1",
+            title: "Launch plan",
+            summary: "Launch notes",
+            createdAt: "2025-12-01T00:00:00.000Z",
+            updatedAt: "2025-12-02T00:00:00.000Z",
+            visibility: "public",
+          },
+        ],
+      },
+    });
+    setAskConversationQuery({
+      data: {
+        conversation: {
+          id: "c1",
+          title: "Launch plan",
+          summary: "Launch notes",
+          createdAt: "2025-12-01T00:00:00.000Z",
+          updatedAt: "2025-12-02T00:00:00.000Z",
+          visibility: "public",
+        },
+        messages: [],
+      },
+    });
+
+    renderWithMantine(<Ask />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("ask-share")).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId("ask-share"));
+
+    const linkInput = (await screen.findByLabelText(
+      "Shared link",
+    )) as HTMLInputElement;
+    expect(linkInput.value).toContain("/portal/server/g1/ask/c1");
+    expect(linkInput.value).toContain("list=shared");
+    expect(screen.queryByText("Make public")).not.toBeInTheDocument();
+  });
+
+  test("shows shared list mode as read only with owner", async () => {
+    guildState.selectedGuildId = "g1";
+    setRouteParams({ conversationId: "c2" });
+    setRouteSearch({ list: "shared" });
+    setAskSettingsQuery({
+      data: { askMembersEnabled: true, askSharingPolicy: "server" },
+    });
+    setAskSharedListQuery({
+      data: {
+        conversations: [
+          {
+            conversationId: "c2",
+            title: "Incident follow-up",
+            summary: "Follow-up notes",
+            updatedAt: "2025-12-05T00:00:00.000Z",
+            sharedAt: "2025-12-05T00:10:00.000Z",
+            ownerUserId: "u2",
+            ownerTag: "Grace Hopper",
+          },
+        ],
+      },
+    });
+    setAskSharedConversationQuery({
+      data: {
+        conversation: {
+          id: "c2",
+          title: "Incident follow-up",
+          summary: "Follow-up notes",
+          createdAt: "2025-12-05T00:00:00.000Z",
+          updatedAt: "2025-12-05T00:00:00.000Z",
+          visibility: "server",
+        },
+        messages: [],
+        shared: {
+          conversationId: "c2",
+          title: "Incident follow-up",
+          summary: "Follow-up notes",
+          updatedAt: "2025-12-05T00:00:00.000Z",
+          sharedAt: "2025-12-05T00:10:00.000Z",
+          ownerUserId: "u2",
+          ownerTag: "Grace Hopper",
+        },
+      },
+    });
+
+    renderWithMantine(<Ask />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Shared by Grace Hopper/i)).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/Shared threads are read only/i),
+    ).toBeInTheDocument();
   });
 });

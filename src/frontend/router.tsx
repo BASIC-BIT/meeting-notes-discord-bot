@@ -16,6 +16,7 @@ const PortalServerLayout = lazyRouteComponent(
 const ServerSelect = lazyRouteComponent(() => import("./pages/ServerSelect"));
 const Library = lazyRouteComponent(() => import("./pages/Library"));
 const Ask = lazyRouteComponent(() => import("./pages/Ask"));
+const PublicAsk = lazyRouteComponent(() => import("./pages/PublicAsk"));
 const Billing = lazyRouteComponent(() => import("./pages/Billing"));
 const Settings = lazyRouteComponent(() => import("./pages/Settings"));
 const LiveMeeting = lazyRouteComponent(() => import("./pages/LiveMeeting"));
@@ -49,13 +50,19 @@ const portalRoute = new Route({
 });
 
 function PortalIndexRedirect() {
-  const { selectedGuildId } = useGuildContext();
+  const { selectedGuildId, guilds } = useGuildContext();
   const lastServerId = usePortalStore((state) => state.lastServerId);
   const targetServerId = selectedGuildId || lastServerId;
   if (targetServerId) {
+    const canManage =
+      guilds.find((guild) => guild.id === targetServerId)?.canManage ?? false;
     return (
       <Navigate
-        to="/portal/server/$serverId/library"
+        to={
+          canManage
+            ? "/portal/server/$serverId/library"
+            : "/portal/server/$serverId/ask"
+        }
         params={{ serverId: targetServerId }}
       />
     );
@@ -88,10 +95,34 @@ const portalLibraryRoute = new Route({
   validateSearch: z.object({ meetingId: z.string().optional() }).parse,
 });
 
+const askSearchSchema = z.object({
+  list: z.enum(["mine", "shared"]).optional(),
+  messageId: z.string().optional(),
+}).parse;
+
 const portalAskRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "ask",
   component: Ask,
+  validateSearch: askSearchSchema,
+});
+
+const portalAskConversationRoute = new Route({
+  getParentRoute: () => portalServerRoute,
+  path: "ask/$conversationId",
+  component: Ask,
+  validateSearch: askSearchSchema,
+});
+
+const publicAskSearchSchema = z.object({
+  messageId: z.string().optional(),
+}).parse;
+
+const publicAskRoute = new Route({
+  getParentRoute: () => rootRoute,
+  path: "share/ask/$serverId/$conversationId",
+  component: PublicAsk,
+  validateSearch: publicAskSearchSchema,
 });
 
 const portalBillingRoute = new Route({
@@ -109,12 +140,14 @@ const portalSettingsRoute = new Route({
 const routeTree = rootRoute.addChildren([
   homeRoute,
   liveMeetingRoute,
+  publicAskRoute,
   portalRoute.addChildren([
     portalIndexRoute,
     portalSelectRoute,
     portalServerRoute.addChildren([
       portalLibraryRoute,
       portalAskRoute,
+      portalAskConversationRoute,
       portalBillingRoute,
       portalSettingsRoute,
     ]),

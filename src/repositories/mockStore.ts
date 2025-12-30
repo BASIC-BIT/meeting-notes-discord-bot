@@ -11,7 +11,11 @@ import type {
   StripeWebhookEvent,
   UserSpeechSettings,
 } from "../types/db";
-import type { AskConversation, AskMessage } from "../types/ask";
+import type {
+  AskConversation,
+  AskMessage,
+  AskSharedConversation,
+} from "../types/ask";
 import { config } from "../services/configService";
 import { nowIso } from "../utils/time";
 import type {
@@ -40,6 +44,7 @@ type MockStore = {
   meetingHistoryByGuild: Map<string, MeetingHistory[]>;
   askConversationsByKey: Map<string, AskConversation[]>;
   askMessagesByConversation: Map<string, AskMessage[]>;
+  askSharesByGuild: Map<string, AskSharedConversation[]>;
   userSpeechSettings: Map<string, UserSpeechSettings>;
 };
 
@@ -142,6 +147,8 @@ function buildDefaultStore(): MockStore {
     defaultTags: ["campaign", "recap"],
     liveVoiceEnabled: false,
     liveVoiceCommandsEnabled: false,
+    askMembersEnabled: true,
+    askSharingPolicy: "server",
     updatedAt: nowIso(),
     updatedBy: mockUser.id,
   });
@@ -317,6 +324,7 @@ function buildDefaultStore(): MockStore {
 
   const askConversationsByKey = new Map<string, AskConversation[]>();
   const askMessagesByConversation = new Map<string, AskMessage[]>();
+  const askSharesByGuild = new Map<string, AskSharedConversation[]>();
   const conversationId = "conv-mock-1";
   const conversationIdTwo = "conv-mock-2";
   const conversationKey = `USER#${mockUser.id}#GUILD#1249723747896918109`;
@@ -338,6 +346,22 @@ function buildDefaultStore(): MockStore {
         "Rin keeps the map, the party banks the gems, and we owe Ada a favor.",
       createdAt,
       updatedAt,
+      visibility: "server",
+      sharedAt: updatedAt,
+      sharedByUserId: mockUser.id,
+      sharedByTag: `${mockUser.username}#${mockUser.discriminator}`,
+    },
+  ]);
+  askSharesByGuild.set("1249723747896918109", [
+    {
+      conversationId: conversationIdTwo,
+      title: "Loot split notes",
+      summary:
+        "Rin keeps the map, the party banks the gems, and we owe Ada a favor.",
+      updatedAt,
+      sharedAt: updatedAt,
+      ownerUserId: mockUser.id,
+      ownerTag: `${mockUser.username}#${mockUser.discriminator}`,
     },
   ]);
   const basePairs = [
@@ -451,6 +475,7 @@ function buildDefaultStore(): MockStore {
     meetingHistoryByGuild,
     askConversationsByKey,
     askMessagesByConversation,
+    askSharesByGuild,
     userSpeechSettings,
   };
 }

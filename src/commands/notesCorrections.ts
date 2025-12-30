@@ -16,8 +16,6 @@ import {
   getMeetingHistoryService,
   updateMeetingNotesService,
 } from "../services/meetingHistoryService";
-import OpenAI from "openai";
-import { config } from "../services/configService";
 import { stripCodeFences } from "../utils/text";
 import { buildPaginatedEmbeds } from "../utils/embedPagination";
 import { MeetingHistory, SuggestionHistoryEntry } from "../types/db";
@@ -25,6 +23,10 @@ import { fetchJsonFromS3 } from "../services/storageService";
 import { formatParticipantLabel } from "../utils/participants";
 import { generateMeetingSummaries } from "../services/meetingSummaryService";
 import { formatNotesWithSummary } from "../utils/notesSummary";
+import { createOpenAIClient } from "../services/openaiClient";
+import { getModelChoice } from "../services/modelFactory";
+import { config } from "../services/configService";
+import { getLangfuseChatPrompt } from "../services/langfusePromptService";
 
 type PendingCorrection = {
   guildId: string;
@@ -50,12 +52,6 @@ const CORRECTION_PREFIX = "notes_correction";
 const CORRECTION_MODAL_PREFIX = "notes_correction_modal";
 const CORRECTION_ACCEPT_PREFIX = "notes_correction_accept";
 const CORRECTION_REJECT_PREFIX = "notes_correction_reject";
-
-const openAIClient = new OpenAI({
-  apiKey: config.openai.apiKey,
-  organization: config.openai.organizationId,
-  project: config.openai.projectId,
-});
 
 function encodeKey(channelIdTimestamp: string): string {
   return Buffer.from(channelIdTimestamp).toString("base64");
@@ -130,33 +126,33 @@ async function generateCorrectedNotes({
   requesterTag,
   previousSuggestions,
 }: CorrectionInput): Promise<string> {
-  const systemPrompt =
-    "You are updating meeting notes. Given the current notes, the full transcript, and a user suggestion, make the smallest edits needed to satisfy the suggestion while preserving the existing structure and sections. Do NOT append or copy the transcript into the notes. Keep all other content unchanged. Return the full revised notes as markdown.";
-
   const priorSuggestions = formatSuggestionsForPrompt(previousSuggestions);
-
-  const userPrompt = `Current notes:
-${currentNotes}
-
-Previously approved suggestions (most recent first):
-${priorSuggestions}
-
-Transcript:
-${transcript}
-
-User (${requesterTag}) suggests:
-"${suggestion}"
-
-Return updated notes.`;
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.notesCorrectionPromptName,
+    variables: {
+      currentNotes,
+      priorSuggestions,
+      transcript,
+      requesterTag,
+      suggestion,
+    },
+  });
 
   try {
+    const modelChoice = getModelChoice("notesCorrection");
+    const openAIClient = createOpenAIClient({
+      traceName: "notes-correction",
+      generationName: "notes-correction",
+      tags: ["feature:notes_correction"],
+      metadata: {
+        requesterTag,
+      },
+      langfusePrompt,
+    });
     const completion = await openAIClient.chat.completions.create({
-      model: config.notes.model,
+      model: modelChoice.model,
       temperature: 0,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+      messages,
     });
 
     const content = completion.choices[0]?.message?.content;

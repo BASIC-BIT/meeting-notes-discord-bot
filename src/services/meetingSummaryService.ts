@@ -1,6 +1,9 @@
-import OpenAI from "openai";
 import { config } from "./configService";
+import type { SpanContext } from "@opentelemetry/api";
 import { formatLongDate } from "../utils/time";
+import { getLangfuseChatPrompt } from "./langfusePromptService";
+import { createOpenAIClient } from "./openaiClient";
+import { getModelChoice } from "./modelFactory";
 
 export type MeetingSummaries = {
   summarySentence?: string;
@@ -15,6 +18,7 @@ type MeetingSummaryInput = {
   now?: Date;
   previousSummarySentence?: string;
   previousSummaryLabel?: string;
+  parentSpanContext?: SpanContext;
 };
 
 function normalizeSummarySentence(value?: string): string | undefined {
@@ -76,39 +80,39 @@ export async function generateMeetingSummaries(
   const previousSentence = input.previousSummarySentence?.trim();
   const previousLabel = input.previousSummaryLabel?.trim();
 
-  const systemPrompt =
-    "You are Chronote, a Discord meeting notes bot. " +
-    "Create two summaries from the meeting notes. " +
-    "summarySentence must be exactly one sentence, clear and friendly. " +
-    "summaryLabel must be five words or fewer, no punctuation. " +
-    "Do not include URLs, links, IDs, mentions, hashtags, or markdown. " +
-    "These summaries may be read aloud, so avoid long numeric strings. " +
-    "If the previous summaries still accurately describe the meeting and the new notes changes are minor, return the previous summaries unchanged. " +
-    'Return ONLY JSON: {"summarySentence":"...","summaryLabel":"..."}';
-
-  const userPrompt = [
-    `Today is ${formatLongDate(now)}.`,
-    `Server: ${input.serverName}`,
-    `Channel: ${input.channelName}`,
-    `Tags: ${tagLine}`,
+  const previousSummaryBlock =
     previousSentence || previousLabel
       ? `Previous summary sentence: ${previousSentence || "(none)"}\nPrevious summary label: ${previousLabel || "(none)"}`
-      : "Previous summaries: (none)",
-    "Notes:",
-    input.notes,
-  ].join("\n");
+      : "Previous summaries: (none)";
+
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.meetingSummaryPromptName,
+    variables: {
+      todayLabel: formatLongDate(now),
+      serverName: input.serverName,
+      channelName: input.channelName,
+      tagLine,
+      previousSummaryBlock,
+      notes: input.notes,
+    },
+  });
 
   try {
-    const completion = await new OpenAI({
-      apiKey: config.openai.apiKey,
-      organization: config.openai.organizationId,
-      project: config.openai.projectId,
-    }).chat.completions.create({
-      model: config.notes.model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+    const modelChoice = getModelChoice("meetingSummary");
+    const openAIClient = createOpenAIClient({
+      traceName: "meeting-summary",
+      generationName: "meeting-summary",
+      tags: ["feature:meeting_summary"],
+      metadata: {
+        serverName: input.serverName,
+        channelName: input.channelName,
+      },
+      langfusePrompt,
+      parentSpanContext: input.parentSpanContext,
+    });
+    const completion = await openAIClient.chat.completions.create({
+      model: modelChoice.model,
+      messages,
       temperature: 0,
       response_format: { type: "json_object" },
       max_completion_tokens: 160,

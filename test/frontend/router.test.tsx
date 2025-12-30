@@ -34,10 +34,13 @@ class MockRouter {
   }
 }
 
-type MockGuildState = { selectedGuildId: string | null };
+type MockGuildState = {
+  selectedGuildId: string | null;
+  guilds: { id: string; canManage?: boolean }[];
+};
 type MockPortalState = { lastServerId: string | null };
 
-const guildState: MockGuildState = { selectedGuildId: null };
+const guildState: MockGuildState = { selectedGuildId: null, guilds: [] };
 const portalState: MockPortalState = { lastServerId: null };
 
 jest.mock("@tanstack/react-router", () => ({
@@ -89,6 +92,7 @@ describe("router", () => {
     }
     const PortalIndexComponent = portalIndex.component;
     guildState.selectedGuildId = "g1";
+    guildState.guilds = [{ id: "g1", canManage: true }];
     portalState.lastServerId = "g2";
     render(<PortalIndexComponent />);
     const node = screen.getByTestId("navigate");
@@ -111,6 +115,7 @@ describe("router", () => {
     }
     const PortalIndexComponent = portalIndex.component;
     guildState.selectedGuildId = null;
+    guildState.guilds = [];
     portalState.lastServerId = null;
     render(<PortalIndexComponent />);
     const node = screen.getByTestId("navigate");

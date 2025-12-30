@@ -35,20 +35,29 @@ const NAV_ITEMS: Array<{
   value: "library" | "ask" | "billing" | "settings";
   icon: ComponentType<{ size?: number }>;
   requiresAuth: boolean;
+  requiresManage?: boolean;
 }> = [
-  { label: "Library", value: "library", icon: IconBook2, requiresAuth: true },
+  {
+    label: "Library",
+    value: "library",
+    icon: IconBook2,
+    requiresAuth: true,
+    requiresManage: true,
+  },
   { label: "Ask", value: "ask", icon: IconSparkles, requiresAuth: true },
   {
     label: "Billing",
     value: "billing",
     icon: IconCreditCard,
     requiresAuth: true,
+    requiresManage: true,
   },
   {
     label: "Settings",
     value: "settings",
     icon: IconSettings,
     requiresAuth: true,
+    requiresManage: true,
   },
 ];
 
@@ -60,9 +69,11 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
   const { selectedGuildId, guilds } = useGuildContext();
   const navigate = useNavigate();
 
-  const selectedServerName = selectedGuildId
-    ? guilds.find((g) => g.id === selectedGuildId)?.name
+  const selectedGuild = selectedGuildId
+    ? (guilds.find((g) => g.id === selectedGuildId) ?? null)
     : null;
+  const selectedServerName = selectedGuild?.name ?? null;
+  const canManage = selectedGuild?.canManage ?? false;
 
   const resolveServerPath = (page: string) =>
     selectedGuildId
@@ -114,7 +125,9 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = pathname.includes(`/${item.value}`);
-            const disabled = item.requiresAuth && authState !== "authenticated";
+            const disabled =
+              (item.requiresAuth && authState !== "authenticated") ||
+              (item.requiresManage && !canManage);
             const navRadius = theme.radius[uiRadii.control];
             return (
               <NavLink

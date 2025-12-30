@@ -14,6 +14,13 @@ ENABLE_ONBOARDING="false"
 OPENAI_ORGANIZATION_ID=""                     # optional
 OPENAI_PROJECT_ID=""                          # optional
 NOTES_MODEL="gpt-5.2"                         # optional; model for notes and summaries
+LANGFUSE_BASE_URL=""                          # optional; set for self-hosted
+LANGFUSE_TRACING_ENABLED="true"               # optional; set false to disable traces
+LANGFUSE_TRACING_ENVIRONMENT="prod"
+LANGFUSE_RELEASE=""
+LANGFUSE_PROMPT_LABEL="production"
+LANGFUSE_PROMPT_MEETING_SUMMARY="chronote-meeting-summary-chat"
+LANGFUSE_PROMPT_CACHE_TTL_MS="60000"
 FRONTEND_BUCKET=""                            # auto-named if blank
 FRONTEND_DOMAIN=""                            # no custom domain if blank
 FRONTEND_CERT_ARN=""                          # only when FRONTEND_DOMAIN is set
@@ -21,6 +28,14 @@ API_DOMAIN=""                                 # e.g., api.chronote.gg (optional,
 API_CERT_ARN=""                               # only when API_DOMAIN is set (ACM ARN in us-east-1)
 TRANSCRIPTS_BUCKET=""                         # auto-named if blank
 TRANSCRIPTS_PREFIX=""                         # no prefix if blank
+BEDROCK_DATA_AUTOMATION_PROFILE_ARN=""        # optional; required for Bedrock evals
+BEDROCK_DATA_AUTOMATION_PROJECT_ARN=""        # optional
+BEDROCK_DATA_AUTOMATION_INPUT_BUCKET=""       # optional; defaults to transcripts bucket
+BEDROCK_DATA_AUTOMATION_OUTPUT_BUCKET=""      # optional; defaults to transcripts bucket
+BEDROCK_DATA_AUTOMATION_INPUT_PREFIX=""       # optional
+BEDROCK_DATA_AUTOMATION_OUTPUT_PREFIX=""      # optional
+BEDROCK_DATA_AUTOMATION_POLL_INTERVAL_MS=""   # optional
+BEDROCK_DATA_AUTOMATION_TIMEOUT_MS=""         # optional
 HOSTED_ZONE_NAME=""                           # e.g., chronote.gg. (required if setting FRONTEND_DOMAIN)
 # Frontend/CORS
 FRONTEND_ALLOWED_ORIGINS=""                   # comma-separated origins, no trailing slash
@@ -66,3 +81,5 @@ grafana_suffix_seed=""                       # optional; change to force a new w
 # - ${project_name}-${environment}/openai-api-key
 # - ${project_name}-${environment}/stripe-secret-key
 # - ${project_name}-${environment}/stripe-webhook-secret
+# - ${project_name}-${environment}/langfuse-public-key
+# - ${project_name}-${environment}/langfuse-secret-key

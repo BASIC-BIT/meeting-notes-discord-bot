@@ -1,12 +1,13 @@
 import type { MeetingData } from "../types/meeting-data";
 import type { LiveMeetingMeta, LiveMeetingStatus } from "../types/liveMeeting";
+import { resolveMeetingStatus } from "../types/meetingLifecycle";
 
 export function buildLiveMeetingMeta(meeting: MeetingData): LiveMeetingMeta {
-  const status: LiveMeetingStatus = meeting.finished
-    ? "complete"
-    : meeting.finishing
-      ? "processing"
-      : "in_progress";
+  const status: LiveMeetingStatus = resolveMeetingStatus({
+    cancelled: meeting.cancelled,
+    finished: meeting.finished,
+    finishing: meeting.finishing,
+  });
   return {
     guildId: meeting.guildId,
     meetingId: meeting.meetingId,

@@ -23,7 +23,7 @@ describe("Billing page", () => {
 
   test("renders disabled billing state", () => {
     guildState.selectedGuildId = "g1";
-    guildState.guilds = [{ id: "g1", name: "Guild One" }];
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     setBillingQuery({
       data: {
         billingEnabled: false,
@@ -39,7 +39,7 @@ describe("Billing page", () => {
 
   test("renders paid plan status line", () => {
     guildState.selectedGuildId = "g1";
-    guildState.guilds = [{ id: "g1", name: "Guild One" }];
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     setBillingQuery({
       data: {
         billingEnabled: true,

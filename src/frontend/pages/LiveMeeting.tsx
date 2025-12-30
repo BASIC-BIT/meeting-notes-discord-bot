@@ -23,6 +23,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useLiveMeetingStream } from "../hooks/useLiveMeetingStream";
 import { formatDateTimeLabel } from "../utils/meetingLibrary";
 import type { MeetingEventType } from "../../types/meetingTimeline";
+import { MEETING_STATUS } from "../../types/meetingLifecycle";
 
 const buildLoginUrl = () => {
   const base = buildApiUrl("/auth/discord");
@@ -30,6 +31,32 @@ const buildLoginUrl = () => {
     return base;
   }
   return `${base}?redirect=${encodeURIComponent(window.location.href)}`;
+};
+
+const resolveStreamStatusLabel = (status: string) => {
+  switch (status) {
+    case MEETING_STATUS.PROCESSING:
+      return "Processing";
+    case MEETING_STATUS.COMPLETE:
+      return "Complete";
+    case MEETING_STATUS.CANCELLED:
+      return "Cancelled";
+    case "live":
+      return "Live";
+    default:
+      return null;
+  }
+};
+
+const resolveTimelineEmptyLabel = (status: string) => {
+  switch (status) {
+    case MEETING_STATUS.PROCESSING:
+      return "Meeting finished. Waiting for notes and timeline updates.";
+    case MEETING_STATUS.CANCELLED:
+      return "Meeting cancelled.";
+    default:
+      return "Waiting for the first transcript line...";
+  }
 };
 
 export default function LiveMeeting() {
@@ -89,14 +116,7 @@ export default function LiveMeeting() {
   }
 
   const meeting = stream.meeting;
-  const statusLabel =
-    stream.status === "processing"
-      ? "Processing"
-      : stream.status === "complete"
-        ? "Complete"
-        : stream.status === "live"
-          ? "Live"
-          : null;
+  const statusLabel = resolveStreamStatusLabel(stream.status);
 
   return (
     <Stack gap="lg" data-testid="live-meeting-page">
@@ -154,11 +174,7 @@ export default function LiveMeeting() {
           }
           height={520}
           title="Live transcript"
-          emptyLabel={
-            stream.status === "processing"
-              ? "Meeting finished. Waiting for notes and timeline updates."
-              : "Waiting for the first transcript line..."
-          }
+          emptyLabel={resolveTimelineEmptyLabel(stream.status)}
           headerActions={
             <>
               <Switch

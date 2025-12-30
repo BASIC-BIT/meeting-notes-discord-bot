@@ -64,6 +64,48 @@ variable "OPENAI_PROJECT_ID" {
   default   = ""
 }
 
+variable "LANGFUSE_BASE_URL" {
+  description = "Optional Langfuse base URL for self-hosted"
+  type        = string
+  default     = ""
+}
+
+variable "LANGFUSE_TRACING_ENABLED" {
+  description = "Enable Langfuse tracing"
+  type        = string
+  default     = "true"
+}
+
+variable "LANGFUSE_TRACING_ENVIRONMENT" {
+  description = "Langfuse tracing environment label"
+  type        = string
+  default     = ""
+}
+
+variable "LANGFUSE_RELEASE" {
+  description = "Langfuse release label"
+  type        = string
+  default     = ""
+}
+
+variable "LANGFUSE_PROMPT_LABEL" {
+  description = "Langfuse prompt label to use"
+  type        = string
+  default     = "production"
+}
+
+variable "LANGFUSE_PROMPT_MEETING_SUMMARY" {
+  description = "Langfuse prompt name for meeting summaries"
+  type        = string
+  default     = "chronote-meeting-summary-chat"
+}
+
+variable "LANGFUSE_PROMPT_CACHE_TTL_MS" {
+  description = "Langfuse prompt cache TTL in milliseconds"
+  type        = string
+  default     = "60000"
+}
+
 variable "NOTES_MODEL" {
   description = "OpenAI model for notes and summaries"
   type        = string
@@ -1102,6 +1144,34 @@ resource "aws_ecs_task_definition" "app_task" {
           value = var.OPENAI_PROJECT_ID
         },
         {
+          name  = "LANGFUSE_BASE_URL"
+          value = var.LANGFUSE_BASE_URL
+        },
+        {
+          name  = "LANGFUSE_TRACING_ENABLED"
+          value = var.LANGFUSE_TRACING_ENABLED
+        },
+        {
+          name  = "LANGFUSE_TRACING_ENVIRONMENT"
+          value = var.LANGFUSE_TRACING_ENVIRONMENT
+        },
+        {
+          name  = "LANGFUSE_RELEASE"
+          value = var.LANGFUSE_RELEASE
+        },
+        {
+          name  = "LANGFUSE_PROMPT_LABEL"
+          value = var.LANGFUSE_PROMPT_LABEL
+        },
+        {
+          name  = "LANGFUSE_PROMPT_MEETING_SUMMARY"
+          value = var.LANGFUSE_PROMPT_MEETING_SUMMARY
+        },
+        {
+          name  = "LANGFUSE_PROMPT_CACHE_TTL_MS"
+          value = var.LANGFUSE_PROMPT_CACHE_TTL_MS
+        },
+        {
           name  = "NOTES_MODEL"
           value = var.NOTES_MODEL
         },
@@ -1112,6 +1182,38 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "TRANSCRIPTS_PREFIX"
           value = var.TRANSCRIPTS_PREFIX
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_PROFILE_ARN"
+          value = var.BEDROCK_DATA_AUTOMATION_PROFILE_ARN
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_PROJECT_ARN"
+          value = var.BEDROCK_DATA_AUTOMATION_PROJECT_ARN
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_INPUT_BUCKET"
+          value = local.bedrock_input_bucket_name
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_OUTPUT_BUCKET"
+          value = local.bedrock_output_bucket_name
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_INPUT_PREFIX"
+          value = var.BEDROCK_DATA_AUTOMATION_INPUT_PREFIX
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_OUTPUT_PREFIX"
+          value = var.BEDROCK_DATA_AUTOMATION_OUTPUT_PREFIX
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_POLL_INTERVAL_MS"
+          value = var.BEDROCK_DATA_AUTOMATION_POLL_INTERVAL_MS
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_TIMEOUT_MS"
+          value = var.BEDROCK_DATA_AUTOMATION_TIMEOUT_MS
         },
         {
           name  = "DDB_TABLE_PREFIX"
@@ -1238,6 +1340,14 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name      = "OPENAI_API_KEY"
           valueFrom = aws_secretsmanager_secret.openai_api_key.arn
+        },
+        {
+          name      = "LANGFUSE_PUBLIC_KEY"
+          valueFrom = aws_secretsmanager_secret.langfuse_public_key.arn
+        },
+        {
+          name      = "LANGFUSE_SECRET_KEY"
+          valueFrom = aws_secretsmanager_secret.langfuse_secret_key.arn
         },
         {
           name      = "STRIPE_SECRET_KEY"

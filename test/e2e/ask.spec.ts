@@ -31,6 +31,12 @@ test("ask page lists conversations and sends a question (mock)", async ({
   const question = "Summarize the last session.";
   await askPage.askWithKeyboard(question);
   await expect(askPage.userMessage(question)).toBeVisible();
-  await expect(askPage.latestChronoteMessage()).toBeVisible();
+  await expect(askPage.latestChronoteMessage()).toContainText(
+    /mock answer for/i,
+    {
+      timeout: 15000,
+    },
+  );
+  await expect(askPage.input()).toBeEnabled({ timeout: 15000 });
   await expect(askPage.input()).toBeFocused();
 });

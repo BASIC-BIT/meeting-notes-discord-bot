@@ -1,6 +1,8 @@
-import OpenAI from "openai";
 import { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
+import { createOpenAIClient } from "./services/openaiClient";
+import { getModelChoice } from "./services/modelFactory";
+import { getLangfuseChatPrompt } from "./services/langfusePromptService";
 import {
   buildLiveResponderContext,
   LatestUtterance,
@@ -15,6 +17,7 @@ import {
   stopThinkingCueLoop,
 } from "./audio/soundCues";
 import { canUserEndMeeting } from "./utils/meetingPermissions";
+import { MEETING_END_REASONS } from "./types/meetingLifecycle";
 
 type GateAction = "respond" | "command_end" | "none";
 
@@ -37,16 +40,13 @@ export type LiveSegment = {
   timestamp: number;
 };
 
-const openAIClient = new OpenAI({
-  apiKey: config.openai.apiKey,
-  organization: config.openai.organizationId,
-  project: config.openai.projectId,
-});
-
 const RECENT_LINES = 3;
 const COMMAND_CONFIRM_TIMEOUT_MS = 30_000;
 const COMMAND_CONFIRM_PROMPT = "Chronote: Confirm end meeting?";
 const COMMAND_DENY_PROMPT = "Chronote: Okay, confirmed your denial.";
+
+const supportsTemperature = (model: string) =>
+  !model.toLowerCase().startsWith("gpt-5");
 
 function getSpeakerLabel(meeting: MeetingData, userId: string): string {
   const participant = meeting.participants.get(userId);
@@ -88,39 +88,47 @@ async function shouldAct(
       segment.text.length > 120 ? "..." : ""
     } speaker=${speaker}`,
   );
-  const systemPrompt =
-    "You are Chronote, the meeting notes bot. Decide whether to speak aloud, issue an end meeting command, or do nothing. " +
-    "Only respond when the speaker is directly addressing you and a short verbal reply would be helpful. " +
-    "Only return command_end when the speaker is explicitly asking you to end the meeting, disconnect, leave, or stop recording. " +
-    'Return EXACTLY one JSON object, no prose. Schema: {"action": "respond" | "command_end" | "none"}. ' +
-    "Return none if you are unsure, the request is ambiguous, or unrelated. " +
-    "Never return empty content. Never omit fields. Never add extra keys.";
-
-  const userPrompt = [
-    `Latest line (${toIsoString(segment.timestamp)}): ${speaker}: ${segment.text}`,
+  const latestLine = `Latest line (${toIsoString(segment.timestamp)}): ${speaker}: ${segment.text}`;
+  const recentContext =
     recent.length > 0
       ? `Recent context:\n${recent.join("\n")}`
-      : "No prior transcript context.",
-    `Server: ${meeting.guild.name}`,
-    `Channel: ${meeting.voiceChannel.name}`,
-  ].join("\n");
+      : "No prior transcript context.";
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.liveVoiceGatePromptName,
+    variables: {
+      latestLine,
+      recentContext,
+      serverName: meeting.guild.name,
+      channelName: meeting.voiceChannel.name,
+    },
+  });
 
   try {
+    const modelChoice = getModelChoice("liveVoiceGate");
+    const openAIClient = createOpenAIClient({
+      traceName: "live-voice-gate",
+      generationName: "live-voice-gate",
+      userId: segment.userId,
+      sessionId: meeting.meetingId,
+      tags: ["feature:live_voice_gate"],
+      metadata: {
+        guildId: meeting.guild.id,
+        channelId: meeting.voiceChannel.id,
+      },
+      langfusePrompt,
+    });
     const completion = await openAIClient.chat.completions.create({
-      model: config.liveVoice.gateModel,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+      model: modelChoice.model,
+      messages,
       max_completion_tokens: config.liveVoice.gateMaxOutputTokens,
       response_format: { type: "json_object" },
-      temperature: 0,
+      ...(supportsTemperature(modelChoice.model) ? { temperature: 0 } : {}),
     });
 
     const content = completion.choices[0].message.content ?? "";
     const finish = completion.choices[0].finish_reason;
     console.log(
-      `[live-voice][gate] model=${config.liveVoice.gateModel} finish=${finish} raw=${content}`,
+      `[live-voice][gate] model=${modelChoice.model} finish=${finish} raw=${content}`,
     );
 
     if (!content.trim()) {
@@ -154,34 +162,40 @@ async function generateReply(
     timestamp: segment.timestamp,
   };
 
-  const { userPrompt, debug } = await buildLiveResponderContext(
-    meeting,
-    latest,
-  );
+  const { variables, debug } = await buildLiveResponderContext(meeting, latest);
 
   const todayLabel = formatLongDate(new Date());
-  const systemPrompt =
-    "You are Chronote, the meeting notes bot. You speak responses aloud via text-to-speech. " +
-    "Respond in a concise, friendly way, usually 1 to 2 sentences, use 3 to 4 only if needed. " +
-    "Do not include URLs, links, citations, IDs, or markdown. " +
-    "Avoid long numbers. " +
-    "Use the supplied context sections and stay on-topic to the latest line. " +
-    "When referring to past meetings, prefer friendly relative phrasing while keeping dates accurate. " +
-    `Today is ${todayLabel}.`;
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.liveVoiceResponderPromptName,
+    variables: {
+      todayLabel,
+      ...variables,
+    },
+  });
 
   try {
+    const modelChoice = getModelChoice("liveVoiceResponder");
+    const openAIClient = createOpenAIClient({
+      traceName: "live-voice-responder",
+      generationName: "live-voice-responder",
+      userId: segment.userId,
+      sessionId: meeting.meetingId,
+      tags: ["feature:live_voice_responder"],
+      metadata: {
+        guildId: meeting.guild.id,
+        channelId: meeting.voiceChannel.id,
+      },
+      langfusePrompt,
+    });
     const completion = await openAIClient.chat.completions.create({
-      model: config.liveVoice.responderModel,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+      model: modelChoice.model,
+      messages,
       max_completion_tokens: 200,
     });
 
     const content = completion.choices[0].message.content ?? "";
     console.log(
-      `[live-voice][responder] model=${config.liveVoice.responderModel} ` +
+      `[live-voice][responder] model=${modelChoice.model} ` +
         `windowLines=${debug.windowLines} pastMeetings=${
           debug.pastMeetings.map((m) => m.meetingId).join(",") || "none"
         }`,
@@ -246,28 +260,40 @@ async function classifyConfirmation(
   segment: LiveSegment,
 ): Promise<ConfirmationDecision> {
   const speaker = getSpeakerLabel(meeting, segment.userId);
-  const systemPrompt =
-    "You are a confirmation classifier for Chronote. Determine if the speaker confirms, denies, or is unclear about ending the meeting. " +
-    'Return EXACTLY one JSON object, no prose. Schema: {"decision": "confirm" | "deny" | "unclear"}. ' +
-    "Do not require the bot name to be mentioned. If the response is unrelated or ambiguous, return unclear.";
-  const userPrompt = `Response (${toIsoString(segment.timestamp)}): ${speaker}: ${segment.text}`;
+  const responseLine = `Response (${toIsoString(segment.timestamp)}): ${speaker}: ${segment.text}`;
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.liveVoiceConfirmPromptName,
+    variables: {
+      responseLine,
+    },
+  });
 
   try {
+    const modelChoice = getModelChoice("liveVoiceGate");
+    const openAIClient = createOpenAIClient({
+      traceName: "live-voice-confirm",
+      generationName: "live-voice-confirm",
+      userId: segment.userId,
+      sessionId: meeting.meetingId,
+      tags: ["feature:live_voice_confirm"],
+      metadata: {
+        guildId: meeting.guild.id,
+        channelId: meeting.voiceChannel.id,
+      },
+      langfusePrompt,
+    });
     const completion = await openAIClient.chat.completions.create({
-      model: config.liveVoice.gateModel,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+      model: modelChoice.model,
+      messages,
       max_completion_tokens: config.liveVoice.gateMaxOutputTokens,
       response_format: { type: "json_object" },
-      temperature: 0,
+      ...(supportsTemperature(modelChoice.model) ? { temperature: 0 } : {}),
     });
 
     const content = completion.choices[0].message.content ?? "";
     const finish = completion.choices[0].finish_reason;
     console.log(
-      `[live-voice][confirm] model=${config.liveVoice.gateModel} finish=${finish} raw=${content}`,
+      `[live-voice][confirm] model=${modelChoice.model} finish=${finish} raw=${content}`,
     );
 
     if (!content.trim()) {
@@ -345,6 +371,8 @@ async function handlePendingCommandIfAny(
       );
       return true;
     }
+    meeting.endReason = MEETING_END_REASONS.LIVE_VOICE;
+    meeting.endTriggeredByUserId = segment.userId;
     if (meeting.onEndMeeting) {
       await meeting.onEndMeeting(meeting);
     } else {

@@ -5,6 +5,9 @@ export const PERMISSION_REASONS = {
   manageGuildRequired: "MANAGE_GUILD_REQUIRED",
   discordRateLimited: "DISCORD_RATE_LIMIT",
   guildIdRequired: "GUILD_ID_REQUIRED",
+  guildMemberRequired: "GUILD_MEMBER_REQUIRED",
+  askMembersDisabled: "ASK_MEMBERS_DISABLED",
+  askSharingDisabled: "ASK_SHARING_DISABLED",
 } as const;
 
 export type PermissionReason =

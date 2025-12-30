@@ -1,4 +1,5 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import type { SpanContext } from "@opentelemetry/api";
 import { ChatEntry } from "./types/chat";
 import { renderChatEntryLine } from "./utils/chatLog";
 import { distance as levenshteinDistance } from "fastest-levenshtein";
@@ -10,8 +11,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import {
+  BYTES_PER_SAMPLE,
   CHANNELS,
-  SAMPLE_RATE,
+  RECORD_SAMPLE_RATE,
   TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
   TRANSCRIPTION_BREAK_DURATION,
   TRANSCRIPTION_MAX_CONCURRENT,
@@ -19,6 +21,7 @@ import {
   TRANSCRIPTION_MAX_RETRIES,
   TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD,
   TRANSCRIPTION_RATE_MIN_TIME,
+  TRANSCRIBE_SAMPLE_RATE,
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
 import { AudioSnippet } from "./types/audio";
@@ -41,13 +44,19 @@ import {
 import { config } from "./services/configService";
 import { formatParticipantLabel } from "./utils/participants";
 import { getBotNameVariants } from "./utils/botNames";
+import { createOpenAIClient } from "./services/openaiClient";
+import { getModelChoice } from "./services/modelFactory";
+import {
+  getLangfuseChatPrompt,
+  type LangfusePromptMeta,
+} from "./services/langfusePromptService";
+import { isLangfuseTracingEnabled } from "./services/langfuseClient";
+import {
+  startActiveObservation,
+  updateActiveObservation,
+  updateActiveTrace,
+} from "@langfuse/tracing";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
-
-const openAIClient = new OpenAI({
-  apiKey: config.openai.apiKey,
-  organization: config.openai.organizationId,
-  project: config.openai.projectId,
-});
 
 // Check if transcription is too similar to the prompt or glossary content (likely verbatim output)
 function isTranscriptionLikelyPrompt(
@@ -107,34 +116,114 @@ function isTranscriptionLikelyPrompt(
   );
 }
 
+type TranscriptionTraceContext = {
+  userId: string;
+  timestamp: number;
+  audioSeconds: number;
+  audioBytes: number;
+};
+
 async function transcribeInternal(
   meeting: MeetingData,
   file: string,
+  context?: TranscriptionTraceContext,
 ): Promise<string> {
   const glossaryContent = getTranscriptionGlossaryContent(meeting);
   const prompt = getTranscriptionKeywords(meeting);
 
-  const transcription = await openAIClient.audio.transcriptions.create({
-    file: createReadStream(file),
-    model: "gpt-4o-transcribe",
-    language: "en",
-    prompt: prompt,
-    temperature: 0,
-    response_format: "json",
-    // include: ["logprobs"],
-  });
+  const modelChoice = getModelChoice("transcription");
+  const traceMetadata = {
+    guildId: meeting.guild.id,
+    channelId: meeting.voiceChannel.id,
+    meetingId: meeting.meetingId,
+    snippetUserId: context?.userId,
+    snippetTimestamp: context?.timestamp,
+    audioSeconds: context?.audioSeconds,
+    audioBytes: context?.audioBytes,
+    promptLength: prompt.length,
+  };
 
-  // Check if the transcription is suspiciously similar to the prompt or glossary content
-  if (
-    isTranscriptionLikelyPrompt(transcription.text, prompt, glossaryContent)
-  ) {
-    console.warn(
-      "Transcription appears to be verbatim prompt output, likely no transcribable audio",
-    );
-    return ""; // Return empty string for segments with no actual speech
+  const runTranscription = async (openAIClient: OpenAI) => {
+    const transcription = await openAIClient.audio.transcriptions.create({
+      file: createReadStream(file),
+      model: modelChoice.model,
+      language: "en",
+      prompt: prompt,
+      temperature: 0,
+      response_format: "json",
+      // include: ["logprobs"],
+    });
+
+    // Check if the transcription is suspiciously similar to the prompt or glossary content
+    if (
+      isTranscriptionLikelyPrompt(transcription.text, prompt, glossaryContent)
+    ) {
+      console.warn(
+        "Transcription appears to be verbatim prompt output, likely no transcribable audio",
+      );
+      return "";
+    }
+
+    return transcription.text;
+  };
+
+  if (!isLangfuseTracingEnabled()) {
+    const openAIClient = createOpenAIClient({
+      traceName: "transcription",
+      generationName: "transcription",
+      userId: meeting.creator.id,
+      sessionId: meeting.meetingId,
+      tags: ["feature:transcription"],
+      metadata: traceMetadata,
+    });
+    return await runTranscription(openAIClient);
   }
 
-  return transcription.text;
+  return await startActiveObservation(
+    "transcription",
+    async () => {
+      updateActiveTrace({
+        name: "transcription",
+        userId: context?.userId,
+        tags: ["feature:transcription"],
+        metadata: traceMetadata,
+      });
+      updateActiveObservation(
+        {
+          input: {
+            language: "en",
+            prompt,
+          },
+          model: modelChoice.model,
+          modelParameters: {
+            temperature: 0,
+            response_format: "json",
+          },
+          metadata: traceMetadata,
+        },
+        { asType: "generation" },
+      );
+
+      const openAIClient = createOpenAIClient({ disableTracing: true });
+      const output = await runTranscription(openAIClient);
+
+      const usageDetails = context?.audioSeconds
+        ? {
+            audioSeconds: Number(context.audioSeconds.toFixed(3)),
+          }
+        : undefined;
+      updateActiveObservation(
+        {
+          output,
+          usageDetails,
+        },
+        { asType: "generation" },
+      );
+
+      return output;
+    },
+    { asType: "generation" },
+  );
 }
 
 const retryPolicy = retry(handleAll, {
@@ -158,18 +247,24 @@ const limiter = new Bottleneck({
   minTime: TRANSCRIPTION_RATE_MIN_TIME,
 });
 
-async function transcribe(meeting: MeetingData, file: string): Promise<string> {
+async function transcribe(
+  meeting: MeetingData,
+  file: string,
+  context?: TranscriptionTraceContext,
+): Promise<string> {
   return await policies.execute(() =>
-    limiter.schedule(() => transcribeInternal(meeting, file)),
+    limiter.schedule(() => transcribeInternal(meeting, file, context)),
   );
 }
 
 export async function transcribeSnippet(
   meeting: MeetingData,
   snippet: AudioSnippet,
+  options: { tempSuffix?: string } = {},
 ): Promise<string> {
-  const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}_transcript.pcm`;
-  const tempWavFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}.wav`;
+  const suffix = options.tempSuffix ? `_${options.tempSuffix}` : "";
+  const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}_transcript.pcm`;
+  const tempWavFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}.wav`;
 
   // Ensure the directories exist
   const tempDir = "./";
@@ -179,13 +274,24 @@ export async function transcribeSnippet(
 
   // Write the PCM buffer to a file
   const buffer = Buffer.concat(snippet.chunks);
+  const audioBytes = buffer.length;
+  const audioSeconds =
+    audioBytes / (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE);
   writeFileSync(tempPcmFileName, buffer);
 
   // Convert PCM to WAV using ffmpeg
   await new Promise<void>((resolve, reject) => {
     ffmpeg(tempPcmFileName)
-      .inputOptions([`-f s16le`, `-ar ${SAMPLE_RATE}`, `-ac ${CHANNELS}`])
-      .outputOptions([`-f wav`, `-c:a pcm_s16le`])
+      .inputOptions([
+        `-f s16le`,
+        `-ar ${RECORD_SAMPLE_RATE}`,
+        `-ac ${CHANNELS}`,
+      ])
+      .outputOptions([
+        `-f wav`,
+        `-c:a pcm_s16le`,
+        `-ar ${TRANSCRIBE_SAMPLE_RATE}`,
+      ])
       .on("end", () => {
         resolve();
       })
@@ -198,7 +304,12 @@ export async function transcribeSnippet(
 
   try {
     // Transcribe the WAV file
-    const transcription = await transcribe(meeting, tempWavFileName);
+    const transcription = await transcribe(meeting, tempWavFileName, {
+      userId: snippet.userId,
+      timestamp: snippet.timestamp,
+      audioSeconds,
+      audioBytes,
+    });
 
     // Cleanup temporary files
     if (existsSync(tempPcmFileName)) {
@@ -239,20 +350,26 @@ export async function cleanupTranscription(
   meeting: MeetingData,
   transcription: string,
 ) {
-  const systemPrompt = await getTranscriptionCleanupSystemPrompt(meeting);
-  return await chat(meeting, {
-    messages: [
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-      {
-        role: "user",
-        content: transcription,
-      },
-    ],
-    temperature: 0,
-  });
+  const { messages, langfusePrompt } = await getTranscriptionCleanupPrompt(
+    meeting,
+    transcription,
+  );
+  const modelChoice = getModelChoice("transcriptionCleanup");
+  return await chat(
+    meeting,
+    {
+      messages: [...messages],
+      temperature: 0,
+    },
+    {
+      model: modelChoice.model,
+      traceName: "transcription-cleanup",
+      generationName: "transcription-cleanup",
+      tags: ["feature:transcription_cleanup"],
+      langfusePrompt,
+      parentSpanContext: meeting.langfuseParentSpanContext,
+    },
+  );
 }
 
 type ChatInput = Omit<
@@ -260,11 +377,36 @@ type ChatInput = Omit<
   "model" | "user"
 >;
 
+type ChatOptions = {
+  model?: string;
+  traceName?: string;
+  generationName?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  langfusePrompt?: LangfusePromptMeta;
+  parentSpanContext?: SpanContext;
+};
+
 async function chat(
   meeting: MeetingData,
   body: ChatInput,
-  model = config.notes.model,
+  options: ChatOptions = {},
 ): Promise<string> {
+  const model = options.model ?? getModelChoice("notes").model;
+  const openAIClient = createOpenAIClient({
+    traceName: options.traceName ?? "notes",
+    generationName: options.generationName ?? "notes",
+    userId: meeting.creator.id,
+    sessionId: meeting.meetingId,
+    tags: options.tags ?? ["feature:notes"],
+    metadata: {
+      guildId: meeting.guild.id,
+      channelId: meeting.voiceChannel.id,
+      ...options.metadata,
+    },
+    langfusePrompt: options.langfusePrompt,
+    parentSpanContext: options.parentSpanContext,
+  });
   let output: string = "";
   let done: boolean = false;
   let count = 0;
@@ -331,15 +473,15 @@ ${content}
 </glossary>`;
 }
 
-export async function getTranscriptionCleanupSystemPrompt(
+export async function getTranscriptionCleanupPrompt(
   meeting: MeetingData,
-): Promise<string> {
-  // Build context data (without memory - too early in process)
+  transcription: string,
+) {
   const contextData = await buildMeetingContext(meeting, false);
   const formattedContext = formatContextForPrompt(contextData, "transcription");
 
   const serverName = meeting.guild.name;
-  const serverDescription = meeting.guild.description;
+  const serverDescription = meeting.guild.description ?? "";
   const roles = meeting.guild.roles
     .valueOf()
     .map((role) => role.name)
@@ -353,67 +495,70 @@ export async function getTranscriptionCleanupSystemPrompt(
     .map((channel) => channel.name)
     .join(", ");
 
-  let prompt =
-    "You are a helpful Discord bot that records meetings and provides transcriptions. ";
-
-  // Add context from context service if available
-  if (formattedContext) {
-    prompt += formattedContext;
-  }
-
-  prompt +=
-    "\nYour task is to correct any spelling discrepancies in the transcribed text, and to correct anything that could've been mis-transcribed. " +
-    "Remove any lines that are likely mis-transcriptions due to the Whisper model being sent non-vocal audio like breathing or typing, but only if the certainty is high. " +
-    "Only make changes if you are confident it would not alter the meaning of the transcription. " +
-    "Output only the altered transcription, in the same format it was received in. " +
-    "Make sure to output the entirety of the conversation, regardless of the length. " +
-    "\nThe meeting attendees are: " +
-    Array.from(meeting.attendance).join(", ") +
-    ".\n" +
-    `This meeting is happening in a discord named: "${serverName}", with a description of "${serverDescription}", in a voice channel named ${meeting.voiceChannel.name}.\n` +
-    `The roles available to users in this server are: ${roles}.\n` +
-    `The upcoming events happening in this server are: ${events}.\n` +
-    `The channels in this server are: ${channelNames}.`;
-
-  return prompt;
+  return await getLangfuseChatPrompt({
+    name: config.langfuse.transcriptionCleanupPromptName,
+    variables: {
+      formattedContext,
+      attendees: Array.from(meeting.attendance).join(", "),
+      serverName,
+      serverDescription,
+      voiceChannelName: meeting.voiceChannel.name,
+      roles,
+      events,
+      channelNames,
+      transcription,
+    },
+  });
 }
 
 export async function getImage(meeting: MeetingData): Promise<string> {
   // Build context data (without memory - visual generation doesn't need history)
   const contextData = await buildMeetingContext(meeting, false);
   const formattedContext = formatContextForPrompt(contextData, "image");
-
-  let systemContent =
-    "Generate a concise, focused image prompt for DALL-E based on the main ideas from the meeting transcript. ";
-
-  // Add context from context service if available
-  if (formattedContext) {
-    // Keep context brief for image generation to avoid confusing DALL-E
-    const briefContext = formattedContext.substring(0, 500);
-    systemContent += `Context: ${briefContext}. `;
-  }
-
-  systemContent +=
-    "Avoid any text, logos, or complex symbols, and limit the inclusion of characters to a single figure at most, if any. Instead, suggest a simple, clear visual concept or scene using objects, environments, or abstract shapes. Ensure the prompt guides DALL-E to produce a visually cohesive and refined image with attention to detail, while avoiding any elements that AI image generation commonly mishandles. Keep the description straightforward to ensure the final image remains polished and coherent. Ensure it generates no text.";
-
-  const imagePrompt = await chat(meeting, {
-    messages: [
-      {
-        role: "system",
-        content: systemContent,
-      },
-      {
-        role: "user",
-        content: meeting.finalTranscript!,
-      },
-    ],
-    temperature: 0.5,
+  const briefContext = formattedContext
+    ? formattedContext.substring(0, 500)
+    : "";
+  const briefContextBlock = briefContext ? `Context: ${briefContext}. ` : "";
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.imagePromptName,
+    variables: {
+      briefContextBlock,
+      transcript: meeting.finalTranscript ?? "",
+    },
   });
+
+  const imagePrompt = await chat(
+    meeting,
+    {
+      messages: [...messages],
+      temperature: 0.5,
+    },
+    {
+      traceName: "image-prompt",
+      generationName: "image-prompt",
+      tags: ["feature:image_prompt"],
+      langfusePrompt,
+      parentSpanContext: meeting.langfuseParentSpanContext,
+    },
+  );
 
   console.log(imagePrompt);
 
-  const response = await openAIClient.images.generate({
-    model: "dall-e-3",
+  const imageModel = getModelChoice("image");
+  const imageClient = createOpenAIClient({
+    traceName: "image",
+    generationName: "image",
+    userId: meeting.creator.id,
+    sessionId: meeting.meetingId,
+    tags: ["feature:image"],
+    metadata: {
+      guildId: meeting.guild.id,
+      channelId: meeting.voiceChannel.id,
+    },
+    parentSpanContext: meeting.langfuseParentSpanContext,
+  });
+  const response = await imageClient.images.generate({
+    model: imageModel.model,
     size: "1024x1024",
     quality: "hd",
     n: 1,
@@ -472,15 +617,13 @@ function formatParticipantRoster(meeting: MeetingData): string | undefined {
     .join("\n");
 }
 
-export async function getNotesSystemPrompt(
-  meeting: MeetingData,
-): Promise<string> {
+export async function getNotesPrompt(meeting: MeetingData) {
   // Build context data with memory if enabled
   const contextData = await buildMeetingContext(meeting, isMemoryEnabled());
   const formattedContext = formatContextForPrompt(contextData, "notes");
 
   const serverName = meeting.guild.name;
-  const serverDescription = meeting.guild.description;
+  const serverDescription = meeting.guild.description ?? "";
   const roles = meeting.guild.roles
     .valueOf()
     .map((role) => role.name)
@@ -504,134 +647,52 @@ export async function getNotesSystemPrompt(
   const participantRoster = formatParticipantRoster(meeting);
 
   const longStoryTestMode = config.notes.longStoryTestMode;
-  const longStoryTargetChars = config.notes.longStoryTargetChars;
-
-  let prompt = `You are Meeting Notes Bot (canonical name "Meeting Notes Bot"), a Discord assistant that records, transcribes, and summarizes conversations. In this server you currently appear as "${botDisplayName}". Follow explicit participant instructions about what to include or omit in the notes, even if they differ from your defaults. Keep the notes concise and proportional to the meeting length; favor clarity over exhaustive detail. Speaker order in the transcript may be imperfect because audio is batched until roughly 5 seconds of silence; avoid strong inferences from ordering or attribution when uncertain. `;
-
-  // Add context from context service if available
-  if (formattedContext) {
-    prompt += formattedContext;
-  }
-
-  if (longStoryTestMode) {
-    prompt += `
-LOAD TEST MODE - GENERATE AN EXTREMELY LONG STORY FOR EMBED SPLITTING QA:
-- Ignore usual brevity and summary expectations; produce a self-contained fictional narrative.
-- Use the meeting transcript only as loose inspiration (names, themes) but still generate the full story even if it is empty.
-- Target length: at least ${longStoryTargetChars} characters of prose; exceeding the target to complete sections is encouraged.
-- Structure the output: 12 numbered chapters ("Chapter 01 - ..." through "Chapter 12 - ..."), each roughly 250-400 words; add an interlude after Chapter 06 of at least 150 words; end with an Epilogue of 300+ words.
-- Append an "Appendix: Key Echoes" section with 30 bullet points (12-20 words each) that restate plot beats to add predictable length.
-- Keep markdown simple: plain text chapter labels and blank-line separated paragraphs; bullets start with "- "; avoid code fences or tables.
-- Do not mention this is a test or talk about token limits; just tell the story.`;
-
-    return prompt;
-  }
-
-  // Check if we're in test mode for context debugging
   const contextTestMode = config.context.testMode;
+  const promptName = longStoryTestMode
+    ? config.langfuse.notesLongStoryPromptName
+    : contextTestMode
+      ? config.langfuse.notesContextTestPromptName
+      : config.langfuse.notesPromptName;
 
-  if (contextTestMode) {
-    prompt += `\nTEST MODE - EXPLICIT CONTEXT USAGE:
-You MUST actively use ALL provided context in your notes. This is for testing purposes.
-
-REQUIRED ACTIONS:
-1. If previous meetings are provided, EXPLICITLY reference them at the start of your notes
-2. When someone refers to "last meeting" or "previously discussed", look up the EXACT details from previous meetings
-3. Create a "Context Connections" section that lists ALL connections to previous meetings
-4. If someone says "the thing I mentioned before", find what that was in previous meetings and NAME IT EXPLICITLY
-5. Start your notes with "Previous Context Applied: [list what you found from previous meetings]"
-
-Example: If someone says "I'll eat the thing I mentioned last meeting" and last meeting mentioned "watermelon", you MUST write "They will eat the watermelon (mentioned in previous meeting)"
-
-Your task is to create notes that PROVE the context system is working by explicitly using all available historical data.`;
-  } else {
-    prompt += `\nYour task is to create concise and insightful notes from the PROVIDED TRANSCRIPTION of THIS CURRENT MEETING. 
-
-CONTEXT USAGE INSTRUCTIONS:
-- You have been provided with context that may include:
-  - Server context: The overall purpose of this Discord server
-  - Channel context: The specific purpose of this voice channel  
-  - Previous meetings: Notes from recent meetings in this same channel
-  
-- ACTIVELY USE previous meeting context when:
-  - Someone explicitly references "last meeting", "previously", "as discussed before"
-  - Topics directly continue from previous meetings
-  - Understanding requires knowledge from previous discussions
-  - Action items or decisions reference earlier conversations
-  
-- When referencing previous meetings:
-  - Be specific about what was previously discussed (e.g., "the watermelon mentioned in the previous meeting")
-  - Include relevant details from past meetings to provide continuity
-  - Help readers understand the full context without having to look up old notes
-  
-- Keep distinctions clear:
-  - Always specify what happened in THIS meeting vs previous meetings
-  - Use phrases like "continuing from last meeting where..." or "as previously discussed..."
-  - Don't mix up events between meetings, but DO connect related discussions
-
-The goal is to create comprehensive notes that leverage historical context to provide better understanding and continuity.`;
-  }
-
-  prompt += `\n\nAdapt the format based on the context of the conversation, whether it's a meeting, a TTRPG session, or a general discussion. Use the following guidelines:
-
-1. **For Meetings or Task-Oriented Discussions**:
-   - Provide a **Summary** of key points discussed.
-   - List any **Action Items** or **Next Steps**. Ensure tasks are assigned to specific attendees if mentioned.
-
-2. **For TTRPG Sessions or Casual Conversations**:
-   - Focus on **Highlights** of what happened, such as important plot developments, character actions, or key decisions made by the participants.
-   - Capture any **Open Questions** or decisions that remain unresolved.
-   - If there are any **Tasks** (e.g., players needing to follow up on something), list them clearly.
-
-3. **For All Types of Conversations**:
-   - Summarize important **takeaways** or **insights** for people who missed the conversation, ensuring these are concise and offer a quick understanding of what was discussed.
-   - List any **To-Do Items** or plans, with specific names if people were assigned tasks.
-
-### Additional Inputs:
-- **Participant chat/instructions**: ${
-    chatContext
-      ? "Use the raw chat provided below to honor any explicit include/omit requests."
-      : "No additional participant chat was captured; rely on transcript and provided context."
-  }
-- **Bot identity**: You are "${botDisplayName}" in this server; canonical name is "Meeting Notes Bot".
-- **Transcript ordering caution**: Speaker order can be unreliable because audio is batched until ~5 seconds of silence.
-- **Participant naming guidance**: Use server nicknames when provided; otherwise use global display names; if absent, use usernames. Be consistent across the summary. If useful, you may link a participant's name to their profile URL from the roster.
-
-${
-  chatContext
-    ? `Participant chat (recent, raw, chronological):\n${chatContext}`
-    : ""
-}
-
-### Participants:
-${participantRoster ?? "No participant roster captured."}
-
-### Contextual Information:
-- **Discord Server**: "${serverName}" (${serverDescription}).
-- **Voice Channel**: ${meeting.voiceChannel.name}.
-- **Attendees**: ${Array.from(meeting.attendance).join(", ")}.
-- **Available Roles**: ${roles}.
-- **Upcoming Events**: ${events}.
-- **Available Channels**: ${channelNames}.
-
-Output the notes in a concise, scannable format suitable for the description section of a Discord embed. Do **not** include the server name, channel name, attendees, or date at the top of the main notes, as these are handled separately in the contextual information. Avoid using four hashes (####) for headers, as discord embed markdown only allows for up to three. Omit any sections that have no content.`;
-
-  return prompt;
+  return await getLangfuseChatPrompt({
+    name: promptName,
+    variables: {
+      formattedContext,
+      botDisplayName,
+      chatContextInstruction: chatContext
+        ? "Use the raw chat provided below to honor any explicit include or omit requests."
+        : "No additional participant chat was captured; rely on transcript and provided context.",
+      chatContextBlock: chatContext
+        ? `Participant chat (recent, raw, chronological):\n${chatContext}`
+        : "",
+      participantRoster: participantRoster ?? "No participant roster captured.",
+      serverName,
+      serverDescription,
+      voiceChannelName: meeting.voiceChannel.name,
+      attendees: Array.from(meeting.attendance).join(", "),
+      roles,
+      events,
+      channelNames,
+      longStoryTargetChars: config.notes.longStoryTargetChars,
+      transcript: meeting.finalTranscript ?? "",
+    },
+  });
 }
 
 export async function getNotes(meeting: MeetingData): Promise<string> {
-  const systemPrompt = await getNotesSystemPrompt(meeting);
-  return await chat(meeting, {
-    messages: [
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-      {
-        role: "user",
-        content: meeting.finalTranscript!,
-      },
-    ],
-    temperature: 0,
-  });
+  const { messages, langfusePrompt } = await getNotesPrompt(meeting);
+  return await chat(
+    meeting,
+    {
+      messages: [...messages],
+      temperature: 0,
+    },
+    {
+      traceName: "notes",
+      generationName: "notes",
+      tags: ["feature:notes"],
+      langfusePrompt,
+      parentSpanContext: meeting.langfuseParentSpanContext,
+    },
+  );
 }

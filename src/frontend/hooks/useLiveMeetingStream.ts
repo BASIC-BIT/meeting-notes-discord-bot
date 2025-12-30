@@ -9,17 +9,20 @@ import type {
   LiveMeetingStatusPayload,
 } from "../../types/liveMeeting";
 import type { MeetingEvent } from "../../types/meetingTimeline";
+import { MEETING_STATUS } from "../../types/meetingLifecycle";
 
 type LiveStreamStatus =
   | "connecting"
   | "live"
   | "processing"
   | "complete"
+  | "cancelled"
   | "error";
 
 const toStreamStatus = (status: LiveMeetingStatus): LiveStreamStatus => {
-  if (status === "complete") return "complete";
-  if (status === "processing") return "processing";
+  if (status === MEETING_STATUS.COMPLETE) return "complete";
+  if (status === MEETING_STATUS.PROCESSING) return "processing";
+  if (status === MEETING_STATUS.CANCELLED) return "cancelled";
   return "live";
 };
 
@@ -93,7 +96,12 @@ export function useLiveMeetingStream({
     });
 
     source.onerror = () => {
-      setStatus((current) => (current === "complete" ? current : "error"));
+      setStatus((current) =>
+        current === MEETING_STATUS.COMPLETE ||
+        current === MEETING_STATUS.CANCELLED
+          ? current
+          : "error",
+      );
       source.close();
     };
 

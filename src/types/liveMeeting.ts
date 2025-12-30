@@ -1,6 +1,12 @@
 import type { MeetingEvent } from "./meetingTimeline";
+import type {
+  AutoRecordRule,
+  MeetingEndReason,
+  MeetingStartReason,
+  MeetingStatus,
+} from "./meetingLifecycle";
 
-export type LiveMeetingStatus = "in_progress" | "processing" | "complete";
+export type LiveMeetingStatus = MeetingStatus;
 
 export type LiveMeetingMeta = {
   guildId: string;
@@ -29,4 +35,15 @@ export type LiveMeetingAttendeesPayload = {
 export type LiveMeetingStatusPayload = {
   status: LiveMeetingStatus;
   endedAt?: string;
+};
+
+export type LiveMeetingStatusResponse = {
+  status: LiveMeetingStatus;
+  endedAt?: string;
+  startReason?: MeetingStartReason;
+  startTriggeredByUserId?: string;
+  autoRecordRule?: AutoRecordRule;
+  endReason?: MeetingEndReason;
+  endTriggeredByUserId?: string;
+  cancellationReason?: string;
 };

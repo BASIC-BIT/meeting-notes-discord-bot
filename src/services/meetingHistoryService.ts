@@ -1,4 +1,5 @@
 import type { MeetingHistory, SuggestionHistoryEntry } from "../types/db";
+import type { MeetingStatus } from "../types/meetingLifecycle";
 import { getMeetingHistoryRepository } from "../repositories/meetingHistoryRepository";
 
 export async function writeMeetingHistoryService(history: MeetingHistory) {
@@ -73,7 +74,7 @@ export async function updateMeetingTagsService(
 export async function updateMeetingStatusService(params: {
   guildId: string;
   channelId_timestamp: string;
-  status: "in_progress" | "processing" | "complete";
+  status: MeetingStatus;
 }) {
   return getMeetingHistoryRepository().updateStatus(
     params.guildId,

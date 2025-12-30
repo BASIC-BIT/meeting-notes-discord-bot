@@ -2,7 +2,12 @@ import { jest } from "@jest/globals";
 
 export type MockGuildState = {
   selectedGuildId: string | null;
-  guilds: Array<{ id: string; name: string; icon?: string | null }>;
+  guilds: Array<{
+    id: string;
+    name: string;
+    icon?: string | null;
+    canManage?: boolean;
+  }>;
   loading: boolean;
   error: string | null;
   setSelectedGuildId: (id: string | null) => void;

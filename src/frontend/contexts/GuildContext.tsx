@@ -8,7 +8,12 @@ import React, {
 import { trpc } from "../services/trpc";
 import { useAuth } from "./AuthContext";
 
-export type Guild = { id: string; name: string; icon?: string | null };
+export type Guild = {
+  id: string;
+  name: string;
+  icon?: string | null;
+  canManage: boolean;
+};
 
 type GuildContextValue = {
   guilds: Guild[];
@@ -95,7 +100,12 @@ const applyGuildQueryState = (options: {
     return;
   }
   if (guildsData) {
-    setGuilds(guildsData);
+    setGuilds(
+      guildsData.map((guild) => ({
+        ...guild,
+        canManage: guild.canManage ?? false,
+      })),
+    );
     syncSelectedGuild({
       selectedGuildId,
       guilds: guildsData,

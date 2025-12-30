@@ -9,6 +9,7 @@ import {
   Drawer,
   Group,
   Loader,
+  Modal,
   MultiSelect,
   ScrollArea,
   SimpleGrid,
@@ -20,6 +21,7 @@ import {
   useComputedColorScheme,
   useMantineTheme,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import {
   IconChevronRight,
   IconDownload,
@@ -42,6 +44,10 @@ import { useGuildContext } from "../contexts/GuildContext";
 import { uiOverlays } from "../uiTokens";
 import { useLiveMeetingStream } from "../hooks/useLiveMeetingStream";
 import {
+  endLiveMeeting,
+  fetchLiveMeetingStatus,
+} from "../services/liveMeetingControl";
+import {
   buildMeetingDetails,
   deriveSummary,
   deriveTitle,
@@ -54,6 +60,10 @@ import type {
   MeetingEvent,
   MeetingEventType,
 } from "../../types/meetingTimeline";
+import {
+  MEETING_STATUS,
+  type MeetingStatus,
+} from "../../types/meetingLifecycle";
 
 type MeetingExport = {
   meeting: {
@@ -95,7 +105,7 @@ type MeetingSummaryRow = {
   notesMessageId?: string;
   audioAvailable: boolean;
   transcriptAvailable: boolean;
-  status?: "in_progress" | "processing" | "complete";
+  status?: MeetingStatus;
 };
 
 type MeetingListItem = MeetingSummaryRow & {
@@ -105,6 +115,61 @@ type MeetingListItem = MeetingSummaryRow & {
   dateLabel: string;
   durationLabel: string;
   channelLabel: string;
+};
+
+const renderListStatusBadge = (status?: MeetingStatus) => {
+  switch (status) {
+    case MEETING_STATUS.IN_PROGRESS:
+      return (
+        <Badge color="red" variant="light">
+          Live
+        </Badge>
+      );
+    case MEETING_STATUS.PROCESSING:
+      return (
+        <Badge color="yellow" variant="light">
+          Processing
+        </Badge>
+      );
+    default:
+      return null;
+  }
+};
+
+const renderDetailStatusBadge = (status?: MeetingStatus) => {
+  switch (status) {
+    case MEETING_STATUS.IN_PROGRESS:
+      return (
+        <Badge color="red" variant="light">
+          Live transcript
+        </Badge>
+      );
+    case MEETING_STATUS.PROCESSING:
+      return (
+        <Badge color="yellow" variant="light">
+          Processing
+        </Badge>
+      );
+    default:
+      return null;
+  }
+};
+
+const resolveTimelineEmptyLabel = (
+  enabled: boolean,
+  status: string,
+): string => {
+  if (!enabled) {
+    return "Timeline data will appear after the meeting finishes processing.";
+  }
+  switch (status) {
+    case MEETING_STATUS.PROCESSING:
+      return "Meeting finished. Waiting for notes and timeline updates.";
+    case MEETING_STATUS.CANCELLED:
+      return "Meeting cancelled.";
+    default:
+      return "Waiting for the first transcript line...";
+  }
 };
 
 export default function Library() {
@@ -123,8 +188,15 @@ export default function Library() {
     MEETING_TIMELINE_FILTERS.map((filter) => filter.value),
   );
   const [fullScreen, setFullScreen] = useState(false);
+  const [endMeetingModalOpen, setEndMeetingModalOpen] = useState(false);
+  const [endMeetingLoading, setEndMeetingLoading] = useState(false);
+  const [endMeetingPreflightLoading, setEndMeetingPreflightLoading] =
+    useState(false);
 
-  const { selectedGuildId } = useGuildContext();
+  const { guilds, selectedGuildId } = useGuildContext();
+  const canManageSelectedGuild =
+    selectedGuildId != null &&
+    guilds.find((guild) => guild.id === selectedGuildId)?.canManage === true;
   const meetingsQuery = trpc.meetings.list.useQuery(
     {
       serverId: selectedGuildId ?? "",
@@ -221,7 +293,8 @@ export default function Library() {
   const liveStreamEnabled = Boolean(
     meeting &&
       selectedGuildId &&
-      (meeting.status === "in_progress" || meeting.status === "processing"),
+      (meeting.status === MEETING_STATUS.IN_PROGRESS ||
+        meeting.status === MEETING_STATUS.PROCESSING),
   );
   const liveStream = useLiveMeetingStream({
     guildId: selectedGuildId ?? "",
@@ -229,18 +302,17 @@ export default function Library() {
     enabled: liveStreamEnabled,
   });
   const displayStatus =
-    liveStream.meeting?.status ?? meeting?.status ?? "complete";
+    liveStream.meeting?.status ?? meeting?.status ?? MEETING_STATUS.COMPLETE;
   const displayAttendees = liveStreamEnabled
     ? liveStream.attendees
     : (meeting?.attendees ?? []);
   const displayEvents = liveStreamEnabled
     ? liveStream.events
     : (meeting?.events ?? []);
-  const timelineEmptyLabel = liveStreamEnabled
-    ? liveStream.status === "processing"
-      ? "Meeting finished. Waiting for notes and timeline updates."
-      : "Waiting for the first transcript line..."
-    : "Timeline data will appear after the meeting finishes processing.";
+  const timelineEmptyLabel = resolveTimelineEmptyLabel(
+    liveStreamEnabled,
+    liveStream.status,
+  );
 
   const listLoading = meetingsQuery.isLoading || channelsQuery.isLoading;
   const listError = meetingsQuery.error ?? channelsQuery.error;
@@ -251,7 +323,12 @@ export default function Library() {
   const meetingKey = meeting?.id ?? null;
   useEffect(() => {
     if (!liveStreamEnabled) return;
-    if (liveStream.status !== "complete") return;
+    if (
+      liveStream.status !== MEETING_STATUS.COMPLETE &&
+      liveStream.status !== MEETING_STATUS.CANCELLED
+    ) {
+      return;
+    }
     if (!selectedGuildId || !meetingKey) return;
     if (refetchedMeetingRef.current === meetingKey) return;
     refetchedMeetingRef.current = meetingKey;
@@ -277,6 +354,55 @@ export default function Library() {
       ]);
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const preflightEndMeeting = async () => {
+    if (!selectedGuildId || !meeting?.meetingId) return;
+    try {
+      setEndMeetingPreflightLoading(true);
+      const status = await fetchLiveMeetingStatus(
+        selectedGuildId,
+        meeting.meetingId,
+      );
+      if (status.status !== MEETING_STATUS.IN_PROGRESS) {
+        notifications.show({
+          color: "gray",
+          message: "Meeting is no longer live.",
+        });
+        return;
+      }
+      setEndMeetingModalOpen(true);
+    } catch {
+      notifications.show({
+        color: "red",
+        message: "Unable to refresh meeting status.",
+      });
+    } finally {
+      setEndMeetingPreflightLoading(false);
+    }
+  };
+
+  const handleConfirmEndMeeting = async () => {
+    if (!selectedGuildId || !meeting?.meetingId) return;
+    try {
+      setEndMeetingLoading(true);
+      await endLiveMeeting(selectedGuildId, meeting.meetingId);
+      notifications.show({
+        color: "green",
+        message: "Ending meeting. Notes will arrive shortly.",
+      });
+      setEndMeetingModalOpen(false);
+      if (liveStreamEnabled) {
+        liveStream.retry();
+      }
+    } catch {
+      notifications.show({
+        color: "red",
+        message: "Unable to end meeting. Please try again.",
+      });
+    } finally {
+      setEndMeetingLoading(false);
     }
   };
 
@@ -441,15 +567,7 @@ export default function Library() {
                   <Stack gap={6} style={{ flex: 1 }}>
                     <Group gap="xs" align="center" wrap="wrap">
                       <Text fw={650}>{meetingItem.title}</Text>
-                      {meetingItem.status === "in_progress" ? (
-                        <Badge color="red" variant="light">
-                          Live
-                        </Badge>
-                      ) : meetingItem.status === "processing" ? (
-                        <Badge color="yellow" variant="light">
-                          Processing
-                        </Badge>
-                      ) : null}
+                      {renderListStatusBadge(meetingItem.status)}
                     </Group>
                     {meetingItem.summaryLabel ? (
                       <Text size="xs" c="dimmed">
@@ -492,6 +610,7 @@ export default function Library() {
             search: (prev) => ({ ...prev, meetingId: undefined }),
           });
           setFullScreen(false);
+          setEndMeetingModalOpen(false);
         }}
         position="right"
         size={fullScreen ? "100%" : "xl"}
@@ -514,138 +633,172 @@ export default function Library() {
                 <Loader color="brand" />
               </Center>
             ) : meeting ? (
-              <Stack gap="md">
-                <Stack gap={4}>
-                  <Group justify="space-between" align="center" wrap="wrap">
-                    <Group gap="xs" align="center" wrap="wrap">
-                      <Title order={3}>{meeting.title}</Title>
-                      {displayStatus === "in_progress" ? (
-                        <Badge color="red" variant="light">
-                          Live transcript
-                        </Badge>
-                      ) : displayStatus === "processing" ? (
-                        <Badge color="yellow" variant="light">
-                          Processing
-                        </Badge>
-                      ) : null}
-                    </Group>
-                    <Group gap="sm">
-                      <Button
-                        variant="light"
-                        leftSection={<IconDownload size={16} />}
-                        onClick={handleDownload}
-                        data-testid="meeting-download"
-                      >
-                        Download
-                      </Button>
-                      <Button
-                        variant="outline"
-                        leftSection={<IconFilter size={16} />}
-                        onClick={() => setFullScreen((prev) => !prev)}
-                      >
-                        {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
-                      </Button>
-                    </Group>
-                  </Group>
-                  <Text size="sm" c="dimmed">
-                    {meeting.dateLabel} | {meeting.durationLabel} |{" "}
-                    {meeting.channel}
-                  </Text>
-                  <Group gap="xs" wrap="wrap">
-                    {meeting.tags.map((tag) => (
-                      <Badge key={tag} variant="light" color="gray">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </Group>
-                </Stack>
-
-                <Surface p="md" tone="soft">
-                  <Group gap="sm" align="center" wrap="wrap">
-                    <ThemeIcon variant="light" color="cyan">
-                      <IconMicrophone size={16} />
-                    </ThemeIcon>
-                    <Stack gap={0}>
-                      <Text fw={600}>Audio</Text>
-                      <Text size="sm" c="dimmed">
-                        Playback for the full recording.
-                      </Text>
-                    </Stack>
-                  </Group>
-                  <Divider my="sm" />
-                  {meeting.audioUrl ? (
-                    <audio
-                      controls
-                      preload="none"
-                      style={{ width: "100%" }}
-                      src={meeting.audioUrl}
-                    />
-                  ) : (
+              <>
+                <Modal
+                  opened={endMeetingModalOpen}
+                  onClose={() => setEndMeetingModalOpen(false)}
+                  title="End live meeting"
+                  centered
+                >
+                  <Stack gap="md">
                     <Text size="sm" c="dimmed">
-                      Audio isn’t available for this meeting yet.
+                      This will stop recording and begin processing notes. Are
+                      you sure you want to end the meeting?
                     </Text>
-                  )}
-                </Surface>
-
-                <Surface p="md">
-                  <Group gap="xs" mb="xs">
-                    <ThemeIcon variant="light" color="brand">
-                      <IconNote size={16} />
-                    </ThemeIcon>
-                    <Text fw={600}>Summary</Text>
-                  </Group>
-                  {meeting.summaryLabel ? (
-                    <Text size="xs" c="dimmed" mb={6}>
-                      {meeting.summaryLabel}
+                    <Group justify="flex-end">
+                      <Button
+                        variant="default"
+                        onClick={() => setEndMeetingModalOpen(false)}
+                        disabled={endMeetingLoading}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        color="red"
+                        onClick={handleConfirmEndMeeting}
+                        loading={endMeetingLoading}
+                      >
+                        End meeting
+                      </Button>
+                    </Group>
+                  </Stack>
+                </Modal>
+                <Stack gap="md">
+                  <Stack gap={4}>
+                    <Group justify="space-between" align="center" wrap="wrap">
+                      <Group gap="xs" align="center" wrap="wrap">
+                        <Title order={3}>{meeting.title}</Title>
+                        {renderDetailStatusBadge(displayStatus)}
+                      </Group>
+                      <Group gap="sm">
+                        {displayStatus === MEETING_STATUS.IN_PROGRESS &&
+                        canManageSelectedGuild ? (
+                          <Button
+                            color="red"
+                            variant="light"
+                            loading={endMeetingPreflightLoading}
+                            onClick={preflightEndMeeting}
+                          >
+                            End meeting
+                          </Button>
+                        ) : null}
+                        <Button
+                          variant="light"
+                          leftSection={<IconDownload size={16} />}
+                          onClick={handleDownload}
+                          data-testid="meeting-download"
+                        >
+                          Download
+                        </Button>
+                        <Button
+                          variant="outline"
+                          leftSection={<IconFilter size={16} />}
+                          onClick={() => setFullScreen((prev) => !prev)}
+                        >
+                          {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
+                        </Button>
+                      </Group>
+                    </Group>
+                    <Text size="sm" c="dimmed">
+                      {meeting.dateLabel} | {meeting.durationLabel} |{" "}
+                      {meeting.channel}
                     </Text>
-                  ) : null}
-                  <Text size="sm" c="dimmed">
-                    {meeting.summary}
-                  </Text>
-                  <Divider my="sm" />
-                  <ScrollArea h={fullScreen ? 260 : 200} offsetScrollbars>
-                    <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
-                      {meeting.notes}
-                    </Text>
-                  </ScrollArea>
-                </Surface>
+                    <Group gap="xs" wrap="wrap">
+                      {meeting.tags.map((tag) => (
+                        <Badge key={tag} variant="light" color="gray">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </Group>
+                  </Stack>
 
-                <Surface p="md">
-                  <Group gap="xs" mb="xs">
-                    <ThemeIcon variant="light" color="cyan">
-                      <IconUsers size={16} />
-                    </ThemeIcon>
-                    <Text fw={600}>Attendees</Text>
-                  </Group>
-                  <Text size="sm" c="dimmed">
-                    {displayAttendees.join(", ")}
-                  </Text>
-                </Surface>
-
-                <Surface p="md">
-                  <Stack gap="sm">
-                    {liveStreamEnabled && liveStream.status === "error" ? (
+                  <Surface p="md" tone="soft">
+                    <Group gap="sm" align="center" wrap="wrap">
+                      <ThemeIcon variant="light" color="cyan">
+                        <IconMicrophone size={16} />
+                      </ThemeIcon>
+                      <Stack gap={0}>
+                        <Text fw={600}>Audio</Text>
+                        <Text size="sm" c="dimmed">
+                          Playback for the full recording.
+                        </Text>
+                      </Stack>
+                    </Group>
+                    <Divider my="sm" />
+                    {meeting.audioUrl ? (
+                      <audio
+                        controls
+                        preload="none"
+                        style={{ width: "100%" }}
+                        src={meeting.audioUrl}
+                      />
+                    ) : (
                       <Text size="sm" c="dimmed">
-                        Unable to connect to the live transcript. Try
-                        refreshing.
+                        Audio isn’t available for this meeting yet.
+                      </Text>
+                    )}
+                  </Surface>
+
+                  <Surface p="md">
+                    <Group gap="xs" mb="xs">
+                      <ThemeIcon variant="light" color="brand">
+                        <IconNote size={16} />
+                      </ThemeIcon>
+                      <Text fw={600}>Summary</Text>
+                    </Group>
+                    {meeting.summaryLabel ? (
+                      <Text size="xs" c="dimmed" mb={6}>
+                        {meeting.summaryLabel}
                       </Text>
                     ) : null}
-                    <MeetingTimeline
-                      events={displayEvents}
-                      activeFilters={activeFilters}
-                      onToggleFilter={(value) =>
-                        setActiveFilters((current) =>
-                          current.includes(value)
-                            ? current.filter((filter) => filter !== value)
-                            : [...current, value],
-                        )
-                      }
-                      height={fullScreen ? 620 : 360}
-                      emptyLabel={timelineEmptyLabel}
-                    />
-                  </Stack>
-                </Surface>
-              </Stack>
+                    <Text size="sm" c="dimmed">
+                      {meeting.summary}
+                    </Text>
+                    <Divider my="sm" />
+                    <ScrollArea h={fullScreen ? 260 : 200} offsetScrollbars>
+                      <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                        {meeting.notes}
+                      </Text>
+                    </ScrollArea>
+                  </Surface>
+
+                  <Surface p="md">
+                    <Group gap="xs" mb="xs">
+                      <ThemeIcon variant="light" color="cyan">
+                        <IconUsers size={16} />
+                      </ThemeIcon>
+                      <Text fw={600}>Attendees</Text>
+                    </Group>
+                    <Text size="sm" c="dimmed">
+                      {displayAttendees.join(", ")}
+                    </Text>
+                  </Surface>
+
+                  <Surface p="md">
+                    <Stack gap="sm">
+                      {liveStreamEnabled && liveStream.status === "error" ? (
+                        <Text size="sm" c="dimmed">
+                          Unable to connect to the live transcript. Try
+                          refreshing.
+                        </Text>
+                      ) : null}
+                      <MeetingTimeline
+                        events={displayEvents}
+                        activeFilters={activeFilters}
+                        onToggleFilter={(value) =>
+                          setActiveFilters((current) =>
+                            current.includes(value)
+                              ? current.filter((filter) => filter !== value)
+                              : [...current, value],
+                          )
+                        }
+                        height={fullScreen ? 620 : 360}
+                        emptyLabel={timelineEmptyLabel}
+                      />
+                    </Stack>
+                  </Surface>
+                </Stack>
+              </>
             ) : null}
           </Box>
         ) : null}

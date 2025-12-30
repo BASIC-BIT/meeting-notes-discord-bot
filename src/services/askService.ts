@@ -1,14 +1,11 @@
-import OpenAI from "openai";
 import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
 import { config } from "./configService";
 import { normalizeTags, parseTags } from "../utils/tags";
 import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
-
-const openAIClient = new OpenAI({
-  apiKey: config.openai.apiKey,
-  organization: config.openai.organizationId,
-  project: config.openai.projectId,
-});
+import { ensureUserCanViewChannel } from "./discordPermissionsService";
+import { createOpenAIClient } from "./openaiClient";
+import { getModelChoice } from "./modelFactory";
+import { getLangfuseChatPrompt } from "./langfusePromptService";
 
 export type AskScope = "guild" | "channel";
 
@@ -25,6 +22,7 @@ export interface AskRequest {
   scope?: AskScope;
   maxMeetings?: number;
   history?: AskHistoryMessage[];
+  viewerUserId?: string;
 }
 
 export interface AskResponse {
@@ -78,6 +76,25 @@ const filterMeetings = (
     filtered = filtered.filter((m) => m.channelId === channelId);
   }
   return filtered;
+};
+
+const filterMeetingsByChannelAccess = async (
+  meetings: MeetingSummary[],
+  guildId: string,
+  userId: string,
+) => {
+  const visible: MeetingSummary[] = [];
+  for (const meeting of meetings) {
+    const allowed = await ensureUserCanViewChannel({
+      guildId,
+      channelId: meeting.channelId,
+      userId,
+    });
+    if (allowed) {
+      visible.push(meeting);
+    }
+  }
+  return visible;
 };
 
 const buildNoMeetingsResponse = (
@@ -141,7 +158,14 @@ export async function answerQuestionService(
     guildId,
     maxMeetings,
   );
-  const meetings = filterMeetings(allMeetings, channelId, scope, tags);
+  const scopedMeetings = filterMeetings(allMeetings, channelId, scope, tags);
+  const meetings = req.viewerUserId
+    ? await filterMeetingsByChannelAccess(
+        scopedMeetings,
+        guildId,
+        req.viewerUserId,
+      )
+    : scopedMeetings;
 
   if (config.mock.enabled) {
     return buildMockResponse(question, guildId, meetings);
@@ -156,27 +180,41 @@ export async function answerQuestionService(
   );
   const contextBlocks = buildContextBlocks(meetings, guildId);
 
-  const system =
-    "You are Chronote. Answer the user's question using the provided meeting summaries/notes and the conversation so far. " +
-    "Prefer meeting notes for factual answers about past sessions. If the user provides new facts in the conversation, you can use them for follow-ups. " +
-    "Cite source link(s) from the context as markdown links. Do not include internal IDs. If uncertain, say so.";
-
   const history = (req.history ?? []).slice(-10);
-  const historyMessages = history.map((msg) => ({
-    role: msg.role === "chronote" ? ("assistant" as const) : ("user" as const),
-    content: msg.text,
-  }));
+  const historyBlock =
+    history.length > 0
+      ? history
+          .map((msg) => {
+            const label = msg.role === "chronote" ? "Chronote" : "User";
+            return `${label}: ${msg.text}`;
+          })
+          .join("\n")
+      : "None.";
 
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.askPromptName,
+    variables: {
+      question,
+      contextBlocks: contextBlocks.join("\n"),
+      historyBlock,
+    },
+  });
+
+  const modelChoice = getModelChoice("ask");
+  const openAIClient = createOpenAIClient({
+    traceName: "ask",
+    generationName: "ask",
+    tags: ["feature:ask"],
+    metadata: {
+      guildId,
+      channelId,
+      scope,
+    },
+    langfusePrompt,
+  });
   const completion = await openAIClient.chat.completions.create({
-    model: config.liveVoice.responderModel,
-    messages: [
-      { role: "system", content: system },
-      ...historyMessages,
-      {
-        role: "user",
-        content: `Question: ${question}\n\nContext:\n${contextBlocks.join("\n")}`,
-      },
-    ],
+    model: modelChoice.model,
+    messages,
     max_completion_tokens: 300,
   });
 

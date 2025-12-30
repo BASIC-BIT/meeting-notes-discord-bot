@@ -1,4 +1,10 @@
 import { Participant } from "./participants";
+import type {
+  AutoRecordRule,
+  MeetingEndReason,
+  MeetingStartReason,
+  MeetingStatus,
+} from "./meetingLifecycle";
 
 export interface GuildSubscription {
   guildId: string;
@@ -94,6 +100,8 @@ export interface ServerContext {
   liveVoiceTtsVoice?: string;
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string;
+  askMembersEnabled?: boolean;
+  askSharingPolicy?: "off" | "server" | "public";
   updatedAt: string; // ISO timestamp
   updatedBy: string; // User ID who last updated
 }
@@ -164,7 +172,13 @@ export interface MeetingHistory {
   generateNotes: boolean; // Whether notes were generated
   meetingCreatorId?: string; // User ID that started the meeting
   isAutoRecording?: boolean; // Whether this meeting was auto-started
-  status?: "in_progress" | "processing" | "complete"; // Live meeting status
+  status?: MeetingStatus; // Live meeting status
+  startReason?: MeetingStartReason;
+  startTriggeredByUserId?: string;
+  autoRecordRule?: AutoRecordRule;
+  endReason?: MeetingEndReason;
+  endTriggeredByUserId?: string;
+  cancellationReason?: string;
   notesMessageIds?: string[]; // All message ids when notes span multiple messages
   notesChannelId?: string; // Channel id where notes were posted
   notesVersion?: number; // Incremented on corrections
@@ -190,6 +204,10 @@ export interface AskConversationRecord {
   summary: string;
   createdAt: string;
   updatedAt: string;
+  visibility?: "private" | "server" | "public";
+  sharedAt?: string;
+  sharedByUserId?: string;
+  sharedByTag?: string;
 }
 
 export interface AskMessageRecord {
@@ -202,4 +220,21 @@ export interface AskMessageRecord {
   text: string;
   createdAt: string;
   sourceMeetingIds?: string[];
+}
+
+export interface AskConversationShareRecord {
+  pk: string;
+  sk: string;
+  type: "share";
+  conversationId: string;
+  guildId: string;
+  ownerUserId: string;
+  ownerTag?: string;
+  title: string;
+  summary: string;
+  createdAt: string;
+  updatedAt: string;
+  sharedAt: string;
+  sharedByUserId: string;
+  sharedByTag?: string;
 }

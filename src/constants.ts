@@ -1,8 +1,10 @@
-export const SAMPLE_RATE = 16000; // 48kHz for audio recording and transcription
+export const RECORD_SAMPLE_RATE = 48000; // Sample rate for recording and MP3 output
+export const TRANSCRIBE_SAMPLE_RATE = 16000; // Sample rate for transcription input
 export const CHANNELS = 2; // Stereo data
 export const BYTES_PER_SAMPLE = 2; // 16 bit audio in this format
-export const FRAME_SIZE = 320; // something about the UDP connection?
-export const SILENCE_THRESHOLD = 2000; // ms of silence before determining that a new snippet must be created
+export const FRAME_SIZE = 960; // 20ms frame at 48kHz
+export const FAST_SILENCE_THRESHOLD = 400; // ms of silence before fast transcription
+export const SILENCE_THRESHOLD = 2000; // ms of silence before finalizing a snippet
 
 export const MAX_SNIPPET_LENGTH = 60000; // maximum amount of time to put into a single snippet, to prevent our lossless audio buffer from getting too large
 

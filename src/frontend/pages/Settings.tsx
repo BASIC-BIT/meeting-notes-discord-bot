@@ -22,6 +22,7 @@ import {
   IconPlus,
   IconRefresh,
   IconSettings,
+  IconShare2,
   IconTrash,
 } from "@tabler/icons-react";
 import { useGuildContext } from "../contexts/GuildContext";
@@ -63,7 +64,11 @@ type GlobalContextData = {
   liveVoiceTtsVoice?: string | null;
   chatTtsEnabled?: boolean | null;
   chatTtsVoice?: string | null;
+  askMembersEnabled?: boolean | null;
+  askSharingPolicy?: "off" | "server" | "public" | null;
 };
+
+type AskSharingPolicy = "off" | "server" | "public";
 
 const formatChannelLabel = (channel: ChannelOption) =>
   channel.botAccess ? channel.label : `${channel.label} (bot access needed)`;
@@ -197,6 +202,12 @@ const resolveDefaultNotesChannelId = (options: {
 
 const resolveDefaultTags = (contextData?: GlobalContextData | null) =>
   (contextData?.defaultTags ?? []).join(", ");
+
+const resolveAskMembersEnabled = (contextData?: GlobalContextData | null) =>
+  contextData?.askMembersEnabled ?? true;
+
+const resolveAskSharingPolicy = (contextData?: GlobalContextData | null) =>
+  contextData?.askSharingPolicy ?? "server";
 
 const coalesce = <T,>(value: T | null | undefined, fallback: T) =>
   value ?? fallback;
@@ -342,6 +353,59 @@ const syncGlobalDefaults = (options: {
   });
 };
 
+const resetAskSettings = (options: {
+  setAskMembersEnabled: (value: boolean) => void;
+  setAskSharingPolicy: (value: AskSharingPolicy) => void;
+  setAskDirty: (value: boolean) => void;
+}) => {
+  const { setAskMembersEnabled, setAskSharingPolicy, setAskDirty } = options;
+  setAskMembersEnabled(true);
+  setAskSharingPolicy("server");
+  setAskDirty(false);
+};
+
+const applyAskSettings = (options: {
+  contextData: GlobalContextData;
+  setAskMembersEnabled: (value: boolean) => void;
+  setAskSharingPolicy: (value: AskSharingPolicy) => void;
+}) => {
+  const { contextData, setAskMembersEnabled, setAskSharingPolicy } = options;
+  setAskMembersEnabled(resolveAskMembersEnabled(contextData));
+  setAskSharingPolicy(resolveAskSharingPolicy(contextData));
+};
+
+const syncAskSettings = (options: {
+  selectedGuildId: string | null;
+  contextData?: GlobalContextData | null;
+  askDirty: boolean;
+  setAskMembersEnabled: (value: boolean) => void;
+  setAskSharingPolicy: (value: AskSharingPolicy) => void;
+  setAskDirty: (value: boolean) => void;
+}) => {
+  const {
+    selectedGuildId,
+    contextData,
+    askDirty,
+    setAskMembersEnabled,
+    setAskSharingPolicy,
+    setAskDirty,
+  } = options;
+  if (!selectedGuildId) {
+    resetAskSettings({
+      setAskMembersEnabled,
+      setAskSharingPolicy,
+      setAskDirty,
+    });
+    return;
+  }
+  if (!contextData || askDirty) return;
+  applyAskSettings({
+    contextData,
+    setAskMembersEnabled,
+    setAskSharingPolicy,
+  });
+};
+
 export default function Settings() {
   const { selectedGuildId, loading: guildLoading } = useGuildContext();
   const trpcUtils = trpc.useUtils();
@@ -386,6 +450,11 @@ export default function Settings() {
   const [recordAllEnabled, setRecordAllEnabled] = useState(false);
   const [globalDirty, setGlobalDirty] = useState(false);
   const [savingGlobal, setSavingGlobal] = useState(false);
+  const [askMembersEnabled, setAskMembersEnabled] = useState(true);
+  const [askSharingPolicy, setAskSharingPolicy] =
+    useState<AskSharingPolicy>("server");
+  const [askDirty, setAskDirty] = useState(false);
+  const [savingAsk, setSavingAsk] = useState(false);
 
   const [channelModalOpen, channelModal] = useDisclosure(false);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
@@ -409,6 +478,9 @@ export default function Settings() {
 
   useEffect(() => {
     setGlobalDirty(false);
+    setAskDirty(false);
+    setAskMembersEnabled(true);
+    setAskSharingPolicy("server");
     setEditingChannelId(null);
     setChannelVoiceChannelId(null);
     setChannelAutoRecord(true);
@@ -513,6 +585,7 @@ export default function Settings() {
     channelsQuery.isLoading ||
     contextQuery.isLoading ||
     savingGlobal;
+  const askBusy = contextQuery.isLoading || savingAsk;
 
   useEffect(() => {
     syncGlobalDefaults({
@@ -533,6 +606,17 @@ export default function Settings() {
     });
   }, [contextQuery.data, recordAllRule, selectedGuildId, globalDirty]);
 
+  useEffect(() => {
+    syncAskSettings({
+      selectedGuildId,
+      contextData: contextQuery.data,
+      askDirty,
+      setAskMembersEnabled,
+      setAskSharingPolicy,
+      setAskDirty,
+    });
+  }, [contextQuery.data, selectedGuildId, askDirty]);
+
   const recordAllRequiresNotesChannel =
     recordAllEnabled && !defaultNotesChannelId;
   const defaultNotesAccess = defaultNotesChannelId
@@ -550,6 +634,7 @@ export default function Settings() {
     Boolean(selectedGuildId) &&
     !recordAllRequiresNotesChannel &&
     (!recordAllEnabled || defaultNotesMissingPermissions.length === 0);
+  const canSaveAsk = Boolean(selectedGuildId);
 
   const openAddChannel = () => {
     setEditingChannelId(null);
@@ -665,6 +750,24 @@ export default function Settings() {
       console.error("Failed to save global settings", error);
     } finally {
       setSavingGlobal(false);
+    }
+  };
+
+  const handleSaveAsk = async () => {
+    if (!selectedGuildId) return;
+    try {
+      setSavingAsk(true);
+      await saveContextMutation.mutateAsync({
+        serverId: selectedGuildId,
+        askMembersEnabled,
+        askSharingPolicy,
+      });
+      await trpcUtils.context.get.invalidate({ serverId: selectedGuildId });
+      setAskDirty(false);
+    } catch (error) {
+      console.error("Failed to save Ask settings", error);
+    } finally {
+      setSavingAsk(false);
     }
   };
 
@@ -930,6 +1033,74 @@ export default function Settings() {
               data-testid="settings-save-defaults"
             >
               Save defaults
+            </Button>
+          </Group>
+        </Stack>
+      </Surface>
+
+      <Surface
+        p="lg"
+        style={{ position: "relative", overflow: "hidden" }}
+        data-testid="settings-ask"
+      >
+        <LoadingOverlay
+          visible={askBusy}
+          data-testid="settings-loading-ask"
+          overlayProps={uiOverlays.loading}
+          loaderProps={{ size: "md" }}
+        />
+        <Stack gap="md">
+          <Group gap="sm">
+            <ThemeIcon variant="light" color="brand">
+              <IconShare2 size={18} />
+            </ThemeIcon>
+            <Text fw={600}>Ask access and sharing</Text>
+          </Group>
+          <Text size="sm" c="dimmed">
+            Control who can use Ask and whether members can share threads.
+          </Text>
+          <Switch
+            label="Allow server members to use Ask"
+            checked={askMembersEnabled}
+            onChange={(event) => {
+              setAskMembersEnabled(event.currentTarget.checked);
+              setAskDirty(true);
+            }}
+            disabled={askBusy}
+          />
+          <Stack gap={6}>
+            <Text size="sm" fw={600}>
+              Sharing policy
+            </Text>
+            <SegmentedControl
+              value={askSharingPolicy}
+              onChange={(value) => {
+                setAskSharingPolicy(value as AskSharingPolicy);
+                setAskDirty(true);
+              }}
+              data={[
+                { label: "Off", value: "off" },
+                { label: "Server", value: "server" },
+                { label: "Public", value: "public" },
+              ]}
+              fullWidth
+              disabled={askBusy}
+            />
+            <Text size="xs" c="dimmed">
+              Sharing is opt-in per thread, and shared threads display the
+              author's Discord name. Public links are read only and visible
+              without login.
+            </Text>
+          </Stack>
+          <Group justify="flex-end">
+            <Button
+              variant="light"
+              onClick={handleSaveAsk}
+              disabled={!canSaveAsk || askBusy}
+              loading={savingAsk}
+              data-testid="settings-save-ask"
+            >
+              Save Ask settings
             </Button>
           </Group>
         </Stack>

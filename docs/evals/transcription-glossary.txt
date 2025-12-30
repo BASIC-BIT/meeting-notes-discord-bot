@@ -1,0 +1,3 @@
+Server Name: Chronote
+Project Names: MeetingNotesBot, Chronote
+Attendees: Alice, Bob
