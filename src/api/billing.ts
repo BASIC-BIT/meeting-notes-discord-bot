@@ -31,24 +31,75 @@ const readMetadataValue = (
   return typeof value === "string" ? value : "";
 };
 
+const resolvePriceInfo = (
+  price: string | Stripe.Price | null | undefined,
+): { priceId?: string; lookupKey?: string } => {
+  if (!price) {
+    return {};
+  }
+  if (typeof price === "string") {
+    return { priceId: price };
+  }
+  return { priceId: price.id, lookupKey: price.lookup_key ?? undefined };
+};
+
+const resolveSubscriptionPeriodEnd = (
+  subscription: Stripe.Subscription,
+): number | undefined => {
+  const items = subscription.items?.data ?? [];
+  if (!items.length) return undefined;
+  return Math.max(...items.map((item) => item.current_period_end));
+};
+
+const resolveInvoicePriceInfo = (
+  invoice: Stripe.Invoice,
+): { priceId?: string; lookupKey?: string } => {
+  const lineItem = invoice.lines?.data?.find(
+    (item) => item.pricing?.price_details?.price,
+  );
+  return resolvePriceInfo(lineItem?.pricing?.price_details?.price);
+};
+
+const resolveInvoiceSubscription = (
+  invoice: Stripe.Invoice,
+): string | Stripe.Subscription | null =>
+  invoice.parent?.subscription_details?.subscription ?? null;
+
+const resolveInvoiceMetadata = (
+  invoice: Stripe.Invoice,
+): Stripe.Metadata | null | undefined =>
+  invoice.parent?.subscription_details?.metadata;
+
+const resolveInvoiceDiscountCode = (
+  invoice: Stripe.Invoice,
+): string | undefined => {
+  const discount = invoice.discounts?.[0];
+  if (!discount || typeof discount === "string") return undefined;
+  if ("deleted" in discount && discount.deleted) return undefined;
+  const coupon = discount.source?.coupon;
+  if (!coupon) return undefined;
+  return typeof coupon === "string" ? coupon : coupon.id;
+};
+
 const resolveTierFromSubscription = (
   subscription: Stripe.Subscription,
 ): KnownTier => {
   const price = subscription.items?.data?.[0]?.price;
+  const { priceId, lookupKey } = resolvePriceInfo(price);
   const tier =
     resolveTierFromPrice({
-      priceId: price?.id,
-      lookupKey: price?.lookup_key,
+      priceId,
+      lookupKey,
     }) ?? null;
   return tier ?? "basic";
 };
 
 const resolveTierFromInvoice = (invoice: Stripe.Invoice): KnownTier | null => {
-  const price = invoice.lines?.data?.[0]?.price;
+  const { priceId, lookupKey } = resolveInvoicePriceInfo(invoice);
   const tier =
     resolveTierFromPrice({
-      priceId: price?.id,
-      lookupKey: price?.lookup_key,
+      priceId,
+      lookupKey,
     }) ?? null;
   return tier;
 };
@@ -61,23 +112,23 @@ const resolveGuildIdFromInvoice = async (
   invoice: Stripe.Invoice,
 ): Promise<string> => {
   const fromDetails = readMetadataValue(
-    invoice.subscription_details?.metadata,
+    resolveInvoiceMetadata(invoice),
     "guild_id",
   );
   if (fromDetails) return fromDetails;
 
-  if (invoice.subscription && typeof invoice.subscription !== "string") {
+  const invoiceSubscription = resolveInvoiceSubscription(invoice);
+  if (invoiceSubscription && typeof invoiceSubscription !== "string") {
     const fromSubscription = readMetadataValue(
-      invoice.subscription.metadata,
+      invoiceSubscription.metadata,
       "guild_id",
     );
     if (fromSubscription) return fromSubscription;
   }
 
-  if (typeof invoice.subscription === "string") {
-    const subscription = await stripe.subscriptions.retrieve(
-      invoice.subscription,
-    );
+  if (typeof invoiceSubscription === "string") {
+    const subscription =
+      await stripe.subscriptions.retrieve(invoiceSubscription);
     return readMetadataValue(subscription.metadata, "guild_id");
   }
 
@@ -141,7 +192,7 @@ const handleCheckoutSessionCompleted: WebhookHandler = async ({
       tier,
       startDate: toIso(sub.start_date),
       endDate: toIso(sub.ended_at),
-      nextBillingDate: toIso(sub.current_period_end),
+      nextBillingDate: toIso(resolveSubscriptionPeriodEnd(sub)),
       paymentMethod: session.payment_method_types?.[0],
       stripeCustomerId:
         typeof session.customer === "string" ? session.customer : undefined,
@@ -172,9 +223,11 @@ const handleInvoicePaymentFailed: WebhookHandler = async ({
     console.warn("Stripe invoice missing guild_id metadata", invoice.id);
     return;
   }
+  const invoiceSubscription = resolveInvoiceSubscription(invoice);
   const existing = await getSubscriptionRepository().get(guildId);
   const existingTier = normalizeTier(existing?.tier);
   const tierFromInvoice = resolveTierFromInvoice(invoice);
+  const priceInfo = resolveInvoicePriceInfo(invoice);
   await saveGuildSubscription(
     buildSubscriptionPayload({
       guildId,
@@ -191,13 +244,10 @@ const handleInvoicePaymentFailed: WebhookHandler = async ({
       stripeCustomerId:
         typeof invoice.customer === "string" ? invoice.customer : undefined,
       stripeSubscriptionId:
-        typeof invoice.subscription === "string"
-          ? invoice.subscription
-          : undefined,
-      priceId:
-        typeof invoice.lines?.data?.[0]?.price?.id === "string"
-          ? invoice.lines?.data?.[0]?.price?.id
-          : existing?.priceId,
+        typeof invoiceSubscription === "string"
+          ? invoiceSubscription
+          : invoiceSubscription?.id,
+      priceId: priceInfo.priceId ?? existing?.priceId,
       mode: invoice.livemode ? "live" : "test",
     }),
   );
@@ -221,7 +271,7 @@ const handleSubscriptionUpsert: WebhookHandler = async ({ event }) => {
       tier,
       startDate: toIso(subscription.start_date),
       endDate: toIso(subscription.ended_at),
-      nextBillingDate: toIso(subscription.current_period_end),
+      nextBillingDate: toIso(resolveSubscriptionPeriodEnd(subscription)),
       paymentMethod: subscription.default_payment_method ? "card" : "unknown",
       stripeCustomerId:
         typeof subscription.customer === "string"
@@ -271,6 +321,7 @@ const handleInvoicePaymentSucceeded: WebhookHandler = async ({
     console.warn("Stripe invoice missing guild_id metadata", invoice.id);
     return;
   }
+  const invoiceSubscription = resolveInvoiceSubscription(invoice);
   await recordPaymentTransaction({
     transactionID: invoice.id,
     userID: guildId,
@@ -279,8 +330,12 @@ const handleInvoicePaymentSucceeded: WebhookHandler = async ({
     status: invoice.status || "paid",
     paymentDate: new Date(invoice.created * 1000).toISOString(),
     paymentMethod: invoice.default_payment_method ? "card" : "unknown",
-    discountCode: invoice.discount?.coupon?.id,
-    subscriptionID: invoice.subscription ? String(invoice.subscription) : "",
+    discountCode: resolveInvoiceDiscountCode(invoice),
+    subscriptionID: invoiceSubscription
+      ? typeof invoiceSubscription === "string"
+        ? invoiceSubscription
+        : invoiceSubscription.id
+      : "",
     customerId:
       typeof invoice.customer === "string" ? invoice.customer : undefined,
   });

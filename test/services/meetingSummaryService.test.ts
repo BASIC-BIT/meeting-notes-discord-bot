@@ -6,9 +6,8 @@ afterEach(() => {
 });
 
 test("parseMeetingSummaryResponse trims summaries", async () => {
-  const { parseMeetingSummaryResponse } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
   const parsed = parseMeetingSummaryResponse(
     '{"summarySentence":"  A short summary.  ","summaryLabel":"  Weekly sync "}',
   );
@@ -19,17 +18,15 @@ test("parseMeetingSummaryResponse trims summaries", async () => {
 });
 
 test("parseMeetingSummaryResponse returns undefined on empty input", async () => {
-  const { parseMeetingSummaryResponse } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
   const parsed = parseMeetingSummaryResponse(" ");
   expect(parsed).toBeUndefined();
 });
 
 test("parseMeetingSummaryResponse drops invalid summaries", async () => {
-  const { parseMeetingSummaryResponse } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
   const parsed = parseMeetingSummaryResponse(
     '{"summarySentence":"First sentence. Second sentence.","summaryLabel":"Too many words in this label"}',
   );
@@ -37,9 +34,8 @@ test("parseMeetingSummaryResponse drops invalid summaries", async () => {
 });
 
 test("parseMeetingSummaryResponse keeps valid sentence when label is invalid", async () => {
-  const { parseMeetingSummaryResponse } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
   const parsed = parseMeetingSummaryResponse(
     '{"summarySentence":"A single sentence.","summaryLabel":"Weekly sync!"}',
   );
@@ -98,9 +94,8 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
   }));
 
-  const { generateMeetingSummaries } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { generateMeetingSummaries } =
+    await import("../../src/services/meetingSummaryService");
   const { config } = await import("../../src/services/configService");
 
   const now = new Date("2025-02-03T12:00:00Z");
@@ -162,9 +157,8 @@ test("generateMeetingSummaries returns empty object on error", async () => {
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
   }));
 
-  const { generateMeetingSummaries } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { generateMeetingSummaries } =
+    await import("../../src/services/meetingSummaryService");
 
   const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
   const result = await generateMeetingSummaries({

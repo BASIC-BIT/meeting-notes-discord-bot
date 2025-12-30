@@ -1,4 +1,4 @@
-import { defineConfig, splitVendorChunkPlugin } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import tsconfigPaths from "vite-tsconfig-paths";
 import path from "node:path";
@@ -12,7 +12,6 @@ export default defineConfig({
       projects: [path.resolve(__dirname, "tsconfig.frontend.json")],
     }),
     react(),
-    splitVendorChunkPlugin(),
   ],
   build: {
     outDir: path.resolve(__dirname, "build", "frontend"),

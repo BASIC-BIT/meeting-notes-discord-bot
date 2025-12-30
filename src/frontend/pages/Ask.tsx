@@ -200,9 +200,9 @@ export default function Ask() {
     {
       enabled: Boolean(
         selectedGuildId &&
-          askAccessAllowed &&
-          sharingEnabled &&
-          listMode === "shared",
+        askAccessAllowed &&
+        sharingEnabled &&
+        listMode === "shared",
       ),
       staleTime: 30_000,
     },
@@ -222,10 +222,10 @@ export default function Ask() {
     {
       enabled: Boolean(
         selectedGuildId &&
-          askAccessAllowed &&
-          activeId &&
-          listMode === "shared" &&
-          sharingEnabled,
+        askAccessAllowed &&
+        activeId &&
+        listMode === "shared" &&
+        sharingEnabled,
       ),
       staleTime: 30_000,
       placeholderData: (prev) => prev,

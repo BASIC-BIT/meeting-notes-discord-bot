@@ -2,14 +2,14 @@
 
 ## Domains
 
-- [ ] Purchase domain: `chronote.gg` (if available)
-- [ ] Configure DNS (prod + staging): `chronote.gg`, `staging.chronote.gg`
+- [x] Purchase domain: `chronote.gg` (if available)
+- [x] Configure DNS (prod + staging): `chronote.gg`, `staging.chronote.gg`
 
 ## Stripe
 
-- [ ] Create live products + prices (monthly + annual)
-- [ ] Confirm lookup keys / price IDs
-- [ ] Configure webhook endpoint + secret
+- [x] Create live products + prices (monthly + annual)
+- [x] Confirm lookup keys / price IDs
+- [x] Configure webhook endpoint + secret
 - [ ] Verify portal settings (prorations, downgrades next cycle)
 
 ## Secrets & Config
