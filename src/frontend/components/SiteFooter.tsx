@@ -13,24 +13,74 @@ type SiteFooterProps = {
 };
 
 export function SiteFooter({ variant = "default" }: SiteFooterProps) {
+  const isCompact = variant === "compact";
   const content = (
-    <Container size="xl" py="md">
-      <Group justify="space-between" gap="md" wrap="wrap">
-        <Text size="sm" c="dimmed">
-          Chronote by BASICBIT
-        </Text>
-        <Group gap="lg">
+    <Container size={isCompact ? undefined : "xl"} fluid={isCompact} py="md">
+      {isCompact ? (
+        <Group justify="center" gap="lg" wrap="wrap">
+          <Text size="sm" c="dimmed">
+            Chronote by{" "}
+            <Anchor
+              href="https://basicbit.net/"
+              c="inherit"
+              target="_blank"
+              rel="noreferrer"
+            >
+              BASICBIT
+            </Anchor>
+          </Text>
           <Anchor
             href="https://discord.com/oauth2/authorize?client_id=1278729036528619633&scope=bot%20applications.commands"
             size="sm"
           >
             Add to Discord
           </Anchor>
+          <Anchor
+            href="https://github.com/Chronote-gg/chronote"
+            size="sm"
+            target="_blank"
+            rel="noreferrer"
+          >
+            GitHub
+          </Anchor>
           <Anchor href="https://chronote.gg" size="sm">
             Docs
           </Anchor>
         </Group>
-      </Group>
+      ) : (
+        <Group justify="space-between" gap="md" wrap="wrap">
+          <Text size="sm" c="dimmed">
+            Chronote by{" "}
+            <Anchor
+              href="https://basicbit.net/"
+              c="inherit"
+              target="_blank"
+              rel="noreferrer"
+            >
+              BASICBIT
+            </Anchor>
+          </Text>
+          <Group gap="lg">
+            <Anchor
+              href="https://discord.com/oauth2/authorize?client_id=1278729036528619633&scope=bot%20applications.commands"
+              size="sm"
+            >
+              Add to Discord
+            </Anchor>
+            <Anchor
+              href="https://github.com/Chronote-gg/chronote"
+              size="sm"
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub
+            </Anchor>
+            <Anchor href="https://chronote.gg" size="sm">
+              Docs
+            </Anchor>
+          </Group>
+        </Group>
+      )}
     </Container>
   );
 

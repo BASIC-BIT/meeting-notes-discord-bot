@@ -27,6 +27,7 @@ import {
   StripeWebhookEvent,
   SuggestionHistoryEntry,
   UserSpeechSettings,
+  ConfigOverrideRecord,
   AskConversationShareRecord,
 } from "./types/db";
 import type { MeetingStatus } from "./types/meetingLifecycle";
@@ -366,6 +367,64 @@ export async function deleteUserSpeechSettings(
   };
   const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+// Config Overrides operations
+export async function writeConfigOverride(
+  record: ConfigOverrideRecord,
+): Promise<void> {
+  const params = {
+    TableName: tableName("ConfigOverridesTable"),
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getConfigOverride(
+  scopeId: string,
+  configKey: string,
+): Promise<ConfigOverrideRecord | undefined> {
+  const params = {
+    TableName: tableName("ConfigOverridesTable"),
+    Key: marshall({ scopeId, configKey }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as ConfigOverrideRecord;
+  }
+  return undefined;
+}
+
+export async function deleteConfigOverride(
+  scopeId: string,
+  configKey: string,
+): Promise<void> {
+  const params = {
+    TableName: tableName("ConfigOverridesTable"),
+    Key: marshall({ scopeId, configKey }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function listConfigOverrides(
+  scopeId: string,
+): Promise<ConfigOverrideRecord[]> {
+  const params = {
+    TableName: tableName("ConfigOverridesTable"),
+    KeyConditionExpression: "scopeId = :scopeId",
+    ExpressionAttributeValues: marshall({
+      ":scopeId": scopeId,
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as ConfigOverrideRecord);
+  }
+  return [];
 }
 
 export async function getAllChannelContexts(

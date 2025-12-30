@@ -10,6 +10,8 @@ const mockEnv = {
   DISCORD_CLIENT_SECRET: "test-client-secret",
   DISCORD_CALLBACK_URL: "http://localhost:3001/auth/discord/callback",
   OAUTH_SECRET: "test-oauth-secret",
+  MOCK_FIXED_NOW: "2025-01-01T00:00:00.000Z",
+  VITE_MOCK_FIXED_NOW: "2025-01-01T00:00:00.000Z",
 };
 
 for (const [key, value] of Object.entries(mockEnv)) {

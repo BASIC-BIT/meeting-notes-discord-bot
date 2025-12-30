@@ -117,6 +117,29 @@ type ContextData = {
   askSharingPolicy?: "off" | "server" | "public" | null;
 };
 type ChannelContextsData = { contexts: ChannelContext[] };
+type ConfigSnapshot = {
+  values: Record<string, { value?: unknown; gated?: boolean; source?: string }>;
+  tier?: "free" | "basic" | "pro";
+};
+type ConfigServerData = {
+  registry: {
+    key: string;
+    label: string;
+    description: string;
+    category: string;
+    valueType: string;
+    defaultValue: unknown;
+    ui: {
+      type: string;
+      options?: string[];
+      min?: number;
+      max?: number;
+      step?: number;
+    };
+  }[];
+  snapshot: ConfigSnapshot;
+  overrides: { scopeId: string; configKey: string; value: unknown }[];
+};
 
 const buildQueryState = <T>(data: T | null): QueryState<T> => ({
   data,
@@ -198,6 +221,11 @@ export const contextQuery = buildQueryState<ContextData | null>(null);
 export const channelContextsQuery = buildQueryState<ChannelContextsData>({
   contexts: [],
 });
+export const configServerQuery = buildQueryState<ConfigServerData>({
+  registry: [],
+  snapshot: { values: {}, tier: "free" },
+  overrides: [],
+});
 
 export const billingCheckoutMutation = buildMutationState<
   [unknown],
@@ -226,6 +254,12 @@ export const channelContextsSetMutation = buildMutationState<[unknown], void>(
   undefined,
 );
 export const channelContextsClearMutation = buildMutationState<[unknown], void>(
+  undefined,
+);
+export const configSetServerMutation = buildMutationState<[unknown], void>(
+  undefined,
+);
+export const configClearServerMutation = buildMutationState<[unknown], void>(
   undefined,
 );
 
@@ -264,6 +298,9 @@ export const trpcUtils = {
   channelContexts: {
     list: { invalidate: jest.fn<Promise<void>, [unknown]>() },
   },
+  config: {
+    server: { invalidate: jest.fn<Promise<void>, [unknown]>() },
+  },
 };
 
 export const resetTrpcMocks = () => {
@@ -297,6 +334,11 @@ export const resetTrpcMocks = () => {
   resetQueryState(autorecordListQuery, { rules: [] });
   resetQueryState(contextQuery, null);
   resetQueryState(channelContextsQuery, { contexts: [] });
+  resetQueryState(configServerQuery, {
+    registry: [],
+    snapshot: { values: {}, tier: "free" },
+    overrides: [],
+  });
 
   resetMutationState(billingCheckoutMutation, {
     url: "https://example.com/checkout",
@@ -312,6 +354,8 @@ export const resetTrpcMocks = () => {
   resetMutationState(contextSetMutation, undefined);
   resetMutationState(channelContextsSetMutation, undefined);
   resetMutationState(channelContextsClearMutation, undefined);
+  resetMutationState(configSetServerMutation, undefined);
+  resetMutationState(configClearServerMutation, undefined);
 
   trpcUtils.ask.listConversations.invalidate.mockReset();
   trpcUtils.ask.listConversations.invalidate.mockResolvedValue(undefined);
@@ -337,6 +381,8 @@ export const resetTrpcMocks = () => {
   trpcUtils.autorecord.list.invalidate.mockResolvedValue(undefined);
   trpcUtils.channelContexts.list.invalidate.mockReset();
   trpcUtils.channelContexts.list.invalidate.mockResolvedValue(undefined);
+  trpcUtils.config.server.invalidate.mockReset();
+  trpcUtils.config.server.invalidate.mockResolvedValue(undefined);
 };
 
 export const setPricingQuery = (
@@ -421,6 +467,12 @@ export const setChannelContextsQuery = (
   Object.assign(channelContextsQuery, next);
 };
 
+export const setConfigServerQuery = (
+  next: Partial<QueryState<ConfigServerData>>,
+) => {
+  Object.assign(configServerQuery, next);
+};
+
 export const setAuthQuery = (
   next: Partial<QueryState<{ id: string } | null>>,
 ) => {
@@ -479,6 +531,11 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
       list: { useQuery: () => channelContextsQuery },
       set: { useMutation: () => channelContextsSetMutation },
       clear: { useMutation: () => channelContextsClearMutation },
+    },
+    config: {
+      server: { useQuery: () => configServerQuery },
+      setServerOverride: { useMutation: () => configSetServerMutation },
+      clearServerOverride: { useMutation: () => configClearServerMutation },
     },
   },
 }));

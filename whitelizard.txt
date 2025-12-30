@@ -14,3 +14,11 @@ src/frontend/pages/Ask.tsx:handleAsk
 src\frontend\pages\Ask.tsx:handleAsk
 src/frontend/pages/Ask.tsx:handleShareChange
 src\frontend\pages\Ask.tsx:handleShareChange
+src/frontend/components/SiteNavbar.tsx:(anonymous)
+src\frontend\components\SiteNavbar.tsx:(anonymous)
+src/frontend/pages/Settings.tsx:(anonymous)
+src\frontend\pages\Settings.tsx:(anonymous)
+src/services/appConfigService.ts:getGlobalConfigValues
+src\services\appConfigService.ts:getGlobalConfigValues
+src/services/unifiedConfigService.ts:coerceValue
+src\services\unifiedConfigService.ts:coerceValue

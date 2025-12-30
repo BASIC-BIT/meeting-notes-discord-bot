@@ -10,6 +10,18 @@ export interface AudioSnippet {
   fastTranscribed?: boolean;
 }
 
+export type TranscriptVariant = {
+  revision: number;
+  text: string;
+  createdAt: string;
+};
+
+export type CoalesceMeta = {
+  model: string;
+  usedFastRevisions: number[];
+  createdAt: string;
+};
+
 export type AudioSegmentSource = "voice" | "chat_tts" | "bot";
 export interface AudioCueEvent {
   userId: string;
@@ -22,6 +34,10 @@ export interface AudioFileData {
   userId: string;
   timestamp: number;
   transcript?: string;
+  fastTranscripts?: TranscriptVariant[];
+  slowTranscript?: string;
+  coalescedTranscript?: string;
+  coalesceMeta?: CoalesceMeta;
   source?: AudioSegmentSource;
   messageId?: string;
   processing: boolean;

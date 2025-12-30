@@ -25,6 +25,7 @@ import {
   shellFooterBackground,
   shellHeaderBackground,
   shellHeights,
+  shellNavbarBackground,
   shellShadow,
 } from "../uiTokens";
 
@@ -65,6 +66,10 @@ export default function PortalLayout() {
             backgroundColor: shellHeaderBackground(isDark),
             backdropFilter: "blur(16px)",
             boxShadow: shellShadow(isDark),
+          },
+          navbar: {
+            borderRight: shellBorder(theme, isDark),
+            backgroundColor: shellNavbarBackground(isDark),
           },
           main: {
             overflow: useInnerScroll ? "hidden" : "auto",
@@ -145,6 +150,10 @@ export default function PortalLayout() {
           backgroundColor: shellHeaderBackground(isDark),
           backdropFilter: "blur(16px)",
           boxShadow: shellShadow(isDark),
+        },
+        navbar: {
+          borderRight: shellBorder(theme, isDark),
+          backgroundColor: shellNavbarBackground(isDark),
         },
         main: {
           overflow: useInnerScroll ? "hidden" : "auto",

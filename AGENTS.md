@@ -109,6 +109,7 @@
 - Local full gate: `yarn run check` (lint --fix, prettier --write, then in parallel test, build:all, code:stats, prompts:check).
 - CI-parity local gate: `yarn run check:ci` (lint:check, prettier:check, test, build:all, test:e2e, checkov, code:stats, prompts:check). Avoid `yarn check` (built-in Yarn integrity command).
 - CI runs the same set as `check:ci` (see `.github/workflows/ci.yml`).
+- Visual regression baselines: update with `yarn test:visual:update`.
 
 Why each check exists:
 

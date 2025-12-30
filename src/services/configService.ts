@@ -56,6 +56,9 @@ class ConfigService {
     transcriptionCleanupPromptName:
       process.env.LANGFUSE_PROMPT_TRANSCRIPTION_CLEANUP ||
       "chronote-transcription-cleanup-chat",
+    transcriptionCoalescePromptName:
+      process.env.LANGFUSE_PROMPT_TRANSCRIPTION_COALESCE ||
+      "chronote-transcription-coalesce-chat",
     imagePromptName:
       process.env.LANGFUSE_PROMPT_IMAGE || "chronote-image-prompt-chat",
     askPromptName:
@@ -89,6 +92,16 @@ class ConfigService {
     longStoryTargetChars:
       parseInt(process.env.NOTES_LONG_STORY_TARGET_CHARS || "20000", 10) ||
       20000,
+  };
+
+  // AppConfig configuration
+  readonly appConfig = {
+    enabled: process.env.APP_CONFIG_ENABLED === "true",
+    applicationId: process.env.APP_CONFIG_APPLICATION_ID || "",
+    environmentId: process.env.APP_CONFIG_ENVIRONMENT_ID || "",
+    profileId: process.env.APP_CONFIG_PROFILE_ID || "",
+    cacheTtlMs:
+      parseInt(process.env.APP_CONFIG_CACHE_TTL_MS || "60000", 10) || 60000,
   };
 
   // Live voice configuration
@@ -135,6 +148,14 @@ class ConfigService {
   readonly subscription = {
     forceTier: process.env.FORCE_TIER || "",
     stripeMode: process.env.STRIPE_MODE || "live",
+  };
+
+  // Admin configuration
+  readonly admin = {
+    superAdminUserIds: (process.env.SUPER_ADMIN_USER_IDS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
   };
 
   // Database Configuration
@@ -276,6 +297,20 @@ class ConfigService {
       required.push(
         { name: "STRIPE_SUCCESS_URL", value: this.stripe.successUrl },
         { name: "STRIPE_CANCEL_URL", value: this.stripe.cancelUrl },
+      );
+    }
+
+    if (this.appConfig.enabled) {
+      required.push(
+        {
+          name: "APP_CONFIG_APPLICATION_ID",
+          value: this.appConfig.applicationId,
+        },
+        {
+          name: "APP_CONFIG_ENVIRONMENT_ID",
+          value: this.appConfig.environmentId,
+        },
+        { name: "APP_CONFIG_PROFILE_ID", value: this.appConfig.profileId },
       );
     }
 

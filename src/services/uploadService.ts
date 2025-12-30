@@ -42,13 +42,22 @@ function buildTranscriptJson(
     messageId?: string;
   }[],
 ) {
+  const resolveSegmentText = (
+    file: MeetingData["audioData"]["audioFiles"][0],
+  ) =>
+    file.coalescedTranscript ??
+    file.slowTranscript ??
+    file.transcript ??
+    (file.fastTranscripts && file.fastTranscripts.length > 0
+      ? file.fastTranscripts[file.fastTranscripts.length - 1].text
+      : undefined);
   const builtSegments =
     segments ??
     [
       ...meeting.audioData.audioFiles.map((file) => ({
         userId: file.userId,
         timestamp: file.timestamp,
-        text: file.transcript,
+        text: resolveSegmentText(file),
         source: file.source,
         messageId: file.messageId,
       })),

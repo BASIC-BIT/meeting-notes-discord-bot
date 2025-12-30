@@ -102,6 +102,18 @@ const tables = [
     BillingMode: "PAY_PER_REQUEST",
   },
   {
+    TableName: "ConfigOverridesTable",
+    KeySchema: [
+      { AttributeName: "scopeId", KeyType: "HASH" },
+      { AttributeName: "configKey", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "scopeId", AttributeType: "S" },
+      { AttributeName: "configKey", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
     TableName: "MeetingHistoryTable",
     KeySchema: [
       { AttributeName: "guildId", KeyType: "HASH" },

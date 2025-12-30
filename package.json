@@ -21,6 +21,8 @@
     "test": "jest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "test:visual": "node scripts/run-visual-tests.js",
+    "test:visual:update": "node scripts/run-visual-tests.js --update-snapshots",
     "lint": "eslint --fix src test",
     "lint:check": "eslint src test",
     "prettier": "prettier . --write",
@@ -70,6 +72,7 @@
   "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@aws-sdk/client-bedrock-data-automation-runtime": "^3.958.0",
+    "@aws-sdk/client-appconfigdata": "^3.958.0",
     "@aws-sdk/client-dynamodb": "^3.958.0",
     "@aws-sdk/client-s3": "^3.958.0",
     "@aws-sdk/s3-request-presigner": "^3.958.0",

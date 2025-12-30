@@ -10,6 +10,7 @@ import type {
   OnboardingState,
   StripeWebhookEvent,
   UserSpeechSettings,
+  ConfigOverrideRecord,
 } from "../types/db";
 import type {
   AskConversation,
@@ -17,7 +18,6 @@ import type {
   AskSharedConversation,
 } from "../types/ask";
 import { config } from "../services/configService";
-import { nowIso } from "../utils/time";
 import type {
   DiscordChannel,
   DiscordGuild,
@@ -46,6 +46,7 @@ type MockStore = {
   askMessagesByConversation: Map<string, AskMessage[]>;
   askSharesByGuild: Map<string, AskSharedConversation[]>;
   userSpeechSettings: Map<string, UserSpeechSettings>;
+  configOverrides: Map<string, ConfigOverrideRecord>;
 };
 
 const MANAGE_GUILD = 1 << 5;
@@ -61,6 +62,11 @@ const mockUser: AuthedProfile = {
 } as AuthedProfile;
 
 function buildDefaultStore(): MockStore {
+  const fixedNowIso = process.env.MOCK_FIXED_NOW;
+  const fixedNowMs = fixedNowIso ? Date.parse(fixedNowIso) : Number.NaN;
+  const baseNowMs = Number.isFinite(fixedNowMs) ? fixedNowMs : Date.now();
+  const baseNowIso = new Date(baseNowMs).toISOString();
+  const mockNowIso = () => baseNowIso;
   const permissions = (BigInt(MANAGE_GUILD) | BigInt(ADMIN)).toString();
   const userGuilds: DiscordGuild[] = [
     {
@@ -133,7 +139,7 @@ function buildDefaultStore(): MockStore {
       enabled: true,
       recordAll: false,
       createdBy: mockUser.id,
-      createdAt: nowIso(),
+      createdAt: mockNowIso(),
       tags: ["campaign", "weekly"],
     },
   ]);
@@ -149,7 +155,7 @@ function buildDefaultStore(): MockStore {
     liveVoiceCommandsEnabled: false,
     askMembersEnabled: true,
     askSharingPolicy: "server",
-    updatedAt: nowIso(),
+    updatedAt: mockNowIso(),
     updatedBy: mockUser.id,
   });
 
@@ -160,7 +166,7 @@ function buildDefaultStore(): MockStore {
     context: "Tabletop voice channel for D&D sessions and campaign recaps.",
     liveVoiceEnabled: true,
     liveVoiceCommandsEnabled: false,
-    updatedAt: nowIso(),
+    updatedAt: mockNowIso(),
     updatedBy: mockUser.id,
   });
 
@@ -168,7 +174,7 @@ function buildDefaultStore(): MockStore {
   guildInstallers.set("1249723747896918109", {
     guildId: "1249723747896918109",
     installerId: mockUser.id,
-    installedAt: nowIso(),
+    installedAt: mockNowIso(),
   });
 
   const subscriptions = new Map<string, GuildSubscription>();
@@ -177,9 +183,9 @@ function buildDefaultStore(): MockStore {
     status: "active",
     tier: "basic",
     subscriptionType: "stripe",
-    startDate: nowIso(),
+    startDate: mockNowIso(),
     nextBillingDate: new Date(
-      Date.now() + 1000 * 60 * 60 * 24 * 25,
+      baseNowMs + 1000 * 60 * 60 * 24 * 25,
     ).toISOString(),
     stripeCustomerId: "cus_mock_basic",
     stripeSubscriptionId: "sub_mock_basic",
@@ -190,7 +196,7 @@ function buildDefaultStore(): MockStore {
     status: "free",
     tier: "free",
     subscriptionType: "free",
-    startDate: nowIso(),
+    startDate: mockNowIso(),
     mode: "test",
   });
 
@@ -198,6 +204,7 @@ function buildDefaultStore(): MockStore {
   const stripeWebhookEvents = new Map<string, StripeWebhookEvent>();
   const onboardingStates = new Map<string, OnboardingState>();
   const userSpeechSettings = new Map<string, UserSpeechSettings>();
+  const configOverrides = new Map<string, ConfigOverrideRecord>();
 
   const meetingHistoryByGuild = new Map<string, MeetingHistory[]>();
   const buildMeeting = (params: {
@@ -210,7 +217,7 @@ function buildDefaultStore(): MockStore {
     meetingIdSuffix: string;
   }): MeetingHistory => {
     const timestamp = new Date(
-      Date.now() - params.minutesAgo * 60 * 1000,
+      baseNowMs - params.minutesAgo * 60 * 1000,
     ).toISOString();
     const channelId_timestamp = `${params.channelId}#${timestamp}`;
     const transcriptKey = `mock/transcripts/${params.guildId}/${params.channelId}-${params.meetingIdSuffix}.json`;
@@ -234,7 +241,7 @@ function buildDefaultStore(): MockStore {
       transcriptKey,
       JSON.stringify(
         {
-          generatedAt: nowIso(),
+          generatedAt: mockNowIso(),
           segments,
           text: transcriptLines
             .map((line) => `${line.speaker}: ${line.text}`)
@@ -328,8 +335,8 @@ function buildDefaultStore(): MockStore {
   const conversationId = "conv-mock-1";
   const conversationIdTwo = "conv-mock-2";
   const conversationKey = `USER#${mockUser.id}#GUILD#1249723747896918109`;
-  const createdAt = nowIso();
-  const updatedAt = nowIso();
+  const createdAt = mockNowIso();
+  const updatedAt = mockNowIso();
   askConversationsByKey.set(conversationKey, [
     {
       id: conversationId,
@@ -477,6 +484,7 @@ function buildDefaultStore(): MockStore {
     askMessagesByConversation,
     askSharesByGuild,
     userSpeechSettings,
+    configOverrides,
   };
 }
 

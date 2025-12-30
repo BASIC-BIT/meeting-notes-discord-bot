@@ -127,6 +127,14 @@ export interface UserSpeechSettings {
   updatedBy: string; // User ID who last updated
 }
 
+export interface ConfigOverrideRecord {
+  scopeId: string; // Partition key, formatted as scope#id
+  configKey: string; // Sort key
+  value: unknown;
+  updatedAt: string; // ISO timestamp
+  updatedBy: string; // User ID who last updated
+}
+
 export interface GuildInstaller {
   guildId: string; // Partition key
   installerId: string;

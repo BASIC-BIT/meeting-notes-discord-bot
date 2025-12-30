@@ -48,6 +48,7 @@ import {
   formatDateLabel,
   formatDurationLabel,
 } from "../utils/meetingLibrary";
+import { resolveNowMs } from "../utils/now";
 import type {
   MeetingEvent,
   MeetingEventType,
@@ -232,6 +233,8 @@ export default function Library() {
     });
   }, [meetingRows, channelNameMap]);
 
+  const nowMs = useMemo(() => resolveNowMs(), []);
+
   const tagOptions = useMemo(
     () =>
       Array.from(
@@ -257,8 +260,9 @@ export default function Library() {
         selectedTags,
         selectedChannel,
         selectedRange,
+        nowMs,
       }),
-    [meetingItems, query, selectedTags, selectedChannel, selectedRange],
+    [meetingItems, query, selectedTags, selectedChannel, selectedRange, nowMs],
   );
 
   const meeting = useMemo(() => {
