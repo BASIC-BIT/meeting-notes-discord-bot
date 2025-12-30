@@ -68,6 +68,30 @@ jobs:
           LANGFUSE_PROMPT_LABEL: ${{ vars.LANGFUSE_PROMPT_LABEL }}
         run: yarn prompts:check
 
+  llm-connections-check:
+    name: LLM Connections Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run Langfuse LLM connection check
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASE_URL: ${{ vars.LANGFUSE_BASE_URL }}
+          LLM_CONNECTIONS_ENV: ${{ vars.LLM_CONNECTIONS_ENV }}
+        run: yarn llm-connections:check
+
   test:
     name: Unit Tests
     runs-on: ubuntu-latest

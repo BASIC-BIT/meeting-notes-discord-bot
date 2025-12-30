@@ -479,6 +479,13 @@ resource "github_actions_environment_variable" "envvar_ecs_log_group" {
   value         = aws_cloudwatch_log_group.app_log_group.name
 }
 
+resource "github_actions_environment_variable" "envvar_secrets_prefix" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "SECRETS_PREFIX"
+  value         = local.name_prefix
+}
+
 resource "aws_vpc" "app_vpc" {
   cidr_block = "10.0.0.0/16"
 

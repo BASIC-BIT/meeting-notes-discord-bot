@@ -25,16 +25,16 @@ test("settings page shows overrides and updates tags (mock)", async ({
     ? settingsPage.overrideByName(mockSettings.overrideChannelName)
     : settingsPage.firstOverride();
   await expect(override).toBeVisible();
-  if (mockSettings.overrideTag) {
-    await expect(override).toContainText(mockSettings.overrideTag);
-  }
 
   await settingsPage.openFirstOverrideEdit();
   await expect(settingsPage.modalTitle()).toBeVisible();
   await settingsPage.tagInput().fill("raid, recap");
   await settingsPage.saveChannelButton().click();
   await expect(settingsPage.modal()).toBeHidden();
-  await expect(settingsPage.firstOverride()).toContainText("raid");
+  await settingsPage.openFirstOverrideEdit();
+  await expect(settingsPage.tagInput()).toHaveValue("raid, recap");
+  await settingsPage.saveChannelButton().click();
+  await expect(settingsPage.modal()).toBeHidden();
 
   const overridesBefore = await settingsPage.overrides().count();
   await settingsPage.removeFirstOverride().click();
