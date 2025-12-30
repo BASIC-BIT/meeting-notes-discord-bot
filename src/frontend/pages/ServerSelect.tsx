@@ -52,7 +52,7 @@ export default function ServerSelect() {
         <Stack gap="sm">
           <Text fw={600}>No servers found</Text>
           <Text c="dimmed">
-            We could not find any servers you can manage yet.
+            We could not find any servers with Chronote installed yet.
           </Text>
         </Stack>
       </Surface>
@@ -63,7 +63,7 @@ export default function ServerSelect() {
     <Stack gap="xl" data-testid="server-select">
       <PageHeader
         title="Choose a server"
-        description="Pick the server you want to manage and explore in the Chronote library."
+        description="Pick a server to manage settings or view shared Ask threads."
       />
       <TextInput
         placeholder="Search servers"
@@ -92,7 +92,9 @@ export default function ServerSelect() {
                 <Stack gap="sm">
                   <Text fw={600}>{guild.name}</Text>
                   <Text size="sm" c="dimmed">
-                    Manage notes, search, and billing for this server.
+                    {guild.canManage
+                      ? "Manage notes, Ask, and billing for this server."
+                      : "View shared Ask threads for this server."}
                   </Text>
                   <Button
                     variant={selectedGuildId === guild.id ? "light" : "outline"}
@@ -103,7 +105,9 @@ export default function ServerSelect() {
                       setSelectedGuildId(guild.id);
                       setLastServerId(guild.id);
                       navigate({
-                        to: "/portal/server/$serverId/library",
+                        to: guild.canManage
+                          ? "/portal/server/$serverId/library"
+                          : "/portal/server/$serverId/ask",
                         params: { serverId: guild.id },
                       });
                     }}

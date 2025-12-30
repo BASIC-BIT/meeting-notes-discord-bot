@@ -182,19 +182,19 @@ const listEligible = authedProcedure.query(async ({ ctx }) => {
 
   const eligible = userGuilds
     .filter((g) => botGuildIds.has(g.id))
-    .filter((g) => {
+    .map((g) => {
       const perms = BigInt(g.permissions ?? "0");
-      return (
+      const canManage =
         g.owner ||
         (perms & BigInt(MANAGE_GUILD)) !== BigInt(0) ||
-        (perms & BigInt(ADMIN)) !== BigInt(0)
-      );
-    })
-    .map((g) => ({
-      id: g.id,
-      name: g.name,
-      icon: g.icon ?? undefined,
-    }));
+        (perms & BigInt(ADMIN)) !== BigInt(0);
+      return {
+        id: g.id,
+        name: g.name,
+        icon: g.icon ?? undefined,
+        canManage,
+      };
+    });
 
   return { guilds: eligible };
 });

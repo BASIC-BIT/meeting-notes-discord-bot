@@ -16,7 +16,7 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 
 1. `yarn install`
 2. Install FFMPEG (e.g., `choco install ffmpeg` on Windows).
-3. Copy `.env.example` to `.env`; set required keys: `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `OPENAI_API_KEY`. Optional: Stripe keys to enable checkout/portal endpoints; `USE_LOCAL_DYNAMODB=true` for local tables.
+3. Copy `.env.example` to `.env`; set required keys: `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `OPENAI_API_KEY`. Optional: Stripe keys to enable checkout/portal endpoints; `USE_LOCAL_DYNAMODB=true` for local tables. For Langfuse prompt sync or tracing, set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`. Optional: `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`.
    - For mock portal data + OAuth bypass, set `MOCK_MODE=true` (no Discord/Dynamo required), or run `yarn start:mock` / `yarn dev:mock` to toggle mock mode without editing `.env`.
    - Deployed ECS uses **AWS Secrets Manager** for secrets (see `_infra/README.md`).
 4. Start everything (local Dynamo + table init + bot): `yarn dev`
@@ -29,19 +29,96 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 - `yarn db:init` – create tables locally
 - `yarn dev:clean` – wipe local Dynamo data and restart
 
+### Langfuse prompt sync
+
+- Prompts live in `prompts/` as Markdown with YAML front matter.
+- Shared prompt blocks live in `prompts/_fragments/` and can be composed via `extends` in front matter.
+- `yarn prompts:push` syncs local prompts to Langfuse and skips unchanged prompts by default. Use `--dry-run` or `--debug-diff` when needed.
+- `yarn prompts:pull` pulls prompts from Langfuse into `prompts/`. It skips prompts that use `extends` unless `--force` is passed.
+- `yarn prompts:check` compares local prompts to Langfuse. It runs inside `yarn run check` and CI.
+
 ## Checks
 
-These checks run before PR merge and deployment. Use `yarn run check` for the full local gate with auto-fix. CI runs the same checks using non fixing commands, plus e2e and IaC scans.
+These checks run before PR merge and deployment. Use `yarn run check` for the full local gate with auto-fix. Use `yarn run check:ci` to mirror CI, including prompt sync, e2e, and IaC scans.
 
 - Lint (ESLint) keeps code quality and catches common bugs. Commands: `yarn lint` (auto-fix) or `yarn lint:check` (CI). Docs: https://eslint.org/docs/latest/use/command-line-interface
 - Format (Prettier) enforces consistent formatting. Commands: `yarn prettier` (write) or `yarn prettier:check` (CI). Docs: https://prettier.io/docs/cli
 - Unit and integration tests (Jest) protect behavior and enforce coverage thresholds in `jest.config.ts`. Command: `yarn test`. Coverage requirements (global): statements 30%, branches 60%, functions 40%, lines 30%. Docs: https://jestjs.io/docs/29.7/configuration
-- Build (TypeScript + Vite) validates type safety and production bundles. Commands: `yarn build` (tsc) and `yarn build:web` (vite build). Docs: https://www.typescriptlang.org/docs/handbook/compiler-options.html and https://vite.dev/guide/
+- Build (TypeScript + Vite) validates type safety and production bundles. Commands: `yarn build` (tsc), `yarn build:web` (vite build), and `yarn build:all` (both). Docs: https://www.typescriptlang.org/docs/handbook/compiler-options.html and https://vite.dev/guide/
 - E2E tests (Playwright) validate critical user flows. Command: `yarn test:e2e`. Docs: https://playwright.dev/docs/running-tests
 - Code stats and complexity (scc + lizard) keep size and complexity visible. Command: `yarn code:stats`. Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can suppress known complexity offenders. Docs: https://github.com/boyter/scc and https://github.com/terryyin/lizard
+- Prompt sync (Langfuse) keeps repo prompt files aligned with Langfuse. Command: `yarn prompts:check`.
 - IaC scan (Checkov via uvx) catches Terraform misconfigurations. Command: `yarn checkov`. Docs: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html and https://docs.astral.sh/uv/concepts/tools/
 
-CI runs: `lint:check`, `prettier:check`, `test`, `build:all`, `test:e2e`, `code:stats`, and `checkov` (see `.github/workflows/ci.yml`).
+CI runs the same set as `yarn run check:ci` (see `.github/workflows/ci.yml`).
+
+### Check dependencies (Mermaid)
+
+`yarn run check`
+
+```mermaid
+flowchart LR
+  A["yarn run check"] --> B["lint (fix)"]
+  B --> C["prettier (write)"]
+  C --> D["test"]
+  C --> E["build:all"]
+  C --> F["code:stats"]
+  C --> G["prompts:check"]
+```
+
+`yarn run check:ci`
+
+```mermaid
+flowchart LR
+  A["yarn run check:ci"] --> B["lint:check"]
+  A --> C["prettier:check"]
+  A --> D["test"]
+  A --> E["build:all"]
+  A --> F["test:e2e"]
+  A --> G["checkov"]
+  A --> H["code:stats"]
+  A --> I["prompts:check"]
+```
+
+PR CI workflow
+
+```mermaid
+flowchart LR
+  A["PR CI (.github/workflows/ci.yml)"] --> B["lint job"]
+  A --> C["prettier job"]
+  A --> D["test job"]
+  A --> E["build job"]
+  A --> F["e2e job"]
+  A --> G["checkov job"]
+  A --> H["code-stats job"]
+  A --> P["prompts-check job"]
+```
+
+Deploy workflow (prod)
+
+```mermaid
+flowchart LR
+  A["Deploy (.github/workflows/deploy.yml)"] --> B["lint job"]
+  A --> C["prettier job"]
+  A --> D["test job"]
+  A --> E["build job"]
+  A --> F["e2e job"]
+  A --> G["checkov job"]
+  A --> H["code-stats job"]
+  A --> P["prompts-check job"]
+  B --> Z["checks complete"]
+  C --> Z
+  D --> Z
+  E --> Z
+  F --> Z
+  G --> Z
+  H --> Z
+  P --> Z
+  Z --> I["deploy backend"]
+  Z --> J["deploy frontend"]
+```
+
+Staging deploy is similar but skips Checkov and allows unit test failures to continue. Prompt check still runs.
 
 Coverage update rule:
 
@@ -64,6 +141,7 @@ Coverage update rule:
 - Bot + API: Node 20, Express 5. API routes are modularized under `src/api/` (billing, guilds). New typed API surface is tRPC at `/trpc` (routers in `src/trpc/`).
 - Voice capture: discord.js v14, @discordjs/voice/opus, prism-media.
 - OpenAI: gpt-4o-transcribe for ASR, gpt-5.1 for notes/corrections, gpt-5-mini for live gate, DALL-E 3 for images.
+- Prompt management and tracing: Langfuse for prompt versioning, tracing, and prompt sync scripts.
 - Billing: Stripe Checkout + Billing Portal; webhook handler persists GuildSubscription and PaymentTransaction in DynamoDB and handles payment_failed / subscription_deleted to downgrade appropriately (guild-scoped billing only).
 - Sessions: Express sessions stored in DynamoDB `SessionTable` (TTL on `expiresAt`).
 - Storage: DynamoDB tables include GuildSubscription, PaymentTransaction, StripeWebhookEventTable (idempotency with TTL), AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, AskConversationTable, SessionTable, InstallerTable, OnboardingStateTable. Transcripts and audio artifacts go to S3 (`TRANSCRIPTS_BUCKET`).

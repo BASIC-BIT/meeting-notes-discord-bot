@@ -5,6 +5,9 @@ export interface AudioSnippet {
   chunks: Buffer[];
   timestamp: number;
   userId: string;
+  audioFileData?: AudioFileData;
+  fastRevision?: number;
+  fastTranscribed?: boolean;
 }
 
 export type AudioSegmentSource = "voice" | "chat_tts" | "bot";
@@ -27,14 +30,25 @@ export interface AudioFileData {
   audioOnlyProcessingPromise?: Promise<void>;
 }
 
+export interface AudioSegmentFile {
+  filePath: string;
+  offsetMs: number;
+  durationMs: number;
+  userId: string;
+  source?: AudioSegmentSource;
+}
+
 export interface AudioData {
   currentSnippets: Map<string, AudioSnippet>; // Map of userId to their current AudioSnippet
-  silenceTimers?: Map<string, NodeJS.Timeout>; // Optional: Map of userId to their silence timer
+  silenceTimers?: Map<string, { fast?: NodeJS.Timeout; slow?: NodeJS.Timeout }>; // Optional: Map of userId to their silence timers
   audioFiles: AudioFileData[];
   cueEvents?: AudioCueEvent[];
   audioPassThrough?: PassThrough;
   outputFileName?: string;
   ffmpegProcess?: FfmpegCommand;
+  audioSegments?: AudioSegmentFile[];
+  segmentWritePromises?: Promise<void>[];
+  segmentDir?: string;
 }
 
 export interface ChunkInfo {

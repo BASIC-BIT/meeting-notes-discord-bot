@@ -24,6 +24,7 @@ export async function generateAndSendNotes(meeting: MeetingData) {
       now: new Date(),
       previousSummarySentence: meeting.summarySentence,
       previousSummaryLabel: meeting.summaryLabel,
+      parentSpanContext: meeting.langfuseParentSpanContext,
     });
     meeting.summarySentence = summaries.summarySentence;
     meeting.summaryLabel = summaries.summaryLabel;

@@ -14,7 +14,7 @@ describe("Library page", () => {
   beforeEach(() => {
     resetFrontendMocks();
     guildState.selectedGuildId = "g1";
-    guildState.guilds = [{ id: "g1", name: "Guild One" }];
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     setServersChannelsQuery({
       data: {
         voiceChannels: [{ id: "c1", name: "General", botAccess: true }],

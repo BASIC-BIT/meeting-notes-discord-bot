@@ -10,8 +10,23 @@ import {
 
 type NavigateOptions = {
   search?:
-    | ((prev: { meetingId?: string }) => { meetingId?: string })
-    | { meetingId?: string };
+    | ((prev: { meetingId?: string; list?: string; messageId?: string }) => {
+        meetingId?: string;
+        list?: string;
+        messageId?: string;
+      })
+    | { meetingId?: string; list?: string; messageId?: string };
+};
+
+const buildSearchString = () => {
+  const params = new URLSearchParams();
+  Object.entries(getRouteSearch()).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  });
+  const query = params.toString();
+  return query ? `?${query}` : "";
 };
 
 const navigate = (options?: NavigateOptions) => {
@@ -44,9 +59,21 @@ jest.mock("@tanstack/react-router", () => ({
       getRouteSearch,
     ),
   useRouterState: (options?: {
-    select?: (state: { location: { pathname: string } }) => string;
+    select?: (state: {
+      location: { pathname: string; search: string };
+    }) => string;
   }) =>
     options?.select
-      ? options.select({ location: { pathname: routerState.pathname } })
-      : { location: { pathname: routerState.pathname } },
+      ? options.select({
+          location: {
+            pathname: routerState.pathname,
+            search: buildSearchString(),
+          },
+        })
+      : {
+          location: {
+            pathname: routerState.pathname,
+            search: buildSearchString(),
+          },
+        },
 }));

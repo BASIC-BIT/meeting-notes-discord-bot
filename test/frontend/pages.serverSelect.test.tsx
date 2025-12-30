@@ -28,7 +28,7 @@ describe("ServerSelect page", () => {
 
   test("selects a server and navigates to library", () => {
     guildState.loading = false;
-    guildState.guilds = [{ id: "g1", name: "Guild One" }];
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     renderWithMantine(<ServerSelect />);
 
     fireEvent.click(screen.getByTestId("server-open"));
@@ -38,6 +38,19 @@ describe("ServerSelect page", () => {
     expect(navigateSpy).toHaveBeenCalledWith({
       to: "/portal/server/$serverId/library",
       params: { serverId: "g1" },
+    });
+  });
+
+  test("navigates non-managers to Ask", () => {
+    guildState.loading = false;
+    guildState.guilds = [{ id: "g2", name: "Guild Two", canManage: false }];
+    renderWithMantine(<ServerSelect />);
+
+    fireEvent.click(screen.getByTestId("server-open"));
+
+    expect(navigateSpy).toHaveBeenCalledWith({
+      to: "/portal/server/$serverId/ask",
+      params: { serverId: "g2" },
     });
   });
 });

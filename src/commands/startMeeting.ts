@@ -30,6 +30,11 @@ import {
   getRollingUsageForGuild,
   getRollingWindowMs,
 } from "../services/meetingUsageService";
+import {
+  MEETING_START_REASONS,
+  type AutoRecordRule,
+  type MeetingStartReason,
+} from "../types/meetingLifecycle";
 
 type GuildLimits = Awaited<ReturnType<typeof getGuildLimits>>["limits"];
 
@@ -236,6 +241,8 @@ export async function handleRequestStartMeeting(
     meetingContext,
     initialInteraction: undefined,
     isAutoRecording: false,
+    startReason: MEETING_START_REASONS.MANUAL_COMMAND,
+    startTriggeredByUserId: interaction.user.id,
     tags,
     onTimeout: (meeting) => handleEndMeetingOther(interaction.client, meeting),
     onEndMeeting: (meeting) =>
@@ -256,6 +263,11 @@ export async function handleRequestStartMeeting(
     .addFields({
       name: "Start Time",
       value: `<t:${Math.floor(meeting.startTime.getTime() / 1000)}:F>`,
+    })
+    .addFields({
+      name: "Tip",
+      value:
+        'Right click the bot in voice and choose "Disconnect" to end the meeting.',
     })
     .setColor(0x00ae86)
     .setTimestamp();
@@ -314,6 +326,9 @@ export async function handleAutoStartMeeting(
     liveVoiceTtsVoice?: string;
     chatTtsEnabled?: boolean;
     chatTtsVoice?: string;
+    startReason?: MeetingStartReason;
+    startTriggeredByUserId?: string;
+    autoRecordRule?: AutoRecordRule;
   },
 ) {
   const guildId = voiceChannel.guild.id;
@@ -378,6 +393,9 @@ export async function handleAutoStartMeeting(
     generateNotes: true, // Always generate notes for auto-recordings
     initialInteraction: undefined, // No interaction for auto-recordings
     isAutoRecording: true,
+    startReason: options?.startReason,
+    startTriggeredByUserId: options?.startTriggeredByUserId,
+    autoRecordRule: options?.autoRecordRule,
     tags: options?.tags,
     onTimeout: (meeting) => handleEndMeetingOther(client, meeting),
     onEndMeeting: (meeting) => handleEndMeetingOther(client, meeting),
@@ -396,6 +414,11 @@ export async function handleAutoStartMeeting(
     .addFields({
       name: "Start Time",
       value: `<t:${Math.floor(meeting.startTime.getTime() / 1000)}:F>`,
+    })
+    .addFields({
+      name: "Tip",
+      value:
+        'Right click the bot in voice and choose "Disconnect" to end the meeting.',
     })
     .setColor(0xff0000)
     .setTimestamp();

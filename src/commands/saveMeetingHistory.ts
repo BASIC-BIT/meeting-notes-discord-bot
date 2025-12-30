@@ -1,5 +1,6 @@
 import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
+import { MEETING_STATUS } from "../types/meetingLifecycle";
 import { writeMeetingHistoryService } from "../services/meetingHistoryService";
 import { getNotes } from "../transcription";
 import { generateMeetingSummaries } from "../services/meetingSummaryService";
@@ -122,6 +123,7 @@ async function resolveMeetingSummaries(
     channelName: meeting.voiceChannel.name,
     tags: meeting.tags,
     now: new Date(),
+    parentSpanContext: meeting.langfuseParentSpanContext,
   });
   meeting.summarySentence = summaries.summarySentence;
   meeting.summaryLabel = summaries.summaryLabel;
@@ -140,6 +142,41 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
           (meeting.endTime.getTime() - meeting.startTime.getTime()) / 1000,
         )
       : 0;
+
+    if (meeting.cancelled) {
+      const history: MeetingHistory = {
+        guildId: meeting.guildId,
+        channelId_timestamp: `${meeting.voiceChannel.id}#${timestamp}`,
+        meetingId: meeting.meetingId,
+        channelId: meeting.voiceChannel.id,
+        timestamp,
+        tags: meeting.tags,
+        context: meeting.meetingContext,
+        participants: Array.from(meeting.participants.values()),
+        duration,
+        transcribeMeeting: meeting.transcribeMeeting,
+        generateNotes: meeting.generateNotes,
+        meetingCreatorId: meeting.creator.id,
+        isAutoRecording: meeting.isAutoRecording,
+        status: MEETING_STATUS.CANCELLED,
+        startReason: meeting.startReason,
+        startTriggeredByUserId: meeting.startTriggeredByUserId,
+        autoRecordRule: meeting.autoRecordRule,
+        endReason: meeting.endReason,
+        endTriggeredByUserId: meeting.endTriggeredByUserId,
+        cancellationReason: meeting.cancellationReason,
+        notesMessageIds: meeting.notesMessageIds,
+        notesChannelId: meeting.notesChannelId,
+        transcriptS3Key: meeting.transcriptS3Key,
+        audioS3Key: meeting.audioS3Key,
+        chatS3Key: meeting.chatS3Key,
+      };
+      await writeMeetingHistoryService(history);
+      console.log(
+        `Cancelled meeting history saved for guild ${meeting.guildId}, channel ${meeting.voiceChannel.id}`,
+      );
+      return;
+    }
 
     const notes = await resolveMeetingNotes(meeting);
     const summaries = await resolveMeetingSummaries(meeting, notes);
@@ -164,7 +201,13 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       generateNotes: meeting.generateNotes,
       meetingCreatorId: meeting.creator.id,
       isAutoRecording: meeting.isAutoRecording,
-      status: "complete",
+      status: MEETING_STATUS.COMPLETE,
+      startReason: meeting.startReason,
+      startTriggeredByUserId: meeting.startTriggeredByUserId,
+      autoRecordRule: meeting.autoRecordRule,
+      endReason: meeting.endReason,
+      endTriggeredByUserId: meeting.endTriggeredByUserId,
+      cancellationReason: meeting.cancellationReason,
       notesMessageIds: meeting.notesMessageIds,
       notesChannelId: meeting.notesChannelId,
       notesVersion,
@@ -206,7 +249,10 @@ export async function saveMeetingStartToDatabase(
       generateNotes: meeting.generateNotes,
       meetingCreatorId: meeting.creator.id,
       isAutoRecording: meeting.isAutoRecording,
-      status: "in_progress",
+      status: MEETING_STATUS.IN_PROGRESS,
+      startReason: meeting.startReason,
+      startTriggeredByUserId: meeting.startTriggeredByUserId,
+      autoRecordRule: meeting.autoRecordRule,
     };
     await writeMeetingHistoryService(history);
   } catch (error) {

@@ -30,6 +30,47 @@ class ConfigService {
     projectId: process.env.OPENAI_PROJECT_ID,
   };
 
+  // Langfuse Configuration
+  readonly langfuse = {
+    publicKey: process.env.LANGFUSE_PUBLIC_KEY || "",
+    secretKey: process.env.LANGFUSE_SECRET_KEY || "",
+    baseUrl: process.env.LANGFUSE_BASE_URL || "",
+    tracingEnabled: process.env.LANGFUSE_TRACING_ENABLED !== "false",
+    tracingEnvironment: process.env.LANGFUSE_TRACING_ENVIRONMENT || "",
+    release: process.env.LANGFUSE_RELEASE || "",
+    promptLabel: process.env.LANGFUSE_PROMPT_LABEL || "production",
+    promptCacheTtlMs:
+      parseInt(process.env.LANGFUSE_PROMPT_CACHE_TTL_MS || "60000", 10) ||
+      60000,
+    meetingSummaryPromptName:
+      process.env.LANGFUSE_PROMPT_MEETING_SUMMARY || "chronote-meeting-summary",
+    notesPromptName:
+      process.env.LANGFUSE_PROMPT_NOTES || "chronote-notes-system",
+    notesLongStoryPromptName:
+      process.env.LANGFUSE_PROMPT_NOTES_LONG_STORY ||
+      "chronote-notes-long-story",
+    notesContextTestPromptName:
+      process.env.LANGFUSE_PROMPT_NOTES_CONTEXT_TEST ||
+      "chronote-notes-context-test",
+    transcriptionCleanupPromptName:
+      process.env.LANGFUSE_PROMPT_TRANSCRIPTION_CLEANUP ||
+      "chronote-transcription-cleanup",
+    imagePromptName:
+      process.env.LANGFUSE_PROMPT_IMAGE || "chronote-image-prompt",
+    askPromptName: process.env.LANGFUSE_PROMPT_ASK || "chronote-ask-system",
+    notesCorrectionPromptName:
+      process.env.LANGFUSE_PROMPT_NOTES_CORRECTION ||
+      "chronote-notes-correction",
+    liveVoiceGatePromptName:
+      process.env.LANGFUSE_PROMPT_LIVE_VOICE_GATE || "chronote-live-voice-gate",
+    liveVoiceConfirmPromptName:
+      process.env.LANGFUSE_PROMPT_LIVE_VOICE_CONFIRM ||
+      "chronote-live-voice-confirm",
+    liveVoiceResponderPromptName:
+      process.env.LANGFUSE_PROMPT_LIVE_VOICE_RESPONDER ||
+      "chronote-live-voice-responder",
+  };
+
   // Context and Memory Configuration
   readonly context = {
     enableMemory: process.env.ENABLE_CONTEXT_MEMORY !== "false",
@@ -176,6 +217,15 @@ class ConfigService {
           { name: "DISCORD_CLIENT_ID", value: this.discord.clientId },
           { name: "OPENAI_API_KEY", value: this.openai.apiKey },
         ];
+
+    const hasLangfuseConfig =
+      this.langfuse.publicKey.length > 0 || this.langfuse.secretKey.length > 0;
+    if (hasLangfuseConfig) {
+      required.push(
+        { name: "LANGFUSE_PUBLIC_KEY", value: this.langfuse.publicKey },
+        { name: "LANGFUSE_SECRET_KEY", value: this.langfuse.secretKey },
+      );
+    }
 
     // Only require OAuth-related secrets if OAuth is enabled (default true)
     if (this.server.oauthEnabled) {

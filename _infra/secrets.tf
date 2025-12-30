@@ -38,6 +38,22 @@ resource "aws_secretsmanager_secret" "openai_api_key" {
   tags        = local.secrets_tags
 }
 
+resource "aws_secretsmanager_secret" "langfuse_public_key" {
+  #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
+  name        = "${local.secrets_prefix}/langfuse-public-key"
+  description = "Langfuse public key"
+  kms_key_id  = aws_kms_key.app_general.arn
+  tags        = local.secrets_tags
+}
+
+resource "aws_secretsmanager_secret" "langfuse_secret_key" {
+  #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
+  name        = "${local.secrets_prefix}/langfuse-secret-key"
+  description = "Langfuse secret key"
+  kms_key_id  = aws_kms_key.app_general.arn
+  tags        = local.secrets_tags
+}
+
 resource "aws_secretsmanager_secret" "stripe_secret_key" {
   #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/stripe-secret-key"
@@ -65,6 +81,8 @@ data "aws_iam_policy_document" "ecs_secrets_policy" {
       aws_secretsmanager_secret.discord_client_secret.arn,
       aws_secretsmanager_secret.oauth_secret.arn,
       aws_secretsmanager_secret.openai_api_key.arn,
+      aws_secretsmanager_secret.langfuse_public_key.arn,
+      aws_secretsmanager_secret.langfuse_secret_key.arn,
       aws_secretsmanager_secret.stripe_secret_key.arn,
       aws_secretsmanager_secret.stripe_webhook_secret.arn,
     ]
@@ -88,6 +106,8 @@ output "secrets_manager_arns" {
     discord_client_secret  = aws_secretsmanager_secret.discord_client_secret.arn
     oauth_secret           = aws_secretsmanager_secret.oauth_secret.arn
     openai_api_key         = aws_secretsmanager_secret.openai_api_key.arn
+    langfuse_public_key    = aws_secretsmanager_secret.langfuse_public_key.arn
+    langfuse_secret_key    = aws_secretsmanager_secret.langfuse_secret_key.arn
     stripe_secret_key      = aws_secretsmanager_secret.stripe_secret_key.arn
     stripe_webhook_secret  = aws_secretsmanager_secret.stripe_webhook_secret.arn
   }

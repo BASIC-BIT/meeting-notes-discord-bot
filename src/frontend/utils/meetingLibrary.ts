@@ -1,5 +1,9 @@
 import { format } from "date-fns";
 import type { MeetingEvent } from "../../types/meetingTimeline";
+import {
+  MEETING_STATUS,
+  type MeetingStatus,
+} from "../../types/meetingLifecycle";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 const SUMMARY_CUTOFF = 180;
@@ -28,7 +32,7 @@ export type MeetingDetails = {
   decisions: string[];
   actions: string[];
   events: MeetingEvent[];
-  status?: "in_progress" | "processing" | "complete";
+  status?: MeetingStatus;
 };
 
 export type MeetingDetailInput = {
@@ -44,7 +48,7 @@ export type MeetingDetailInput = {
   audioUrl?: string | null;
   attendees?: string[];
   events?: MeetingEvent[];
-  status?: "in_progress" | "processing" | "complete";
+  status?: MeetingStatus;
 };
 
 export type MeetingFilterItem = {
@@ -216,7 +220,7 @@ const resolveAttendees = (attendees?: string[]) =>
 const resolveEvents = (events?: MeetingEvent[]) => events ?? [];
 
 const resolveStatus = (status?: MeetingDetails["status"]) =>
-  status ?? "complete";
+  status ?? MEETING_STATUS.COMPLETE;
 
 export const buildMeetingDetails = (
   detail: MeetingDetailInput,

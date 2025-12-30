@@ -4,19 +4,27 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { registerLiveMeetingRoutes } from "../../src/api/liveMeetings";
 import { getMeeting } from "../../src/meetings";
-import { ensureUserInGuild } from "../../src/services/guildAccessService";
+import {
+  ensureManageGuildWithUserToken,
+  ensureUserInGuild,
+} from "../../src/services/guildAccessService";
 import { ensureUserCanConnectChannel } from "../../src/services/discordPermissionsService";
 import { buildLiveMeetingMeta } from "../../src/services/liveMeetingService";
 import { buildLiveMeetingTimelineEvents } from "../../src/services/meetingTimelineService";
 import type { LiveMeetingMeta } from "../../src/types/liveMeeting";
 import type { MeetingEvent } from "../../src/types/meetingTimeline";
 import type { MeetingData } from "../../src/types/meeting-data";
+import {
+  MEETING_END_REASONS,
+  MEETING_STATUS,
+} from "../../src/types/meetingLifecycle";
 
 jest.mock("../../src/meetings", () => ({
   getMeeting: jest.fn(),
 }));
 jest.mock("../../src/services/guildAccessService", () => ({
   ensureUserInGuild: jest.fn(),
+  ensureManageGuildWithUserToken: jest.fn(),
 }));
 jest.mock("../../src/services/discordPermissionsService", () => ({
   ensureUserCanConnectChannel: jest.fn(),
@@ -32,6 +40,10 @@ const mockedGetMeeting = getMeeting as jest.MockedFunction<typeof getMeeting>;
 const mockedEnsureUserInGuild = ensureUserInGuild as jest.MockedFunction<
   typeof ensureUserInGuild
 >;
+const mockedEnsureManageGuildWithUserToken =
+  ensureManageGuildWithUserToken as jest.MockedFunction<
+    typeof ensureManageGuildWithUserToken
+  >;
 const mockedEnsureUserCanConnectChannel =
   ensureUserCanConnectChannel as jest.MockedFunction<
     typeof ensureUserCanConnectChannel
@@ -63,7 +75,7 @@ const makeMeta = (overrides?: Partial<LiveMeetingMeta>): LiveMeetingMeta => ({
   channelName: "General",
   startedAt: "2025-01-01T00:00:00.000Z",
   isAutoRecording: false,
-  status: "in_progress",
+  status: MEETING_STATUS.IN_PROGRESS,
   attendees: [],
   ...overrides,
 });
@@ -95,6 +107,22 @@ const createServer = (authenticated = true) => {
 const requestJson = async (url: string) =>
   new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
     const req = http.request(url, { method: "GET" }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        body += chunk;
+      });
+      res.on("end", () => {
+        resolve({ statusCode: res.statusCode ?? 0, body });
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+
+const requestJsonPost = async (url: string) =>
+  new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
+    const req = http.request(url, { method: "POST" }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => {
@@ -182,6 +210,65 @@ test("streams init payload for live meeting", async () => {
     channelId: "voice-1",
     userId: "user-1",
   });
+});
+
+test("returns 403 when user lacks manage guild for status", async () => {
+  const meeting = makeMeeting();
+  mockedGetMeeting.mockReturnValue(meeting);
+  mockedEnsureManageGuildWithUserToken.mockResolvedValue(false);
+
+  const { server, baseUrl } = createServer(true);
+  try {
+    const response = await requestJson(
+      `${baseUrl}/api/live/guild-1/meeting-1/status`,
+    );
+    expect(response.statusCode).toBe(403);
+    const payload = JSON.parse(response.body) as { error?: string };
+    expect(payload.error).toBe("Manage Server permission required");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("returns status payload for live meeting when allowed", async () => {
+  const meeting = makeMeeting({
+    endReason: MEETING_END_REASONS.BUTTON as MeetingData["endReason"],
+  });
+  mockedGetMeeting.mockReturnValue(meeting);
+  mockedEnsureManageGuildWithUserToken.mockResolvedValue(true);
+
+  const { server, baseUrl } = createServer(true);
+  try {
+    const response = await requestJson(
+      `${baseUrl}/api/live/guild-1/meeting-1/status`,
+    );
+    expect(response.statusCode).toBe(200);
+    const payload = JSON.parse(response.body) as { status?: string };
+    expect(payload.status).toBe(MEETING_STATUS.IN_PROGRESS);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("ends meeting via api endpoint", async () => {
+  const onEndMeeting = jest.fn();
+  const meeting = makeMeeting({ onEndMeeting });
+  mockedGetMeeting.mockReturnValue(meeting);
+  mockedEnsureManageGuildWithUserToken.mockResolvedValue(true);
+
+  const { server, baseUrl } = createServer(true);
+  try {
+    const response = await requestJsonPost(
+      `${baseUrl}/api/live/guild-1/meeting-1/end`,
+    );
+    expect(response.statusCode).toBe(200);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+
+  expect(onEndMeeting).toHaveBeenCalled();
+  expect(meeting.endReason).toBe(MEETING_END_REASONS.WEB_UI);
+  expect(meeting.endTriggeredByUserId).toBe("user-1");
 });
 
 test("returns 403 when user cannot connect to the voice channel", async () => {

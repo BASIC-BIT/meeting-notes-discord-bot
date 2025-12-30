@@ -6,10 +6,16 @@ import type { MeetingEvent } from "../types/meetingTimeline";
 import type { Participant } from "../types/participants";
 import type { TranscriptPayload, TranscriptSegment } from "../types/transcript";
 import {
+  MEETING_END_REASONS,
+  MEETING_STATUS,
+  type MeetingEndReason,
+} from "../types/meetingLifecycle";
+import {
   formatElapsedSeconds,
   toIsoString,
   toTimestampMs,
 } from "../utils/time";
+import { MEETING_END_REASON_LABELS } from "../utils/meetingLifecycle";
 
 type EventWithSeconds = {
   seconds: number;
@@ -35,6 +41,14 @@ const resolveSegmentSpeaker = (segment: TranscriptSegment) =>
   segment.username ||
   segment.tag ||
   "Unknown";
+
+const resolveHistoryParticipantLabel = (
+  participants: Participant[] | undefined,
+  userId: string,
+) => {
+  const participant = participants?.find((item) => item.id === userId);
+  return participant ? resolveParticipantLabel(participant) : "Unknown";
+};
 
 const buildEventId = (
   type: MeetingEvent["type"],
@@ -79,6 +93,53 @@ const buildNotesPostedEvent = (
     time: formatElapsed(safeSeconds),
     speaker: "Chronote",
     text: "Meeting summary posted to Discord.",
+  });
+};
+
+const buildEndEventText = (options: {
+  reason: MeetingEndReason;
+  triggeredByLabel?: string;
+  cancellationReason?: string;
+}): string => {
+  const { reason, triggeredByLabel, cancellationReason } = options;
+  if (reason === MEETING_END_REASONS.AUTO_CANCELLED) {
+    const trimmed =
+      cancellationReason && cancellationReason.length > 180
+        ? `${cancellationReason.slice(0, 177)}...`
+        : cancellationReason;
+    const detail = trimmed ? `: ${trimmed}` : "";
+    return `Auto-recording cancelled${detail}.`;
+  }
+  const reasonLabel = MEETING_END_REASON_LABELS[reason] ?? "Reason unknown";
+  const opener = triggeredByLabel
+    ? `Meeting ended by ${triggeredByLabel}.`
+    : "Meeting ended.";
+  return `${opener} ${reasonLabel}.`;
+};
+
+const addEndEvent = (options: {
+  events: EventWithSeconds[];
+  seconds: number;
+  reason?: MeetingEndReason;
+  triggeredByLabel?: string;
+  cancellationReason?: string;
+  idSuffix?: string;
+}) => {
+  const {
+    events,
+    seconds,
+    reason,
+    triggeredByLabel,
+    cancellationReason,
+    idSuffix,
+  } = options;
+  if (!reason) return;
+  addEvent(events, seconds, {
+    id: buildEventId("bot", ["meeting-end", idSuffix ?? reason]),
+    type: "bot",
+    time: formatElapsed(seconds),
+    speaker: "Chronote",
+    text: buildEndEventText({ reason, triggeredByLabel, cancellationReason }),
   });
 };
 
@@ -213,6 +274,24 @@ export function buildMeetingTimelineEventsFromHistory(options: {
     );
   }
 
+  addEndEvent({
+    events,
+    seconds: history.duration,
+    reason:
+      history.endReason ??
+      (history.status === MEETING_STATUS.CANCELLED
+        ? MEETING_END_REASONS.AUTO_CANCELLED
+        : undefined),
+    triggeredByLabel: history.endTriggeredByUserId
+      ? resolveHistoryParticipantLabel(
+          history.participants,
+          history.endTriggeredByUserId,
+        )
+      : undefined,
+    cancellationReason: history.cancellationReason,
+    idSuffix: history.meetingId,
+  });
+
   return sortEvents(events);
 }
 
@@ -324,6 +403,25 @@ export function buildLiveMeetingTimelineEvents(
         : 0,
       meeting.notesMessageIds?.[0],
     );
+  }
+
+  if (meeting.endTime) {
+    const endSeconds = Math.max(
+      0,
+      Math.floor((meeting.endTime.getTime() - meetingStartMs) / 1000),
+    );
+    addEndEvent({
+      events,
+      seconds: endSeconds,
+      reason:
+        meeting.endReason ??
+        (meeting.cancelled ? MEETING_END_REASONS.AUTO_CANCELLED : undefined),
+      triggeredByLabel: meeting.endTriggeredByUserId
+        ? resolveLiveSpeaker(meeting, meeting.endTriggeredByUserId)
+        : undefined,
+      cancellationReason: meeting.cancellationReason,
+      idSuffix: meeting.meetingId,
+    });
   }
 
   return sortEvents(events);

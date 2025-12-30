@@ -44,7 +44,7 @@ describe("portal layouts", () => {
     authState.loading = false;
     guildState.loading = false;
     guildState.selectedGuildId = "g1";
-    guildState.guilds = [{ id: "g1", name: "Guild One" }];
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     setRouterPathname("/portal/server/g1/library");
     renderWithMantine(<PortalLayout />);
     expect(screen.getByTestId("nav-server-button")).toBeInTheDocument();
@@ -72,7 +72,7 @@ describe("portal layouts", () => {
   test("PortalServerLayout redirects when server is missing", async () => {
     authState.state = "authenticated";
     guildState.loading = false;
-    guildState.guilds = [{ id: "g1", name: "Guild One" }];
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     setRouteParams({ serverId: "g2" });
     render(<PortalServerLayout />);
     await waitFor(() => {
@@ -85,7 +85,7 @@ describe("portal layouts", () => {
     authState.state = "authenticated";
     guildState.loading = false;
     guildState.selectedGuildId = null;
-    guildState.guilds = [{ id: "g1", name: "Guild One" }];
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     setRouteParams({ serverId: "g1" });
 
     render(<PortalServerLayout />);

@@ -68,6 +68,10 @@ import {
   onboardCommand,
 } from "./commands/onboard";
 import { fetchGuildInstaller } from "./services/guildInstallerService";
+import {
+  MEETING_END_REASONS,
+  MEETING_START_REASONS,
+} from "./types/meetingLifecycle";
 
 const TOKEN = config.discord.botToken;
 const CLIENT_ID = config.discord.clientId;
@@ -315,6 +319,13 @@ async function handleVoiceStateUpdate(
   oldState: VoiceState,
   newState: VoiceState,
 ) {
+  const botId = client.user?.id;
+  if (
+    botId &&
+    (oldState.member?.id === botId || newState.member?.id === botId)
+  ) {
+    await handleBotVoiceUpdate(oldState, newState);
+  }
   // Check if the user switched channels
   if (
     oldState.channel &&
@@ -333,6 +344,29 @@ async function handleVoiceStateUpdate(
   // Check if the user left a voice channel
   else if (oldState.channel && !newState.channel && oldState.member) {
     await handleUserLeave(oldState);
+  }
+}
+
+async function handleBotVoiceUpdate(
+  oldState: VoiceState,
+  newState: VoiceState,
+) {
+  const meeting = getMeeting(oldState.guild.id);
+  if (!meeting || meeting.finishing || meeting.finished) return;
+  const wasInMeetingChannel = oldState.channelId === meeting.voiceChannel.id;
+  const stillInMeetingChannel = newState.channelId === meeting.voiceChannel.id;
+  if (wasInMeetingChannel && !stillInMeetingChannel) {
+    meeting.endReason = MEETING_END_REASONS.BOT_DISCONNECT;
+    const notice = await meeting.textChannel.send(
+      "Meeting ending because the bot was disconnected from the voice channel.",
+    );
+    if (meeting.isAutoRecording) {
+      if (!meeting.messagesToDelete) {
+        meeting.messagesToDelete = [];
+      }
+      meeting.messagesToDelete.push(notice.id);
+    }
+    await handleEndMeetingOther(client, meeting);
   }
 }
 
@@ -420,6 +454,14 @@ async function handleUserJoin(newState: VoiceState) {
             limits,
           );
           const tags = autoRecordSetting.tags ?? serverContext?.defaultTags;
+          const startReason = autoRecordSetting.recordAll
+            ? MEETING_START_REASONS.AUTO_RECORD_ALL
+            : MEETING_START_REASONS.AUTO_RECORD_CHANNEL;
+          const startTriggeredByUserId = newState.member.user.id;
+          const autoRecordRule = {
+            mode: autoRecordSetting.recordAll ? "all" : "channel",
+            channelId: autoRecordSetting.channelId,
+          };
           await handleAutoStartMeeting(client, newState.channel, textChannel, {
             tags,
             liveVoiceEnabled,
@@ -427,6 +469,9 @@ async function handleUserJoin(newState: VoiceState) {
             liveVoiceTtsVoice,
             chatTtsEnabled,
             chatTtsVoice,
+            startReason,
+            startTriggeredByUserId,
+            autoRecordRule,
           });
         } else {
           console.error(
@@ -465,9 +510,18 @@ async function handleUserLeave(oldState: VoiceState) {
     unsubscribeToVoiceUponLeaving(meeting, oldState.member!.user.id);
 
     if (meeting.voiceChannel.members.size <= 1 && !meeting.finishing) {
-      await meeting.textChannel.send(
+      if (!meeting.endReason) {
+        meeting.endReason = MEETING_END_REASONS.CHANNEL_EMPTY;
+      }
+      const notice = await meeting.textChannel.send(
         "Meeting ending due to nobody being left in the voice channel.",
       );
+      if (meeting.isAutoRecording) {
+        if (!meeting.messagesToDelete) {
+          meeting.messagesToDelete = [];
+        }
+        meeting.messagesToDelete.push(notice.id);
+      }
       await handleEndMeetingOther(client, meeting);
     }
   }

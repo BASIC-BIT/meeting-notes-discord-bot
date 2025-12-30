@@ -1,7 +1,11 @@
 import { v4 as uuid } from "uuid";
 import { answerQuestionService } from "./askService";
 import { getAskConversationRepository } from "../repositories/askConversationRepository";
-import type { AskConversation, AskMessage } from "../types/ask";
+import type {
+  AskConversation,
+  AskConversationVisibility,
+  AskMessage,
+} from "../types/ask";
 import { nowIso } from "../utils/time";
 
 const DEFAULT_TITLE = "New question";
@@ -24,13 +28,64 @@ const buildConversation = (
     summary: "",
     createdAt: now,
     updatedAt: now,
+    visibility: "private",
   };
 };
+
+const buildShareRecord = (options: {
+  guildId: string;
+  ownerUserId: string;
+  ownerTag?: string;
+  conversation: AskConversation;
+  sharedAt: string;
+  sharedByUserId: string;
+  sharedByTag?: string;
+}) => {
+  const {
+    guildId,
+    ownerUserId,
+    ownerTag,
+    conversation,
+    sharedAt,
+    sharedByUserId,
+    sharedByTag,
+  } = options;
+  return {
+    pk: `GUILD#${guildId}`,
+    sk: `SHARE#${conversation.id}`,
+    type: "share" as const,
+    conversationId: conversation.id,
+    guildId,
+    ownerUserId,
+    ownerTag,
+    title: conversation.title,
+    summary: conversation.summary,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    sharedAt,
+    sharedByUserId,
+    sharedByTag,
+  };
+};
+
+const isSharedVisibility = (visibility?: AskConversationVisibility) =>
+  visibility === "server" || visibility === "public";
 
 export async function listAskConversations(userId: string, guildId: string) {
   const repo = getAskConversationRepository();
   const conversations = await repo.listConversations(userId, guildId);
   return conversations.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function listSharedAskConversations(
+  guildId: string,
+  viewerUserId: string,
+) {
+  const repo = getAskConversationRepository();
+  const conversations = await repo.listSharedConversations(guildId);
+  return conversations
+    .filter((conv) => conv.ownerUserId !== viewerUserId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function getAskConversationWithMessages(
@@ -54,6 +109,35 @@ export async function getAskConversationWithMessages(
   };
 }
 
+export async function getSharedConversationWithMessages(
+  guildId: string,
+  conversationId: string,
+) {
+  const repo = getAskConversationRepository();
+  const shared = await repo.getSharedConversation(guildId, conversationId);
+  if (!shared) {
+    return undefined;
+  }
+  const conversation = await repo.getConversation(
+    shared.ownerUserId,
+    guildId,
+    conversationId,
+  );
+  if (!conversation) {
+    return undefined;
+  }
+  const messages = await repo.listMessages(
+    shared.ownerUserId,
+    guildId,
+    conversationId,
+  );
+  return {
+    conversation,
+    messages,
+    shared,
+  };
+}
+
 export async function renameAskConversation(
   userId: string,
   guildId: string,
@@ -71,6 +155,61 @@ export async function renameAskConversation(
     updatedAt: nowIso(),
   };
   await repo.writeConversation(userId, guildId, updated);
+  if (isSharedVisibility(updated.visibility) && updated.sharedAt) {
+    await repo.writeSharedConversation(
+      buildShareRecord({
+        guildId,
+        ownerUserId: userId,
+        ownerTag: updated.sharedByTag,
+        conversation: updated,
+        sharedAt: updated.sharedAt,
+        sharedByUserId: updated.sharedByUserId ?? userId,
+        sharedByTag: updated.sharedByTag,
+      }),
+    );
+  }
+  return updated;
+}
+
+export async function setAskConversationVisibility(params: {
+  userId: string;
+  guildId: string;
+  conversationId: string;
+  visibility: AskConversationVisibility;
+  sharedByTag?: string;
+}) {
+  const repo = getAskConversationRepository();
+  const { userId, guildId, conversationId, visibility, sharedByTag } = params;
+  const existing = await repo.getConversation(userId, guildId, conversationId);
+  if (!existing) {
+    return undefined;
+  }
+  const now = nowIso();
+  const isShared = isSharedVisibility(visibility);
+  const updated: AskConversation = {
+    ...existing,
+    visibility,
+    sharedAt: isShared ? now : undefined,
+    sharedByUserId: isShared ? userId : undefined,
+    sharedByTag: isShared ? sharedByTag : undefined,
+    updatedAt: now,
+  };
+  await repo.writeConversation(userId, guildId, updated);
+  if (isShared) {
+    await repo.writeSharedConversation(
+      buildShareRecord({
+        guildId,
+        ownerUserId: userId,
+        ownerTag: sharedByTag,
+        conversation: updated,
+        sharedAt: updated.sharedAt ?? now,
+        sharedByUserId: userId,
+        sharedByTag,
+      }),
+    );
+  } else {
+    await repo.deleteSharedConversation(guildId, conversationId);
+  }
   return updated;
 }
 
@@ -82,10 +221,19 @@ export async function askWithConversation(params: {
   channelId?: string;
   tags?: string[];
   scope?: "guild" | "channel";
+  viewerUserId?: string;
 }) {
   const repo = getAskConversationRepository();
-  const { userId, guildId, question, conversationId, channelId, tags, scope } =
-    params;
+  const {
+    userId,
+    guildId,
+    question,
+    conversationId,
+    channelId,
+    tags,
+    scope,
+    viewerUserId,
+  } = params;
   const existing = conversationId
     ? await repo.getConversation(userId, guildId, conversationId)
     : undefined;
@@ -118,6 +266,7 @@ export async function askWithConversation(params: {
     tags,
     scope,
     history,
+    viewerUserId,
   });
 
   const replyMessage: AskMessage = {
@@ -139,6 +288,20 @@ export async function askWithConversation(params: {
     updatedAt: nowIso(),
   };
   await repo.writeConversation(userId, guildId, updatedConversation);
+  if (isSharedVisibility(updatedConversation.visibility)) {
+    const sharedAt = updatedConversation.sharedAt ?? nowIso();
+    await repo.writeSharedConversation(
+      buildShareRecord({
+        guildId,
+        ownerUserId: userId,
+        ownerTag: updatedConversation.sharedByTag,
+        conversation: updatedConversation,
+        sharedAt,
+        sharedByUserId: updatedConversation.sharedByUserId ?? userId,
+        sharedByTag: updatedConversation.sharedByTag,
+      }),
+    );
+  }
 
   return {
     conversationId: conversation.id,

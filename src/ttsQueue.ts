@@ -4,13 +4,14 @@ import {
   StreamType,
   createAudioResource,
 } from "@discordjs/voice";
-import OpenAI from "openai";
 import ffmpeg from "fluent-ffmpeg";
 import prism from "prism-media";
 import { Readable } from "node:stream";
 import { ReadableStream as WebReadableStream } from "node:stream/web";
 import type { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
+import { createOpenAIClient } from "./services/openaiClient";
+import { getModelChoice } from "./services/modelFactory";
 import type {
   AudioCueEvent,
   AudioFileData,
@@ -48,12 +49,6 @@ export type TtsQueue = {
   stopAndClear: () => void;
   size: () => number;
 };
-
-const openAIClient = new OpenAI({
-  apiKey: config.openai.apiKey,
-  organization: config.openai.organizationId,
-  project: config.openai.projectId,
-});
 
 const OUTPUT_SAMPLE_RATE = 48000;
 
@@ -123,8 +118,21 @@ async function playTtsItem(
   onPlaybackStart: () => void,
   onPlaybackEnd: () => void,
 ): Promise<void> {
+  const modelChoice = getModelChoice("liveVoiceTts");
+  const openAIClient = createOpenAIClient({
+    traceName: "tts",
+    generationName: "tts",
+    userId: item.userId,
+    sessionId: meeting.meetingId,
+    tags: [`feature:${item.source}`],
+    metadata: {
+      guildId: meeting.guild.id,
+      channelId: meeting.voiceChannel.id,
+      voice: item.voice,
+    },
+  });
   const speechResponse = await openAIClient.audio.speech.create({
-    model: config.liveVoice.ttsModel,
+    model: modelChoice.model,
     voice: item.voice,
     input: item.text,
     response_format: "pcm",

@@ -1,6 +1,9 @@
 import express from "express";
 import { getMeeting } from "../meetings";
-import { ensureUserInGuild } from "../services/guildAccessService";
+import {
+  ensureManageGuildWithUserToken,
+  ensureUserInGuild,
+} from "../services/guildAccessService";
 import { ensureUserCanConnectChannel } from "../services/discordPermissionsService";
 import { buildLiveMeetingMeta } from "../services/liveMeetingService";
 import { buildLiveMeetingTimelineEvents } from "../services/meetingTimelineService";
@@ -11,6 +14,11 @@ import type {
   LiveMeetingAttendeesPayload,
   LiveMeetingStatusPayload,
 } from "../types/liveMeeting";
+import {
+  MEETING_END_REASONS,
+  MEETING_STATUS,
+  resolveMeetingStatus,
+} from "../types/meetingLifecycle";
 
 type SessionGuildCache = {
   guildIds?: string[];
@@ -20,6 +28,86 @@ type SessionGuildCache = {
 const GUILD_CACHE_TTL_MS = 60_000;
 
 export function registerLiveMeetingRoutes(app: express.Express) {
+  app.get(
+    "/api/live/:guildId/:meetingId/status",
+    requireAuth,
+    async (req, res): Promise<void> => {
+      const user = req.user as AuthedProfile;
+      const { guildId, meetingId } = req.params;
+      const allowed = await ensureManageGuildWithUserToken(
+        user.accessToken,
+        guildId,
+      );
+      if (allowed === null) {
+        res.status(429).json({ error: "Discord rate limited. Please retry." });
+        return;
+      }
+      if (!allowed) {
+        res.status(403).json({ error: "Manage Server permission required" });
+        return;
+      }
+      const meeting = getMeeting(guildId);
+      if (!meeting || meeting.meetingId !== meetingId) {
+        res.status(404).json({ error: "Meeting not found" });
+        return;
+      }
+      const status = resolveMeetingStatus({
+        cancelled: meeting.cancelled,
+        finished: meeting.finished,
+        finishing: meeting.finishing,
+      });
+      res.json({
+        status,
+        endedAt: meeting.endTime?.toISOString(),
+        startReason: meeting.startReason,
+        startTriggeredByUserId: meeting.startTriggeredByUserId,
+        autoRecordRule: meeting.autoRecordRule,
+        endReason: meeting.endReason,
+        endTriggeredByUserId: meeting.endTriggeredByUserId,
+        cancellationReason: meeting.cancellationReason,
+      });
+    },
+  );
+
+  app.post(
+    "/api/live/:guildId/:meetingId/end",
+    requireAuth,
+    async (req, res): Promise<void> => {
+      const user = req.user as AuthedProfile;
+      const { guildId, meetingId } = req.params;
+      const allowed = await ensureManageGuildWithUserToken(
+        user.accessToken,
+        guildId,
+      );
+      if (allowed === null) {
+        res.status(429).json({ error: "Discord rate limited. Please retry." });
+        return;
+      }
+      if (!allowed) {
+        res.status(403).json({ error: "Manage Server permission required" });
+        return;
+      }
+      const meeting = getMeeting(guildId);
+      if (!meeting || meeting.meetingId !== meetingId) {
+        res.status(404).json({ error: "Meeting not found" });
+        return;
+      }
+      if (meeting.finishing || meeting.finished || meeting.cancelled) {
+        res.status(409).json({ error: "Meeting is already ending." });
+        return;
+      }
+      meeting.endReason = MEETING_END_REASONS.WEB_UI;
+      meeting.endTriggeredByUserId = user.id;
+      if (meeting.onEndMeeting) {
+        await meeting.onEndMeeting(meeting);
+      } else {
+        res.status(500).json({ error: "End meeting handler unavailable" });
+        return;
+      }
+      res.json({ status: "ok" });
+    },
+  );
+
   app.get(
     "/api/live/:guildId/:meetingId/stream",
     requireAuth,
@@ -126,11 +214,11 @@ export function registerLiveMeetingRoutes(app: express.Express) {
       const tick = () => {
         emitEvents(buildLiveMeetingTimelineEvents(meeting));
         emitAttendees();
-        const nextStatus = meeting.finished
-          ? "complete"
-          : meeting.finishing
-            ? "processing"
-            : "in_progress";
+        const nextStatus = resolveMeetingStatus({
+          cancelled: meeting.cancelled,
+          finished: meeting.finished,
+          finishing: meeting.finishing,
+        });
         if (nextStatus !== lastStatus) {
           lastStatus = nextStatus;
           const payload: LiveMeetingStatusPayload = {
@@ -139,7 +227,10 @@ export function registerLiveMeetingRoutes(app: express.Express) {
           };
           sendEvent("status", payload);
         }
-        if (nextStatus === "complete") {
+        if (
+          nextStatus === MEETING_STATUS.COMPLETE ||
+          nextStatus === MEETING_STATUS.CANCELLED
+        ) {
           cleanup();
         }
       };

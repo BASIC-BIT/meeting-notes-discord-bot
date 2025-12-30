@@ -11,6 +11,8 @@ export type ServerContextUpdate = {
   liveVoiceTtsVoice?: string | null;
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string | null;
+  askMembersEnabled?: boolean;
+  askSharingPolicy?: "off" | "server" | "public" | null;
 };
 
 export async function setServerContext(
@@ -53,6 +55,14 @@ export async function setServerContext(
     update.chatTtsVoice === null
       ? undefined
       : (update.chatTtsVoice ?? existing?.chatTtsVoice);
+  const nextAskMembersEnabled =
+    update.askMembersEnabled !== undefined
+      ? update.askMembersEnabled
+      : existing?.askMembersEnabled;
+  const nextAskSharingPolicy =
+    update.askSharingPolicy === null
+      ? undefined
+      : (update.askSharingPolicy ?? existing?.askSharingPolicy);
 
   const next: ServerContext = {
     guildId,
@@ -76,6 +86,10 @@ export async function setServerContext(
       ? { chatTtsEnabled: nextChatTtsEnabled }
       : {}),
     ...(nextChatTtsVoice ? { chatTtsVoice: nextChatTtsVoice } : {}),
+    ...(nextAskMembersEnabled !== undefined
+      ? { askMembersEnabled: nextAskMembersEnabled }
+      : {}),
+    ...(nextAskSharingPolicy ? { askSharingPolicy: nextAskSharingPolicy } : {}),
   };
   await getServerContextRepository().write(next);
 }

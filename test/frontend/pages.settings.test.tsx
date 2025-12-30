@@ -43,6 +43,8 @@ describe("Settings page", () => {
         defaultNotesChannelId: null,
         liveVoiceEnabled: false,
         chatTtsEnabled: false,
+        askMembersEnabled: true,
+        askSharingPolicy: "server",
       },
     });
     setChannelContextsQuery({ data: { contexts: [] } });
@@ -64,5 +66,17 @@ describe("Settings page", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByTestId("settings-add-channel")).toBeDisabled();
+  });
+
+  test("shows public sharing policy option and helper copy", async () => {
+    renderWithMantine(<Settings />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Sharing policy/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText("Public")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Public links are read only and visible without login/i),
+    ).toBeInTheDocument();
   });
 });

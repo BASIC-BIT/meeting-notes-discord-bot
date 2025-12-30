@@ -1,6 +1,11 @@
 import { jest } from "@jest/globals";
-import type { AskConversation, AskMessage } from "../../../src/types/ask";
+import type {
+  AskConversation,
+  AskMessage,
+  AskSharedConversation,
+} from "../../../src/types/ask";
 import type { AutoRecordSettings, ChannelContext } from "../../../src/types/db";
+import type { MeetingStatus } from "../../../src/types/meetingLifecycle";
 import type { PaidPlan } from "../../../src/types/pricing";
 
 type QueryState<T> = {
@@ -47,7 +52,7 @@ export type MeetingSummaryRow = {
   notesMessageId?: string;
   audioAvailable: boolean;
   transcriptAvailable: boolean;
-  status?: "in_progress" | "processing" | "complete";
+  status?: MeetingStatus;
 };
 
 export type MeetingEvent = {
@@ -72,7 +77,7 @@ export type MeetingDetail = {
   audioUrl?: string | null;
   attendees?: string[];
   events?: MeetingEvent[];
-  status?: "in_progress" | "processing" | "complete";
+  status?: MeetingStatus;
 };
 
 type PricingPlansData = { plans: PaidPlan[] };
@@ -88,6 +93,17 @@ type AskConversationData = {
   conversation: AskConversation | null;
   messages: AskMessage[];
 };
+type AskSettingsData = {
+  askMembersEnabled: boolean;
+  askSharingPolicy: "off" | "server" | "public";
+};
+type AskSharedListData = { conversations: AskSharedConversation[] };
+type AskSharedConversationData = {
+  conversation: AskConversation | null;
+  messages: AskMessage[];
+  shared: AskSharedConversation | null;
+};
+type AskPublicConversationData = AskSharedConversationData;
 type RulesData = { rules: AutoRecordSettings[] };
 type ContextData = {
   context?: string | null;
@@ -97,6 +113,8 @@ type ContextData = {
   liveVoiceTtsVoice?: string | null;
   chatTtsEnabled?: boolean | null;
   chatTtsVoice?: string | null;
+  askMembersEnabled?: boolean | null;
+  askSharingPolicy?: "off" | "server" | "public" | null;
 };
 type ChannelContextsData = { contexts: ChannelContext[] };
 
@@ -137,7 +155,7 @@ const resetMutationState = <TArgs extends unknown[], TResult>(
 
 export const authQuery = buildQueryState<{ id: string } | null>(null);
 export const guildQuery = buildQueryState<{
-  guilds: { id: string; name: string }[];
+  guilds: { id: string; name: string; canManage?: boolean }[];
 } | null>(null);
 export const pricingQuery = buildQueryState<PricingPlansData>({ plans: [] });
 export const billingQuery = buildQueryState<BillingDataQuery | null>(null);
@@ -152,10 +170,29 @@ export const serversChannelsQuery = buildQueryState<ChannelsData>({
   textChannels: [],
 });
 export const askListQuery = buildQueryState<AskListData>({ conversations: [] });
+export const askSettingsQuery = buildQueryState<AskSettingsData>({
+  askMembersEnabled: true,
+  askSharingPolicy: "server",
+});
+export const askSharedListQuery = buildQueryState<AskSharedListData>({
+  conversations: [],
+});
 export const askConversationQuery = buildQueryState<AskConversationData>({
   conversation: null,
   messages: [],
 });
+export const askSharedConversationQuery =
+  buildQueryState<AskSharedConversationData>({
+    conversation: null,
+    messages: [],
+    shared: null,
+  });
+export const askPublicConversationQuery =
+  buildQueryState<AskPublicConversationData>({
+    conversation: null,
+    messages: [],
+    shared: null,
+  });
 export const autorecordListQuery = buildQueryState<RulesData>({ rules: [] });
 export const contextQuery = buildQueryState<ContextData | null>(null);
 export const channelContextsQuery = buildQueryState<ChannelContextsData>({
@@ -172,6 +209,10 @@ export const billingPortalMutation = buildMutationState<
 >({ url: "https://example.com/portal" });
 export const askMutation = buildMutationState<[unknown], void>(undefined);
 export const askRenameMutation = buildMutationState<[unknown], void>(undefined);
+export const askVisibilityMutation = buildMutationState<
+  [unknown],
+  { conversation: AskConversation } | null
+>(null);
 export const autorecordAddMutation = buildMutationState<[unknown], void>(
   undefined,
 );
@@ -194,7 +235,15 @@ export const trpcUtils = {
       invalidate: jest.fn<Promise<void>, [unknown]>(),
       setData: jest.fn(),
     },
+    listSharedConversations: {
+      invalidate: jest.fn<Promise<void>, [unknown]>(),
+      setData: jest.fn(),
+    },
     getConversation: {
+      invalidate: jest.fn<Promise<void>, [unknown]>(),
+      setData: jest.fn(),
+    },
+    getSharedConversation: {
       invalidate: jest.fn<Promise<void>, [unknown]>(),
       setData: jest.fn(),
     },
@@ -229,7 +278,22 @@ export const resetTrpcMocks = () => {
     textChannels: [],
   });
   resetQueryState(askListQuery, { conversations: [] });
+  resetQueryState(askSettingsQuery, {
+    askMembersEnabled: true,
+    askSharingPolicy: "server",
+  });
+  resetQueryState(askSharedListQuery, { conversations: [] });
   resetQueryState(askConversationQuery, { conversation: null, messages: [] });
+  resetQueryState(askSharedConversationQuery, {
+    conversation: null,
+    messages: [],
+    shared: null,
+  });
+  resetQueryState(askPublicConversationQuery, {
+    conversation: null,
+    messages: [],
+    shared: null,
+  });
   resetQueryState(autorecordListQuery, { rules: [] });
   resetQueryState(contextQuery, null);
   resetQueryState(channelContextsQuery, { contexts: [] });
@@ -242,6 +306,7 @@ export const resetTrpcMocks = () => {
   });
   resetMutationState(askMutation, undefined);
   resetMutationState(askRenameMutation, undefined);
+  resetMutationState(askVisibilityMutation, null);
   resetMutationState(autorecordAddMutation, undefined);
   resetMutationState(autorecordRemoveMutation, undefined);
   resetMutationState(contextSetMutation, undefined);
@@ -251,9 +316,15 @@ export const resetTrpcMocks = () => {
   trpcUtils.ask.listConversations.invalidate.mockReset();
   trpcUtils.ask.listConversations.invalidate.mockResolvedValue(undefined);
   trpcUtils.ask.listConversations.setData.mockReset();
+  trpcUtils.ask.listSharedConversations.invalidate.mockReset();
+  trpcUtils.ask.listSharedConversations.invalidate.mockResolvedValue(undefined);
+  trpcUtils.ask.listSharedConversations.setData.mockReset();
   trpcUtils.ask.getConversation.invalidate.mockReset();
   trpcUtils.ask.getConversation.invalidate.mockResolvedValue(undefined);
   trpcUtils.ask.getConversation.setData.mockReset();
+  trpcUtils.ask.getSharedConversation.invalidate.mockReset();
+  trpcUtils.ask.getSharedConversation.invalidate.mockResolvedValue(undefined);
+  trpcUtils.ask.getSharedConversation.setData.mockReset();
   trpcUtils.meetings.list.invalidate.mockReset();
   trpcUtils.meetings.list.invalidate.mockResolvedValue(undefined);
   trpcUtils.meetings.detail.invalidate.mockReset();
@@ -302,10 +373,34 @@ export const setAskListQuery = (next: Partial<QueryState<AskListData>>) => {
   Object.assign(askListQuery, next);
 };
 
+export const setAskSettingsQuery = (
+  next: Partial<QueryState<AskSettingsData>>,
+) => {
+  Object.assign(askSettingsQuery, next);
+};
+
+export const setAskSharedListQuery = (
+  next: Partial<QueryState<AskSharedListData>>,
+) => {
+  Object.assign(askSharedListQuery, next);
+};
+
 export const setAskConversationQuery = (
   next: Partial<QueryState<AskConversationData>>,
 ) => {
   Object.assign(askConversationQuery, next);
+};
+
+export const setAskSharedConversationQuery = (
+  next: Partial<QueryState<AskSharedConversationData>>,
+) => {
+  Object.assign(askSharedConversationQuery, next);
+};
+
+export const setAskPublicConversationQuery = (
+  next: Partial<QueryState<AskPublicConversationData>>,
+) => {
+  Object.assign(askPublicConversationQuery, next);
 };
 
 export const setAutorecordListQuery = (
@@ -333,7 +428,11 @@ export const setAuthQuery = (
 };
 
 export const setGuildQuery = (
-  next: Partial<QueryState<{ guilds: { id: string; name: string }[] } | null>>,
+  next: Partial<
+    QueryState<{
+      guilds: { id: string; name: string; canManage?: boolean }[];
+    } | null>
+  >,
 ) => {
   Object.assign(guildQuery, next);
 };
@@ -353,10 +452,15 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
       portal: { useMutation: () => billingPortalMutation },
     },
     ask: {
+      settings: { useQuery: () => askSettingsQuery },
       listConversations: { useQuery: () => askListQuery },
+      listSharedConversations: { useQuery: () => askSharedListQuery },
       getConversation: { useQuery: () => askConversationQuery },
+      getSharedConversation: { useQuery: () => askSharedConversationQuery },
+      getPublicConversation: { useQuery: () => askPublicConversationQuery },
       ask: { useMutation: () => askMutation },
       rename: { useMutation: () => askRenameMutation },
+      setVisibility: { useMutation: () => askVisibilityMutation },
     },
     meetings: {
       list: { useQuery: () => meetingsListQuery },

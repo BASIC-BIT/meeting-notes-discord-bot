@@ -51,8 +51,18 @@ function getSpeakerLabel(meeting: MeetingData, userId: string): string {
   });
 }
 
+export type LiveResponderVariables = {
+  latestLine: string;
+  recentTranscript: string;
+  pastMeetings: string;
+  serverName: string;
+  channelName: string;
+  windowLines: number;
+  windowSeconds: number;
+};
+
 export interface LiveResponderContext {
-  userPrompt: string;
+  variables: LiveResponderVariables;
   debug: {
     windowLines: number;
     pastMeetings: Array<{ meetingId: string; timestamp: string }>;
@@ -108,25 +118,20 @@ export async function buildLiveResponderContext(
       ? pastBlocks.join("\n\n")
       : "(no past meetings pulled into context)";
 
-  const userPrompt = [
-    `Latest line: ${formatLine({
-      ts: latest.timestamp,
-      speaker: latest.speaker,
-      text: latest.text,
-    })}`,
-    "",
-    `Recent live transcript (up to ${config.liveVoice.windowLines} lines / ${config.liveVoice.windowSeconds}s):`,
-    windowBlock,
-    "",
-    "Past meetings (brief):",
-    pastBlock,
-    "",
-    `Server: ${meeting.guild.name}`,
-    `Channel: ${meeting.voiceChannel.name}`,
-  ].join("\n");
-
   return {
-    userPrompt,
+    variables: {
+      latestLine: formatLine({
+        ts: latest.timestamp,
+        speaker: latest.speaker,
+        text: latest.text,
+      }),
+      recentTranscript: windowBlock,
+      pastMeetings: pastBlock,
+      serverName: meeting.guild.name,
+      channelName: meeting.voiceChannel.name,
+      windowLines: config.liveVoice.windowLines,
+      windowSeconds: config.liveVoice.windowSeconds,
+    },
     debug: {
       windowLines: windowLines.length,
       pastMeetings: pastMeetings.map((m) => ({

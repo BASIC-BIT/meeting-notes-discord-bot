@@ -26,6 +26,12 @@ export const meetingsStarted = new Counter({
   registers: [metricsRegistry],
 });
 
+export const meetingsCancelled = new Counter({
+  name: "meeting_cancelled_total",
+  help: "Total meetings cancelled due to low content",
+  registers: [metricsRegistry],
+});
+
 export const liveVoiceResponses = new Counter({
   name: "live_voice_responses_total",
   help: "Total live voice responses spoken",

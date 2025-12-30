@@ -35,6 +35,13 @@ import {
 import { config } from "./services/configService";
 import { createTtsQueue } from "./ttsQueue";
 import { maybeSpeakChatMessage } from "./chatTts";
+import {
+  MEETING_END_REASONS,
+  MEETING_START_REASONS,
+  type AutoRecordRule,
+  type MeetingStartReason,
+} from "./types/meetingLifecycle";
+import { meetingsStarted } from "./metrics";
 
 const meetings = new Map<string, MeetingData>();
 
@@ -80,6 +87,9 @@ export interface MeetingInitOptions {
   meetingContext?: string;
   initialInteraction?: ButtonInteraction;
   isAutoRecording?: boolean;
+  startReason?: MeetingStartReason;
+  startTriggeredByUserId?: string;
+  autoRecordRule?: AutoRecordRule;
   onTimeout?: (meeting: MeetingData) => void;
   tags?: string[];
   liveVoiceEnabled?: boolean;
@@ -113,6 +123,9 @@ export async function initializeMeeting(
     meetingContext,
     initialInteraction,
     isAutoRecording = false,
+    startReason,
+    startTriggeredByUserId,
+    autoRecordRule,
     onTimeout,
     tags,
     liveVoiceEnabled: liveVoiceOverride,
@@ -124,6 +137,11 @@ export async function initializeMeeting(
     maxMeetingDurationPretty,
     onEndMeeting,
   } = options;
+  const resolvedStartReason =
+    startReason ??
+    (isAutoRecording
+      ? MEETING_START_REASONS.AUTO_RECORD_CHANNEL
+      : MEETING_START_REASONS.MANUAL_COMMAND);
 
   // Join the voice channel
   let connection;
@@ -202,6 +220,9 @@ export async function initializeMeeting(
     meetingContext,
     onEndMeeting: onEndMeeting ?? onTimeout,
     isAutoRecording,
+    startReason: resolvedStartReason,
+    startTriggeredByUserId,
+    autoRecordRule,
     participants: new Map(),
     tags,
   };
@@ -291,6 +312,7 @@ export async function initializeMeeting(
 
   // Add meeting to the global map
   addMeeting(meeting);
+  meetingsStarted.inc();
 
   // Set a timer to automatically end the meeting after the specified duration
   if (onTimeout) {
@@ -301,6 +323,7 @@ export async function initializeMeeting(
       textChannel.send(
         `Ending ${isAutoRecording ? "auto-recorded " : ""}meeting due to maximum meeting time of ${durationPretty} having been reached.`,
       );
+      meeting.endReason = MEETING_END_REASONS.TIMEOUT;
       onTimeout(meeting);
     }, durationLimitMs);
   }

@@ -1,14 +1,20 @@
 import {
   BYTES_PER_SAMPLE,
   CHANNELS,
+  FAST_SILENCE_THRESHOLD,
   FRAME_SIZE,
   MAX_DISCORD_UPLOAD_SIZE,
   MAX_SNIPPET_LENGTH,
   MINIMUM_TRANSCRIPTION_LENGTH,
-  SAMPLE_RATE,
+  RECORD_SAMPLE_RATE,
   SILENCE_THRESHOLD,
 } from "./constants";
-import { AudioFileData, AudioSnippet, ChunkInfo } from "./types/audio";
+import {
+  AudioFileData,
+  AudioSegmentFile,
+  AudioSnippet,
+  ChunkInfo,
+} from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType } from "@discordjs/voice";
 import prism from "prism-media";
@@ -30,12 +36,152 @@ function generateNewSnippet(userId: string): AudioSnippet {
     chunks: [],
     timestamp: Date.now(),
     userId,
+    fastRevision: 0,
+    fastTranscribed: false,
   };
 }
 
 type SnippetProcessingOptions = {
   forceTranscribe?: boolean;
+  skipLiveVoice?: boolean;
 };
+
+type SnippetTimers = {
+  fast?: NodeJS.Timeout;
+  slow?: NodeJS.Timeout;
+};
+
+function cloneSnippet(snippet: AudioSnippet): AudioSnippet {
+  return {
+    ...snippet,
+    chunks: [...snippet.chunks],
+  };
+}
+
+function getSegmentDir(meeting: MeetingData): string {
+  if (meeting.audioData.segmentDir) {
+    return meeting.audioData.segmentDir;
+  }
+  const dir = path.resolve(
+    process.cwd(),
+    `segments_${meeting.guildId}_${meeting.channelId}_${meeting.meetingId}`,
+  );
+  meeting.audioData.segmentDir = dir;
+  return dir;
+}
+
+function trackSegmentWrite(meeting: MeetingData, promise: Promise<void>) {
+  if (!meeting.audioData.segmentWritePromises) {
+    meeting.audioData.segmentWritePromises = [];
+  }
+  meeting.audioData.segmentWritePromises.push(promise);
+}
+
+async function persistSnippetAudioSegment(
+  meeting: MeetingData,
+  snippet: AudioSnippet,
+) {
+  if (snippet.chunks.length === 0) return;
+
+  const buffer = Buffer.concat(snippet.chunks);
+  const durationMs = Math.round(
+    (buffer.length / (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)) * 1000,
+  );
+  if (durationMs <= 0) return;
+
+  const offsetMs = Math.max(0, snippet.timestamp - meeting.startTime.getTime());
+  const dir = getSegmentDir(meeting);
+  await fs.promises.mkdir(dir, { recursive: true });
+
+  const filePath = path.join(
+    dir,
+    `segment_${snippet.userId}_${snippet.timestamp}.pcm`,
+  );
+
+  const writePromise = fs.promises
+    .writeFile(filePath, buffer)
+    .catch((error) => {
+      console.error(
+        `Failed to persist audio segment for user ${snippet.userId}:`,
+        error,
+      );
+    }) as Promise<void>;
+
+  trackSegmentWrite(meeting, writePromise);
+
+  const segment: AudioSegmentFile = {
+    filePath,
+    offsetMs,
+    durationMs,
+    userId: snippet.userId,
+    source: "voice",
+  };
+  if (!meeting.audioData.audioSegments) {
+    meeting.audioData.audioSegments = [];
+  }
+  meeting.audioData.audioSegments.push(segment);
+}
+
+function getOrCreateAudioFileData(
+  meeting: MeetingData,
+  snippet: AudioSnippet,
+): AudioFileData {
+  if (snippet.audioFileData) {
+    return snippet.audioFileData;
+  }
+
+  const audioFileData: AudioFileData = {
+    timestamp: snippet.timestamp,
+    userId: snippet.userId,
+    source: "voice",
+    processing: true,
+    audioOnlyProcessing: false, // Audio already written in real-time
+  };
+
+  audioFileData.audioOnlyProcessingPromise = Promise.resolve();
+
+  meeting.audioData.audioFiles.push(audioFileData);
+  snippet.audioFileData = audioFileData;
+
+  return audioFileData;
+}
+
+function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
+  if (snippet.chunks.length === 0) return;
+
+  const duration = getAudioDuration(snippet);
+  if (duration <= MINIMUM_TRANSCRIPTION_LENGTH) {
+    return;
+  }
+
+  const audioFileData = getOrCreateAudioFileData(meeting, snippet);
+  const revision = (snippet.fastRevision ?? 0) + 1;
+  snippet.fastRevision = revision;
+
+  const snapshot = cloneSnippet(snippet);
+  void transcribeSnippet(meeting, snapshot, {
+    tempSuffix: `fast-${revision}`,
+  })
+    .then((transcription) => {
+      if (snippet.fastRevision !== revision) return;
+      if (!transcription.trim() || transcription === "[Transcription failed]") {
+        return;
+      }
+      audioFileData.transcript = transcription;
+      snippet.fastTranscribed = true;
+      void maybeRespondLive(meeting, {
+        userId: snippet.userId,
+        text: transcription,
+        timestamp: snippet.timestamp,
+      });
+    })
+    .catch((error) => {
+      console.error(
+        `Failed to transcribe fast snippet for user ${snippet.userId}:`,
+        error,
+      );
+    });
+}
 
 // Handle snippets based on the user speaking
 export function updateSnippetsIfNecessary(
@@ -66,13 +212,11 @@ export function startProcessingSnippet(
   const snippet = meeting.audioData.currentSnippets.get(userId);
   if (!snippet) return;
 
-  const audioFileData: AudioFileData = {
-    timestamp: snippet.timestamp,
-    userId: snippet.userId,
-    source: "voice",
-    processing: true,
-    audioOnlyProcessing: false, // Audio already written in real-time
-  };
+  void persistSnippetAudioSegment(meeting, snippet);
+  snippet.fastRevision = (snippet.fastRevision ?? 0) + 1;
+
+  const audioFileData = getOrCreateAudioFileData(meeting, snippet);
+  audioFileData.processing = true;
 
   const promises: Promise<void>[] = [];
 
@@ -85,11 +229,13 @@ export function startProcessingSnippet(
     promises.push(
       transcribeSnippet(meeting, snippet).then((transcription) => {
         audioFileData.transcript = transcription;
-        void maybeRespondLive(meeting, {
-          userId: snippet.userId,
-          text: transcription,
-          timestamp: snippet.timestamp,
-        });
+        if (!options.skipLiveVoice) {
+          void maybeRespondLive(meeting, {
+            userId: snippet.userId,
+            text: transcription,
+            timestamp: snippet.timestamp,
+          });
+        }
       }),
     );
   } else {
@@ -101,42 +247,65 @@ export function startProcessingSnippet(
   // Audio is now written immediately as it arrives, so we don't need to write it here
   // This prevents duplicate audio and memory buildup for long recordings
 
-  audioFileData.audioOnlyProcessingPromise = Promise.resolve(); // Already processed in real-time
-
   audioFileData.processingPromise = Promise.all(promises).then(() => {
     audioFileData.processing = false;
   });
 
-  meeting.audioData.audioFiles.push(audioFileData);
   meeting.audioData.currentSnippets.delete(userId); // Remove snippet after processing
 }
 
-// Set a timer to process the snippet after SILENCE_THRESHOLD
+// Set timers to run fast transcription and finalize the snippet after silence
 function setSnippetTimer(meeting: MeetingData, userId: string) {
   const currentTimers =
-    meeting.audioData.silenceTimers || new Map<string, NodeJS.Timeout>();
+    meeting.audioData.silenceTimers || new Map<string, SnippetTimers>();
+  const existing = currentTimers.get(userId) ?? {};
 
-  if (currentTimers.has(userId)) {
-    clearTimeout(currentTimers.get(userId)!);
+  if (existing.fast) {
+    clearTimeout(existing.fast);
+  }
+  if (existing.slow) {
+    clearTimeout(existing.slow);
   }
 
-  const timer = setTimeout(() => {
-    startProcessingSnippet(meeting, userId);
+  existing.fast = setTimeout(() => {
+    const snippet = meeting.audioData.currentSnippets.get(userId);
+    if (!snippet) return;
+    runFastTranscription(meeting, snippet);
+    const next = currentTimers.get(userId);
+    if (next) {
+      next.fast = undefined;
+    }
+  }, FAST_SILENCE_THRESHOLD);
+
+  existing.slow = setTimeout(() => {
+    const snippet = meeting.audioData.currentSnippets.get(userId);
+    if (!snippet) {
+      currentTimers.delete(userId);
+      return;
+    }
+    startProcessingSnippet(meeting, userId, {
+      skipLiveVoice: Boolean(snippet.fastTranscribed),
+    });
     currentTimers.delete(userId);
   }, SILENCE_THRESHOLD);
 
-  currentTimers.set(userId, timer);
+  currentTimers.set(userId, existing);
   meeting.audioData.silenceTimers = currentTimers;
 }
 
 export function clearSnippetTimer(meeting: MeetingData, userId: string) {
   const currentTimers =
-    meeting.audioData.silenceTimers || new Map<string, NodeJS.Timeout>();
+    meeting.audioData.silenceTimers || new Map<string, SnippetTimers>();
+  const existing = currentTimers.get(userId);
 
-  if (currentTimers.has(userId)) {
-    clearTimeout(currentTimers.get(userId)!);
+  if (existing?.fast) {
+    clearTimeout(existing.fast);
+  }
+  if (existing?.slow) {
+    clearTimeout(existing.slow);
   }
 
+  currentTimers.delete(userId);
   meeting.audioData.silenceTimers = currentTimers;
 }
 
@@ -152,7 +321,7 @@ export async function subscribeToUserVoice(
   });
 
   const opusDecoder = new prism.opus.Decoder({
-    rate: SAMPLE_RATE,
+    rate: RECORD_SAMPLE_RATE,
     channels: CHANNELS,
     frameSize: FRAME_SIZE,
   });
@@ -224,7 +393,7 @@ export async function waitForAudioOnlyFinishProcessing(meeting: MeetingData) {
 function getAudioDuration(audio: AudioSnippet): number {
   return (
     audio.chunks.reduce((acc, cur) => acc + cur.length, 0) /
-    (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)
+    (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)
   );
 }
 
@@ -329,14 +498,14 @@ export function openOutputFile(meeting: MeetingData) {
   meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
     .inputOptions([
       "-f s16le", // PCM format
-      `-ar ${SAMPLE_RATE}`, // Sample rate
+      `-ar ${RECORD_SAMPLE_RATE}`, // Sample rate
       `-ac ${CHANNELS}`, // Number of audio channels
     ])
     .audioCodec("libmp3lame") // Use LAME codec for MP3
     .outputOptions([
       `-b:a 128k`, // Bitrate for lossy compression
       `-ac ${CHANNELS}`, // Ensure stereo output
-      `-ar ${SAMPLE_RATE}`, // Ensure output sample rate
+      `-ar ${RECORD_SAMPLE_RATE}`, // Ensure output sample rate
     ])
     .toFormat("mp3") // Output format as MP3
     .on("error", (err) => {
@@ -359,6 +528,79 @@ export function closeOutputFile(meeting: MeetingData): Promise<void> {
       });
     }
   });
+}
+
+async function waitForSegmentWrites(meeting: MeetingData) {
+  const writes = meeting.audioData.segmentWritePromises;
+  if (!writes || writes.length === 0) return;
+  await Promise.all(writes);
+}
+
+export async function buildMixedAudio(
+  meeting: MeetingData,
+): Promise<string | undefined> {
+  const segments = meeting.audioData.audioSegments ?? [];
+  if (segments.length < 2) return undefined;
+
+  await waitForSegmentWrites(meeting);
+
+  const usable = segments.filter(
+    (segment) => segment.durationMs > 0 && fs.existsSync(segment.filePath),
+  );
+  if (usable.length < 2) return undefined;
+
+  const outputFileName = `./recording_${meeting.guildId}_${meeting.channelId}_${meeting.meetingId}_mixed.mp3`;
+
+  return await new Promise<string | undefined>((resolve) => {
+    const command = ffmpeg();
+
+    usable.forEach((segment) => {
+      command
+        .input(segment.filePath)
+        .inputOptions([
+          "-f s16le",
+          `-ar ${RECORD_SAMPLE_RATE}`,
+          `-ac ${CHANNELS}`,
+        ]);
+    });
+
+    const filterParts = usable.map((segment, index) => {
+      const delay = Math.max(0, Math.round(segment.offsetMs));
+      return `[${index}:a]adelay=${delay}|${delay}[a${index}]`;
+    });
+    const mixInputs = usable.map((_segment, index) => `[a${index}]`).join("");
+    const filter = `${filterParts.join(";")};${mixInputs}amix=inputs=${usable.length}:dropout_transition=0:normalize=0[mixed]`;
+
+    command
+      .complexFilter(filter)
+      .outputOptions([
+        "-map [mixed]",
+        `-b:a 128k`,
+        `-ac ${CHANNELS}`,
+        `-ar ${RECORD_SAMPLE_RATE}`,
+      ])
+      .audioCodec("libmp3lame")
+      .on("error", (err) => {
+        console.error("Failed to render mixed audio:", err);
+        resolve(undefined);
+      })
+      .on("end", () => {
+        resolve(outputFileName);
+      })
+      .save(outputFileName);
+  });
+}
+
+export async function cleanupAudioSegments(
+  meeting: MeetingData,
+): Promise<void> {
+  const dir = meeting.audioData.segmentDir;
+  if (!dir) return;
+  try {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  } catch (error) {
+    console.error("Failed to clean up audio segment files:", error);
+  }
 }
 
 /**

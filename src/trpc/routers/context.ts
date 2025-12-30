@@ -17,6 +17,8 @@ type ServerContextSnapshot = {
   liveVoiceTtsVoice?: string | null;
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string | null;
+  askMembersEnabled?: boolean;
+  askSharingPolicy?: "off" | "server" | "public";
 };
 
 type ServerContextUpdateInput = {
@@ -28,6 +30,8 @@ type ServerContextUpdateInput = {
   liveVoiceTtsVoice?: string | null;
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string | null;
+  askMembersEnabled?: boolean;
+  askSharingPolicy?: "off" | "server" | "public";
 };
 
 const normalizeServerContext = (ctxRecord?: ServerContextSnapshot | null) => {
@@ -40,6 +44,8 @@ const normalizeServerContext = (ctxRecord?: ServerContextSnapshot | null) => {
     liveVoiceTtsVoice = null,
     chatTtsEnabled = false,
     chatTtsVoice = null,
+    askMembersEnabled = true,
+    askSharingPolicy = "server",
   } = ctxRecord ?? {};
   return {
     context,
@@ -50,6 +56,8 @@ const normalizeServerContext = (ctxRecord?: ServerContextSnapshot | null) => {
     liveVoiceTtsVoice,
     chatTtsEnabled,
     chatTtsVoice,
+    askMembersEnabled,
+    askSharingPolicy,
   };
 };
 
@@ -77,6 +85,12 @@ const buildServerContextUpdate = (
   if (input.chatTtsVoice !== undefined) {
     update.chatTtsVoice = input.chatTtsVoice;
   }
+  if (input.askMembersEnabled !== undefined) {
+    update.askMembersEnabled = input.askMembersEnabled;
+  }
+  if (input.askSharingPolicy !== undefined) {
+    update.askSharingPolicy = input.askSharingPolicy;
+  }
   return update;
 };
 
@@ -100,6 +114,8 @@ const set = manageGuildProcedure
       liveVoiceTtsVoice: z.string().nullable().optional(),
       chatTtsEnabled: z.boolean().optional(),
       chatTtsVoice: z.string().nullable().optional(),
+      askMembersEnabled: z.boolean().optional(),
+      askSharingPolicy: z.enum(["off", "server", "public"]).optional(),
     }),
   )
   .mutation(async ({ ctx, input }) => {

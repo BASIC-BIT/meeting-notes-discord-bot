@@ -246,7 +246,7 @@ describe("frontend components", () => {
   test("renders SiteNavbar navigation for authenticated users", () => {
     authState.state = "authenticated";
     guildState.selectedGuildId = "g1";
-    guildState.guilds = [{ id: "g1", name: "Guild One" }];
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     const openSpy = jest.spyOn(window, "open").mockImplementation(() => null);
 
     renderWithMantine(<SiteNavbar pathname="/portal/server/g1/library" />);

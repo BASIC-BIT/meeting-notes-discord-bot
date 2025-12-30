@@ -8,6 +8,7 @@ import {
   formatDateLabel,
   formatDurationLabel,
 } from "../../src/frontend/utils/meetingLibrary";
+import { MEETING_STATUS } from "../../src/types/meetingLifecycle";
 
 describe("meeting library utils", () => {
   test("formatChannelLabel prefixes channel names", () => {
@@ -98,6 +99,6 @@ describe("meeting library utils", () => {
     expect(built.title).toBe("Meeting in planning");
     expect(built.notes).toBe("No notes recorded.");
     expect(built.attendees).toEqual(["Unknown"]);
-    expect(built.status).toBe("complete");
+    expect(built.status).toBe(MEETING_STATUS.COMPLETE);
   });
 });

@@ -7,11 +7,17 @@ import {
   User,
   VoiceBasedChannel,
 } from "discord.js";
+import type { SpanContext } from "@opentelemetry/api";
 import { AudioData } from "./audio";
 import { ChatEntry } from "./chat";
 import { Participant } from "./participants";
 import type { UserSpeechSettings } from "./db";
 import type { TtsQueue } from "../ttsQueue";
+import type {
+  AutoRecordRule,
+  MeetingEndReason,
+  MeetingStartReason,
+} from "./meetingLifecycle";
 
 export type LiveVoiceCommandPending = {
   type: "end_meeting";
@@ -43,6 +49,13 @@ export interface MeetingData {
   guild: Guild;
   initialInteraction?: ButtonInteraction;
   isAutoRecording: boolean;
+  startReason?: MeetingStartReason;
+  startTriggeredByUserId?: string;
+  autoRecordRule?: AutoRecordRule;
+  endReason?: MeetingEndReason;
+  endTriggeredByUserId?: string;
+  cancelled?: boolean;
+  cancellationReason?: string;
 
   liveAudioPlayer?: AudioPlayer;
   liveVoiceEnabled?: boolean;
@@ -50,6 +63,7 @@ export interface MeetingData {
   liveVoiceTtsVoice?: string;
   liveVoiceCommandPending?: LiveVoiceCommandPending;
   liveVoiceThinkingCueState?: LiveVoiceThinkingCueState;
+  langfuseParentSpanContext?: SpanContext;
 
   chatTtsEnabled?: boolean;
   chatTtsVoice?: string;
@@ -82,6 +96,7 @@ export interface MeetingData {
   chatS3Key?: string;
   tags?: string[];
   startMessageId?: string;
+  messagesToDelete?: string[];
 }
 
 export interface MeetingSetup {

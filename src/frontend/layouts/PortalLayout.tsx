@@ -41,7 +41,7 @@ export default function PortalLayout() {
   });
   const showNavbar = !pathname.startsWith("/portal/select-server");
   const useInnerScroll =
-    pathname.startsWith("/portal/server/") && pathname.endsWith("/ask");
+    pathname.startsWith("/portal/server/") && pathname.includes("/ask");
 
   if (authState === "unauthenticated") {
     return <Navigate to="/" />;
