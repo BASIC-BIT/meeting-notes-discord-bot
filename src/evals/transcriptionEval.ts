@@ -661,7 +661,7 @@ async function runTranscriptionBatch(inputs: BatchInputs): Promise<EvalOutput> {
     const normalized = normalize(rawText);
     const promptLike = Boolean(
       (inputs.prompt || inputs.glossary) &&
-        isTranscriptionLikelyPrompt(normalized, inputs.prompt, inputs.glossary),
+      isTranscriptionLikelyPrompt(normalized, inputs.prompt, inputs.glossary),
     );
 
     const finalText = inputs.dropPromptLike && promptLike ? "" : normalized;
