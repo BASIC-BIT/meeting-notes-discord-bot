@@ -36,10 +36,10 @@ export default defineConfig({
       url: "http://localhost:3001/health",
       reuseExistingServer: reuseServer,
       env: mockEnv,
-      timeout: 120_000,
+      timeout: 180_000,
     },
     {
-      command: "yarn frontend:dev --host 127.0.0.1 --port 5173",
+      command: "yarn frontend:dev --host 0.0.0.0 --port 5173",
       url: "http://localhost:5173",
       reuseExistingServer: reuseServer,
       env: {
@@ -47,7 +47,7 @@ export default defineConfig({
         // Use Vite's proxy for local E2E to avoid CORS issues.
         VITE_API_BASE_URL: "",
       },
-      timeout: 120_000,
+      timeout: 180_000,
     },
   ],
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],

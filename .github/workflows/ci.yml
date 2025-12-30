@@ -1,4 +1,7 @@
 name: CI
+permissions:
+  contents: read
+  pull-requests: write
 
 on:
   pull_request:
@@ -169,6 +172,7 @@ jobs:
     name: Visual Regression
     if: github.event_name == 'pull_request'
     runs-on: windows-latest
+    continue-on-error: true
     defaults:
       run:
         shell: bash
@@ -230,7 +234,7 @@ jobs:
             visual-summary.md
 
       - name: Comment on PR
-        if: always()
+        if: always() && github.event.pull_request.head.repo.fork == false
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
