@@ -124,7 +124,9 @@ describe("Ask page", () => {
     });
     fireEvent.click(screen.getByTestId("ask-share"));
 
-    const linkInput = screen.getByLabelText("Public link") as HTMLInputElement;
+    const linkInput = (await screen.findByLabelText(
+      "Public link",
+    )) as HTMLInputElement;
     expect(linkInput.value).toContain("/share/ask/g1/c1");
     expect(screen.getByText("Make server-only")).toBeInTheDocument();
   });
@@ -170,7 +172,9 @@ describe("Ask page", () => {
     });
     fireEvent.click(screen.getByTestId("ask-share"));
 
-    const linkInput = screen.getByLabelText("Shared link") as HTMLInputElement;
+    const linkInput = (await screen.findByLabelText(
+      "Shared link",
+    )) as HTMLInputElement;
     expect(linkInput.value).toContain("/portal/server/g1/ask/c1");
     expect(linkInput.value).toContain("list=shared");
     expect(screen.queryByText("Make public")).not.toBeInTheDocument();

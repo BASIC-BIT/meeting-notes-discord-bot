@@ -118,6 +118,22 @@ const setupLiveVoice = async (responses: string[]) => {
       chat: { completions: { create: mockCreate } },
     })),
   }));
+  const mockGetLangfuseChatPrompt = jest.fn().mockResolvedValue({
+    messages: [
+      { role: "system", content: "You are a helpful assistant." },
+      { role: "user", content: "Stub prompt." },
+    ],
+    source: "langfuse",
+    langfusePrompt: {
+      name: "chronote-live-voice-gate-chat",
+      version: 1,
+      isFallback: true,
+    },
+  });
+  jest.doMock("../src/services/langfusePromptService", () => ({
+    __esModule: true,
+    getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
+  }));
 
   const liveVoice = await import("../src/liveVoice");
   return { maybeRespondLive: liveVoice.maybeRespondLive, mockCreate };
