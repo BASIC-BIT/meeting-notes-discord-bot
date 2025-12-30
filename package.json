@@ -71,8 +71,8 @@
   "author": "BASIC-BIT",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
-    "@aws-sdk/client-bedrock-data-automation-runtime": "^3.958.0",
     "@aws-sdk/client-appconfigdata": "^3.958.0",
+    "@aws-sdk/client-bedrock-data-automation-runtime": "^3.958.0",
     "@aws-sdk/client-dynamodb": "^3.958.0",
     "@aws-sdk/client-s3": "^3.958.0",
     "@aws-sdk/s3-request-presigner": "^3.958.0",
@@ -92,6 +92,7 @@
     "@opentelemetry/exporter-trace-otlp-http": "^0.208.0",
     "@opentelemetry/sdk-node": "^0.208.0",
     "@opentelemetry/sdk-trace-base": "^2.2.0",
+    "@snazzah/davey": "^0.1.9",
     "@tabler/icons-react": "^3.36.0",
     "@tanstack/react-query": "^5.90.15",
     "@tanstack/react-router": "^1.144.0",

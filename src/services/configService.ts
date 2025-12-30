@@ -173,6 +173,8 @@ class ConfigService {
     awsRegion: process.env.AWS_REGION || "us-east-1",
     endpoint: process.env.STORAGE_ENDPOINT,
     forcePathStyle: process.env.STORAGE_FORCE_PATH_STYLE === "true",
+    accessKeyId: process.env.STORAGE_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.STORAGE_SECRET_ACCESS_KEY || "",
   };
 
   // Bedrock Data Automation configuration (evals)

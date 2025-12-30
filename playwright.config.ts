@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const reuseServer = process.env.PW_REUSE_SERVER === "true";
+const baseUrl = "http://127.0.0.1:5173";
 const mockEnv = {
   MOCK_MODE: "true",
   ENABLE_OAUTH: "false",
@@ -25,7 +26,7 @@ export default defineConfig({
   fullyParallel: true,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: baseUrl,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -33,20 +34,24 @@ export default defineConfig({
   webServer: [
     {
       command: "yarn start:mock:once",
-      url: "http://localhost:3001/health",
+      url: "http://127.0.0.1:3001/health",
       reuseExistingServer: reuseServer,
       env: mockEnv,
+      stdout: "pipe",
+      stderr: "pipe",
       timeout: 180_000,
     },
     {
-      command: "yarn frontend:dev --host 0.0.0.0 --port 5173",
-      url: "http://localhost:5173",
+      command: "yarn frontend:dev --host 127.0.0.1 --port 5173",
+      url: baseUrl,
       reuseExistingServer: reuseServer,
       env: {
         ...mockEnv,
         // Use Vite's proxy for local E2E to avoid CORS issues.
         VITE_API_BASE_URL: "",
       },
+      stdout: "pipe",
+      stderr: "pipe",
       timeout: 180_000,
     },
   ],
