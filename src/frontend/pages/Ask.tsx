@@ -11,7 +11,6 @@ import {
   Loader,
   Modal,
   ScrollArea,
-  SegmentedControl,
   Stack,
   Text,
   TextInput,
@@ -22,29 +21,22 @@ import {
 import {
   IconMessage,
   IconPencil,
-  IconPlus,
-  IconSearch,
   IconX,
   IconCheck,
   IconSparkles,
   IconShare2,
   IconLink,
   IconCopy,
-  IconUsers,
 } from "@tabler/icons-react";
-import { format } from "date-fns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
+import { ConversationListPanel } from "../features/ask/ConversationListPanel";
 import { trpc } from "../services/trpc";
 import { useGuildContext } from "../contexts/GuildContext";
-import type {
-  AskConversation,
-  AskMessage,
-  AskSharedConversation,
-} from "../../types/ask";
+import type { AskConversation, AskMessage } from "../../types/ask";
 import { getDiscordOpenUrl } from "../utils/discordLinks";
 import {
   uiColors,
@@ -53,95 +45,15 @@ import {
   uiRadii,
   uiSpacing,
 } from "../uiTokens";
-
-const formatTime = (value: string) => format(new Date(value), "HH:mm");
-const formatUpdated = (value: string) => format(new Date(value), "MMM d");
-const truncate = (text: string, maxLen: number) =>
-  text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
-
-type ListMode = "mine" | "shared";
-
-const resolveListMode = (value: string | null): ListMode =>
-  value === "shared" ? "shared" : "mine";
-
-const buildAskUrl = (options: {
-  origin: string;
-  serverId: string;
-  conversationId: string;
-  listMode: ListMode;
-  messageId?: string | null;
-}) => {
-  const { origin, serverId, conversationId, listMode, messageId } = options;
-  const url = new URL(
-    `/portal/server/${serverId}/ask/${conversationId}`,
-    origin,
-  );
-  url.searchParams.set("list", listMode);
-  if (messageId) {
-    url.searchParams.set("messageId", messageId);
-  }
-  return url.toString();
-};
-
-const buildPublicAskUrl = (options: {
-  origin: string;
-  serverId: string;
-  conversationId: string;
-  messageId?: string | null;
-}) => {
-  const { origin, serverId, conversationId, messageId } = options;
-  const url = new URL(`/share/ask/${serverId}/${conversationId}`, origin);
-  if (messageId) {
-    url.searchParams.set("messageId", messageId);
-  }
-  return url.toString();
-};
-
-const buildThinkingMessage = (): AskMessage => ({
-  id: "thinking",
-  role: "chronote",
-  text: "Thinking...",
-  createdAt: new Date().toISOString(),
-});
-
-const hasOptimisticMessage = (
-  base: AskMessage[],
-  optimisticMessages: AskMessage[],
-) =>
-  base === optimisticMessages ||
-  base.some(
-    (msg) => msg.role === "user" && msg.text === optimisticMessages[0]?.text,
-  );
-
-const buildDisplayMessages = (options: {
-  activeConversation: AskConversation | null;
-  activeId: string | null;
-  activeMessages: AskMessage[];
-  optimisticMessages: AskMessage[];
-  isPending: boolean;
-}) => {
-  const {
-    activeConversation,
-    activeId,
-    activeMessages,
-    optimisticMessages,
-    isPending,
-  } = options;
-  const base =
-    activeConversation || activeId ? activeMessages : optimisticMessages;
-  const pending =
-    isPending && optimisticMessages.length > 0 ? [buildThinkingMessage()] : [];
-
-  if (!optimisticMessages.length) {
-    return [...base, ...pending];
-  }
-
-  if (hasOptimisticMessage(base, optimisticMessages)) {
-    return [...base, ...pending];
-  }
-
-  return [...base, ...optimisticMessages, ...pending];
-};
+import {
+  buildAskUrl,
+  buildDisplayMessages,
+  buildPublicAskUrl,
+  formatTime,
+  resolveListMode,
+  truncate,
+  type ListMode,
+} from "../utils/askLinks";
 
 export default function Ask() {
   const { selectedGuildId, guilds } = useGuildContext();
@@ -200,9 +112,9 @@ export default function Ask() {
     {
       enabled: Boolean(
         selectedGuildId &&
-          askAccessAllowed &&
-          sharingEnabled &&
-          listMode === "shared",
+        askAccessAllowed &&
+        sharingEnabled &&
+        listMode === "shared",
       ),
       staleTime: 30_000,
     },
@@ -222,10 +134,10 @@ export default function Ask() {
     {
       enabled: Boolean(
         selectedGuildId &&
-          askAccessAllowed &&
-          activeId &&
-          listMode === "shared" &&
-          sharingEnabled,
+        askAccessAllowed &&
+        activeId &&
+        listMode === "shared" &&
+        sharingEnabled,
       ),
       staleTime: 30_000,
       placeholderData: (prev) => prev,
@@ -278,6 +190,22 @@ export default function Ask() {
     [navigate, selectedGuildId],
   );
 
+  const handleListModeChange = useCallback(
+    (mode: ListMode) => {
+      setIsCreatingNew(false);
+      navigateToConversation(activeId, mode);
+    },
+    [activeId, navigateToConversation],
+  );
+
+  const listIds = useMemo(
+    () =>
+      listMode === "shared"
+        ? sharedConversations.map((conv) => conv.conversationId)
+        : mineConversations.map((conv) => conv.id),
+    [listMode, mineConversations, sharedConversations],
+  );
+
   useEffect(() => {
     if (!selectedGuildId) {
       setOptimisticMessages([]);
@@ -287,36 +215,45 @@ export default function Ask() {
     }
     if (!askAccessAllowed) {
       setIsCreatingNew(false);
-      return;
     }
-    if (listMode === "shared" && !sharingEnabled) {
+  }, [selectedGuildId, askAccessAllowed]);
+
+  useEffect(() => {
+    if (listMode !== "shared") return;
+    if (!sharingEnabled) {
       if (activeId) {
         navigateToConversation(null, listMode);
       }
       return;
     }
-    if (listMode === "shared" && isCreatingNew) {
+    if (isCreatingNew) {
       setIsCreatingNew(false);
     }
-    const listIds =
-      listMode === "shared"
-        ? sharedConversations.map((conv) => conv.conversationId)
-        : mineConversations.map((conv) => conv.id);
-    if (!isCreatingNew) {
-      if (!listIds.length) {
-        if (activeId) {
-          navigateToConversation(null, listMode);
-        }
-        return;
+  }, [
+    listMode,
+    sharingEnabled,
+    activeId,
+    isCreatingNew,
+    navigateToConversation,
+  ]);
+
+  useEffect(() => {
+    if (!selectedGuildId || !askAccessAllowed) return;
+    if (listMode === "shared" && !sharingEnabled) return;
+    if (isCreatingNew) return;
+    if (listIds.length === 0) {
+      if (activeId) {
+        navigateToConversation(null, listMode);
       }
-      if (!activeId || !listIds.includes(activeId)) {
-        const nextId =
-          listMode === "shared"
-            ? sharedConversations[0]?.conversationId
-            : mineConversations[0]?.id;
-        if (nextId) {
-          navigateToConversation(nextId, listMode);
-        }
+      return;
+    }
+    if (!activeId || !listIds.includes(activeId)) {
+      const nextId =
+        listMode === "shared"
+          ? sharedConversations[0]?.conversationId
+          : mineConversations[0]?.id;
+      if (nextId) {
+        navigateToConversation(nextId, listMode);
       }
     }
   }, [
@@ -324,10 +261,11 @@ export default function Ask() {
     askAccessAllowed,
     listMode,
     sharingEnabled,
+    isCreatingNew,
+    listIds,
+    activeId,
     sharedConversations,
     mineConversations,
-    activeId,
-    isCreatingNew,
     navigateToConversation,
   ]);
 
@@ -351,7 +289,6 @@ export default function Ask() {
         .includes(needle),
     );
   }, [query, sharedConversations]);
-  const listItems = listMode === "shared" ? filteredShared : filteredMine;
   const listError =
     listMode === "shared" ? sharedListQuery.error : listQuery.error;
 
@@ -820,210 +757,25 @@ export default function Ask() {
           align="stretch"
           styles={{ inner: { height: "100%" } }}
         >
-          <Grid.Col
-            span={{ base: 12, md: 4 }}
-            style={{
-              display: "flex",
-              minHeight: 0,
-              height: "100%",
-              maxHeight: "100%",
-            }}
-          >
-            <Surface
-              p="md"
-              tone="soft"
-              style={{
-                position: "relative",
-                overflow: "hidden",
-                display: "flex",
-                flexDirection: "column",
-                flex: 1,
-                minHeight: 0,
-                maxHeight: "100%",
+          <Grid.Col span={{ base: 12, md: 4 }} style={{ height: "100%" }}>
+            <ConversationListPanel
+              listMode={listMode}
+              onListModeChange={handleListModeChange}
+              query={query}
+              onQueryChange={setQuery}
+              mineConversations={filteredMine}
+              sharedConversations={filteredShared}
+              listBusy={listBusy}
+              listError={listError}
+              activeId={activeId}
+              onNewConversation={handleNewConversation}
+              navigateToConversation={(id, mode) => {
+                setIsCreatingNew(false);
+                navigateToConversation(id, mode);
               }}
-              data-testid="ask-conversations"
-            >
-              <LoadingOverlay
-                visible={listBusy}
-                data-testid="ask-loading-list"
-                overlayProps={uiOverlays.loading}
-                loaderProps={{ size: "md" }}
-              />
-              <Stack gap="sm" style={{ height: "100%", minHeight: 0 }}>
-                <Group
-                  justify="space-between"
-                  align="center"
-                  style={{
-                    paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
-                  }}
-                >
-                  <Text fw={600}>Conversations</Text>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    leftSection={<IconPlus size={14} />}
-                    onClick={handleNewConversation}
-                    disabled={listBusy || conversationBusy || !askAccessAllowed}
-                    loading={listBusy}
-                    data-testid="ask-new"
-                  >
-                    {listMode === "shared" ? "New chat" : "New"}
-                  </Button>
-                </Group>
-                <SegmentedControl
-                  fullWidth
-                  data={[
-                    { label: "My chats", value: "mine" },
-                    { label: "Shared", value: "shared" },
-                  ]}
-                  value={listMode}
-                  onChange={(value) => {
-                    setIsCreatingNew(false);
-                    navigateToConversation(activeId, value as ListMode);
-                  }}
-                  disabled={!selectedGuildId || !askAccessAllowed}
-                  data-testid="ask-list-toggle"
-                />
-                <TextInput
-                  placeholder="Search chats"
-                  value={query}
-                  onChange={(event) => setQuery(event.currentTarget.value)}
-                  leftSection={<IconSearch size={14} />}
-                  data-testid="ask-search"
-                  styles={{
-                    input: {
-                      paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
-                    },
-                  }}
-                />
-                <ScrollArea
-                  style={{ flex: 1, minHeight: 0 }}
-                  type="always"
-                  offsetScrollbars
-                  scrollbarSize={10}
-                  styles={{
-                    viewport: {
-                      paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
-                    },
-                  }}
-                >
-                  <Stack gap="sm">
-                    {!askAccessAllowed ? (
-                      <Center py="lg">
-                        <Text size="sm" c="dimmed">
-                          Ask access is disabled for members in this server.
-                        </Text>
-                      </Center>
-                    ) : listMode === "shared" && !sharingEnabled ? (
-                      <Center py="lg">
-                        <Text size="sm" c="dimmed">
-                          Sharing is disabled for this server.
-                        </Text>
-                      </Center>
-                    ) : listError ? (
-                      <Center py="lg">
-                        <Text size="sm" c="dimmed">
-                          Unable to load conversations.
-                        </Text>
-                      </Center>
-                    ) : listItems.length === 0 ? (
-                      <Center py="lg">
-                        <Text size="sm" c="dimmed">
-                          {listMode === "shared"
-                            ? "No shared conversations yet."
-                            : "No conversations yet."}
-                        </Text>
-                      </Center>
-                    ) : (
-                      listItems.map((conv) => {
-                        const convId =
-                          listMode === "shared"
-                            ? (conv as AskSharedConversation).conversationId
-                            : (conv as AskConversation).id;
-                        const conversation =
-                          listMode === "mine"
-                            ? (conv as AskConversation)
-                            : null;
-                        const convVisibility =
-                          conversation?.visibility ?? "private";
-                        const displayVisibility =
-                          convVisibility === "public" && !publicSharingEnabled
-                            ? "server"
-                            : convVisibility;
-                        const isActive = convId === activeId;
-                        return (
-                          <Surface
-                            key={convId}
-                            p="sm"
-                            tone={isActive ? "soft" : "default"}
-                            shadow={undefined}
-                            radius={uiRadii.surface}
-                            data-testid="ask-conversation-item"
-                            data-conversation-id={convId}
-                            style={{
-                              cursor: "pointer",
-                              boxShadow: isActive
-                                ? uiEffects.activeInset
-                                : undefined,
-                              borderColor: isActive
-                                ? uiColors.highlightBorderSoft
-                                : undefined,
-                            }}
-                            onClick={() => {
-                              setIsCreatingNew(false);
-                              navigateToConversation(convId, listMode);
-                            }}
-                          >
-                            <Stack gap={6}>
-                              <Group justify="space-between" align="center">
-                                <Text fw={600}>{conv.title}</Text>
-                                {listMode === "mine" ? (
-                                  <Text size="xs" c="dimmed" fw={600}>
-                                    {formatUpdated(conv.updatedAt)}
-                                  </Text>
-                                ) : null}
-                              </Group>
-                              <Text size="sm" c="dimmed" lineClamp={2}>
-                                {conv.summary ||
-                                  "Ask Chronote about a meeting."}
-                              </Text>
-                              {listMode === "mine" ? (
-                                displayVisibility !== "private" ? (
-                                  <Badge
-                                    size="xs"
-                                    variant="light"
-                                    color={
-                                      displayVisibility === "public"
-                                        ? "teal"
-                                        : "cyan"
-                                    }
-                                  >
-                                    {displayVisibility === "public"
-                                      ? "Public"
-                                      : "Shared"}
-                                  </Badge>
-                                ) : null
-                              ) : (
-                                <Group gap="xs" align="center">
-                                  <IconUsers
-                                    size={14}
-                                    color={uiColors.linkAccent}
-                                  />
-                                  <Text size="xs" c="dimmed">
-                                    {(conv as AskSharedConversation).ownerTag ??
-                                      "Unknown member"}
-                                  </Text>
-                                </Group>
-                              )}
-                            </Stack>
-                          </Surface>
-                        );
-                      })
-                    )}
-                  </Stack>
-                </ScrollArea>
-              </Stack>
-            </Surface>
+              sharingEnabled={sharingEnabled}
+              askAccessAllowed={askAccessAllowed}
+            />
           </Grid.Col>
           <Grid.Col
             span={{ base: 12, md: 8 }}

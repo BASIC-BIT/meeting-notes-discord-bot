@@ -36,6 +36,15 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 - `yarn prompts:push` syncs local prompts to Langfuse and skips unchanged prompts by default. Use `--dry-run` or `--debug-diff` when needed.
 - `yarn prompts:pull` pulls prompts from Langfuse into `prompts/`. It skips prompts that use `extends` unless `--force` is passed.
 - `yarn prompts:check` compares local prompts to Langfuse. It runs inside `yarn run check` and CI.
+- Prompt sync scripts use the Langfuse JS SDK and read the same `LANGFUSE_*` env vars as runtime.
+
+### Langfuse LLM connection sync
+
+- LLM connections live in `langfuse/llm-connections/*.yml`.
+- `yarn llm-connections:push` upserts local connections to Langfuse.
+- `yarn llm-connections:pull` pulls connections from Langfuse into YAML files.
+- `yarn llm-connections:check` compares local YAML with Langfuse (keys only, no secrets). It runs inside `yarn run check` and CI.
+- Details and schema: `docs/langfuse-llm-connections.md`.
 
 ## Checks
 
@@ -48,6 +57,7 @@ These checks run before PR merge and deployment. Use `yarn run check` for the fu
 - E2E tests (Playwright) validate critical user flows. Command: `yarn test:e2e`. Docs: https://playwright.dev/docs/running-tests
 - Code stats and complexity (scc + lizard) keep size and complexity visible. Command: `yarn code:stats`. Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can suppress known complexity offenders. Docs: https://github.com/boyter/scc and https://github.com/terryyin/lizard
 - Prompt sync (Langfuse) keeps repo prompt files aligned with Langfuse. Command: `yarn prompts:check`.
+- LLM connection sync (Langfuse) keeps LLM connection YAML aligned with Langfuse. Command: `yarn llm-connections:check`.
 - IaC scan (Checkov via uvx) catches Terraform misconfigurations. Command: `yarn checkov`. Docs: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html and https://docs.astral.sh/uv/concepts/tools/
 
 CI runs the same set as `yarn run check:ci` (see `.github/workflows/ci.yml`).
@@ -64,6 +74,7 @@ flowchart LR
   C --> E["build:all"]
   C --> F["code:stats"]
   C --> G["prompts:check"]
+  C --> H["llm-connections:check"]
 ```
 
 `yarn run check:ci`
@@ -78,6 +89,7 @@ flowchart LR
   A --> G["checkov"]
   A --> H["code:stats"]
   A --> I["prompts:check"]
+  A --> J["llm-connections:check"]
 ```
 
 PR CI workflow
@@ -92,6 +104,7 @@ flowchart LR
   A --> G["checkov job"]
   A --> H["code-stats job"]
   A --> P["prompts-check job"]
+  A --> Q["llm-connections-check job"]
 ```
 
 Deploy workflow (prod)
@@ -106,6 +119,7 @@ flowchart LR
   A --> G["checkov job"]
   A --> H["code-stats job"]
   A --> P["prompts-check job"]
+  A --> Q["llm-connections-check job"]
   B --> Z["checks complete"]
   C --> Z
   D --> Z
@@ -114,11 +128,12 @@ flowchart LR
   G --> Z
   H --> Z
   P --> Z
+  Q --> Z
   Z --> I["deploy backend"]
   Z --> J["deploy frontend"]
 ```
 
-Staging deploy is similar but skips Checkov and allows unit test failures to continue. Prompt check still runs.
+Staging deploy is similar but skips Checkov and allows unit test failures to continue. Prompt and LLM connection checks still run.
 
 Coverage update rule:
 

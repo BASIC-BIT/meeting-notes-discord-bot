@@ -1,0 +1,8 @@
+provider: bedrock
+adapter: bedrock
+secretKeyEnv: LANGFUSE_LLM_SECRET_BEDROCK
+withDefaultModels: true
+customModels:
+  - anthropic.claude-3-5-sonnet-20240620-v1:0
+config:
+  region: us-east-1

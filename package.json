@@ -44,8 +44,8 @@
     "docker:minio-init": "docker-compose run --rm minio-init",
     "checkov": "uvx --from checkov checkov -d _infra --quiet --compact",
     "check": "run-s lint prettier check:parallel",
-    "check:parallel": "run-p test build:all code:stats prompts:check",
-    "check:ci": "run-p lint:check prettier:check test build:all test:e2e checkov code:stats prompts:check",
+    "check:parallel": "run-p test build:all code:stats prompts:check llm-connections:check",
+    "check:ci": "run-p lint:check prettier:check test build:all test:e2e checkov code:stats prompts:check llm-connections:check",
     "stripe:listen": "stripe listen --forward-to http://localhost:3001/api/billing/webhook",
     "stripe:trigger": "stripe trigger",
     "stripe:trigger:checkout": "stripe trigger checkout.session.completed",
@@ -58,6 +58,9 @@
     "prompts:push": "ts-node scripts/prompts/push.ts",
     "prompts:pull": "ts-node scripts/prompts/pull.ts",
     "prompts:check": "ts-node scripts/prompts/check.ts",
+    "llm-connections:push": "ts-node scripts/llm-connections/push.ts",
+    "llm-connections:pull": "ts-node scripts/llm-connections/pull.ts",
+    "llm-connections:check": "ts-node scripts/llm-connections/check.ts",
     "code:stats": "scc --ci && scc --ci --by-file --sort lines && python -m lizard -l ts -l tsx -l js -l jsx src test"
   },
   "engines": {
@@ -166,6 +169,7 @@
     "typescript-eslint": "^8.51.0",
     "vite": "^7.3.0",
     "vite-tsconfig-paths": "^6.0.3",
+    "yaml": "^2.8.2",
     "yarn": "^1.22.22"
   },
   "funding": "https://ko-fi.com/basicbit",
