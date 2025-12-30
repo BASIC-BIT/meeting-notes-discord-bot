@@ -32,5 +32,6 @@ test("ask page lists conversations and sends a question (mock)", async ({
   await askPage.askWithKeyboard(question);
   await expect(askPage.userMessage(question)).toBeVisible();
   await expect(askPage.latestChronoteMessage()).toBeVisible();
+  await expect(askPage.input()).toBeEnabled();
   await expect(askPage.input()).toBeFocused();
 });

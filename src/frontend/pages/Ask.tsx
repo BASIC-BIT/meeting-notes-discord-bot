@@ -1377,7 +1377,8 @@ export default function Ask() {
                   ) : null}
                   <Group justify="space-between" align="center" wrap="wrap">
                     <Text size="xs" c="dimmed">
-                      Searches recent meetings by default.
+                      Searches recent meetings by default. Press Ctrl+Enter to
+                      send.
                     </Text>
                     <Button
                       variant="gradient"
