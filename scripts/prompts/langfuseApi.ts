@@ -41,7 +41,9 @@ export type PromptMetaListResponse = {
 
 function getBaseUrl(): string {
   const baseUrl = process.env.LANGFUSE_BASE_URL?.trim();
-  return baseUrl && baseUrl.length > 0 ? baseUrl : "https://cloud.langfuse.com";
+  return baseUrl && baseUrl.length > 0
+    ? baseUrl
+    : "https://us.cloud.langfuse.com";
 }
 
 function getAuthHeader(): string {
