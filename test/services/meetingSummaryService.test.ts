@@ -60,11 +60,42 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
       },
     ],
   });
+  const mockGetLangfuseChatPrompt = jest
+    .fn()
+    .mockImplementation(({ variables }) => ({
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        {
+          role: "user",
+          content: [
+            `Today is ${variables?.todayLabel ?? ""}.`,
+            `Server: ${variables?.serverName ?? ""}`,
+            `Channel: ${variables?.channelName ?? ""}`,
+            `Tags: ${variables?.tagLine ?? ""}`,
+            `${variables?.previousSummaryBlock ?? ""}`,
+            "Notes:",
+            `${variables?.notes ?? ""}`,
+          ]
+            .filter((line) => line.trim().length > 0)
+            .join("\n"),
+        },
+      ],
+      source: "langfuse",
+      langfusePrompt: {
+        name: "chronote-meeting-summary-chat",
+        version: 1,
+        isFallback: true,
+      },
+    }));
   jest.doMock("openai", () => ({
     __esModule: true,
     default: jest.fn().mockImplementation(() => ({
       chat: { completions: { create: mockCreate } },
     })),
+  }));
+  jest.doMock("../../src/services/langfusePromptService", () => ({
+    __esModule: true,
+    getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
   }));
 
   const { generateMeetingSummaries } = await import(
@@ -111,11 +142,24 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
 
 test("generateMeetingSummaries returns empty object on error", async () => {
   const mockCreate = jest.fn().mockRejectedValue(new Error("boom"));
+  const mockGetLangfuseChatPrompt = jest.fn().mockResolvedValue({
+    messages: [{ role: "system", content: "You are a helpful assistant." }],
+    source: "langfuse",
+    langfusePrompt: {
+      name: "chronote-meeting-summary-chat",
+      version: 1,
+      isFallback: true,
+    },
+  });
   jest.doMock("openai", () => ({
     __esModule: true,
     default: jest.fn().mockImplementation(() => ({
       chat: { completions: { create: mockCreate } },
     })),
+  }));
+  jest.doMock("../../src/services/langfusePromptService", () => ({
+    __esModule: true,
+    getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
   }));
 
   const { generateMeetingSummaries } = await import(

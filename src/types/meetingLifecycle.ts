@@ -28,7 +28,8 @@ export const MEETING_STATUS = {
   CANCELLED: "cancelled",
 } as const;
 
-export type MeetingStatus = (typeof MEETING_STATUS)[keyof typeof MEETING_STATUS];
+export type MeetingStatus =
+  (typeof MEETING_STATUS)[keyof typeof MEETING_STATUS];
 
 export const resolveMeetingStatus = (options: {
   cancelled?: boolean;

@@ -43,32 +43,35 @@ class ConfigService {
       parseInt(process.env.LANGFUSE_PROMPT_CACHE_TTL_MS || "60000", 10) ||
       60000,
     meetingSummaryPromptName:
-      process.env.LANGFUSE_PROMPT_MEETING_SUMMARY || "chronote-meeting-summary",
+      process.env.LANGFUSE_PROMPT_MEETING_SUMMARY ||
+      "chronote-meeting-summary-chat",
     notesPromptName:
-      process.env.LANGFUSE_PROMPT_NOTES || "chronote-notes-system",
+      process.env.LANGFUSE_PROMPT_NOTES || "chronote-notes-system-chat",
     notesLongStoryPromptName:
       process.env.LANGFUSE_PROMPT_NOTES_LONG_STORY ||
-      "chronote-notes-long-story",
+      "chronote-notes-long-story-chat",
     notesContextTestPromptName:
       process.env.LANGFUSE_PROMPT_NOTES_CONTEXT_TEST ||
-      "chronote-notes-context-test",
+      "chronote-notes-context-test-chat",
     transcriptionCleanupPromptName:
       process.env.LANGFUSE_PROMPT_TRANSCRIPTION_CLEANUP ||
-      "chronote-transcription-cleanup",
+      "chronote-transcription-cleanup-chat",
     imagePromptName:
-      process.env.LANGFUSE_PROMPT_IMAGE || "chronote-image-prompt",
-    askPromptName: process.env.LANGFUSE_PROMPT_ASK || "chronote-ask-system",
+      process.env.LANGFUSE_PROMPT_IMAGE || "chronote-image-prompt-chat",
+    askPromptName:
+      process.env.LANGFUSE_PROMPT_ASK || "chronote-ask-system-chat",
     notesCorrectionPromptName:
       process.env.LANGFUSE_PROMPT_NOTES_CORRECTION ||
-      "chronote-notes-correction",
+      "chronote-notes-correction-chat",
     liveVoiceGatePromptName:
-      process.env.LANGFUSE_PROMPT_LIVE_VOICE_GATE || "chronote-live-voice-gate",
+      process.env.LANGFUSE_PROMPT_LIVE_VOICE_GATE ||
+      "chronote-live-voice-gate-chat",
     liveVoiceConfirmPromptName:
       process.env.LANGFUSE_PROMPT_LIVE_VOICE_CONFIRM ||
-      "chronote-live-voice-confirm",
+      "chronote-live-voice-confirm-chat",
     liveVoiceResponderPromptName:
       process.env.LANGFUSE_PROMPT_LIVE_VOICE_RESPONDER ||
-      "chronote-live-voice-responder",
+      "chronote-live-voice-responder-chat",
   };
 
   // Context and Memory Configuration
@@ -149,6 +152,38 @@ class ConfigService {
     awsRegion: process.env.AWS_REGION || "us-east-1",
     endpoint: process.env.STORAGE_ENDPOINT,
     forcePathStyle: process.env.STORAGE_FORCE_PATH_STYLE === "true",
+  };
+
+  // Bedrock Data Automation configuration (evals)
+  readonly bedrock = {
+    dataAutomationProfileArn:
+      process.env.BEDROCK_DATA_AUTOMATION_PROFILE_ARN || "",
+    dataAutomationProjectArn:
+      process.env.BEDROCK_DATA_AUTOMATION_PROJECT_ARN || "",
+    dataAutomationInputBucket:
+      process.env.BEDROCK_DATA_AUTOMATION_INPUT_BUCKET ||
+      process.env.TRANSCRIPTS_BUCKET ||
+      "",
+    dataAutomationOutputBucket:
+      process.env.BEDROCK_DATA_AUTOMATION_OUTPUT_BUCKET ||
+      process.env.TRANSCRIPTS_BUCKET ||
+      "",
+    dataAutomationInputPrefix:
+      process.env.BEDROCK_DATA_AUTOMATION_INPUT_PREFIX ||
+      "bedrock-evals/inputs",
+    dataAutomationOutputPrefix:
+      process.env.BEDROCK_DATA_AUTOMATION_OUTPUT_PREFIX ||
+      "bedrock-evals/outputs",
+    dataAutomationPollIntervalMs:
+      parseInt(
+        process.env.BEDROCK_DATA_AUTOMATION_POLL_INTERVAL_MS || "2000",
+        10,
+      ) || 2000,
+    dataAutomationTimeoutMs:
+      parseInt(
+        process.env.BEDROCK_DATA_AUTOMATION_TIMEOUT_MS || "300000",
+        10,
+      ) || 300000,
   };
 
   // Server Configuration

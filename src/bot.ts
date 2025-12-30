@@ -71,6 +71,7 @@ import { fetchGuildInstaller } from "./services/guildInstallerService";
 import {
   MEETING_END_REASONS,
   MEETING_START_REASONS,
+  type AutoRecordRule,
 } from "./types/meetingLifecycle";
 
 const TOKEN = config.discord.botToken;
@@ -458,7 +459,7 @@ async function handleUserJoin(newState: VoiceState) {
             ? MEETING_START_REASONS.AUTO_RECORD_ALL
             : MEETING_START_REASONS.AUTO_RECORD_CHANNEL;
           const startTriggeredByUserId = newState.member.user.id;
-          const autoRecordRule = {
+          const autoRecordRule: AutoRecordRule = {
             mode: autoRecordSetting.recordAll ? "all" : "channel",
             channelId: autoRecordSetting.channelId,
           };

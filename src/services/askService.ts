@@ -5,7 +5,7 @@ import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
 import { ensureUserCanViewChannel } from "./discordPermissionsService";
 import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
-import { getLangfuseTextPrompt } from "./langfusePromptService";
+import { getLangfuseChatPrompt } from "./langfusePromptService";
 
 export type AskScope = "guild" | "channel";
 
@@ -180,15 +180,25 @@ export async function answerQuestionService(
   );
   const contextBlocks = buildContextBlocks(meetings, guildId);
 
-  const { prompt: systemPrompt, langfusePrompt } = await getLangfuseTextPrompt({
-    name: config.langfuse.askPromptName,
-  });
-
   const history = (req.history ?? []).slice(-10);
-  const historyMessages = history.map((msg) => ({
-    role: msg.role === "chronote" ? ("assistant" as const) : ("user" as const),
-    content: msg.text,
-  }));
+  const historyBlock =
+    history.length > 0
+      ? history
+          .map((msg) => {
+            const label = msg.role === "chronote" ? "Chronote" : "User";
+            return `${label}: ${msg.text}`;
+          })
+          .join("\n")
+      : "None.";
+
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.askPromptName,
+    variables: {
+      question,
+      contextBlocks: contextBlocks.join("\n"),
+      historyBlock,
+    },
+  });
 
   const modelChoice = getModelChoice("ask");
   const openAIClient = createOpenAIClient({
@@ -204,14 +214,7 @@ export async function answerQuestionService(
   });
   const completion = await openAIClient.chat.completions.create({
     model: modelChoice.model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      ...historyMessages,
-      {
-        role: "user",
-        content: `Question: ${question}\n\nContext:\n${contextBlocks.join("\n")}`,
-      },
-    ],
+    messages,
     max_completion_tokens: 300,
   });
 

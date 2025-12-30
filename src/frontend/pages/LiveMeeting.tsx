@@ -174,9 +174,7 @@ export default function LiveMeeting() {
           }
           height={520}
           title="Live transcript"
-          emptyLabel={
-            resolveTimelineEmptyLabel(stream.status)
-          }
+          emptyLabel={resolveTimelineEmptyLabel(stream.status)}
           headerActions={
             <>
               <Switch

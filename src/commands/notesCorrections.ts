@@ -26,7 +26,7 @@ import { formatNotesWithSummary } from "../utils/notesSummary";
 import { createOpenAIClient } from "../services/openaiClient";
 import { getModelChoice } from "../services/modelFactory";
 import { config } from "../services/configService";
-import { getLangfuseTextPrompt } from "../services/langfusePromptService";
+import { getLangfuseChatPrompt } from "../services/langfusePromptService";
 
 type PendingCorrection = {
   guildId: string;
@@ -126,25 +126,17 @@ async function generateCorrectedNotes({
   requesterTag,
   previousSuggestions,
 }: CorrectionInput): Promise<string> {
-  const { prompt: systemPrompt, langfusePrompt } = await getLangfuseTextPrompt({
-    name: config.langfuse.notesCorrectionPromptName,
-  });
-
   const priorSuggestions = formatSuggestionsForPrompt(previousSuggestions);
-
-  const userPrompt = `Current notes:
-${currentNotes}
-
-Previously approved suggestions (most recent first):
-${priorSuggestions}
-
-Transcript:
-${transcript}
-
-User (${requesterTag}) suggests:
-"${suggestion}"
-
-Return updated notes.`;
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.notesCorrectionPromptName,
+    variables: {
+      currentNotes,
+      priorSuggestions,
+      transcript,
+      requesterTag,
+      suggestion,
+    },
+  });
 
   try {
     const modelChoice = getModelChoice("notesCorrection");
@@ -160,10 +152,7 @@ Return updated notes.`;
     const completion = await openAIClient.chat.completions.create({
       model: modelChoice.model,
       temperature: 0,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+      messages,
     });
 
     const content = completion.choices[0]?.message?.content;

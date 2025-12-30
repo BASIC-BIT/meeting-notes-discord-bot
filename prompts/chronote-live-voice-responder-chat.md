@@ -1,5 +1,5 @@
 ---
-name: chronote-live-voice-responder
+name: chronote-live-voice-responder-chat
 type: chat
 labels:
   - production

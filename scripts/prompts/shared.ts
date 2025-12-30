@@ -90,6 +90,8 @@ function stripKnownKeys(data: PromptFrontMatter): Record<string, unknown> {
     tags,
     config,
     commitMessage,
+    extends: extendsList,
+    fragment,
     messages,
     prompt,
     version,
@@ -101,6 +103,8 @@ function stripKnownKeys(data: PromptFrontMatter): Record<string, unknown> {
   void tags;
   void config;
   void commitMessage;
+  void extendsList;
+  void fragment;
   void messages;
   void prompt;
   void version;

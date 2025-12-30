@@ -97,7 +97,7 @@ variable "LANGFUSE_PROMPT_LABEL" {
 variable "LANGFUSE_PROMPT_MEETING_SUMMARY" {
   description = "Langfuse prompt name for meeting summaries"
   type        = string
-  default     = "chronote-meeting-summary"
+  default     = "chronote-meeting-summary-chat"
 }
 
 variable "LANGFUSE_PROMPT_CACHE_TTL_MS" {
@@ -1182,6 +1182,38 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "TRANSCRIPTS_PREFIX"
           value = var.TRANSCRIPTS_PREFIX
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_PROFILE_ARN"
+          value = var.BEDROCK_DATA_AUTOMATION_PROFILE_ARN
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_PROJECT_ARN"
+          value = var.BEDROCK_DATA_AUTOMATION_PROJECT_ARN
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_INPUT_BUCKET"
+          value = local.bedrock_input_bucket_name
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_OUTPUT_BUCKET"
+          value = local.bedrock_output_bucket_name
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_INPUT_PREFIX"
+          value = var.BEDROCK_DATA_AUTOMATION_INPUT_PREFIX
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_OUTPUT_PREFIX"
+          value = var.BEDROCK_DATA_AUTOMATION_OUTPUT_PREFIX
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_POLL_INTERVAL_MS"
+          value = var.BEDROCK_DATA_AUTOMATION_POLL_INTERVAL_MS
+        },
+        {
+          name  = "BEDROCK_DATA_AUTOMATION_TIMEOUT_MS"
+          value = var.BEDROCK_DATA_AUTOMATION_TIMEOUT_MS
         },
         {
           name  = "DDB_TABLE_PREFIX"

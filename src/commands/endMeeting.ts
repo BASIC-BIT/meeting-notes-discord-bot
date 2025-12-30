@@ -87,7 +87,9 @@ export async function handleEndMeetingButton(
       await runEndMeetingFlow({
         client,
         meeting,
-        acknowledge: () => interaction.deferReply(),
+        acknowledge: async () => {
+          await interaction.deferReply();
+        },
         sendEndEmbed: async (chatLogFilePath, splitFiles) => {
           await sendMeetingEndEmbed(
             meeting,
@@ -221,7 +223,7 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
 
   if (meeting.transcribeMeeting) {
     let waitingForTranscriptionsMessage:
-      | { delete: () => Promise<void> }
+      | Awaited<ReturnType<typeof meeting.textChannel.send>>
       | undefined;
     if (!transcriptionsReady) {
       waitingForTranscriptionsMessage = await meeting.textChannel.send(

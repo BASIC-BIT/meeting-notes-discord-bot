@@ -1,5 +1,5 @@
 ---
-name: chronote-live-voice-confirm
+name: chronote-live-voice-confirm-chat
 type: chat
 labels:
   - production

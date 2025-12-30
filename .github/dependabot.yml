@@ -1,0 +1,55 @@
+version: 2
+
+multi-ecosystem-groups:
+  app:
+    schedule:
+      interval: "weekly"
+  infra:
+    schedule:
+      interval: "weekly"
+  tooling:
+    schedule:
+      interval: "weekly"
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "app"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "tooling"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "tooling"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "infra"
+
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "infra"
+
+  - package-ecosystem: "terraform"
+    directory: "/_infra"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "infra"
+
+  - package-ecosystem: "terraform"
+    directory: "/_infra_state_mgmt"
+    patterns:
+      - "*"
+    multi-ecosystem-group: "infra"

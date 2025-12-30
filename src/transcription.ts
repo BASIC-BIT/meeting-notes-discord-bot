@@ -47,9 +47,8 @@ import { getBotNameVariants } from "./utils/botNames";
 import { createOpenAIClient } from "./services/openaiClient";
 import { getModelChoice } from "./services/modelFactory";
 import {
-  getLangfuseTextPrompt,
+  getLangfuseChatPrompt,
   type LangfusePromptMeta,
-  type TextPromptResult,
 } from "./services/langfusePromptService";
 import { isLangfuseTracingEnabled } from "./services/langfuseClient";
 import {
@@ -351,22 +350,15 @@ export async function cleanupTranscription(
   meeting: MeetingData,
   transcription: string,
 ) {
-  const { prompt: systemPrompt, langfusePrompt } =
-    await getTranscriptionCleanupSystemPrompt(meeting);
+  const { messages, langfusePrompt } = await getTranscriptionCleanupPrompt(
+    meeting,
+    transcription,
+  );
   const modelChoice = getModelChoice("transcriptionCleanup");
   return await chat(
     meeting,
     {
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: transcription,
-        },
-      ],
+      messages: [...messages],
       temperature: 0,
     },
     {
@@ -481,10 +473,10 @@ ${content}
 </glossary>`;
 }
 
-export async function getTranscriptionCleanupSystemPrompt(
+export async function getTranscriptionCleanupPrompt(
   meeting: MeetingData,
-): Promise<TextPromptResult> {
-  // Build context data (without memory - too early in process)
+  transcription: string,
+) {
   const contextData = await buildMeetingContext(meeting, false);
   const formattedContext = formatContextForPrompt(contextData, "transcription");
 
@@ -503,7 +495,7 @@ export async function getTranscriptionCleanupSystemPrompt(
     .map((channel) => channel.name)
     .join(", ");
 
-  return await getLangfuseTextPrompt({
+  return await getLangfuseChatPrompt({
     name: config.langfuse.transcriptionCleanupPromptName,
     variables: {
       formattedContext,
@@ -514,6 +506,7 @@ export async function getTranscriptionCleanupSystemPrompt(
       roles,
       events,
       channelNames,
+      transcription,
     },
   });
 }
@@ -526,28 +519,18 @@ export async function getImage(meeting: MeetingData): Promise<string> {
     ? formattedContext.substring(0, 500)
     : "";
   const briefContextBlock = briefContext ? `Context: ${briefContext}. ` : "";
-  const { prompt: systemContent, langfusePrompt } = await getLangfuseTextPrompt(
-    {
-      name: config.langfuse.imagePromptName,
-      variables: {
-        briefContextBlock,
-      },
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.imagePromptName,
+    variables: {
+      briefContextBlock,
+      transcript: meeting.finalTranscript ?? "",
     },
-  );
+  });
 
   const imagePrompt = await chat(
     meeting,
     {
-      messages: [
-        {
-          role: "system",
-          content: systemContent,
-        },
-        {
-          role: "user",
-          content: meeting.finalTranscript!,
-        },
-      ],
+      messages: [...messages],
       temperature: 0.5,
     },
     {
@@ -634,9 +617,7 @@ function formatParticipantRoster(meeting: MeetingData): string | undefined {
     .join("\n");
 }
 
-export async function getNotesSystemPrompt(
-  meeting: MeetingData,
-): Promise<TextPromptResult> {
+export async function getNotesPrompt(meeting: MeetingData) {
   // Build context data with memory if enabled
   const contextData = await buildMeetingContext(meeting, isMemoryEnabled());
   const formattedContext = formatContextForPrompt(contextData, "notes");
@@ -673,7 +654,7 @@ export async function getNotesSystemPrompt(
       ? config.langfuse.notesContextTestPromptName
       : config.langfuse.notesPromptName;
 
-  return await getLangfuseTextPrompt({
+  return await getLangfuseChatPrompt({
     name: promptName,
     variables: {
       formattedContext,
@@ -693,26 +674,17 @@ export async function getNotesSystemPrompt(
       events,
       channelNames,
       longStoryTargetChars: config.notes.longStoryTargetChars,
+      transcript: meeting.finalTranscript ?? "",
     },
   });
 }
 
 export async function getNotes(meeting: MeetingData): Promise<string> {
-  const { prompt: systemPrompt, langfusePrompt } =
-    await getNotesSystemPrompt(meeting);
+  const { messages, langfusePrompt } = await getNotesPrompt(meeting);
   return await chat(
     meeting,
     {
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: meeting.finalTranscript!,
-        },
-      ],
+      messages: [...messages],
       temperature: 0,
     },
     {

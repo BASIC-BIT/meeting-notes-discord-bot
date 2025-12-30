@@ -32,11 +32,11 @@ async function collectExistingFrontMatter(dir: string) {
     for (const filePath of files) {
       try {
         const prompt = await readPromptFile(filePath);
-        const extra = prompt.extraFrontMatter;
-        const hasExtends =
-          typeof extra.extends === "string" ||
-          (Array.isArray(extra.extends) && extra.extends.length > 0);
-        existing.set(prompt.name, { extra, hasExtends });
+        const hasExtends = prompt.extends.length > 0;
+        existing.set(prompt.name, {
+          extra: prompt.extraFrontMatter,
+          hasExtends,
+        });
       } catch (error) {
         console.warn(`Skipping ${filePath}, unable to parse.`);
       }

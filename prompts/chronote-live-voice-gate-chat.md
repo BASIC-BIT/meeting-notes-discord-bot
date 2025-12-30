@@ -1,5 +1,5 @@
 ---
-name: chronote-live-voice-gate
+name: chronote-live-voice-gate-chat
 type: chat
 labels:
   - production

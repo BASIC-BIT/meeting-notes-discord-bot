@@ -1,7 +1,7 @@
 import { config } from "./configService";
 import type { SpanContext } from "@opentelemetry/api";
 import { formatLongDate } from "../utils/time";
-import { getLangfuseTextPrompt } from "./langfusePromptService";
+import { getLangfuseChatPrompt } from "./langfusePromptService";
 import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
 
@@ -44,12 +44,6 @@ function normalizeSummaryLabel(value?: string): string | undefined {
   return trimmed;
 }
 
-async function getMeetingSummarySystemPrompt() {
-  return await getLangfuseTextPrompt({
-    name: config.langfuse.meetingSummaryPromptName,
-  });
-}
-
 export function parseMeetingSummaryResponse(
   content: string,
 ): MeetingSummaries | undefined {
@@ -86,20 +80,22 @@ export async function generateMeetingSummaries(
   const previousSentence = input.previousSummarySentence?.trim();
   const previousLabel = input.previousSummaryLabel?.trim();
 
-  const { prompt: systemPrompt, langfusePrompt } =
-    await getMeetingSummarySystemPrompt();
-
-  const userPrompt = [
-    `Today is ${formatLongDate(now)}.`,
-    `Server: ${input.serverName}`,
-    `Channel: ${input.channelName}`,
-    `Tags: ${tagLine}`,
+  const previousSummaryBlock =
     previousSentence || previousLabel
       ? `Previous summary sentence: ${previousSentence || "(none)"}\nPrevious summary label: ${previousLabel || "(none)"}`
-      : "Previous summaries: (none)",
-    "Notes:",
-    input.notes,
-  ].join("\n");
+      : "Previous summaries: (none)";
+
+  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
+    name: config.langfuse.meetingSummaryPromptName,
+    variables: {
+      todayLabel: formatLongDate(now),
+      serverName: input.serverName,
+      channelName: input.channelName,
+      tagLine,
+      previousSummaryBlock,
+      notes: input.notes,
+    },
+  });
 
   try {
     const modelChoice = getModelChoice("meetingSummary");
@@ -116,10 +112,7 @@ export async function generateMeetingSummaries(
     });
     const completion = await openAIClient.chat.completions.create({
       model: modelChoice.model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+      messages,
       temperature: 0,
       response_format: { type: "json_object" },
       max_completion_tokens: 160,

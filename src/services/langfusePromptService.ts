@@ -13,8 +13,19 @@ export type TextPromptResult = {
   source: "langfuse" | "fallback";
 };
 
+type ChatRole = "system" | "user" | "assistant";
+
+const allowedChatRoles: Record<ChatRole, true> = {
+  system: true,
+  user: true,
+  assistant: true,
+};
+
+const isChatRole = (value: string): value is ChatRole =>
+  Object.prototype.hasOwnProperty.call(allowedChatRoles, value);
+
 export type ChatMessage = {
-  role: string;
+  role: ChatRole;
   content: string;
 };
 
@@ -130,6 +141,11 @@ export async function getLangfuseChatPrompt(options: {
       ) {
         throw new Error(
           `Langfuse chat prompt "${options.name}" has invalid messages.`,
+        );
+      }
+      if (!isChatRole(message.role)) {
+        throw new Error(
+          `Langfuse chat prompt "${options.name}" has unsupported role "${message.role}".`,
         );
       }
       return { role: message.role, content: message.content };

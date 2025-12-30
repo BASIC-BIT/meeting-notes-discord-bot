@@ -6,3 +6,5 @@ src/frontend/pages/PublicAsk.tsx:(anonymous)
 src\frontend\pages\PublicAsk.tsx:(anonymous)
 src/services/autoRecordCancellationService.ts:evaluateAutoRecordCancellation
 src\services\autoRecordCancellationService.ts:evaluateAutoRecordCancellation
+src/commands/endMeeting.ts:runEndMeetingFlow
+src\commands\endMeeting.ts:runEndMeetingFlow

@@ -1,7 +1,22 @@
+import { randomUUID } from "node:crypto";
 import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { z } from "zod";
+import matter from "gray-matter";
 import { distance as levenshteinDistance } from "fastest-levenshtein";
+import {
+  BedrockDataAutomationRuntimeClient,
+  GetDataAutomationStatusCommand,
+  InvokeDataAutomationAsyncCommand,
+  type GetDataAutomationStatusCommandOutput,
+} from "@aws-sdk/client-bedrock-data-automation-runtime";
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import type { TranscriptionCreateParamsNonStreaming } from "openai/resources/audio";
 import { createOpenAIClient } from "../services/openaiClient";
 import { getModelChoice } from "../services/modelFactory";
 import { config } from "../services/configService";
@@ -11,7 +26,7 @@ import {
   isLangfuseEnabled,
 } from "../services/langfuseClient";
 
-type ProviderName = "openai";
+type ProviderName = "openai" | "bedrock";
 
 type EvalOptions = {
   file?: string;
@@ -58,6 +73,28 @@ type EvalOutput = {
   avgDurationMs: number;
 };
 
+type PromptChatMessage = {
+  role?: string;
+  content?: string;
+};
+
+type PromptFrontMatter = {
+  type?: string;
+  messages?: PromptChatMessage[];
+  prompt?: PromptChatMessage[];
+};
+
+type BedrockEvalConfig = {
+  dataAutomationProfileArn: string;
+  dataAutomationProjectArn: string;
+  inputBucket: string;
+  outputBucket: string;
+  inputPrefix: string;
+  outputPrefix: string;
+  pollIntervalMs: number;
+  timeoutMs: number;
+};
+
 type PromptInputs = {
   prompt?: string;
   promptFile?: string;
@@ -69,24 +106,11 @@ type ReferenceInputs = {
   referenceFile?: string;
 };
 
-type TranscriptionRequest = {
-  file: NodeJS.ReadableStream;
-  model: string;
-  language: string;
-  response_format: "json";
-  prompt?: string;
-  temperature?: number;
-};
-
 type BatchInputs = {
-  client: ReturnType<typeof createOpenAIClient>;
-  filePath: string;
+  transcribeOnce: () => Promise<string>;
   runs: number;
-  model: string;
-  language: string;
   prompt: string;
   glossary: string;
-  temperature?: number;
   delayMs: number;
   dropPromptLike: boolean;
   quiet: boolean;
@@ -131,6 +155,16 @@ const EvalOutputSchema = z.object({
   avgDurationMs: z.number(),
 });
 
+const BdaAudioSegmentSchema = z.object({
+  type: z.string().optional(),
+  text: z.string().optional(),
+  start_timestamp_millis: z.number().optional(),
+});
+
+const BdaOutputSchema = z.object({
+  audio_segments: z.array(BdaAudioSegmentSchema).optional(),
+});
+
 const HELP_TEXT = `
 Usage:
   yarn eval:transcription --file <path> [options]
@@ -142,7 +176,7 @@ Options:
   --language                Language code (default en)
   --temperature             Temperature override
   --prompt                  Inline prompt text
-  --prompt-file             Path to prompt file
+  --prompt-file             Path to prompt file (plain text or Langfuse chat prompt)
   --glossary-file           Path to glossary file (used for prompt-like checks)
   --reference               Reference transcript text (for WER)
   --reference-file          Path to reference transcript file
@@ -151,7 +185,7 @@ Options:
   --output                  Write JSON results to a file
   --quiet                   Suppress per-run logs
   --trace                   Enable Langfuse OpenAI tracing
-  --provider                Transcription provider (default openai)
+  --provider                Transcription provider (openai | bedrock)
   --dataset, --langfuse-dataset   Run against a Langfuse dataset
   --experiment, --langfuse-experiment  Langfuse experiment name
   --help, -h                Show this help
@@ -177,6 +211,43 @@ function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function extractChatPrompt(messages: PromptChatMessage[]): string {
+  const normalized = messages
+    .map((message) => ({
+      role: (message.role ?? "").toLowerCase(),
+      content: message.content?.trim() ?? "",
+    }))
+    .filter((message) => message.content.length > 0);
+
+  const systemMessages = normalized.filter(
+    (message) => message.role === "system",
+  );
+  const selected = systemMessages.length > 0 ? systemMessages : normalized;
+  return selected.map((message) => message.content).join("\n\n");
+}
+
+async function readPromptFileContent(
+  value?: string,
+): Promise<string | undefined> {
+  if (!value) return undefined;
+  const resolved = path.resolve(process.cwd(), value);
+  const raw = await fs.readFile(resolved, "utf8");
+  const trimmed = raw.trimStart();
+  if (!trimmed.startsWith("---")) {
+    return raw.trim();
+  }
+  const parsed = matter(raw);
+  const data = parsed.data as PromptFrontMatter;
+  if (data.type === "chat") {
+    const messages = data.messages ?? data.prompt;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return "";
+    }
+    return extractChatPrompt(messages);
+  }
+  return parsed.content.trim();
+}
+
 function normalizeForCompare(value: string): string {
   return value
     .toLowerCase()
@@ -188,6 +259,34 @@ function normalizeForCompare(value: string): string {
 function tokenize(value: string): string[] {
   const cleaned = normalizeForCompare(value);
   return cleaned.length === 0 ? [] : cleaned.split(" ");
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value : `${value}/`;
+}
+
+function stripLeadingSlash(value: string): string {
+  return value.startsWith("/") ? value.slice(1) : value;
+}
+
+function buildS3Uri(bucket: string, key: string): string {
+  return `s3://${bucket}/${stripLeadingSlash(key)}`;
+}
+
+function parseS3Uri(uri: string): { bucket: string; key: string } {
+  const match = /^s3:\/\/([^/]+)\/(.+)$/.exec(uri);
+  if (!match) {
+    throw new Error(`Invalid S3 URI: ${uri}`);
+  }
+  return { bucket: match[1], key: decodeURIComponent(match[2]) };
+}
+
+async function streamToString(stream: Readable): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function wordErrorRate(reference: string, hypothesis: string): number | null {
@@ -269,6 +368,38 @@ function isTranscriptionLikelyPrompt(
   );
 }
 
+function resolveBedrockConfig(): BedrockEvalConfig {
+  const inputBucket = config.bedrock.dataAutomationInputBucket;
+  const outputBucket = config.bedrock.dataAutomationOutputBucket;
+
+  if (!config.bedrock.dataAutomationProfileArn) {
+    throw new Error(
+      "BEDROCK_DATA_AUTOMATION_PROFILE_ARN is required for Bedrock evals.",
+    );
+  }
+  if (!inputBucket || !outputBucket) {
+    throw new Error(
+      "BEDROCK_DATA_AUTOMATION_INPUT_BUCKET or TRANSCRIPTS_BUCKET is required for Bedrock evals.",
+    );
+  }
+  if (config.storage.endpoint) {
+    throw new Error(
+      "Bedrock evals require AWS S3. STORAGE_ENDPOINT is set to a custom value.",
+    );
+  }
+
+  return {
+    dataAutomationProfileArn: config.bedrock.dataAutomationProfileArn,
+    dataAutomationProjectArn: config.bedrock.dataAutomationProjectArn,
+    inputBucket,
+    outputBucket,
+    inputPrefix: config.bedrock.dataAutomationInputPrefix,
+    outputPrefix: config.bedrock.dataAutomationOutputPrefix,
+    pollIntervalMs: config.bedrock.dataAutomationPollIntervalMs,
+    timeoutMs: config.bedrock.dataAutomationTimeoutMs,
+  };
+}
+
 function parseOptions(): EvalOptions {
   if (hasFlag("--help") || hasFlag("-h")) {
     console.log(HELP_TEXT);
@@ -304,9 +435,10 @@ function parseOptions(): EvalOptions {
   const referenceFile = readFlagValue("--reference-file");
 
   const providerRaw = (readFlagValue("--provider") ?? "openai").toLowerCase();
-  if (providerRaw !== "openai") {
-    throw new Error("Only --provider openai is supported for now.");
+  if (providerRaw !== "openai" && providerRaw !== "bedrock") {
+    throw new Error("Only --provider openai or bedrock is supported for now.");
   }
+  const provider = providerRaw as ProviderName;
 
   const datasetFlag =
     readFlagValue("--langfuse-dataset") ?? readFlagValue("--dataset");
@@ -338,7 +470,7 @@ function parseOptions(): EvalOptions {
     quiet: hasFlag("--quiet"),
     reference,
     referenceFile,
-    provider: "openai",
+    provider,
     langfuseDataset,
     langfuseExperiment,
     useDataset,
@@ -348,7 +480,7 @@ function parseOptions(): EvalOptions {
 async function resolvePrompt(
   options: PromptInputs,
 ): Promise<{ prompt: string; glossary: string }> {
-  const promptFromFile = await readOptionalFile(options.promptFile);
+  const promptFromFile = await readPromptFileContent(options.promptFile);
   const glossaryFromFile = await readOptionalFile(options.glossaryFile);
   return {
     prompt: options.prompt ?? promptFromFile ?? "",
@@ -363,6 +495,69 @@ async function resolveReference(
   return options.reference ?? referenceFromFile;
 }
 
+function extractTranscriptFromBda(payload: unknown): string {
+  const parsed = BdaOutputSchema.safeParse(payload);
+  if (!parsed.success || !parsed.data.audio_segments) {
+    return "";
+  }
+
+  const segments = parsed.data.audio_segments;
+  const transcriptSegments = segments.filter(
+    (segment) => (segment.type ?? "").toUpperCase() === "TRANSCRIPT",
+  );
+  const selected =
+    transcriptSegments.length > 0 ? transcriptSegments : segments;
+  const ordered = selected
+    .filter((segment) => segment.text && segment.text.trim().length > 0)
+    .sort(
+      (a, b) =>
+        (a.start_timestamp_millis ?? 0) - (b.start_timestamp_millis ?? 0),
+    );
+
+  return ordered.map((segment) => segment.text?.trim()).join(" ");
+}
+
+async function waitForBedrockOutput(
+  client: BedrockDataAutomationRuntimeClient,
+  invocationArn: string,
+  config: BedrockEvalConfig,
+): Promise<GetDataAutomationStatusCommandOutput> {
+  const deadline = Date.now() + config.timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await client.send(
+      new GetDataAutomationStatusCommand({ invocationArn }),
+    );
+    const state = status.status ?? "Unknown";
+    if (state === "Success") {
+      return status;
+    }
+    if (state === "ServiceError" || state === "ClientError") {
+      const message = status.errorMessage ?? "Unknown Bedrock error.";
+      const errorType = status.errorType ?? "UnknownError";
+      throw new Error(
+        `Bedrock Data Automation failed: ${errorType} ${message}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
+  }
+  throw new Error("Timed out waiting for Bedrock Data Automation output.");
+}
+
+async function readJsonFromS3(
+  client: S3Client,
+  s3Uri: string,
+): Promise<unknown> {
+  const { bucket, key } = parseS3Uri(s3Uri);
+  const response = await client.send(
+    new GetObjectCommand({ Bucket: bucket, Key: key }),
+  );
+  if (!response.Body) {
+    throw new Error(`Empty S3 response body for ${s3Uri}`);
+  }
+  const body = await streamToString(response.Body as Readable);
+  return JSON.parse(body);
+}
+
 async function transcribeWithOpenAI(
   client: ReturnType<typeof createOpenAIClient>,
   filePath: string,
@@ -373,7 +568,7 @@ async function transcribeWithOpenAI(
     temperature?: number;
   },
 ): Promise<string> {
-  const request: TranscriptionRequest = {
+  const request: TranscriptionCreateParamsNonStreaming<"json"> = {
     file: createReadStream(filePath),
     model: options.model,
     language: options.language,
@@ -391,6 +586,66 @@ async function transcribeWithOpenAI(
   return response.text ?? "";
 }
 
+async function transcribeWithBedrock(
+  bedrockClient: BedrockDataAutomationRuntimeClient,
+  s3Client: S3Client,
+  filePath: string,
+  bedrockConfig: BedrockEvalConfig,
+): Promise<string> {
+  const inputKey = `${stripLeadingSlash(
+    ensureTrailingSlash(bedrockConfig.inputPrefix),
+  )}${randomUUID()}-${path.basename(filePath)}`;
+  const outputPrefix = `${stripLeadingSlash(
+    ensureTrailingSlash(bedrockConfig.outputPrefix),
+  )}${randomUUID()}/`;
+  const inputS3Uri = buildS3Uri(bedrockConfig.inputBucket, inputKey);
+  const outputS3Uri = buildS3Uri(bedrockConfig.outputBucket, outputPrefix);
+
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: bedrockConfig.inputBucket,
+      Key: inputKey,
+      Body: createReadStream(filePath),
+    }),
+  );
+
+  const invokeResponse = await bedrockClient.send(
+    new InvokeDataAutomationAsyncCommand({
+      dataAutomationProfileArn: bedrockConfig.dataAutomationProfileArn,
+      dataAutomationConfiguration: bedrockConfig.dataAutomationProjectArn
+        ? {
+            dataAutomationProjectArn: bedrockConfig.dataAutomationProjectArn,
+          }
+        : undefined,
+      inputConfiguration: {
+        s3Uri: inputS3Uri,
+      },
+      outputConfiguration: {
+        s3Uri: outputS3Uri,
+      },
+    }),
+  );
+
+  if (!invokeResponse.invocationArn) {
+    throw new Error(
+      "Bedrock Data Automation did not return an invocation ARN.",
+    );
+  }
+
+  const status = await waitForBedrockOutput(
+    bedrockClient,
+    invokeResponse.invocationArn,
+    bedrockConfig,
+  );
+  const outputUri = status.outputConfiguration?.s3Uri;
+  if (!outputUri) {
+    throw new Error("Bedrock Data Automation did not return an output URI.");
+  }
+
+  const payload = await readJsonFromS3(s3Client, outputUri);
+  return extractTranscriptFromBda(payload);
+}
+
 async function runTranscriptionBatch(inputs: BatchInputs): Promise<EvalOutput> {
   const results: EvalResult[] = [];
   const counts = new Map<string, number>();
@@ -399,12 +654,7 @@ async function runTranscriptionBatch(inputs: BatchInputs): Promise<EvalOutput> {
 
   for (let i = 0; i < inputs.runs; i += 1) {
     const start = Date.now();
-    const rawText = await transcribeWithOpenAI(inputs.client, inputs.filePath, {
-      model: inputs.model,
-      language: inputs.language,
-      prompt: inputs.prompt,
-      temperature: inputs.temperature,
-    });
+    const rawText = await inputs.transcribeOnce();
     const durationMs = Date.now() - start;
     totalDurationMs += durationMs;
 
@@ -503,22 +753,42 @@ async function runFileEval(options: EvalOptions) {
   const filePath = path.resolve(process.cwd(), options.file);
   await fs.access(filePath);
 
-  const client = createOpenAIClient({
-    traceName: options.trace ? "transcription-eval" : undefined,
-    generationName: options.trace ? "transcription-eval" : undefined,
-    tags: options.trace ? ["eval:transcription"] : undefined,
-    disableTracing: !options.trace,
-  });
-
   const output = await runTranscriptionBatch({
-    client,
-    filePath,
+    transcribeOnce:
+      options.provider === "openai"
+        ? (() => {
+            const client = createOpenAIClient({
+              traceName: options.trace ? "transcription-eval" : undefined,
+              generationName: options.trace ? "transcription-eval" : undefined,
+              tags: options.trace ? ["eval:transcription"] : undefined,
+              disableTracing: !options.trace,
+            });
+            return () =>
+              transcribeWithOpenAI(client, filePath, {
+                model: options.model,
+                language: options.language,
+                prompt,
+                temperature: options.temperature,
+              });
+          })()
+        : (() => {
+            const bedrockConfig = resolveBedrockConfig();
+            const region = config.storage.awsRegion;
+            const bedrockClient = new BedrockDataAutomationRuntimeClient({
+              region,
+            });
+            const s3Client = new S3Client({ region });
+            return () =>
+              transcribeWithBedrock(
+                bedrockClient,
+                s3Client,
+                filePath,
+                bedrockConfig,
+              );
+          })(),
     runs: options.runs,
-    model: options.model,
-    language: options.language,
     prompt,
     glossary,
-    temperature: options.temperature,
     delayMs: options.delayMs,
     dropPromptLike: options.dropPromptLike,
     quiet: options.quiet,
@@ -528,6 +798,7 @@ async function runFileEval(options: EvalOptions) {
 
   if (options.output) {
     const payload = {
+      provider: options.provider,
       model: options.model,
       file: options.file,
       runs: options.runs,
@@ -564,12 +835,24 @@ async function runLangfuseEval(options: EvalOptions) {
     throw new Error("Langfuse client is unavailable.");
   }
 
-  const client = createOpenAIClient({
-    traceName: options.trace ? "transcription-eval" : undefined,
-    generationName: options.trace ? "transcription-eval" : undefined,
-    tags: options.trace ? ["eval:transcription"] : undefined,
-    disableTracing: !options.trace,
-  });
+  const openAiClient =
+    options.provider === "openai"
+      ? createOpenAIClient({
+          traceName: options.trace ? "transcription-eval" : undefined,
+          generationName: options.trace ? "transcription-eval" : undefined,
+          tags: options.trace ? ["eval:transcription"] : undefined,
+          disableTracing: !options.trace,
+        })
+      : null;
+  const bedrockConfig =
+    options.provider === "bedrock" ? resolveBedrockConfig() : null;
+  const region = config.storage.awsRegion;
+  const bedrockClient =
+    options.provider === "bedrock"
+      ? new BedrockDataAutomationRuntimeClient({ region })
+      : null;
+  const s3Client =
+    options.provider === "bedrock" ? new S3Client({ region }) : null;
 
   const dataset = await langfuse.dataset.get(datasetName);
 
@@ -587,14 +870,25 @@ async function runLangfuseEval(options: EvalOptions) {
       await fs.access(filePath);
 
       const output = await runTranscriptionBatch({
-        client,
-        filePath,
+        transcribeOnce:
+          options.provider === "openai"
+            ? () =>
+                transcribeWithOpenAI(openAiClient!, filePath, {
+                  model: options.model,
+                  language: input.language ?? options.language,
+                  prompt,
+                  temperature: input.temperature ?? options.temperature,
+                })
+            : () =>
+                transcribeWithBedrock(
+                  bedrockClient!,
+                  s3Client!,
+                  filePath,
+                  bedrockConfig!,
+                ),
         runs: input.runs ?? options.runs,
-        model: options.model,
-        language: input.language ?? options.language,
         prompt,
         glossary,
-        temperature: input.temperature ?? options.temperature,
         delayMs: options.delayMs,
         dropPromptLike: options.dropPromptLike,
         quiet: true,
@@ -653,11 +947,10 @@ async function runLangfuseEval(options: EvalOptions) {
 }
 
 async function runEval() {
-  if (!config.openai.apiKey) {
+  const options = parseOptions();
+  if (options.provider === "openai" && !config.openai.apiKey) {
     throw new Error("OPENAI_API_KEY is required to run transcription evals.");
   }
-
-  const options = parseOptions();
 
   if (options.useDataset) {
     await runLangfuseEval(options);

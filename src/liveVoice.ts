@@ -162,10 +162,7 @@ async function generateReply(
     timestamp: segment.timestamp,
   };
 
-  const { variables, debug } = await buildLiveResponderContext(
-    meeting,
-    latest,
-  );
+  const { variables, debug } = await buildLiveResponderContext(meeting, latest);
 
   const todayLabel = formatLongDate(new Date());
   const { messages, langfusePrompt } = await getLangfuseChatPrompt({
