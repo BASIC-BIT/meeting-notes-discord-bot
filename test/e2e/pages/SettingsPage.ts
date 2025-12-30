@@ -50,11 +50,13 @@ export class SettingsPage {
   }
 
   removeFirstOverride(): Locator {
-    return this.firstOverride().getByTestId(testIds.settings.removeOverride);
+    return this.firstOverride().getByRole("button", {
+      name: /remove override/i,
+    });
   }
 
   async openFirstOverrideEdit(): Promise<void> {
-    await this.firstOverride().getByRole("button", { name: /edit/i }).click();
+    await this.firstOverride().click();
   }
 
   modal(): Locator {
@@ -78,19 +80,15 @@ export class SettingsPage {
   }
 
   chatTtsToggle(): Locator {
-    return this.page.getByText(/enable chat-to-speech by default/i);
+    return this.page.getByRole("button", { name: /chat tts/i });
   }
 
   chronoteVoiceSelect(): Locator {
-    return this.page.getByRole("textbox", {
-      name: /default chronote voice/i,
-    });
+    return this.page.getByRole("textbox", { name: /live voice tts voice/i });
   }
 
   chatTtsVoiceSelect(): Locator {
-    return this.page.getByRole("textbox", {
-      name: /default chat-to-speech voice/i,
-    });
+    return this.page.getByPlaceholder(/chat tts voice/i);
   }
 
   async selectChronoteVoice(label: string): Promise<void> {

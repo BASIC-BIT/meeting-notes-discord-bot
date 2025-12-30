@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActionIcon,
   Badge,
   Box,
   Button,
@@ -10,12 +9,9 @@ import {
   Group,
   Loader,
   Modal,
-  MultiSelect,
   ScrollArea,
-  SimpleGrid,
   Stack,
   Text,
-  TextInput,
   ThemeIcon,
   Title,
   useComputedColorScheme,
@@ -23,19 +19,15 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import {
-  IconChevronRight,
   IconDownload,
   IconFilter,
   IconMicrophone,
   IconNote,
-  IconRefresh,
-  IconSearch,
   IconUsers,
 } from "@tabler/icons-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
-import FormSelect from "../components/FormSelect";
 import MeetingTimeline, {
   MEETING_TIMELINE_FILTERS,
 } from "../components/MeetingTimeline";
@@ -64,6 +56,8 @@ import {
   MEETING_STATUS,
   type MeetingStatus,
 } from "../../types/meetingLifecycle";
+import { FiltersBar } from "../features/library/FiltersBar";
+import { MeetingList } from "../features/library/MeetingList";
 
 type MeetingExport = {
   meeting: {
@@ -108,32 +102,13 @@ type MeetingSummaryRow = {
   status?: MeetingStatus;
 };
 
-type MeetingListItem = MeetingSummaryRow & {
+export type MeetingListItem = MeetingSummaryRow & {
   title: string;
   summary: string;
   summaryLabel?: string;
   dateLabel: string;
   durationLabel: string;
   channelLabel: string;
-};
-
-const renderListStatusBadge = (status?: MeetingStatus) => {
-  switch (status) {
-    case MEETING_STATUS.IN_PROGRESS:
-      return (
-        <Badge color="red" variant="light">
-          Live
-        </Badge>
-      );
-    case MEETING_STATUS.PROCESSING:
-      return (
-        <Badge color="yellow" variant="light">
-          Processing
-        </Badge>
-      );
-    default:
-      return null;
-  }
 };
 
 const renderDetailStatusBadge = (status?: MeetingStatus) => {
@@ -317,7 +292,6 @@ export default function Library() {
   const listLoading = meetingsQuery.isLoading || channelsQuery.isLoading;
   const listError = meetingsQuery.error ?? channelsQuery.error;
   const detailLoading = detailQuery.isLoading || detailQuery.isFetching;
-  const [refreshing, setRefreshing] = useState(false);
   const refetchedMeetingRef = useRef<string | null>(null);
 
   const meetingKey = meeting?.id ?? null;
@@ -345,16 +319,11 @@ export default function Library() {
 
   const handleRefresh = async () => {
     if (!selectedGuildId) return;
-    try {
-      setRefreshing(true);
-      await Promise.all([
-        trpcUtils.meetings.list.invalidate({ serverId: selectedGuildId }),
-        trpcUtils.meetings.detail.invalidate(),
-        trpcUtils.servers.channels.invalidate({ serverId: selectedGuildId }),
-      ]);
-    } finally {
-      setRefreshing(false);
-    }
+    await Promise.all([
+      trpcUtils.meetings.list.invalidate({ serverId: selectedGuildId }),
+      trpcUtils.meetings.detail.invalidate(),
+      trpcUtils.servers.channels.invalidate({ serverId: selectedGuildId }),
+    ]);
   };
 
   const preflightEndMeeting = async () => {
@@ -454,42 +423,18 @@ export default function Library() {
         description="Every session, indexed by tags, channel, and timeline."
       />
 
-      <Surface p="lg" tone="soft">
-        <SimpleGrid cols={{ base: 1, md: 4 }} spacing="md">
-          <TextInput
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search meetings"
-            leftSection={<IconSearch size={16} />}
-            data-testid="library-search"
-          />
-          <MultiSelect
-            data={tagOptions}
-            placeholder="Tags"
-            value={selectedTags}
-            onChange={setSelectedTags}
-            searchable
-            clearable
-          />
-          <FormSelect
-            value={selectedRange}
-            onChange={(value) => setSelectedRange(value || "30")}
-            data={[
-              { value: "7", label: "Last 7 days" },
-              { value: "30", label: "Last 30 days" },
-              { value: "90", label: "Last 90 days" },
-              { value: "all", label: "All time" },
-            ]}
-          />
-          <FormSelect
-            placeholder="Channel"
-            value={selectedChannel}
-            onChange={setSelectedChannel}
-            data={channelOptions}
-            clearable
-          />
-        </SimpleGrid>
-      </Surface>
+      <FiltersBar
+        query={query}
+        onQueryChange={setQuery}
+        tagOptions={tagOptions}
+        selectedTags={selectedTags}
+        onTagsChange={setSelectedTags}
+        selectedRange={selectedRange}
+        onRangeChange={(value) => setSelectedRange(value)}
+        selectedChannel={selectedChannel}
+        onChannelChange={setSelectedChannel}
+        channelOptions={channelOptions}
+      />
 
       <Group justify="space-between" align="center" wrap="wrap">
         <Text c="dimmed" size="sm">
@@ -497,111 +442,28 @@ export default function Library() {
         </Text>
         <Group gap="sm" align="center">
           <Text size="xs" c="dimmed">
-            Sorted by recency •{" "}
+            Sorted by recency |{" "}
             {selectedRange === "all"
               ? "All time"
               : `Range: ${selectedRange} days`}
           </Text>
-          <Button
-            size="xs"
-            variant="subtle"
-            leftSection={<IconRefresh size={14} />}
-            loading={refreshing || meetingsQuery.isFetching}
-            onClick={handleRefresh}
-            data-testid="library-refresh"
-          >
-            Refresh
-          </Button>
         </Group>
       </Group>
-
-      <Surface
-        p={0}
-        style={{ position: "relative" }}
-        data-testid="library-list"
-      >
-        {listLoading ? (
-          <Center
-            py="xl"
-            style={{ minHeight: 240 }}
-            data-testid="library-loading"
-          >
-            <Loader color="brand" />
-          </Center>
-        ) : listError ? (
-          <Center py="xl">
-            <Text c="dimmed">Unable to load meetings. Try again shortly.</Text>
-          </Center>
-        ) : filtered.length === 0 && !listLoading ? (
-          <Center py="xl">
-            <Text c="dimmed">No meetings match these filters yet.</Text>
-          </Center>
-        ) : (
-          <Stack gap={0}>
-            {filtered.map((meetingItem, index) => (
-              <Box
-                key={meetingItem.id}
-                px={{ base: "md", md: "lg" }}
-                py="md"
-                onClick={() => {
-                  navigate({
-                    search: (prev) => ({
-                      ...prev,
-                      meetingId: meetingItem.id,
-                    }),
-                  });
-                }}
-                data-testid="library-meeting-row"
-                data-meeting-id={meetingItem.id}
-                style={{
-                  cursor: "pointer",
-                  borderBottom:
-                    index === filtered.length - 1
-                      ? undefined
-                      : `1px solid ${
-                          isDark ? theme.colors.dark[5] : theme.colors.gray[2]
-                        }`,
-                }}
-              >
-                <Group justify="space-between" align="flex-start" wrap="nowrap">
-                  <Stack gap={6} style={{ flex: 1 }}>
-                    <Group gap="xs" align="center" wrap="wrap">
-                      <Text fw={650}>{meetingItem.title}</Text>
-                      {renderListStatusBadge(meetingItem.status)}
-                    </Group>
-                    {meetingItem.summaryLabel ? (
-                      <Text size="xs" c="dimmed">
-                        {meetingItem.summaryLabel}
-                      </Text>
-                    ) : null}
-                    <Text size="sm" c="dimmed">
-                      {meetingItem.summary}
-                    </Text>
-                    <Text size="xs" c="dimmed">
-                      {meetingItem.dateLabel} • {meetingItem.durationLabel} •{" "}
-                      {meetingItem.channelLabel}
-                    </Text>
-                    <Group gap="xs" wrap="wrap">
-                      {meetingItem.tags.map((tag) => (
-                        <Badge key={tag} variant="light" color="gray">
-                          {tag}
-                        </Badge>
-                      ))}
-                    </Group>
-                  </Stack>
-                  <ActionIcon
-                    variant="light"
-                    color="gray"
-                    aria-label="Open meeting"
-                  >
-                    <IconChevronRight size={18} />
-                  </ActionIcon>
-                </Group>
-              </Box>
-            ))}
-          </Stack>
-        )}
-      </Surface>
+      <MeetingList
+        items={filtered}
+        listLoading={listLoading}
+        listError={Boolean(listError)}
+        onRefresh={handleRefresh}
+        onSelect={(meetingId) =>
+          navigate({
+            search: (prev) => ({
+              ...prev,
+              meetingId,
+            }),
+          })
+        }
+        selectedMeetingId={selectedMeetingId}
+      />
 
       <Drawer
         opened={!!selectedMeetingId}
@@ -734,7 +596,7 @@ export default function Library() {
                       />
                     ) : (
                       <Text size="sm" c="dimmed">
-                        Audio isn’t available for this meeting yet.
+                        Audio isn't available for this meeting yet.
                       </Text>
                     )}
                   </Surface>

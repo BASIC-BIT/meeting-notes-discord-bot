@@ -1,10 +1,16 @@
 # Lizard whitelist (one function name per line).
 # Add known complexity offenders here to suppress warnings.
-src/frontend/pages/Ask.tsx:(anonymous)
-src\frontend\pages\Ask.tsx:(anonymous)
 src/frontend/pages/PublicAsk.tsx:(anonymous)
 src\frontend\pages\PublicAsk.tsx:(anonymous)
 src/services/autoRecordCancellationService.ts:evaluateAutoRecordCancellation
 src\services\autoRecordCancellationService.ts:evaluateAutoRecordCancellation
 src/commands/endMeeting.ts:runEndMeetingFlow
 src\commands\endMeeting.ts:runEndMeetingFlow
+src/frontend/pages/Ask.tsx:Ask
+src\frontend\pages\Ask.tsx:Ask
+src/frontend/pages/Ask.tsx:(anonymous)
+src\frontend\pages\Ask.tsx:(anonymous)
+src/frontend/pages/Ask.tsx:handleAsk
+src\frontend\pages\Ask.tsx:handleAsk
+src/frontend/pages/Ask.tsx:handleShareChange
+src\frontend\pages\Ask.tsx:handleShareChange
