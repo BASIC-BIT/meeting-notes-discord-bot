@@ -1,0 +1,209 @@
+import type { Client } from "discord.js";
+import type { MeetingData } from "../../src/types/meeting-data";
+import { handleEndMeetingOther } from "../../src/commands/endMeeting";
+import { startProcessingSnippet } from "../../src/audio";
+import { withMeetingEndTrace } from "../../src/observability/meetingTrace";
+import { sendMeetingEndEmbedToChannel } from "../../src/embed";
+import { evaluateAutoRecordCancellation } from "../../src/services/autoRecordCancellationService";
+import {
+  buildMixedAudio,
+  closeOutputFile,
+  splitAudioIntoChunks,
+  waitForAudioOnlyFinishProcessing,
+} from "../../src/audio";
+import { uploadMeetingArtifacts } from "../../src/services/uploadService";
+import { saveMeetingHistoryToDatabase } from "../../src/commands/saveMeetingHistory";
+import { getGuildLimits } from "../../src/services/subscriptionService";
+import { updateMeetingStatusService } from "../../src/services/meetingHistoryService";
+
+jest.mock("../../src/audio", () => ({
+  buildMixedAudio: jest.fn(),
+  cleanupAudioSegments: jest.fn(),
+  closeOutputFile: jest.fn(),
+  compileTranscriptions: jest.fn(),
+  splitAudioIntoChunks: jest.fn(),
+  startProcessingSnippet: jest.fn(),
+  waitForAudioOnlyFinishProcessing: jest.fn(),
+  waitForFinishProcessing: jest.fn(),
+}));
+jest.mock("../../src/embed", () => ({
+  sendMeetingEndEmbed: jest.fn(),
+  sendMeetingEndEmbedToChannel: jest.fn(),
+  sendTranscriptionFiles: jest.fn(),
+}));
+jest.mock("../../src/util", () => ({
+  deleteDirectoryRecursively: jest.fn(),
+  deleteIfExists: jest.fn(),
+}));
+jest.mock("../../src/commands/generateNotes", () => ({
+  generateAndSendNotes: jest.fn(),
+}));
+jest.mock("../../src/commands/saveMeetingHistory", () => ({
+  saveMeetingHistoryToDatabase: jest.fn(),
+}));
+jest.mock("../../src/services/meetingHistoryService", () => ({
+  updateMeetingStatusService: jest.fn(),
+}));
+jest.mock("../../src/utils/chatLog", () => ({
+  renderChatEntryLine: jest.fn().mockReturnValue(""),
+}));
+jest.mock("../../src/services/uploadService", () => ({
+  uploadMeetingArtifacts: jest.fn(),
+}));
+jest.mock("../../src/services/subscriptionService", () => ({
+  getGuildLimits: jest.fn(),
+}));
+jest.mock("../../src/audio/soundCues", () => ({
+  stopThinkingCueLoop: jest.fn(),
+}));
+jest.mock("../../src/observability/meetingTrace", () => ({
+  withMeetingEndTrace: jest.fn(),
+}));
+jest.mock("../../src/services/autoRecordCancellationService", () => ({
+  evaluateAutoRecordCancellation: jest.fn(),
+}));
+jest.mock("../../src/metrics", () => ({
+  meetingsCancelled: { inc: jest.fn() },
+}));
+jest.mock("../../src/utils/meetingLifecycle", () => ({
+  describeAutoRecordRule: jest.fn(),
+}));
+jest.mock("../../src/meetings", () => ({
+  deleteMeeting: jest.fn(),
+  getMeeting: jest.fn(),
+  hasMeeting: jest.fn(),
+}));
+jest.mock("../../src/services/meetingUsageService", () => ({
+  getNextAvailableAt: jest.fn(),
+  getRollingUsageForGuild: jest.fn(),
+  getRollingWindowMs: jest.fn(),
+}));
+jest.mock("../../src/utils/upgradePrompt", () => ({
+  buildUpgradeTextOnly: jest.fn((content: string) => content),
+}));
+jest.mock("node:fs", () => ({
+  writeFileSync: jest.fn(),
+}));
+
+const mockedStartProcessingSnippet =
+  startProcessingSnippet as jest.MockedFunction<typeof startProcessingSnippet>;
+const mockedWithMeetingEndTrace = withMeetingEndTrace as jest.MockedFunction<
+  typeof withMeetingEndTrace
+>;
+const mockedSendMeetingEndEmbedToChannel =
+  sendMeetingEndEmbedToChannel as jest.MockedFunction<
+    typeof sendMeetingEndEmbedToChannel
+  >;
+const mockedEvaluateAutoRecordCancellation =
+  evaluateAutoRecordCancellation as jest.MockedFunction<
+    typeof evaluateAutoRecordCancellation
+  >;
+const mockedBuildMixedAudio = buildMixedAudio as jest.MockedFunction<
+  typeof buildMixedAudio
+>;
+const mockedCloseOutputFile = closeOutputFile as jest.MockedFunction<
+  typeof closeOutputFile
+>;
+const mockedSplitAudioIntoChunks = splitAudioIntoChunks as jest.MockedFunction<
+  typeof splitAudioIntoChunks
+>;
+const mockedWaitForAudioOnlyFinishProcessing =
+  waitForAudioOnlyFinishProcessing as jest.MockedFunction<
+    typeof waitForAudioOnlyFinishProcessing
+  >;
+const mockedUploadMeetingArtifacts =
+  uploadMeetingArtifacts as jest.MockedFunction<typeof uploadMeetingArtifacts>;
+const mockedSaveMeetingHistoryToDatabase =
+  saveMeetingHistoryToDatabase as jest.MockedFunction<
+    typeof saveMeetingHistoryToDatabase
+  >;
+const mockedGetGuildLimits = getGuildLimits as jest.MockedFunction<
+  typeof getGuildLimits
+>;
+const mockedUpdateMeetingStatusService =
+  updateMeetingStatusService as jest.MockedFunction<
+    typeof updateMeetingStatusService
+  >;
+
+describe("handleEndMeetingOther", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("flushes active snippets before disconnecting the voice connection", async () => {
+    const events: string[] = [];
+    mockedStartProcessingSnippet.mockImplementation(() => {
+      events.push("flush");
+    });
+    mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
+    mockedSendMeetingEndEmbedToChannel.mockResolvedValue(undefined);
+    mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
+    mockedBuildMixedAudio.mockResolvedValue(undefined);
+    mockedCloseOutputFile.mockResolvedValue(undefined);
+    mockedSplitAudioIntoChunks.mockResolvedValue([
+      { file: "chunk.mp3", start: 0, end: 0 },
+    ]);
+    mockedWaitForAudioOnlyFinishProcessing.mockResolvedValue(undefined);
+    mockedUploadMeetingArtifacts.mockResolvedValue(undefined);
+    mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
+    mockedGetGuildLimits.mockResolvedValue({ limits: {} } as never);
+    mockedUpdateMeetingStatusService.mockResolvedValue(undefined);
+
+    const connection = {
+      disconnect: jest.fn(() => {
+        events.push("disconnect");
+      }),
+      destroy: jest.fn(() => {
+        events.push("destroy");
+      }),
+    };
+
+    const meeting = {
+      guildId: "guild-1",
+      channelId: "text-1",
+      meetingId: "meeting-1",
+      voiceChannel: { id: "voice-1", name: "Voice" },
+      textChannel: {
+        send: jest.fn(),
+        messages: { fetch: jest.fn() },
+      },
+      connection,
+      chatLog: [],
+      audioData: {
+        audioFiles: [],
+        currentSnippets: new Map([
+          [
+            "user-1",
+            {
+              userId: "user-1",
+              timestamp: Date.now(),
+              chunks: [Buffer.from("test")],
+              fastRevision: 0,
+              fastTranscribed: false,
+            },
+          ],
+        ]),
+        outputFileName: "recording.mp3",
+      },
+      startTime: new Date("2025-01-01T00:00:00.000Z"),
+      endTime: undefined,
+      finishing: false,
+      finished: false,
+      transcribeMeeting: false,
+      generateNotes: false,
+      isAutoRecording: false,
+      creator: { id: "user-1" },
+      guild: { id: "guild-1", name: "Guild", members: { cache: new Map() } },
+      ttsQueue: { stopAndClear: jest.fn() },
+      setFinished: jest.fn(),
+    } as unknown as MeetingData;
+
+    await handleEndMeetingOther({} as Client, meeting);
+
+    expect(events.indexOf("flush")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("flush")).toBeLessThan(events.indexOf("disconnect"));
+    expect(events.indexOf("disconnect")).toBeLessThan(
+      events.indexOf("destroy"),
+    );
+  });
+});

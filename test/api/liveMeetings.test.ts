@@ -204,7 +204,11 @@ test("streams init payload for live meeting", async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
-  expect(mockedEnsureUserInGuild).toHaveBeenCalledWith("token", "guild-1");
+  expect(mockedEnsureUserInGuild).toHaveBeenCalledWith(
+    "token",
+    "guild-1",
+    expect.objectContaining({ session: expect.any(Object) }),
+  );
   expect(mockedEnsureUserCanConnectChannel).toHaveBeenCalledWith({
     guildId: "guild-1",
     channelId: "voice-1",

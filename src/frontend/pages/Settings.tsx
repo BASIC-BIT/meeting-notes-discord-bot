@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Group,
+  LoadingOverlay,
   Modal,
   SegmentedControl,
   Stack,
@@ -269,6 +270,10 @@ export default function Settings() {
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
   );
+  const configQuery = trpc.config.server.useQuery(
+    { serverId: selectedGuildId ?? "" },
+    { enabled: Boolean(selectedGuildId) && !guildLoading },
+  );
   const channelContextsQuery = trpc.channelContexts.list.useQuery(
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
@@ -277,6 +282,7 @@ export default function Settings() {
   const addRuleMutation = trpc.autorecord.add.useMutation();
   const removeRuleMutation = trpc.autorecord.remove.useMutation();
   const saveContextMutation = trpc.context.set.useMutation();
+  const setServerConfigMutation = trpc.config.setServerOverride.useMutation();
   const setChannelContextMutation = trpc.channelContexts.set.useMutation();
   const clearChannelContextMutation = trpc.channelContexts.clear.useMutation();
 
@@ -303,6 +309,14 @@ export default function Settings() {
     useState<AskSharingPolicy>("server");
   const [askDirty, setAskDirty] = useState(false);
   const [savingAsk, setSavingAsk] = useState(false);
+  const [experimentalEnabled, setExperimentalEnabled] = useState(false);
+  const [premiumTranscriptionEnabled, setPremiumTranscriptionEnabled] =
+    useState(false);
+  const [premiumCleanupEnabled, setPremiumCleanupEnabled] = useState(true);
+  const [premiumCoalesceModel, setPremiumCoalesceModel] =
+    useState("gpt-5-mini");
+  const [configDirty, setConfigDirty] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
 
   const [channelModalOpen, channelModal] = useDisclosure(false);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
@@ -329,6 +343,12 @@ export default function Settings() {
     setAskDirty(false);
     setAskMembersEnabled(true);
     setAskSharingPolicy("server");
+    setExperimentalEnabled(false);
+    setPremiumTranscriptionEnabled(false);
+    setPremiumCleanupEnabled(true);
+    setPremiumCoalesceModel("gpt-5-mini");
+    setConfigDirty(false);
+    setConfigSaving(false);
     setEditingChannelId(null);
     setChannelVoiceChannelId(null);
     setChannelAutoRecord(true);
@@ -434,6 +454,7 @@ export default function Settings() {
     contextQuery.isLoading ||
     savingGlobal;
   const askBusy = contextQuery.isLoading || savingAsk;
+  const configBusy = configQuery.isLoading || configSaving;
 
   useEffect(() => {
     syncGlobalDefaults({
@@ -465,6 +486,33 @@ export default function Settings() {
     });
   }, [contextQuery.data, selectedGuildId, askDirty]);
 
+  useEffect(() => {
+    if (!selectedGuildId) {
+      setConfigDirty(false);
+      return;
+    }
+    if (!configQuery.data || configDirty) return;
+    const snapshot = configQuery.data.snapshot;
+    const values =
+      (snapshot?.values as Record<
+        string,
+        { value?: unknown; gated?: boolean }
+      >) ?? {};
+    const experimental = values["features.experimental"]?.value ?? false;
+    const premiumEnabled =
+      values["transcription.premium.enabled"]?.value ?? false;
+    const premiumCleanup =
+      values["transcription.premium.cleanup.enabled"]?.value ?? true;
+    const coalesceModel =
+      values["transcription.premium.coalesce.model"]?.value ?? "gpt-5-mini";
+
+    setExperimentalEnabled(Boolean(experimental));
+    setPremiumTranscriptionEnabled(Boolean(premiumEnabled));
+    setPremiumCleanupEnabled(Boolean(premiumCleanup));
+    setPremiumCoalesceModel(String(coalesceModel));
+    setConfigDirty(false);
+  }, [configQuery.data, selectedGuildId, configDirty]);
+
   const recordAllRequiresNotesChannel =
     recordAllEnabled && !defaultNotesChannelId;
   const defaultNotesAccess = defaultNotesChannelId
@@ -483,6 +531,12 @@ export default function Settings() {
     !recordAllRequiresNotesChannel &&
     (!recordAllEnabled || defaultNotesMissingPermissions.length === 0);
   const canSaveAsk = Boolean(selectedGuildId);
+  const canSaveConfig = Boolean(selectedGuildId);
+  const configTier = configQuery.data?.snapshot?.tier ?? "free";
+  const premiumTierLocked = configTier !== "pro";
+  const premiumRequiresExperimental = !experimentalEnabled;
+  const premiumControlsDisabled =
+    configBusy || premiumTierLocked || premiumRequiresExperimental;
 
   const openAddChannel = () => {
     setEditingChannelId(null);
@@ -616,6 +670,41 @@ export default function Settings() {
       console.error("Failed to save Ask settings", error);
     } finally {
       setSavingAsk(false);
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    if (!selectedGuildId) return;
+    try {
+      setConfigSaving(true);
+      await Promise.all([
+        setServerConfigMutation.mutateAsync({
+          serverId: selectedGuildId,
+          key: "features.experimental",
+          value: experimentalEnabled,
+        }),
+        setServerConfigMutation.mutateAsync({
+          serverId: selectedGuildId,
+          key: "transcription.premium.enabled",
+          value: premiumTranscriptionEnabled,
+        }),
+        setServerConfigMutation.mutateAsync({
+          serverId: selectedGuildId,
+          key: "transcription.premium.cleanup.enabled",
+          value: premiumCleanupEnabled,
+        }),
+        setServerConfigMutation.mutateAsync({
+          serverId: selectedGuildId,
+          key: "transcription.premium.coalesce.model",
+          value: premiumCoalesceModel,
+        }),
+      ]);
+      await trpcUtils.config.server.invalidate({ serverId: selectedGuildId });
+      setConfigDirty(false);
+    } catch (error) {
+      console.error("Failed to save config settings", error);
+    } finally {
+      setConfigSaving(false);
     }
   };
 
@@ -805,6 +894,83 @@ export default function Settings() {
           }}
           onSave={handleSaveAsk}
         />
+      </Surface>
+
+      <Surface p="lg" style={{ position: "relative", overflow: "hidden" }}>
+        <LoadingOverlay
+          visible={configBusy}
+          overlayProps={uiOverlays.loading}
+          loaderProps={{ size: "md" }}
+        />
+        <Stack gap="md">
+          <Text fw={600}>Experimental and premium features</Text>
+          <Switch
+            label="Enable experimental features for this server"
+            checked={experimentalEnabled}
+            onChange={(event) => {
+              setExperimentalEnabled(event.currentTarget.checked);
+              setConfigDirty(true);
+            }}
+            disabled={configBusy}
+          />
+          <Switch
+            label="Premium transcription (pro only)"
+            checked={premiumTranscriptionEnabled}
+            onChange={(event) => {
+              setPremiumTranscriptionEnabled(event.currentTarget.checked);
+              setConfigDirty(true);
+            }}
+            disabled={premiumControlsDisabled}
+          />
+          {premiumTierLocked ? (
+            <Alert
+              icon={<IconAlertTriangle size={16} />}
+              color="yellow"
+              variant="light"
+            >
+              Premium transcription requires a pro plan. Upgrade in Billing to
+              enable it.
+            </Alert>
+          ) : null}
+          {premiumRequiresExperimental ? (
+            <Alert
+              icon={<IconAlertTriangle size={16} />}
+              color="yellow"
+              variant="light"
+            >
+              Turn on experimental features to enable premium transcription.
+            </Alert>
+          ) : null}
+          <FormSelect
+            label="Premium coalesce model"
+            data={["gpt-5-nano", "gpt-5-mini", "gpt-5.2", "gpt-5.2-pro"]}
+            value={premiumCoalesceModel}
+            onChange={(value) => {
+              if (!value) return;
+              setPremiumCoalesceModel(value);
+              setConfigDirty(true);
+            }}
+            disabled={premiumControlsDisabled}
+          />
+          <Switch
+            label="Enable premium transcription cleanup"
+            checked={premiumCleanupEnabled}
+            onChange={(event) => {
+              setPremiumCleanupEnabled(event.currentTarget.checked);
+              setConfigDirty(true);
+            }}
+            disabled={premiumControlsDisabled}
+          />
+          <Group justify="flex-end">
+            <Button
+              onClick={handleSaveConfig}
+              disabled={!canSaveConfig || configBusy}
+              loading={configSaving}
+            >
+              Save experimental settings
+            </Button>
+          </Group>
+        </Stack>
       </Surface>
 
       <ChannelOverridesCard

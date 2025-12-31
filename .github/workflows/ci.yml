@@ -1,4 +1,7 @@
 name: CI
+permissions:
+  contents: read
+  pull-requests: write
 
 on:
   pull_request:
@@ -164,6 +167,105 @@ jobs:
 
       - name: Run Playwright tests
         run: yarn test:e2e
+
+  visual-regression:
+    name: Visual Regression
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: pw-version-visual
+        run: |
+          pw_version=$(node -p 'require("@playwright/test/package.json").version')
+          echo "version=$pw_version" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: pw-cache-visual
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw-version-visual.outputs.version }}
+
+      - name: Install Playwright browsers
+        run: npx playwright install
+
+      - name: Restore baseline snapshots
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          git checkout origin/${{ github.base_ref }} -- test/e2e/visual.spec.ts-snapshots || echo "No baseline snapshots found"
+
+      - name: Run visual tests
+        id: visual-tests
+        continue-on-error: true
+        env:
+          DEBUG: pw:webserver
+        run: yarn test:visual
+
+      - name: Detect visual diffs
+        id: visual-diff
+        if: always()
+        run: |
+          diff_count=$(find test-results -type f \( -name "*-diff.png" -o -name "*-diff.jpg" \) 2>/dev/null | wc -l || true)
+          if [ "${diff_count}" -gt 0 ]; then
+            echo "has_diffs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_diffs=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build visual summary
+        if: always()
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          node scripts/visual/summarize.js --results test-results --output visual-summary.md --run-url "$run_url"
+
+      - name: Append visual failure note
+        if: always() && steps.visual-tests.outcome != 'success' && steps.visual-diff.outputs.has_diffs != 'true'
+        run: |
+          cat >> visual-summary.md <<'EOF'
+
+          ## Visual regression report
+          Visual run failed before completion. No diff results were produced; see workflow logs.
+          EOF
+
+      - name: Upload visual artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression
+          path: |
+            playwright-report
+            test-results
+            visual-summary.md
+
+      - name: Comment on PR
+        if: always() && github.event.pull_request.head.repo.fork == false && (steps.visual-tests.outcome == 'success' || steps.visual-diff.outputs.has_diffs == 'true')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body-file visual-summary.md
+
+      - name: Fail on visual diffs
+        if: steps.visual-diff.outputs.has_diffs == 'true'
+        run: exit 1
 
   code-stats:
     name: Code Stats

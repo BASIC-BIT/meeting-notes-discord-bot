@@ -54,6 +54,7 @@ import {
   truncate,
   type ListMode,
 } from "../utils/askLinks";
+import { resolveNowMs } from "../utils/now";
 
 export default function Ask() {
   const { selectedGuildId, guilds } = useGuildContext();
@@ -474,7 +475,7 @@ export default function Ask() {
     if (!selectedGuildId || !question || listMode !== "mine") return;
     if (!askAccessAllowed) return;
     setErrorMessage(null);
-    const now = new Date().toISOString();
+    const now = new Date(resolveNowMs()).toISOString();
     setOptimisticMessages([
       {
         id: `optimistic-${now}`,

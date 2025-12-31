@@ -37,6 +37,7 @@ export function registerLiveMeetingRoutes(app: express.Express) {
       const allowed = await ensureManageGuildWithUserToken(
         user.accessToken,
         guildId,
+        { userId: user.id, session: req.session },
       );
       if (allowed === null) {
         res.status(429).json({ error: "Discord rate limited. Please retry." });
@@ -78,6 +79,7 @@ export function registerLiveMeetingRoutes(app: express.Express) {
       const allowed = await ensureManageGuildWithUserToken(
         user.accessToken,
         guildId,
+        { userId: user.id, session: req.session },
       );
       if (allowed === null) {
         res.status(429).json({ error: "Discord rate limited. Please retry." });
@@ -128,7 +130,9 @@ export function registerLiveMeetingRoutes(app: express.Express) {
       const cachedGuilds = sessionData.guildIds ?? [];
       const cachedHasGuild = cacheFresh && cachedGuilds.includes(guildId);
       if (!cachedHasGuild) {
-        const inGuild = await ensureUserInGuild(user.accessToken, guildId);
+        const inGuild = await ensureUserInGuild(user.accessToken, guildId, {
+          session: req.session,
+        });
         if (inGuild === null) {
           res
             .status(429)

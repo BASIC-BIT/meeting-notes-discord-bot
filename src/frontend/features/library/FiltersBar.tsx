@@ -49,6 +49,7 @@ export function FiltersBar({
         <FormSelect
           value={selectedRange}
           onChange={(value) => onRangeChange(value || "30")}
+          data-testid="library-range"
           data={[
             { value: "7", label: "Last 7 days" },
             { value: "30", label: "Last 30 days" },
@@ -60,6 +61,7 @@ export function FiltersBar({
           placeholder="Channel"
           value={selectedChannel}
           onChange={onChannelChange}
+          data-testid="library-channel"
           data={channelOptions}
           clearable
         />

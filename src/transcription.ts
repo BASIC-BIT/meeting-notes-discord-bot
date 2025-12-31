@@ -24,7 +24,7 @@ import {
   TRANSCRIBE_SAMPLE_RATE,
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
-import { AudioSnippet } from "./types/audio";
+import { AudioSnippet, TranscriptVariant } from "./types/audio";
 import {
   bulkhead,
   circuitBreaker,
@@ -366,6 +366,69 @@ export async function cleanupTranscription(
       traceName: "transcription-cleanup",
       generationName: "transcription-cleanup",
       tags: ["feature:transcription_cleanup"],
+      langfusePrompt,
+      parentSpanContext: meeting.langfuseParentSpanContext,
+    },
+  );
+}
+
+type CoalesceInput = {
+  slowTranscript: string;
+  fastTranscripts: TranscriptVariant[];
+  modelOverride?: string;
+};
+
+export async function getTranscriptionCoalescePrompt(
+  meeting: MeetingData,
+  input: CoalesceInput,
+) {
+  const contextData = await buildMeetingContext(meeting, false);
+  const formattedContext = formatContextForPrompt(contextData, "transcription");
+  const fastTranscriptBlock = input.fastTranscripts
+    .map((entry) => `- (rev ${entry.revision}) ${entry.text}`)
+    .join("\n");
+
+  return await getLangfuseChatPrompt({
+    name: config.langfuse.transcriptionCoalescePromptName,
+    variables: {
+      formattedContext,
+      serverName: meeting.guild.name,
+      voiceChannelName: meeting.voiceChannel.name,
+      attendees: Array.from(meeting.attendance).join(", "),
+      slowTranscript: input.slowTranscript,
+      fastTranscriptBlock,
+    },
+  });
+}
+
+export async function coalesceTranscription(
+  meeting: MeetingData,
+  input: CoalesceInput,
+): Promise<string> {
+  const { messages, langfusePrompt } = await getTranscriptionCoalescePrompt(
+    meeting,
+    input,
+  );
+  const overrides = input.modelOverride
+    ? {
+        transcriptionCoalesce: {
+          provider: "openai" as const,
+          model: input.modelOverride,
+        },
+      }
+    : undefined;
+  const modelChoice = getModelChoice("transcriptionCoalesce", overrides);
+  return await chat(
+    meeting,
+    {
+      messages: [...messages],
+      temperature: 0,
+    },
+    {
+      model: modelChoice.model,
+      traceName: "transcription-coalesce",
+      generationName: "transcription-coalesce",
+      tags: ["feature:transcription_coalesce"],
       langfusePrompt,
       parentSpanContext: meeting.langfuseParentSpanContext,
     },

@@ -8,6 +8,7 @@ import {
   MINIMUM_TRANSCRIPTION_LENGTH,
   RECORD_SAMPLE_RATE,
   SILENCE_THRESHOLD,
+  TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE,
 } from "./constants";
 import {
   AudioFileData,
@@ -19,13 +20,18 @@ import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType } from "@discordjs/voice";
 import prism from "prism-media";
 import { PassThrough } from "node:stream";
-import { transcribeSnippet } from "./transcription";
+import {
+  cleanupTranscription,
+  coalesceTranscription,
+  transcribeSnippet,
+} from "./transcription";
 import { formatParticipantLabel } from "./utils/participants";
 import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
 import * as fs from "node:fs";
 import path from "node:path";
 import { maybeRespondLive } from "./liveVoice";
+import { nowIso } from "./utils/time";
 
 const TRANSCRIPTION_HEADER =
   `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
@@ -55,6 +61,18 @@ function cloneSnippet(snippet: AudioSnippet): AudioSnippet {
   return {
     ...snippet,
     chunks: [...snippet.chunks],
+  };
+}
+
+function getTranscriptionTiming(meeting: MeetingData) {
+  const runtime = meeting.runtimeConfig;
+  return {
+    fastSilenceMs:
+      runtime?.transcription.fastSilenceMs ?? FAST_SILENCE_THRESHOLD,
+    slowSilenceMs: runtime?.transcription.slowSilenceMs ?? SILENCE_THRESHOLD,
+    minSnippetSeconds:
+      runtime?.transcription.minSnippetSeconds ?? MINIMUM_TRANSCRIPTION_LENGTH,
+    maxSnippetMs: runtime?.transcription.maxSnippetMs ?? MAX_SNIPPET_LENGTH,
   };
 }
 
@@ -149,8 +167,9 @@ function getOrCreateAudioFileData(
 function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
   if (snippet.chunks.length === 0) return;
 
+  const { minSnippetSeconds } = getTranscriptionTiming(meeting);
   const duration = getAudioDuration(snippet);
-  if (duration <= MINIMUM_TRANSCRIPTION_LENGTH) {
+  if (duration <= minSnippetSeconds) {
     return;
   }
 
@@ -167,6 +186,15 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
       if (!transcription.trim() || transcription === "[Transcription failed]") {
         return;
       }
+      const entry = {
+        revision,
+        text: transcription,
+        createdAt: nowIso(),
+      };
+      if (!audioFileData.fastTranscripts) {
+        audioFileData.fastTranscripts = [];
+      }
+      audioFileData.fastTranscripts.push(entry);
       audioFileData.transcript = transcription;
       snippet.fastTranscribed = true;
       void maybeRespondLive(meeting, {
@@ -195,7 +223,8 @@ export function updateSnippetsIfNecessary(
     meeting.audioData.currentSnippets.set(userId, snippet);
   } else {
     const elapsedTime = Date.now() - snippet.timestamp;
-    if (elapsedTime >= MAX_SNIPPET_LENGTH) {
+    const { maxSnippetMs } = getTranscriptionTiming(meeting);
+    if (elapsedTime >= maxSnippetMs) {
       startProcessingSnippet(meeting, userId);
       snippet = generateNewSnippet(userId);
       meeting.audioData.currentSnippets.set(userId, snippet);
@@ -220,23 +249,61 @@ export function startProcessingSnippet(
 
   const promises: Promise<void>[] = [];
 
+  const { minSnippetSeconds } = getTranscriptionTiming(meeting);
   const duration = getAudioDuration(snippet);
   const hasAudio = snippet.chunks.length > 0;
-  if (
-    hasAudio &&
-    (duration > MINIMUM_TRANSCRIPTION_LENGTH || options.forceTranscribe)
-  ) {
+  if (hasAudio && (duration > minSnippetSeconds || options.forceTranscribe)) {
     promises.push(
-      transcribeSnippet(meeting, snippet).then((transcription) => {
-        audioFileData.transcript = transcription;
-        if (!options.skipLiveVoice) {
-          void maybeRespondLive(meeting, {
-            userId: snippet.userId,
-            text: transcription,
-            timestamp: snippet.timestamp,
-          });
-        }
-      }),
+      transcribeSnippet(meeting, snippet)
+        .then(async (transcription) => {
+          audioFileData.slowTranscript = transcription;
+          audioFileData.transcript = transcription;
+          if (!options.skipLiveVoice) {
+            void maybeRespondLive(meeting, {
+              userId: snippet.userId,
+              text: transcription,
+              timestamp: snippet.timestamp,
+            });
+          }
+
+          const premium = meeting.runtimeConfig?.premiumTranscription;
+          if (
+            premium?.enabled &&
+            transcription.trim().length > 0 &&
+            audioFileData.fastTranscripts &&
+            audioFileData.fastTranscripts.length > 0
+          ) {
+            try {
+              const coalesced = await coalesceTranscription(meeting, {
+                slowTranscript: transcription,
+                fastTranscripts: audioFileData.fastTranscripts,
+                modelOverride: premium.coalesceModel,
+              });
+              if (coalesced && coalesced.trim().length > 0) {
+                audioFileData.coalescedTranscript = coalesced;
+                audioFileData.coalesceMeta = {
+                  model: premium.coalesceModel,
+                  usedFastRevisions: audioFileData.fastTranscripts.map(
+                    (entry) => entry.revision,
+                  ),
+                  createdAt: nowIso(),
+                };
+                audioFileData.transcript = coalesced;
+              }
+            } catch (error) {
+              console.error(
+                `Failed to coalesce transcription for user ${snippet.userId}:`,
+                error,
+              );
+            }
+          }
+        })
+        .catch((error) => {
+          console.error(
+            `Failed to transcribe snippet for user ${snippet.userId}:`,
+            error,
+          );
+        }),
     );
   } else {
     console.log(
@@ -267,6 +334,8 @@ function setSnippetTimer(meeting: MeetingData, userId: string) {
     clearTimeout(existing.slow);
   }
 
+  const { fastSilenceMs, slowSilenceMs } = getTranscriptionTiming(meeting);
+
   existing.fast = setTimeout(() => {
     const snippet = meeting.audioData.currentSnippets.get(userId);
     if (!snippet) return;
@@ -275,7 +344,7 @@ function setSnippetTimer(meeting: MeetingData, userId: string) {
     if (next) {
       next.fast = undefined;
     }
-  }, FAST_SILENCE_THRESHOLD);
+  }, fastSilenceMs);
 
   existing.slow = setTimeout(() => {
     const snippet = meeting.audioData.currentSnippets.get(userId);
@@ -287,7 +356,7 @@ function setSnippetTimer(meeting: MeetingData, userId: string) {
       skipLiveVoice: Boolean(snippet.fastTranscribed),
     });
     currentTimers.delete(userId);
-  }, SILENCE_THRESHOLD);
+  }, slowSilenceMs);
 
   currentTimers.set(userId, existing);
   meeting.audioData.silenceTimers = currentTimers;
@@ -402,13 +471,23 @@ export async function compileTranscriptions(
   meeting: MeetingData,
   options: { includeCues?: boolean } = {},
 ): Promise<string> {
+  const resolveTranscriptText = (fileData: AudioFileData) => {
+    if (fileData.coalescedTranscript) return fileData.coalescedTranscript;
+    if (fileData.slowTranscript) return fileData.slowTranscript;
+    if (fileData.transcript) return fileData.transcript;
+    if (fileData.fastTranscripts && fileData.fastTranscripts.length > 0) {
+      return fileData.fastTranscripts[fileData.fastTranscripts.length - 1].text;
+    }
+    return "";
+  };
+
   const segments = meeting.audioData.audioFiles
-    .filter((fileData) => fileData.transcript && fileData.transcript.length > 0)
     .map((fileData) => ({
       userId: fileData.userId,
       timestamp: fileData.timestamp,
-      text: fileData.transcript ?? "",
-    }));
+      text: resolveTranscriptText(fileData),
+    }))
+    .filter((segment) => segment.text && segment.text.length > 0);
 
   if (options.includeCues && meeting.audioData.cueEvents) {
     for (const cue of meeting.audioData.cueEvents) {
@@ -453,40 +532,36 @@ export async function compileTranscriptions(
     return transcription;
   }
 
-  return TRANSCRIPTION_HEADER + transcription;
+  const premiumConfig = meeting.runtimeConfig?.premiumTranscription;
+  if (!premiumConfig?.enabled || !premiumConfig.cleanupEnabled) {
+    return TRANSCRIPTION_HEADER + transcription;
+  }
 
-  //
-  // try {
-  //   // return TRANSCRIPTION_HEADER + fs.readFileSync("./src/test/test_raw_transcript.txt").toString();
-  //   const cleanedUpTranscription = await cleanupTranscription(
-  //     meeting,
-  //     transcription,
-  //   );
-  //
-  //   const originalTranscriptionLines = transcription.split("\n").length;
-  //   const cleanedUpTranscriptionLines = (cleanedUpTranscription || "").split(
-  //     "\n",
-  //   ).length;
-  //   console.log(
-  //     `Transcription cleanup succeeded.  Original lines: ${originalTranscriptionLines}, Cleaned up lines: ${cleanedUpTranscriptionLines}`,
-  //   );
-  //
-  //   // If our cleaned up transcription is less than 75% of the lines of the original, assume something went critically wrong
-  //   if (
-  //     cleanedUpTranscriptionLines <
-  //     originalTranscriptionLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
-  //   ) {
-  //     console.error("Transcription cleanup failed checks, returning original");
-  //
-  //     return TRANSCRIPTION_HEADER + transcription;
-  //   }
-  //
-  //   return TRANSCRIPTION_HEADER + cleanedUpTranscription;
-  // } catch (e) {
-  //   console.error("Transcription cleanup failed, returning original", e);
-  //
-  //   return TRANSCRIPTION_HEADER + transcription;
-  // }
+  try {
+    const cleanedUpTranscription = await cleanupTranscription(
+      meeting,
+      transcription,
+    );
+
+    const originalLines = transcription.split("\n").length;
+    const cleanedLines = (cleanedUpTranscription || "").split("\n").length;
+    console.log(
+      `Transcription cleanup succeeded. Original lines: ${originalLines}, cleaned lines: ${cleanedLines}`,
+    );
+
+    if (
+      cleanedLines <
+      originalLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
+    ) {
+      console.error("Transcription cleanup failed checks, returning original.");
+      return TRANSCRIPTION_HEADER + transcription;
+    }
+
+    return TRANSCRIPTION_HEADER + cleanedUpTranscription;
+  } catch (error) {
+    console.error("Transcription cleanup failed, returning original:", error);
+    return TRANSCRIPTION_HEADER + transcription;
+  }
 }
 
 export function openOutputFile(meeting: MeetingData) {

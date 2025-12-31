@@ -20,6 +20,7 @@ const PublicAsk = lazyRouteComponent(() => import("./pages/PublicAsk"));
 const Billing = lazyRouteComponent(() => import("./pages/Billing"));
 const Settings = lazyRouteComponent(() => import("./pages/Settings"));
 const LiveMeeting = lazyRouteComponent(() => import("./pages/LiveMeeting"));
+const AdminConfig = lazyRouteComponent(() => import("./pages/AdminConfig"));
 import { useGuildContext } from "./contexts/GuildContext";
 import { usePortalStore } from "./stores/portalStore";
 
@@ -137,6 +138,12 @@ const portalSettingsRoute = new Route({
   component: Settings,
 });
 
+const portalAdminConfigRoute = new Route({
+  getParentRoute: () => portalRoute,
+  path: "admin/config",
+  component: AdminConfig,
+});
+
 const routeTree = rootRoute.addChildren([
   homeRoute,
   liveMeetingRoute,
@@ -151,6 +158,7 @@ const routeTree = rootRoute.addChildren([
       portalBillingRoute,
       portalSettingsRoute,
     ]),
+    portalAdminConfigRoute,
   ]),
 ]);
 

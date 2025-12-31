@@ -109,6 +109,7 @@
 - Local full gate: `yarn run check` (lint --fix, prettier --write, then in parallel test, build:all, code:stats, prompts:check).
 - CI-parity local gate: `yarn run check:ci` (lint:check, prettier:check, test, build:all, test:e2e, checkov, code:stats, prompts:check). Avoid `yarn check` (built-in Yarn integrity command).
 - CI runs the same set as `check:ci` (see `.github/workflows/ci.yml`).
+- Visual regression baselines: update with `yarn test:visual:update`.
 
 Why each check exists:
 
@@ -130,3 +131,27 @@ Coverage guidance:
 ## Non-idiomatic typing
 
 If you find yourself using keywords like `tyepof`, `as`, etc. you should then pause and think about how you can improve that code. This might involve a web search to go search online for the idiomatic way of using the library/framework/etc. Look for a way that leverages typescript best practices, such as type narrowing, to write clean maintainable code
+
+## Online Research
+
+Use your web search tool and/or the Context7 MCP tools to pare down uncertainty of developing or debugging work, Especially anything relating to an external library.
+
+For context 7 library IDs you should save off the resolved library ID of packages that we use as you find them as you look them up as necessary during work.
+
+Known Context7 IDs:
+
+- React (react.dev): /reactjs/react.dev
+- Discord.js 14.25.1 docs: /websites/discord_js_packages_discord_js_14_25_1
+- OpenAI Node SDK: /openai/openai-node
+- Express: /expressjs/express
+- AWS SDK for JavaScript v3: /aws/aws-sdk-js-v3
+- TanStack Query v5 (React Query): /websites/tanstack_query_v5
+- tRPC: /trpc/trpc
+- TanStack Router: /tanstack/router
+- Zod v4 docs: /websites/zod_dev_v4
+- Zustand: /pmndrs/zustand
+- Mantine: /mantinedev/mantine
+- Playwright: /microsoft/playwright.dev
+- Langfuse JS/TS SDKs: /langfuse/langfuse-js
+- Stripe Node SDK: /stripe/stripe-node
+- Vite: /vitejs/vite

@@ -5,3 +5,36 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+:root {
+  --color-scheme-transition-duration: 500ms;
+  --color-scheme-transition-easing: ease;
+}
+
+html[data-mantine-color-scheme] body,
+html[data-mantine-color-scheme] #root,
+html[data-mantine-color-scheme] #root * {
+  transition:
+    color var(--color-scheme-transition-duration)
+      var(--color-scheme-transition-easing),
+    background-color var(--color-scheme-transition-duration)
+      var(--color-scheme-transition-easing),
+    border-color var(--color-scheme-transition-duration)
+      var(--color-scheme-transition-easing),
+    outline-color var(--color-scheme-transition-duration)
+      var(--color-scheme-transition-easing),
+    box-shadow var(--color-scheme-transition-duration)
+      var(--color-scheme-transition-easing),
+    fill var(--color-scheme-transition-duration)
+      var(--color-scheme-transition-easing),
+    stroke var(--color-scheme-transition-duration)
+      var(--color-scheme-transition-easing);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-mantine-color-scheme] body,
+  html[data-mantine-color-scheme] #root,
+  html[data-mantine-color-scheme] #root * {
+    transition: none;
+  }
+}

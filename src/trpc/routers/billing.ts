@@ -24,6 +24,8 @@ const me = authedProcedure
     await requireManageGuild({
       accessToken: ctx.user.accessToken,
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     if (config.mock.enabled) {
       return getMockBillingSnapshot(input.serverId);

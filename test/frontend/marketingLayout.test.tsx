@@ -13,6 +13,7 @@ describe("MarketingLayout", () => {
     resetFrontendMocks();
     renderWithMantine(<MarketingLayout />);
     expect(screen.getByTestId("portal-cta")).toBeInTheDocument();
-    expect(screen.getByText("Chronote by BASICBIT")).toBeInTheDocument();
+    expect(screen.getByText(/Chronote by/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "BASICBIT" })).toBeInTheDocument();
   });
 });

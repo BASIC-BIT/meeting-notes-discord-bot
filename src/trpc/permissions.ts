@@ -1,5 +1,8 @@
 import { TRPCError } from "@trpc/server";
-import { ensureManageGuildWithUserToken } from "../services/guildAccessService";
+import {
+  ensureManageGuildWithUserToken,
+  type GuildSessionCache,
+} from "../services/guildAccessService";
 
 export const PERMISSION_REASONS = {
   manageGuildRequired: "MANAGE_GUILD_REQUIRED",
@@ -45,10 +48,13 @@ export const getGuildIdFromInput = (input: unknown): string | null => {
 export const requireManageGuild = async (params: {
   accessToken?: string;
   guildId: string;
+  userId?: string;
+  session?: GuildSessionCache;
 }) => {
   const allowed = await ensureManageGuildWithUserToken(
     params.accessToken,
     params.guildId,
+    { userId: params.userId, session: params.session },
   );
   if (allowed === null) {
     throw toPermissionError({

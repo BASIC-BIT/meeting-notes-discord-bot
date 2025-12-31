@@ -1005,6 +1005,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.server_context_table.arn,
           aws_dynamodb_table.channel_context_table.arn,
           aws_dynamodb_table.user_speech_settings_table.arn,
+          aws_dynamodb_table.config_overrides_table.arn,
           aws_dynamodb_table.ask_conversation_table.arn,
           aws_dynamodb_table.meeting_history_table.arn,
           "${aws_dynamodb_table.meeting_history_table.arn}/index/*",
@@ -1183,6 +1184,22 @@ resource "aws_ecs_task_definition" "app_task" {
           value = var.NOTES_MODEL
         },
         {
+          name  = "APP_CONFIG_ENABLED"
+          value = var.APP_CONFIG_ENABLED
+        },
+        {
+          name  = "APP_CONFIG_APPLICATION_ID"
+          value = aws_appconfig_application.chronote_config.id
+        },
+        {
+          name  = "APP_CONFIG_ENVIRONMENT_ID"
+          value = aws_appconfig_environment.chronote_config_env.environment_id
+        },
+        {
+          name  = "APP_CONFIG_PROFILE_ID"
+          value = aws_appconfig_configuration_profile.chronote_config_profile.configuration_profile_id
+        },
+        {
           name  = "TRANSCRIPTS_BUCKET"
           value = local.transcripts_bucket_name
         },
@@ -1329,6 +1346,10 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "BILLING_LANDING_URL"
           value = var.BILLING_LANDING_URL
+        },
+        {
+          name  = "SUPER_ADMIN_USER_IDS"
+          value = var.SUPER_ADMIN_USER_IDS
         },
       ]
       secrets = [

@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { resolveNowMs } from "./now";
 import type { AskConversation, AskMessage } from "../../types/ask";
 
 export type ListMode = "mine" | "shared";
@@ -45,11 +46,13 @@ export const buildPublicAskUrl = (options: {
   return url.toString();
 };
 
+const resolveNowIso = () => new Date(resolveNowMs()).toISOString();
+
 export const buildThinkingMessage = (): AskMessage => ({
   id: "thinking",
   role: "chronote",
   text: "Thinking...",
-  createdAt: new Date().toISOString(),
+  createdAt: resolveNowIso(),
 });
 
 const hasOptimisticMessage = (

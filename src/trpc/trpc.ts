@@ -40,7 +40,12 @@ const isManageGuild = t.middleware(
     }
     const resolvedInput = input ?? (await getRawInput());
     const guildId = requireGuildId(resolvedInput);
-    await requireManageGuild({ accessToken: ctx.user.accessToken, guildId });
+    await requireManageGuild({
+      accessToken: ctx.user.accessToken,
+      guildId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
+    });
     return next();
   },
 );
@@ -52,7 +57,9 @@ const isGuildMember = t.middleware(
     }
     const resolvedInput = input ?? (await getRawInput());
     const guildId = requireGuildId(resolvedInput);
-    const allowed = await ensureUserInGuild(ctx.user.accessToken, guildId);
+    const allowed = await ensureUserInGuild(ctx.user.accessToken, guildId, {
+      session: ctx.req.session,
+    });
     if (allowed === null) {
       throw new TRPCError({
         code: "TOO_MANY_REQUESTS",

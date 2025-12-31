@@ -9,6 +9,12 @@ type AuthContextValue = {
   loading: boolean;
   loginUrl: string;
   refresh: () => Promise<void>;
+  user?: {
+    id: string;
+    username: string;
+    avatar: string | null;
+    isSuperAdmin?: boolean;
+  } | null;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -38,11 +44,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       state,
       loading,
       loginUrl,
+      user: authQuery.data ?? null,
       refresh: async () => {
         await refetch();
       },
     }),
-    [state, loading, loginUrl, refetch],
+    [state, loading, loginUrl, refetch, authQuery.data],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

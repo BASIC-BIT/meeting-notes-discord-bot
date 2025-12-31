@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const reuseServer = process.env.PW_REUSE_SERVER === "true";
+const baseUrl = "http://127.0.0.1:5173";
 const mockEnv = {
   MOCK_MODE: "true",
   ENABLE_OAUTH: "false",
@@ -10,6 +11,9 @@ const mockEnv = {
   DISCORD_CLIENT_SECRET: "test-client-secret",
   DISCORD_CALLBACK_URL: "http://localhost:3001/auth/discord/callback",
   OAUTH_SECRET: "test-oauth-secret",
+  FORCE_TIER: "pro",
+  MOCK_FIXED_NOW: "2025-01-01T00:00:00.000Z",
+  VITE_MOCK_FIXED_NOW: "2025-01-01T00:00:00.000Z",
 };
 
 for (const [key, value] of Object.entries(mockEnv)) {
@@ -23,7 +27,7 @@ export default defineConfig({
   fullyParallel: true,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: baseUrl,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -31,21 +35,25 @@ export default defineConfig({
   webServer: [
     {
       command: "yarn start:mock:once",
-      url: "http://localhost:3001/health",
+      url: "http://127.0.0.1:3001/health",
       reuseExistingServer: reuseServer,
       env: mockEnv,
-      timeout: 120_000,
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 180_000,
     },
     {
       command: "yarn frontend:dev --host 127.0.0.1 --port 5173",
-      url: "http://localhost:5173",
+      url: baseUrl,
       reuseExistingServer: reuseServer,
       env: {
         ...mockEnv,
         // Use Vite's proxy for local E2E to avoid CORS issues.
         VITE_API_BASE_URL: "",
       },
-      timeout: 120_000,
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 180_000,
     },
   ],
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],

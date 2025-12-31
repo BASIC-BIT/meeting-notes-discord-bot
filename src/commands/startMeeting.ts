@@ -203,7 +203,7 @@ export async function handleRequestStartMeeting(
   const { voiceChannel } = voiceResult;
 
   // Tier and limits
-  const { limits } = await getGuildLimits(guildId);
+  const { limits, subscription } = await getGuildLimits(guildId);
   const limitNotice = await getLimitNotice(guildId, limits);
   if (limitNotice) {
     await interaction.reply(buildUpgradePrompt(limitNotice));
@@ -254,6 +254,7 @@ export async function handleRequestStartMeeting(
     chatTtsVoice,
     maxMeetingDurationMs: limits.maxMeetingDurationMs,
     maxMeetingDurationPretty: limits.maxMeetingDurationPretty,
+    subscriptionTier: subscription.tier,
   });
   void saveMeetingStartToDatabase(meeting);
 
@@ -332,7 +333,7 @@ export async function handleAutoStartMeeting(
   },
 ) {
   const guildId = voiceChannel.guild.id;
-  const { limits } = await getGuildLimits(guildId);
+  const { limits, subscription } = await getGuildLimits(guildId);
   const limitNotice = await getLimitNotice(guildId, limits);
   if (limitNotice) {
     await textChannel.send(limitNotice);
@@ -404,6 +405,7 @@ export async function handleAutoStartMeeting(
     liveVoiceTtsVoice: options?.liveVoiceTtsVoice,
     chatTtsEnabled: options?.chatTtsEnabled,
     chatTtsVoice: options?.chatTtsVoice,
+    subscriptionTier: subscription.tier,
   });
   void saveMeetingStartToDatabase(meeting);
 

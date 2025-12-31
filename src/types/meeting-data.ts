@@ -18,6 +18,7 @@ import type {
   MeetingEndReason,
   MeetingStartReason,
 } from "./meetingLifecycle";
+import type { ConfigTier, MeetingRuntimeConfig } from "../config/types";
 
 export type LiveVoiceCommandPending = {
   type: "end_meeting";
@@ -80,6 +81,8 @@ export interface MeetingData {
   generateNotes: boolean;
   meetingContext?: string;
   onEndMeeting?: (meeting: MeetingData) => Promise<void> | void;
+  subscriptionTier?: ConfigTier;
+  runtimeConfig?: MeetingRuntimeConfig;
 
   finalTranscript?: string;
   transcriptS3Key?: string;

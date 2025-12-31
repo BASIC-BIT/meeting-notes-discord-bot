@@ -8,6 +8,7 @@ export type ModelRole =
   | "notesCorrection"
   | "transcription"
   | "transcriptionCleanup"
+  | "transcriptionCoalesce"
   | "image"
   | "ask"
   | "liveVoiceGate"
@@ -27,6 +28,7 @@ const defaultModels: Record<ModelRole, ModelChoice> = {
   notesCorrection: { provider: "openai", model: config.notes.model },
   transcription: { provider: "openai", model: "gpt-4o-transcribe" },
   transcriptionCleanup: { provider: "openai", model: config.notes.model },
+  transcriptionCoalesce: { provider: "openai", model: "gpt-5-mini" },
   image: { provider: "openai", model: "dall-e-3" },
   ask: { provider: "openai", model: config.liveVoice.responderModel },
   liveVoiceGate: { provider: "openai", model: config.liveVoice.gateModel },

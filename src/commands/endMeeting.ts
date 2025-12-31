@@ -177,11 +177,6 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
 
   await clearStartMessageComponents(meeting);
 
-  if (meeting.connection) {
-    meeting.connection.disconnect();
-    meeting.connection.destroy();
-  }
-
   const chatLogFilePath = `./chatlog-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
   writeFileSync(
     chatLogFilePath,
@@ -192,6 +187,11 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
   meeting.audioData.currentSnippets.forEach((snippet) => {
     startProcessingSnippet(meeting, snippet.userId);
   });
+
+  if (meeting.connection) {
+    meeting.connection.disconnect();
+    meeting.connection.destroy();
+  }
 
   await waitForAudioOnlyFinishProcessing(meeting);
 
