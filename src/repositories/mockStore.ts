@@ -421,7 +421,7 @@ function buildDefaultStore(): MockStore {
     ]),
   ];
   const seededMessages: AskMessage[] = [];
-  const baseTime = Date.now() - seededPairs.length * 6 * 60 * 1000;
+  const baseTime = baseNowMs - seededPairs.length * 6 * 60 * 1000;
   seededPairs.forEach(([question, answer], index) => {
     const questionTime = new Date(
       baseTime + index * 6 * 60 * 1000,

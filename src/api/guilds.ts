@@ -62,11 +62,15 @@ export function registerGuildRoutes(app: express.Express) {
   };
 
   const requireManageGuild = async (
+    req: express.Request,
     res: express.Response,
     user: AuthedUser,
     guildId: string,
   ): Promise<boolean> => {
-    const ok = await ensureManageGuildWithUserToken(user.accessToken, guildId);
+    const ok = await ensureManageGuildWithUserToken(user.accessToken, guildId, {
+      userId: user.id,
+      session: req.session,
+    });
     if (ok === null) {
       res.status(429).json({ error: "Discord rate limited. Please retry." });
       return false;
@@ -85,7 +89,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         console.warn("Context 403: missing Manage Guild", {
           guildId,
           userId: user?.id,
@@ -110,7 +114,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       if (!(await ensureBotPresence(req, res, guildId))) {
@@ -143,7 +147,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       if (!(await ensureBotPresence(req, res, guildId))) {
@@ -161,7 +165,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       const rules = await listAutoRecordSettings(guildId);
@@ -175,7 +179,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       const { mode, voiceChannelId, textChannelId, tags } = req.body as {
@@ -207,7 +211,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       const { channelId } = req.body as { channelId?: string };
@@ -234,13 +238,23 @@ export function registerGuildRoutes(app: express.Express) {
       const sessionData = req.session as typeof req.session & {
         guildIds?: string[];
         guildIdsFetchedAt?: number;
+        userGuilds?: Array<{
+          id: string;
+          name: string;
+          icon?: string;
+          permissions: string;
+          owner?: boolean;
+        }>;
+        userGuildsFetchedAt?: number;
         botGuildIds?: string[];
         botGuildIdsFetchedAt?: number;
       };
       const cachedGuilds = sessionData.guildIds ?? [];
       const cachedHasGuild = cachedGuilds.includes(guildId);
       if (!cachedHasGuild) {
-        const accessCheck = await ensureUserInGuild(user.accessToken, guildId);
+        const accessCheck = await ensureUserInGuild(user.accessToken, guildId, {
+          session: req.session,
+        });
         if (accessCheck === null) {
           res
             .status(429)
@@ -309,7 +323,7 @@ export function registerGuildRoutes(app: express.Express) {
         res.status(401).json({ error: "No access token. Please re-login." });
         return;
       }
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       const { question, tags, scope, channelId } = req.body as {
@@ -362,11 +376,21 @@ export function registerGuildRoutes(app: express.Express) {
       const sessionData = req.session as typeof req.session & {
         guildIds?: string[];
         guildIdsFetchedAt?: number;
+        userGuilds?: Array<{
+          id: string;
+          name: string;
+          icon?: string;
+          permissions: string;
+          owner?: boolean;
+        }>;
+        userGuildsFetchedAt?: number;
         botGuildIds?: string[];
         botGuildIdsFetchedAt?: number;
       };
       sessionData.guildIds = userGuilds.map((guild) => guild.id);
       sessionData.guildIdsFetchedAt = Date.now();
+      sessionData.userGuilds = userGuilds;
+      sessionData.userGuildsFetchedAt = sessionData.guildIdsFetchedAt;
 
       const botGuildsResp = await fetch(
         "https://discord.com/api/users/@me/guilds",

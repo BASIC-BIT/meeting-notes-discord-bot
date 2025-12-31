@@ -10,7 +10,10 @@ import {
   setAskConversationVisibility,
 } from "../../services/askConversationService";
 import { fetchServerContext } from "../../services/appContextService";
-import { ensureManageGuildWithUserToken } from "../../services/guildAccessService";
+import {
+  ensureManageGuildWithUserToken,
+  type GuildSessionCache,
+} from "../../services/guildAccessService";
 import { guildMemberProcedure, publicProcedure, router } from "../trpc";
 import { PERMISSION_REASONS } from "../permissions";
 
@@ -25,12 +28,15 @@ const resolveAskSettings = async (guildId: string) => {
 const resolveAskAccess = async (options: {
   accessToken: string;
   guildId: string;
+  userId?: string;
+  session?: GuildSessionCache;
 }) => {
   const settings = await resolveAskSettings(options.guildId);
   let isManager = false;
   const manageCheck = await ensureManageGuildWithUserToken(
     options.accessToken,
     options.guildId,
+    { userId: options.userId, session: options.session },
   );
   if (manageCheck === null && !settings.askMembersEnabled) {
     throw new TRPCError({
@@ -91,6 +97,8 @@ const ask = guildMemberProcedure
     const { isManager } = await resolveAskAccess({
       accessToken: ctx.user.accessToken ?? "",
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     const result = await askWithConversation({
       userId: ctx.user.id,
@@ -111,6 +119,8 @@ const listConversations = guildMemberProcedure
     await resolveAskAccess({
       accessToken: ctx.user.accessToken ?? "",
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     const conversations = await listAskConversations(
       ctx.user.id,
@@ -125,6 +135,8 @@ const listSharedConversations = guildMemberProcedure
     const { settings } = await resolveAskAccess({
       accessToken: ctx.user.accessToken ?? "",
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     ensureSharingAllowed(settings.askSharingPolicy);
     const conversations = await listSharedAskConversations(
@@ -140,6 +152,8 @@ const getConversation = guildMemberProcedure
     await resolveAskAccess({
       accessToken: ctx.user.accessToken ?? "",
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     const result = await getAskConversationWithMessages(
       ctx.user.id,
@@ -161,6 +175,8 @@ const getSharedConversation = guildMemberProcedure
     const { settings } = await resolveAskAccess({
       accessToken: ctx.user.accessToken ?? "",
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     ensureSharingAllowed(settings.askSharingPolicy);
     const result = await getSharedConversationWithMessages(
@@ -211,6 +227,8 @@ const rename = guildMemberProcedure
     await resolveAskAccess({
       accessToken: ctx.user.accessToken ?? "",
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     const updated = await renameAskConversation(
       ctx.user.id,
@@ -239,6 +257,8 @@ const setVisibility = guildMemberProcedure
     const { settings } = await resolveAskAccess({
       accessToken: ctx.user.accessToken ?? "",
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     ensureSharingAllowed(settings.askSharingPolicy, input.visibility);
     const updated = await setAskConversationVisibility({
