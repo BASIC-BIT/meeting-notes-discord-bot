@@ -34,6 +34,7 @@ import {
 } from "./utils/participants";
 import { config } from "./services/configService";
 import { resolveMeetingRuntimeConfig } from "./services/meetingConfigService";
+import { listDictionaryEntriesService } from "./services/dictionaryService";
 import { createTtsQueue } from "./ttsQueue";
 import { maybeSpeakChatMessage } from "./chatTts";
 import {
@@ -328,6 +329,14 @@ export async function initializeMeeting(
     });
   } catch (error) {
     console.warn("Failed to resolve meeting runtime config:", error);
+  }
+
+  try {
+    meeting.dictionaryEntries = await listDictionaryEntriesService(
+      meeting.guildId,
+    );
+  } catch (error) {
+    console.warn("Failed to load dictionary entries:", error);
   }
 
   // Set a timer to automatically end the meeting after the specified duration

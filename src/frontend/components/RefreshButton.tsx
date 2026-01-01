@@ -1,8 +1,10 @@
 import { Button, type ButtonProps } from "@mantine/core";
+import type { MouseEventHandler } from "react";
 import { IconRefresh } from "@tabler/icons-react";
 
 type RefreshButtonProps = Omit<ButtonProps, "children" | "leftSection"> & {
   label?: string;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
 };
 
 export function RefreshButton({

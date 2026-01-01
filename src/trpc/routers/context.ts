@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { SERVER_CONTEXT_KEYS } from "../../config/keys";
-import { resolveConfigSnapshot } from "../../services/unifiedConfigService";
+import {
+  getSnapshotBoolean,
+  getSnapshotEnum,
+  getSnapshotString,
+  resolveConfigSnapshot,
+} from "../../services/unifiedConfigService";
 import {
   clearConfigOverrideForScope,
   setConfigOverrideForScope,
@@ -9,52 +14,60 @@ import { normalizeTags, parseTags } from "../../utils/tags";
 import { ensureBotPresence } from "./ensureBotPresence";
 import { manageGuildProcedure, router } from "../trpc";
 
-const resolveStringValue = (value: unknown) =>
-  typeof value === "string" && value.trim().length > 0 ? value : null;
-
 const get = manageGuildProcedure
   .input(z.object({ serverId: z.string() }))
   .query(async ({ ctx, input }) => {
     await ensureBotPresence(ctx, input.serverId);
     const snapshot = await resolveConfigSnapshot({ guildId: input.serverId });
     const contextValue =
-      resolveStringValue(snapshot.values[SERVER_CONTEXT_KEYS.context]?.value) ??
-      "";
-    const defaultNotesChannelId = resolveStringValue(
-      snapshot.values[SERVER_CONTEXT_KEYS.defaultNotesChannelId]?.value,
+      getSnapshotString(snapshot, SERVER_CONTEXT_KEYS.context, {
+        trim: true,
+      }) ?? "";
+    const defaultNotesChannelId = getSnapshotString(
+      snapshot,
+      SERVER_CONTEXT_KEYS.defaultNotesChannelId,
+      { trim: true },
     );
-    const defaultTagsValue =
-      snapshot.values[SERVER_CONTEXT_KEYS.defaultTags]?.value;
-    const defaultTags =
-      typeof defaultTagsValue === "string"
-        ? (parseTags(defaultTagsValue) ?? [])
-        : [];
-    const liveVoiceEnabled = Boolean(
-      snapshot.values[SERVER_CONTEXT_KEYS.liveVoiceEnabled]?.value,
+    const defaultTagsValue = getSnapshotString(
+      snapshot,
+      SERVER_CONTEXT_KEYS.defaultTags,
+      { trim: true },
     );
-    const liveVoiceCommandsEnabled = Boolean(
-      snapshot.values[SERVER_CONTEXT_KEYS.liveVoiceCommandsEnabled]?.value,
+    const defaultTags = defaultTagsValue
+      ? (parseTags(defaultTagsValue) ?? [])
+      : [];
+    const liveVoiceEnabled = getSnapshotBoolean(
+      snapshot,
+      SERVER_CONTEXT_KEYS.liveVoiceEnabled,
     );
-    const liveVoiceTtsVoice = resolveStringValue(
-      snapshot.values[SERVER_CONTEXT_KEYS.liveVoiceTtsVoice]?.value,
+    const liveVoiceCommandsEnabled = getSnapshotBoolean(
+      snapshot,
+      SERVER_CONTEXT_KEYS.liveVoiceCommandsEnabled,
     );
-    const chatTtsEnabled = Boolean(
-      snapshot.values[SERVER_CONTEXT_KEYS.chatTtsEnabled]?.value,
+    const liveVoiceTtsVoice = getSnapshotString(
+      snapshot,
+      SERVER_CONTEXT_KEYS.liveVoiceTtsVoice,
+      { trim: true },
     );
-    const chatTtsVoice = resolveStringValue(
-      snapshot.values[SERVER_CONTEXT_KEYS.chatTtsVoice]?.value,
+    const chatTtsEnabled = getSnapshotBoolean(
+      snapshot,
+      SERVER_CONTEXT_KEYS.chatTtsEnabled,
     );
-    const askMembersEnabled = Boolean(
-      snapshot.values[SERVER_CONTEXT_KEYS.askMembersEnabled]?.value,
+    const chatTtsVoice = getSnapshotString(
+      snapshot,
+      SERVER_CONTEXT_KEYS.chatTtsVoice,
+      { trim: true },
     );
-    const askSharingPolicyValue =
-      snapshot.values[SERVER_CONTEXT_KEYS.askSharingPolicy]?.value;
+    const askMembersEnabled = getSnapshotBoolean(
+      snapshot,
+      SERVER_CONTEXT_KEYS.askMembersEnabled,
+    );
     const askSharingPolicy =
-      askSharingPolicyValue === "off" ||
-      askSharingPolicyValue === "server" ||
-      askSharingPolicyValue === "public"
-        ? askSharingPolicyValue
-        : "server";
+      getSnapshotEnum(snapshot, SERVER_CONTEXT_KEYS.askSharingPolicy, [
+        "off",
+        "server",
+        "public",
+      ]) ?? "server";
     return {
       context: contextValue,
       defaultNotesChannelId,

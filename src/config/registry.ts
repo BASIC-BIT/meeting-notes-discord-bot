@@ -164,6 +164,171 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
     },
   },
   {
+    key: "dictionary.maxEntries",
+    label: "Dictionary max entries",
+    description:
+      "Maximum dictionary entries used in prompts. Uses most recently updated terms. Set to 0 to disable dictionary usage, clamped by the global dictionary cap to protect prompt size.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 200,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+      server: scope(true, false, "admin", "number"),
+    },
+    ui: {
+      type: "number",
+      min: 0,
+      step: 1,
+      maxKey: "dictionary.maxEntries.cap",
+    },
+  },
+  {
+    key: "dictionary.maxEntries.pro",
+    label: "Dictionary max entries (pro)",
+    description:
+      "Pro tier maximum dictionary entries used in prompts. Set to 0 to disable dictionary usage for pro tier, clamped by the global dictionary cap.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 400,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+      server: scope(true, false, "admin", "number"),
+    },
+    minTier: "pro",
+    ui: {
+      type: "number",
+      min: 0,
+      step: 1,
+      maxKey: "dictionary.maxEntries.cap",
+    },
+  },
+  {
+    key: "dictionary.maxEntries.cap",
+    label: "Dictionary max entries cap",
+    description:
+      "Global hard cap for dictionary entries used in prompts to protect prompt size and model quality.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 500,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+    },
+    ui: { type: "number", min: 0, step: 1 },
+  },
+  {
+    key: "dictionary.maxChars.transcription",
+    label: "Dictionary transcription chars",
+    description:
+      "Character budget for dictionary terms in the transcription prompt. Definitions are not included. Set to 0 to disable dictionary terms in transcription, clamped by the global transcription cap.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 2000,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+      server: scope(true, false, "admin", "number"),
+    },
+    ui: {
+      type: "number",
+      min: 0,
+      step: 100,
+      maxKey: "dictionary.maxChars.transcription.cap",
+    },
+  },
+  {
+    key: "dictionary.maxChars.transcription.pro",
+    label: "Dictionary transcription chars (pro)",
+    description:
+      "Pro tier character budget for dictionary terms in the transcription prompt. Definitions are not included, clamped by the global transcription cap.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 4000,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+      server: scope(true, false, "admin", "number"),
+    },
+    minTier: "pro",
+    ui: {
+      type: "number",
+      min: 0,
+      step: 100,
+      maxKey: "dictionary.maxChars.transcription.cap",
+    },
+  },
+  {
+    key: "dictionary.maxChars.transcription.cap",
+    label: "Dictionary transcription chars cap",
+    description:
+      "Global hard cap for dictionary transcription characters to keep prompts within a safe context window.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 6000,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+    },
+    ui: { type: "number", min: 0, step: 100 },
+  },
+  {
+    key: "dictionary.maxChars.context",
+    label: "Dictionary context chars",
+    description:
+      "Character budget for dictionary terms and definitions in cleanup, coalesce, and notes prompts. Set to 0 to disable dictionary context, clamped by the global context cap.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 6000,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+      server: scope(true, false, "admin", "number"),
+    },
+    ui: {
+      type: "number",
+      min: 0,
+      step: 100,
+      maxKey: "dictionary.maxChars.context.cap",
+    },
+  },
+  {
+    key: "dictionary.maxChars.context.pro",
+    label: "Dictionary context chars (pro)",
+    description:
+      "Pro tier character budget for dictionary terms and definitions in cleanup, coalesce, and notes prompts, clamped by the global context cap.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 12000,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+      server: scope(true, false, "admin", "number"),
+    },
+    minTier: "pro",
+    ui: {
+      type: "number",
+      min: 0,
+      step: 100,
+      maxKey: "dictionary.maxChars.context.cap",
+    },
+  },
+  {
+    key: "dictionary.maxChars.context.cap",
+    label: "Dictionary context chars cap",
+    description:
+      "Global hard cap for dictionary context characters to keep prompts within a safe context window.",
+    category: "Dictionary",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: 20000,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+    },
+    ui: { type: "number", min: 0, step: 100 },
+  },
+  {
     key: "notes.channelId",
     label: "Notes channel",
     description: "Default notes channel for meetings and auto-recording.",

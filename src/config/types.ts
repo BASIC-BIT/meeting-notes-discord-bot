@@ -81,4 +81,9 @@ export type MeetingRuntimeConfig = {
     cleanupEnabled: boolean;
     coalesceModel: string;
   };
+  dictionary: {
+    maxEntries: number;
+    maxCharsTranscription: number;
+    maxCharsContext: number;
+  };
 };

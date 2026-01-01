@@ -41,6 +41,11 @@ export type ConfigResolveContext = {
   tier?: ConfigTier;
 };
 
+export type StringValueOptions = {
+  trim?: boolean;
+  allowEmpty?: boolean;
+};
+
 const resolveScopeChain = (context: ConfigResolveContext): ConfigScope[] => {
   if (context.meetingId) {
     return ["meeting", "channel", "server", "global"];
@@ -260,6 +265,101 @@ export async function resolveConfigSnapshot(
     tier: context.tier,
     missingRequired: Array.from(missingRequired),
   };
+}
+
+export const getSnapshotValue = (
+  snapshot: ResolvedConfigSnapshot,
+  key: string,
+): unknown => snapshot.values[key]?.value;
+
+export const resolveStringValue = (
+  value: unknown,
+  options?: StringValueOptions,
+): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const next = options?.trim ? value.trim() : value;
+  if (!options?.allowEmpty && next.length === 0) return undefined;
+  return next;
+};
+
+export const resolveBooleanValue = (value: unknown): boolean | undefined =>
+  typeof value === "boolean" ? value : undefined;
+
+export const resolveEnumValue = <T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback?: T,
+): T | undefined => {
+  if (typeof value === "string" && allowed.includes(value as T)) {
+    return value as T;
+  }
+  return fallback;
+};
+
+export const getSnapshotString = (
+  snapshot: ResolvedConfigSnapshot,
+  key: string,
+  options?: StringValueOptions,
+): string | undefined =>
+  resolveStringValue(getSnapshotValue(snapshot, key), options);
+
+export const getSnapshotBoolean = (
+  snapshot: ResolvedConfigSnapshot,
+  key: string,
+): boolean => resolveBooleanValue(getSnapshotValue(snapshot, key)) ?? false;
+
+export const getSnapshotEnum = <T extends string>(
+  snapshot: ResolvedConfigSnapshot,
+  key: string,
+  allowed: readonly T[],
+  fallback?: T,
+): T | undefined =>
+  resolveEnumValue(getSnapshotValue(snapshot, key), allowed, fallback);
+
+export async function resolveConfigValue<T>(
+  context: ConfigResolveContext,
+  key: string,
+  transform: (value: unknown) => T | undefined,
+  options?: { logLabel?: string },
+): Promise<T | undefined> {
+  try {
+    const snapshot = await resolveConfigSnapshot(context);
+    return transform(getSnapshotValue(snapshot, key));
+  } catch (error) {
+    console.error(
+      options?.logLabel ?? `Failed to resolve config value for ${key}.`,
+      error,
+    );
+    return undefined;
+  }
+}
+
+export async function resolveConfigString(
+  context: ConfigResolveContext,
+  key: string,
+  options?: StringValueOptions & { logLabel?: string },
+): Promise<string | undefined> {
+  return resolveConfigValue(
+    context,
+    key,
+    (value) => resolveStringValue(value, options),
+    options,
+  );
+}
+
+export async function resolveConfigEnum<T extends string>(
+  context: ConfigResolveContext,
+  key: string,
+  allowed: readonly T[],
+  fallback?: T,
+  options?: { logLabel?: string },
+): Promise<T | undefined> {
+  return resolveConfigValue(
+    context,
+    key,
+    (value) => resolveEnumValue(value, allowed, fallback),
+    options,
+  );
 }
 
 export async function resolveGlobalConfigValues(): Promise<

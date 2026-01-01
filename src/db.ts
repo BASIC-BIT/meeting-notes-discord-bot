@@ -27,6 +27,7 @@ import {
   StripeWebhookEvent,
   SuggestionHistoryEntry,
   UserSpeechSettings,
+  DictionaryEntry,
   ConfigOverrideRecord,
   AskConversationShareRecord,
 } from "./types/db";
@@ -386,6 +387,64 @@ export async function deleteUserSpeechSettings(
   const params = {
     TableName: tableName("UserSpeechSettingsTable"),
     Key: marshall({ guildId, userId }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+// Dictionary operations
+export async function writeDictionaryEntry(
+  entry: DictionaryEntry,
+): Promise<void> {
+  const params = {
+    TableName: tableName("DictionaryTable"),
+    Item: marshall(entry, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getDictionaryEntry(
+  guildId: string,
+  termKey: string,
+): Promise<DictionaryEntry | undefined> {
+  const params = {
+    TableName: tableName("DictionaryTable"),
+    Key: marshall({ guildId, termKey }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as DictionaryEntry;
+  }
+  return undefined;
+}
+
+export async function listDictionaryEntries(
+  guildId: string,
+): Promise<DictionaryEntry[]> {
+  const params = {
+    TableName: tableName("DictionaryTable"),
+    KeyConditionExpression: "guildId = :guildId",
+    ExpressionAttributeValues: marshall({
+      ":guildId": guildId,
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as DictionaryEntry);
+  }
+  return [];
+}
+
+export async function deleteDictionaryEntry(
+  guildId: string,
+  termKey: string,
+): Promise<void> {
+  const params = {
+    TableName: tableName("DictionaryTable"),
+    Key: marshall({ guildId, termKey }),
   };
   const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);

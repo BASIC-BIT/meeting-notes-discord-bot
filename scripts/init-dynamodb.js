@@ -90,6 +90,18 @@ const tables = [
     BillingMode: "PAY_PER_REQUEST",
   },
   {
+    TableName: "DictionaryTable",
+    KeySchema: [
+      { AttributeName: "guildId", KeyType: "HASH" },
+      { AttributeName: "termKey", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "guildId", AttributeType: "S" },
+      { AttributeName: "termKey", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
     TableName: "UserSpeechSettingsTable",
     KeySchema: [
       { AttributeName: "guildId", KeyType: "HASH" },

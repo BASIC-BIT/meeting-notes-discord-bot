@@ -15,7 +15,12 @@ const parseNumberValue = (value: unknown): number | undefined => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
-const coerceBoolean = (_entry: ConfigEntry, value: unknown): CoercedValue => {
+type ConfigEntryLike = Pick<ConfigEntry, "valueType" | "ui">;
+
+const coerceBoolean = (
+  _entry: ConfigEntryLike,
+  value: unknown,
+): CoercedValue => {
   if (typeof value === "boolean") return { value, valid: true };
   if (typeof value === "string") {
     const lower = value.toLowerCase();
@@ -25,12 +30,15 @@ const coerceBoolean = (_entry: ConfigEntry, value: unknown): CoercedValue => {
   return invalid(value);
 };
 
-const coerceNumber = (_entry: ConfigEntry, value: unknown): CoercedValue => {
+const coerceNumber = (
+  _entry: ConfigEntryLike,
+  value: unknown,
+): CoercedValue => {
   const parsed = parseNumberValue(value);
   return parsed === undefined ? invalid(value) : { value: parsed, valid: true };
 };
 
-const coerceSelect = (entry: ConfigEntry, value: unknown): CoercedValue => {
+const coerceSelect = (entry: ConfigEntryLike, value: unknown): CoercedValue => {
   if (typeof value !== "string") return invalid(value);
   if (entry.ui.type === "custom") {
     if (entry.ui.options && !entry.ui.options.includes(value)) {
@@ -46,13 +54,16 @@ const coerceSelect = (entry: ConfigEntry, value: unknown): CoercedValue => {
   return invalid(value);
 };
 
-const coerceString = (_entry: ConfigEntry, value: unknown): CoercedValue => {
+const coerceString = (
+  _entry: ConfigEntryLike,
+  value: unknown,
+): CoercedValue => {
   if (typeof value === "string") return { value, valid: true };
   return invalid(value);
 };
 
 export function coerceConfigValue(
-  entry: ConfigEntry,
+  entry: ConfigEntryLike,
   value: unknown,
 ): CoercedValue {
   switch (entry.valueType) {
@@ -71,8 +82,10 @@ export function coerceConfigValue(
 
 export type NumberRange = { min?: number; max?: number; invalidKeys: string[] };
 
+type NumberRangeEntry = Pick<ConfigEntry, "key" | "ui">;
+
 export const resolveNumberRange = (
-  entry: ConfigEntry,
+  entry: NumberRangeEntry,
   valuesByKey?: Record<string, unknown>,
 ): NumberRange => {
   if (entry.ui.type !== "number") {

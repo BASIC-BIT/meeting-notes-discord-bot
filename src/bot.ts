@@ -23,7 +23,10 @@ import { handleAutoRecordCommand } from "./commands/autorecord";
 import { handleContextCommand } from "./commands/context";
 import { getAutoRecordSettingByChannel } from "./services/autorecordService";
 import { resolveMeetingVoiceSettings } from "./services/meetingVoiceSettingsService";
-import { resolveConfigSnapshot } from "./services/unifiedConfigService";
+import {
+  getSnapshotString,
+  resolveConfigSnapshot,
+} from "./services/unifiedConfigService";
 import { getGuildLimits } from "./services/subscriptionService";
 import { formatParticipantLabel, fromMember } from "./utils/participants";
 import { parseTags } from "./utils/tags";
@@ -55,6 +58,7 @@ import {
   isEditTagsHistoryModal,
 } from "./commands/tags";
 import { handleAskCommand } from "./commands/ask";
+import { handleDictionaryCommand } from "./commands/dictionary";
 import { billingCommand, handleBillingCommand } from "./commands/billing";
 import { handleSayCommand } from "./commands/say";
 import { handleTtsCommand } from "./commands/tts";
@@ -110,6 +114,7 @@ const commandHandlers: Record<
 > = {
   autorecord: handleAutoRecordCommand,
   ask: handleAskCommand,
+  dictionary: handleDictionaryCommand,
   context: handleContextCommand,
   billing: handleBillingCommand,
   say: handleSayCommand,
@@ -436,16 +441,17 @@ async function handleUserJoin(newState: VoiceState) {
             guildId: newState.guild.id,
             tier: subscription.tier,
           });
-          const notesChannelValue =
-            snapshot.values[CONFIG_KEYS.notes.channelId]?.value;
-          if (
-            typeof notesChannelValue === "string" &&
-            notesChannelValue.trim().length > 0
-          ) {
-            defaultNotesChannelId = notesChannelValue;
-          }
-          const notesTagsValue = snapshot.values[CONFIG_KEYS.notes.tags]?.value;
-          if (typeof notesTagsValue === "string") {
+          defaultNotesChannelId = getSnapshotString(
+            snapshot,
+            CONFIG_KEYS.notes.channelId,
+            { trim: true },
+          );
+          const notesTagsValue = getSnapshotString(
+            snapshot,
+            CONFIG_KEYS.notes.tags,
+            { trim: true },
+          );
+          if (notesTagsValue) {
             defaultTags = parseTags(notesTagsValue);
           }
         } catch (error) {
@@ -788,6 +794,50 @@ async function setupApplicationCommands() {
         subcommand
           .setName("list")
           .setDescription("List all contexts in this server"),
+      ),
+    new SlashCommandBuilder()
+      .setName("dictionary")
+      .setDescription("Manage dictionary terms for better transcription")
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("list")
+          .setDescription("List dictionary entries for this server"),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("add")
+          .setDescription("Add or update a dictionary entry")
+          .addStringOption((option) =>
+            option
+              .setName("term")
+              .setDescription("Word or phrase to capture")
+              .setRequired(true)
+              .setMaxLength(80),
+          )
+          .addStringOption((option) =>
+            option
+              .setName("definition")
+              .setDescription("Optional definition or explanation")
+              .setRequired(false)
+              .setMaxLength(400),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("remove")
+          .setDescription("Remove a dictionary entry")
+          .addStringOption((option) =>
+            option
+              .setName("term")
+              .setDescription("Term to remove")
+              .setRequired(true)
+              .setMaxLength(80),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("clear")
+          .setDescription("Remove all dictionary entries for this server"),
       ),
   ];
 

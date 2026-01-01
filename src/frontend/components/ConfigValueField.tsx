@@ -26,6 +26,7 @@ export type ConfigUiContext = {
   textChannels?: ChannelOption[];
   ttsVoiceOptions?: Array<{ value: string; label: string }>;
   resolvedValues?: Record<string, unknown>;
+  showLimitSources?: boolean;
 };
 
 const formatOptionLabel = (option: string) =>
@@ -48,7 +49,7 @@ const AskSharingPolicySegment: CustomRenderer = ({
       value={typeof value === "string" ? value : ""}
       onChange={(next) => onChange(next)}
       onClickCapture={() => {
-        if (!disabled) onOverrideIntent?.(value);
+        if (!disabled) onOverrideIntent?.();
       }}
       data={options.map((option) => ({
         value: option,
@@ -174,14 +175,14 @@ export function ConfigValueField({
   }
 
   if (entry.ui.type === "toggle") {
-    const toggleValue = value ? "on" : "off";
+    const toggleValue = value === true ? "on" : "off";
     return (
       <SegmentedControl
         aria-label={entry.key}
         value={toggleValue}
         onChange={(next) => onChange(next === "on")}
         onClickCapture={() => {
-          if (!disabled) onOverrideIntent?.(value);
+          if (!disabled) onOverrideIntent?.();
         }}
         data={[
           { label: "Off", value: "off" },
@@ -195,20 +196,47 @@ export function ConfigValueField({
 
   if (entry.ui.type === "number") {
     const range = resolveNumberRange(entry, uiContext?.resolvedValues);
+    const showLimitSources = uiContext?.showLimitSources ?? true;
+    const limitParts: string[] = [];
+    if (range.min !== undefined) {
+      limitParts.push(
+        `Min ${range.min}${
+          showLimitSources && entry.ui.minKey
+            ? ` (from ${entry.ui.minKey})`
+            : ""
+        }`,
+      );
+    }
+    if (range.max !== undefined) {
+      limitParts.push(
+        `Max ${range.max}${
+          showLimitSources && entry.ui.maxKey
+            ? ` (from ${entry.ui.maxKey})`
+            : ""
+        }`,
+      );
+    }
     return (
-      <NumberInput
-        aria-label={entry.key}
-        value={typeof value === "number" ? value : undefined}
-        onChange={(next) => {
-          if (typeof next === "number") {
-            onChange(clampNumberValue(next, range));
-          }
-        }}
-        min={range.min}
-        max={range.max}
-        step={entry.ui.step}
-        disabled={disabled}
-      />
+      <Stack gap={4}>
+        <NumberInput
+          aria-label={entry.key}
+          value={typeof value === "number" ? value : undefined}
+          onChange={(next) => {
+            if (typeof next === "number") {
+              onChange(clampNumberValue(next, range));
+            }
+          }}
+          min={range.min}
+          max={range.max}
+          step={entry.ui.step}
+          disabled={disabled}
+        />
+        {limitParts.length > 0 ? (
+          <Text size="xs" c="dimmed">
+            Limits: {limitParts.join(" · ")}
+          </Text>
+        ) : null}
+      </Stack>
     );
   }
 
@@ -234,7 +262,7 @@ export function ConfigValueField({
         value={typeof value === "string" ? value : ""}
         onChange={(next) => onChange(next)}
         onClickCapture={() => {
-          if (!disabled) onOverrideIntent?.(value);
+          if (!disabled) onOverrideIntent?.();
         }}
         data={(entry.ui.options ?? []).map((option) => ({
           value: option,

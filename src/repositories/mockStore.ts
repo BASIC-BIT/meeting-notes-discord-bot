@@ -11,6 +11,7 @@ import type {
   StripeWebhookEvent,
   UserSpeechSettings,
   ConfigOverrideRecord,
+  DictionaryEntry,
 } from "../types/db";
 import type {
   AskConversation,
@@ -48,6 +49,7 @@ type MockStore = {
   askSharesByGuild: Map<string, AskSharedConversation[]>;
   userSpeechSettings: Map<string, UserSpeechSettings>;
   configOverrides: Map<string, ConfigOverrideRecord>;
+  dictionaryEntriesByGuild: Map<string, DictionaryEntry[]>;
 };
 
 const MANAGE_GUILD = 1 << 5;
@@ -206,6 +208,7 @@ function buildDefaultStore(): MockStore {
   const onboardingStates = new Map<string, OnboardingState>();
   const userSpeechSettings = new Map<string, UserSpeechSettings>();
   const configOverrides = new Map<string, ConfigOverrideRecord>();
+  const dictionaryEntriesByGuild = new Map<string, DictionaryEntry[]>();
 
   const addOverride = (record: ConfigOverrideRecord) => {
     configOverrides.set(`${record.scopeId}#${record.configKey}`, record);
@@ -465,6 +468,29 @@ function buildDefaultStore(): MockStore {
     ensureServerDefault(guild.id, CONFIG_KEYS.ask.membersEnabled, true);
     ensureServerDefault(guild.id, CONFIG_KEYS.ask.sharingPolicy, "server");
   });
+
+  dictionaryEntriesByGuild.set("1249723747896918109", [
+    {
+      guildId: "1249723747896918109",
+      termKey: "chronote",
+      term: "Chronote",
+      definition: "Meeting Notes Bot brand name.",
+      createdAt: mockNowIso(),
+      createdBy: mockUser.id,
+      updatedAt: mockNowIso(),
+      updatedBy: mockUser.id,
+    },
+    {
+      guildId: "1249723747896918109",
+      termKey: "dynamodb",
+      term: "DynamoDB",
+      definition: "AWS key value and document database.",
+      createdAt: mockNowIso(),
+      createdBy: mockUser.id,
+      updatedAt: mockNowIso(),
+      updatedBy: mockUser.id,
+    },
+  ]);
 
   const meetingHistoryByGuild = new Map<string, MeetingHistory[]>();
   const buildMeeting = (params: {
@@ -745,6 +771,7 @@ function buildDefaultStore(): MockStore {
     askSharesByGuild,
     userSpeechSettings,
     configOverrides,
+    dictionaryEntriesByGuild,
   };
 }
 

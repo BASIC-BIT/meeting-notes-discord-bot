@@ -10,7 +10,11 @@ import {
   renameAskConversation,
   setAskConversationVisibility,
 } from "../../services/askConversationService";
-import { resolveConfigSnapshot } from "../../services/unifiedConfigService";
+import {
+  getSnapshotBoolean,
+  getSnapshotEnum,
+  resolveConfigSnapshot,
+} from "../../services/unifiedConfigService";
 import {
   ensureManageGuildWithUserToken,
   type GuildSessionCache,
@@ -20,16 +24,16 @@ import { PERMISSION_REASONS } from "../permissions";
 
 const resolveAskSettings = async (guildId: string) => {
   const snapshot = await resolveConfigSnapshot({ guildId });
-  const askMembersEnabled = Boolean(
-    snapshot.values[CONFIG_KEYS.ask.membersEnabled]?.value,
+  const askMembersEnabled = getSnapshotBoolean(
+    snapshot,
+    CONFIG_KEYS.ask.membersEnabled,
   );
-  const policyValue = snapshot.values[CONFIG_KEYS.ask.sharingPolicy]?.value;
   const askSharingPolicy =
-    policyValue === "off" ||
-    policyValue === "server" ||
-    policyValue === "public"
-      ? policyValue
-      : "server";
+    getSnapshotEnum(snapshot, CONFIG_KEYS.ask.sharingPolicy, [
+      "off",
+      "server",
+      "public",
+    ]) ?? "server";
   return { askMembersEnabled, askSharingPolicy };
 };
 

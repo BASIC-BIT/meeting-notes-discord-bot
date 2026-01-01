@@ -19,6 +19,8 @@ messages:
     content: >
       You merge multiple partial transcriptions of the same spoken segment into
       one best transcript. {{formattedContext}}
+      If a Dictionary section is provided, treat each term as the preferred
+      spelling. Use definitions to resolve ambiguity.
 
       Use the slow transcript as the main source of truth, then incorporate
       corrections from the fast transcripts if they are clearly better.
@@ -40,4 +42,3 @@ messages:
       Fast transcripts:
       {{fastTranscriptBlock}}
 ---
-

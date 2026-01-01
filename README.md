@@ -1,16 +1,17 @@
 # Chronote
 
-A Discord bot that records voice meetings, transcribes them with OpenAI, generates notes, and posts results back to Discord. It also supports billing, tagging, and a static frontend.
+A Discord bot that records voice meetings, transcribes them with OpenAI, generates notes, and posts results back to Discord. It also supports billing, tagging, dictionary terms for domain jargon, and a static frontend.
 
 [Add the bot to your server](https://discord.com/oauth2/authorize?client_id=1278729036528619633)
 
 ## Commands
 
-- `/startmeeting` – Begin recording the meeting (audio + chat logs).
-- `/autorecord` – Configure auto-recording for a server/channel.
-- `/context` – Manage prompt context.
-- `/ask` – Ask questions over recent meeting history (guild scope by default).
-- `/onboard` – Guided setup (context, auto-record, feature tour, upgrade CTA).
+- `/startmeeting`: Begin recording the meeting (audio + chat logs).
+- `/autorecord`: Configure auto-recording for a server/channel.
+- `/context`: Manage prompt context.
+- `/dictionary`: Manage dictionary terms used in prompts.
+- `/ask`: Ask questions over recent meeting history (guild scope by default).
+- `/onboard`: Guided setup (context, auto-record, feature tour, upgrade CTA).
 
 ## Run locally
 
@@ -160,7 +161,7 @@ Coverage update rule:
 - Prompt management and tracing: Langfuse for prompt versioning, tracing, and prompt sync scripts.
 - Billing: Stripe Checkout + Billing Portal; webhook handler persists GuildSubscription and PaymentTransaction in DynamoDB and handles payment_failed / subscription_deleted to downgrade appropriately (guild-scoped billing only).
 - Sessions: Express sessions stored in DynamoDB `SessionTable` (TTL on `expiresAt`).
-- Storage: DynamoDB tables include GuildSubscription, PaymentTransaction, StripeWebhookEventTable (idempotency with TTL), AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, AskConversationTable, SessionTable, InstallerTable, OnboardingStateTable. Transcripts and audio artifacts go to S3 (`TRANSCRIPTS_BUCKET`).
+- Storage: DynamoDB tables include GuildSubscription, PaymentTransaction, StripeWebhookEventTable (idempotency with TTL), AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, DictionaryTable, MeetingHistory, AskConversationTable, SessionTable, InstallerTable, OnboardingStateTable. Transcripts and audio artifacts go to S3 (`TRANSCRIPTS_BUCKET`).
 
 ### Stripe webhook testing (local)
 

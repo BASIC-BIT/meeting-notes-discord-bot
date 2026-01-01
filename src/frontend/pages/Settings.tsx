@@ -21,6 +21,10 @@ import { uiOverlays } from "../uiTokens";
 import { parseTags } from "../../utils/tags";
 import { TTS_VOICE_OPTIONS } from "../../utils/ttsVoices";
 import { CONFIG_KEYS } from "../../config/keys";
+import {
+  DEFAULT_DICTIONARY_BUDGETS,
+  resolveDictionaryBudgets,
+} from "../../utils/dictionary";
 
 import {
   buildChannelOverrides,
@@ -30,6 +34,7 @@ import {
 } from "../utils/settingsChannels";
 import { ChannelOverridesCard } from "../features/settings/ChannelOverridesCard";
 import { ServerConfigCard } from "../features/settings/ServerConfigCard";
+import { DictionaryCard } from "../features/settings/DictionaryCard";
 
 export default function Settings() {
   const { selectedGuildId, loading: guildLoading } = useGuildContext();
@@ -50,6 +55,10 @@ export default function Settings() {
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
   );
+  const dictionaryQuery = trpc.dictionary.list.useQuery(
+    { serverId: selectedGuildId ?? "" },
+    { enabled: Boolean(selectedGuildId) && !guildLoading },
+  );
 
   const addRuleMutation = trpc.autorecord.add.useMutation();
   const removeRuleMutation = trpc.autorecord.remove.useMutation();
@@ -58,6 +67,9 @@ export default function Settings() {
     trpc.config.clearServerOverride.useMutation();
   const setChannelContextMutation = trpc.channelContexts.set.useMutation();
   const clearChannelContextMutation = trpc.channelContexts.clear.useMutation();
+  const dictionaryUpsertMutation = trpc.dictionary.upsert.useMutation();
+  const dictionaryRemoveMutation = trpc.dictionary.remove.useMutation();
+  const dictionaryClearMutation = trpc.dictionary.clear.useMutation();
 
   const [channelModalOpen, channelModal] = useDisclosure(false);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
@@ -204,6 +216,22 @@ export default function Settings() {
     }),
     [textChannels],
   );
+
+  const dictionaryBudgets = useMemo(() => {
+    const snapshot = configQuery.data?.snapshot;
+    if (!snapshot?.values) return DEFAULT_DICTIONARY_BUDGETS;
+    const valuesByKey: Record<string, unknown> = {};
+    Object.entries(snapshot.values).forEach(([key, entry]) => {
+      valuesByKey[key] = entry.value;
+    });
+    return resolveDictionaryBudgets(valuesByKey, snapshot.tier);
+  }, [configQuery.data?.snapshot]);
+
+  const dictionaryBusy =
+    dictionaryQuery.isLoading ||
+    dictionaryUpsertMutation.isPending ||
+    dictionaryRemoveMutation.isPending ||
+    dictionaryClearMutation.isPending;
 
   const openAddChannel = () => {
     setEditingChannelId(null);
@@ -429,6 +457,42 @@ export default function Settings() {
               ])
             : Promise.resolve()
         }
+      />
+
+      <DictionaryCard
+        busy={dictionaryBusy || !selectedGuildId}
+        entries={dictionaryQuery.data?.entries ?? []}
+        budgets={dictionaryBudgets}
+        onUpsert={async (term, definition) => {
+          if (!selectedGuildId) return;
+          await dictionaryUpsertMutation.mutateAsync({
+            serverId: selectedGuildId,
+            term,
+            definition,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
+        onRemove={async (term) => {
+          if (!selectedGuildId) return;
+          await dictionaryRemoveMutation.mutateAsync({
+            serverId: selectedGuildId,
+            term,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
+        onClear={async () => {
+          if (!selectedGuildId) return;
+          await dictionaryClearMutation.mutateAsync({
+            serverId: selectedGuildId,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
       />
 
       <ChannelOverridesCard

@@ -118,7 +118,7 @@ const formatInheritedStatus = (source: string, value: unknown) => {
   if (source === "appconfig") return "Status: Default (global)";
   if (source === "default") return "Status: Default";
   if (source === "experimental") return "Status: Experimental default";
-  if (source === "gated") return "Status: Gated";
+  if (source === "gated") return "Status: Locked";
   return `Status: Inherited from ${formatSourceLabel(source)}`;
 };
 
@@ -258,6 +258,7 @@ export function ServerConfigCard({
     () => ({
       ...(uiContextProp ?? {}),
       resolvedValues,
+      showLimitSources: false,
     }),
     [resolvedValues, uiContextProp],
   );
@@ -406,14 +407,11 @@ export function ServerConfigCard({
     requiredLabel?: string;
     statusLabel: string;
   }) => (
-    <Group justify="space-between" align="flex-start" wrap="wrap">
-      <Stack gap={2}>
+    <Group justify="space-between" align="flex-start" wrap="nowrap">
+      <Stack gap={2} style={{ flex: 1 }}>
         <Text fw={600}>{entry.label}</Text>
         <Text size="sm" c="dimmed">
           {entry.description}
-        </Text>
-        <Text size="xs" c="dimmed">
-          Key: {entry.key}
         </Text>
       </Stack>
       <Stack gap={2} align="flex-end">
@@ -453,16 +451,48 @@ export function ServerConfigCard({
     );
   };
 
-  const EntryGateAlert = ({ show }: { show: boolean }) =>
-    show ? (
+  const resolveGateMessage = (
+    entry: ConfigEntryInput,
+    tier: ConfigTier | undefined,
+    experimentalEnabled: boolean,
+  ) => {
+    const needsTier = !isTierAllowed(tier, entry.minTier);
+    const needsExperimental = Boolean(
+      entry.requiresExperimentalTag && !experimentalEnabled,
+    );
+    if (needsTier && needsExperimental) {
+      return `Locked until you enable experimental features or upgrade to ${entry.minTier} tier.`;
+    }
+    if (needsTier) {
+      return `Locked until you upgrade to ${entry.minTier} tier.`;
+    }
+    if (needsExperimental) {
+      return "Locked until experimental features are enabled for this server.";
+    }
+    return "";
+  };
+
+  const EntryGateAlert = ({
+    entry,
+    tier,
+    experimentalEnabled,
+  }: {
+    entry: ConfigEntryInput;
+    tier: ConfigTier | undefined;
+    experimentalEnabled: boolean;
+  }) => {
+    const message = resolveGateMessage(entry, tier, experimentalEnabled);
+    if (!message) return null;
+    return (
       <Alert
         icon={<IconAlertTriangle size={16} />}
         color="yellow"
         variant="light"
       >
-        This setting is gated by tier or experimental access.
+        {message}
       </Alert>
-    ) : null;
+    );
+  };
 
   const renderEntry = (entry: ConfigEntryInput) => {
     const scopeConfig = resolveScopeConfigInput(entry, "server");
@@ -470,11 +500,15 @@ export function ServerConfigCard({
     const resolved = snapshot?.values[entry.key];
     const resolvedSource = resolved?.source ?? "appconfig";
     const resolvedValue = resolved?.value;
+    const isGated = isEntryGated(entry, snapshot?.tier, experimentalEnabled);
     const isOverridden = entryDraft.mode === "override";
+    const fallbackSource =
+      !isGated && resolvedSource === "gated" ? "appconfig" : resolvedSource;
     const statusLabel = isOverridden
       ? "Status: Overridden"
-      : formatInheritedStatus(resolvedSource, resolvedValue);
-    const isGated = isEntryGated(entry, snapshot?.tier, experimentalEnabled);
+      : isGated
+        ? "Status: Locked"
+        : formatInheritedStatus(fallbackSource, resolvedValue);
     const entryTestId = `settings-config-entry-${entry.key}`;
     const isMissingRequired = missingRequiredKeys.has(entry.key);
     const notesRequired =
@@ -515,7 +549,13 @@ export function ServerConfigCard({
             uiContext={uiContext}
           />
 
-          <EntryGateAlert show={isGated} />
+          {isGated ? (
+            <EntryGateAlert
+              entry={entry}
+              tier={snapshot?.tier}
+              experimentalEnabled={experimentalEnabled}
+            />
+          ) : null}
         </Stack>
       </Surface>
     );

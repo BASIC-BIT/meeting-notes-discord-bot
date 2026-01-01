@@ -2,6 +2,7 @@ import { CONFIG_KEYS } from "../config/keys";
 import { CONFIG_REGISTRY } from "../config/registry";
 import type { ConfigTier, MeetingRuntimeConfig } from "../config/types";
 import { resolveConfigSnapshot } from "./unifiedConfigService";
+import { resolveDictionaryBudgets } from "../utils/dictionary";
 
 const requireValue = (
   snapshot: Awaited<ReturnType<typeof resolveConfigSnapshot>>,
@@ -26,6 +27,11 @@ export async function resolveMeetingRuntimeConfig(input: {
     userId: input.userId,
     tier: input.tier,
   });
+  const valuesByKey: Record<string, unknown> = {};
+  Object.entries(snapshot.values).forEach(([key, entry]) => {
+    valuesByKey[key] = entry.value;
+  });
+  const dictionaryBudgets = resolveDictionaryBudgets(valuesByKey, input.tier);
 
   return {
     transcription: {
@@ -53,6 +59,7 @@ export async function resolveMeetingRuntimeConfig(input: {
         requireValue(snapshot, CONFIG_KEYS.transcription.premiumCoalesceModel),
       ),
     },
+    dictionary: dictionaryBudgets,
   };
 }
 

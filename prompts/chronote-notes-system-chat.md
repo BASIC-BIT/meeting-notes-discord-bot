@@ -34,6 +34,9 @@ messages:
       in the transcript may be imperfect because audio is batched until roughly
       5 seconds of silence, avoid strong inferences from ordering or attribution
       when uncertain. {{formattedContext}}
+      If a Dictionary section is provided, treat each term as the preferred
+      spelling. Use definitions to resolve ambiguity, and do not copy the
+      dictionary into the notes.
   - role: system
     content: >
       Your task is to create concise and insightful notes from the PROVIDED
@@ -144,4 +147,3 @@ messages:
       Transcript:
       {{transcript}}
 ---
-

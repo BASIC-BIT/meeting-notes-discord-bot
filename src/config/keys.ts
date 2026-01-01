@@ -30,6 +30,17 @@ export const CONFIG_KEYS = {
     enabled: "chatTts.enabled",
     voice: "chatTts.voice",
   },
+  dictionary: {
+    maxEntries: "dictionary.maxEntries",
+    maxEntriesPro: "dictionary.maxEntries.pro",
+    maxEntriesCap: "dictionary.maxEntries.cap",
+    maxCharsTranscription: "dictionary.maxChars.transcription",
+    maxCharsTranscriptionPro: "dictionary.maxChars.transcription.pro",
+    maxCharsTranscriptionCap: "dictionary.maxChars.transcription.cap",
+    maxCharsContext: "dictionary.maxChars.context",
+    maxCharsContextPro: "dictionary.maxChars.context.pro",
+    maxCharsContextCap: "dictionary.maxChars.context.cap",
+  },
   ask: {
     membersEnabled: "ask.members.enabled",
     sharingPolicy: "ask.sharing.policy",

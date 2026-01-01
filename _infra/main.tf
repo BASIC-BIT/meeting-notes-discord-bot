@@ -1777,6 +1777,37 @@ resource "aws_dynamodb_table" "channel_context_table" {
   }
 }
 
+# Dictionary Table
+resource "aws_dynamodb_table" "dictionary_table" {
+  name         = "${local.name_prefix}-DictionaryTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+  range_key    = "termKey"
+
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+
+  attribute {
+    name = "termKey"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "DictionaryTable"
+  }
+}
+
 # User Speech Settings Table
 resource "aws_dynamodb_table" "user_speech_settings_table" {
   name         = "${local.name_prefix}-UserSpeechSettingsTable"

@@ -1,16 +1,23 @@
 import { CONFIG_KEYS } from "../config/keys";
 import { MeetingData } from "../types/meeting-data";
-import { MeetingHistory } from "../types/db";
+import { MeetingHistory, type DictionaryEntry } from "../types/db";
 import { fetchChannelContext } from "./channelContextService";
 import { listRecentMeetingsForChannelService } from "./meetingHistoryService";
 import { config } from "./configService";
 import { resolveConfigSnapshot } from "./unifiedConfigService";
+import {
+  buildDictionaryPromptLines,
+  DEFAULT_DICTIONARY_BUDGETS,
+  type DictionaryBudgets,
+} from "../utils/dictionary";
 
 export interface MeetingContextData {
   meetingContext?: string; // From /startmeeting command
   channelContext?: string; // From database
   serverContext?: string; // From database
   recentMeetings?: MeetingHistory[]; // From database (if memory enabled)
+  dictionaryEntries?: DictionaryEntry[];
+  dictionaryBudgets?: DictionaryBudgets;
 }
 
 /**
@@ -28,6 +35,13 @@ export async function buildMeetingContext(
   // Include meeting-specific context if provided
   if (meeting.meetingContext) {
     contextData.meetingContext = meeting.meetingContext;
+  }
+
+  if (meeting.dictionaryEntries && meeting.dictionaryEntries.length > 0) {
+    contextData.dictionaryEntries = meeting.dictionaryEntries;
+  }
+  if (meeting.runtimeConfig?.dictionary) {
+    contextData.dictionaryBudgets = meeting.runtimeConfig.dictionary;
   }
 
   try {
@@ -96,6 +110,21 @@ export function formatContextForPrompt(
   // Add meeting-specific context
   if (context.meetingContext) {
     formattedContext += `\n**Meeting Context:** ${context.meetingContext}\n`;
+  }
+
+  if (
+    context.dictionaryEntries &&
+    context.dictionaryEntries.length > 0 &&
+    promptType !== "image"
+  ) {
+    const budgets = context.dictionaryBudgets ?? DEFAULT_DICTIONARY_BUDGETS;
+    const { contextLines } = buildDictionaryPromptLines(
+      context.dictionaryEntries,
+      budgets,
+    );
+    if (contextLines.length > 0) {
+      formattedContext += `\n**Dictionary:**\n${contextLines.join("\n")}\n`;
+    }
   }
 
   // Add recent meeting notes for relevant prompt types

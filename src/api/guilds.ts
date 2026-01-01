@@ -16,16 +16,16 @@ import {
 } from "../services/guildAccessService";
 import { answerQuestionService } from "../services/askService";
 import { config } from "../services/configService";
-import { resolveConfigSnapshot } from "../services/unifiedConfigService";
+import {
+  getSnapshotString,
+  resolveConfigSnapshot,
+} from "../services/unifiedConfigService";
 import { normalizeTags, parseTags } from "../utils/tags";
 
 type AuthedUser = {
   accessToken?: string;
   id?: string;
 };
-
-const resolveStringValue = (value: unknown) =>
-  typeof value === "string" && value.trim().length > 0 ? value : null;
 
 export function registerGuildRoutes(app: express.Express) {
   const ensureBotPresence = async (
@@ -106,18 +106,22 @@ export function registerGuildRoutes(app: express.Express) {
       }
       const snapshot = await resolveConfigSnapshot({ guildId });
       const contextValue =
-        resolveStringValue(
-          snapshot.values[SERVER_CONTEXT_KEYS.context]?.value,
-        ) ?? "";
-      const defaultNotesChannelId = resolveStringValue(
-        snapshot.values[SERVER_CONTEXT_KEYS.defaultNotesChannelId]?.value,
+        getSnapshotString(snapshot, SERVER_CONTEXT_KEYS.context, {
+          trim: true,
+        }) ?? "";
+      const defaultNotesChannelId = getSnapshotString(
+        snapshot,
+        SERVER_CONTEXT_KEYS.defaultNotesChannelId,
+        { trim: true },
       );
-      const defaultTagsValue =
-        snapshot.values[SERVER_CONTEXT_KEYS.defaultTags]?.value;
-      const defaultTags =
-        typeof defaultTagsValue === "string"
-          ? (parseTags(defaultTagsValue) ?? [])
-          : [];
+      const defaultTagsValue = getSnapshotString(
+        snapshot,
+        SERVER_CONTEXT_KEYS.defaultTags,
+        { trim: true },
+      );
+      const defaultTags = defaultTagsValue
+        ? (parseTags(defaultTagsValue) ?? [])
+        : [];
       res.json({
         context: contextValue,
         defaultNotesChannelId,

@@ -18,6 +18,7 @@ import type { ConfigEntryInput } from "../types/configEntry";
 import { uiOverlays } from "../uiTokens";
 import { resolveScopeConfigInput } from "../utils/configScopes";
 import { TTS_VOICE_OPTIONS } from "../../utils/ttsVoices";
+import { coerceConfigValue } from "../../config/validation";
 
 type GlobalConfigValue = { key: string; value?: unknown; source: string };
 
@@ -57,7 +58,11 @@ const buildInitialState = (
 
   entries.forEach((entry) => {
     if (Object.hasOwn(appconfigValues, entry.key)) {
-      values[entry.key] = appconfigValues[entry.key];
+      const rawValue = appconfigValues[entry.key];
+      const coerced = coerceConfigValue(entry, rawValue);
+      values[entry.key] = coerced.valid
+        ? coerced.value
+        : (entry.defaultValue ?? undefined);
     } else {
       values[entry.key] = entry.defaultValue ?? undefined;
     }
