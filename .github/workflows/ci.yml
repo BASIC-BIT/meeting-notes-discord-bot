@@ -222,7 +222,11 @@ jobs:
       - name: Restore baseline snapshots
         run: |
           git fetch origin ${{ github.base_ref }} --depth=1
-          git checkout origin/${{ github.base_ref }} -- test/e2e/visual.spec.ts-snapshots || echo "No baseline snapshots found"
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD -- test/e2e/visual.spec.ts-snapshots | grep -q .; then
+            echo "Snapshots updated in this PR, skipping baseline restore."
+          else
+            git checkout origin/${{ github.base_ref }} -- test/e2e/visual.spec.ts-snapshots || echo "No baseline snapshots found"
+          fi
 
       - name: Run visual tests
         id: visual-tests
