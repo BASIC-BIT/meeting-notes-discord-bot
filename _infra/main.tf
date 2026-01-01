@@ -64,6 +64,20 @@ variable "OPENAI_PROJECT_ID" {
   default   = ""
 }
 
+variable "LANGFUSE_PUBLIC_KEY" {
+  description = "Langfuse public key (for prompt sync and tracing)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "LANGFUSE_SECRET_KEY" {
+  description = "Langfuse secret key (for prompt sync and tracing)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "LANGFUSE_BASE_URL" {
   description = "Optional Langfuse base URL for self-hosted"
   type        = string

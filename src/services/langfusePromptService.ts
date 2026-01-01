@@ -162,3 +162,76 @@ export async function getLangfuseChatPrompt(options: {
     );
   }
 }
+
+const formatPromptError = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+const buildPromptVerificationList = () => {
+  const prompts = new Set<string>([
+    config.langfuse.askPromptName,
+    config.langfuse.meetingSummaryPromptName,
+    config.langfuse.notesPromptName,
+    config.langfuse.transcriptionCleanupPromptName,
+    config.langfuse.transcriptionCoalescePromptName,
+    config.langfuse.imagePromptName,
+    config.langfuse.notesCorrectionPromptName,
+  ]);
+
+  if (config.notes.longStoryTestMode) {
+    prompts.add(config.langfuse.notesLongStoryPromptName);
+  }
+  if (config.context.testMode) {
+    prompts.add(config.langfuse.notesContextTestPromptName);
+  }
+  if (config.liveVoice.mode !== "off") {
+    prompts.add(config.langfuse.liveVoiceGatePromptName);
+    prompts.add(config.langfuse.liveVoiceConfirmPromptName);
+    prompts.add(config.langfuse.liveVoiceResponderPromptName);
+  }
+
+  return Array.from(prompts);
+};
+
+export async function verifyLangfusePrompts(): Promise<void> {
+  if (config.mock.enabled) {
+    return;
+  }
+
+  if (!isLangfuseEnabled()) {
+    if (config.server.nodeEnv === "production") {
+      throw new Error(
+        "Langfuse is required in production but LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY are missing.",
+      );
+    }
+    return;
+  }
+
+  const client = getLangfuseClient();
+  if (!client) {
+    throw new Error("Langfuse client is unavailable.");
+  }
+
+  const label = config.langfuse.promptLabel;
+  const cacheTtlSeconds = Math.floor(
+    Math.max(config.langfuse.promptCacheTtlMs, 0) / 1000,
+  );
+  const promptNames = buildPromptVerificationList();
+  const failures: string[] = [];
+
+  for (const name of promptNames) {
+    try {
+      await client.prompt.get(name, {
+        label,
+        cacheTtlSeconds,
+      });
+    } catch (error) {
+      failures.push(`${name}: ${formatPromptError(error)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `Langfuse prompt verification failed (${label}): ${failures.join("; ")}`,
+    );
+  }
+}

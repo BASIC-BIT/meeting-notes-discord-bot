@@ -54,6 +54,18 @@ resource "aws_secretsmanager_secret" "langfuse_secret_key" {
   tags        = local.secrets_tags
 }
 
+resource "aws_secretsmanager_secret_version" "langfuse_public_key_value" {
+  count         = var.LANGFUSE_PUBLIC_KEY != "" ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.langfuse_public_key.id
+  secret_string = var.LANGFUSE_PUBLIC_KEY
+}
+
+resource "aws_secretsmanager_secret_version" "langfuse_secret_key_value" {
+  count         = var.LANGFUSE_SECRET_KEY != "" ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.langfuse_secret_key.id
+  secret_string = var.LANGFUSE_SECRET_KEY
+}
+
 resource "aws_secretsmanager_secret" "stripe_secret_key" {
   #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/stripe-secret-key"
