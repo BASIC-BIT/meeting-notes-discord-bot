@@ -1004,6 +1004,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.session_table.arn,
           aws_dynamodb_table.server_context_table.arn,
           aws_dynamodb_table.channel_context_table.arn,
+          aws_dynamodb_table.dictionary_table.arn,
           aws_dynamodb_table.user_speech_settings_table.arn,
           aws_dynamodb_table.config_overrides_table.arn,
           aws_dynamodb_table.ask_conversation_table.arn,

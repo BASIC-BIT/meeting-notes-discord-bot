@@ -11,8 +11,13 @@ import { ensureUserInGuild } from "../services/guildAccessService";
 const t = initTRPC.context<TrpcContext>().create({
   errorFormatter({ shape, error }) {
     const reason = getPermissionReason(error.cause);
+    const message =
+      error.code === "INTERNAL_SERVER_ERROR"
+        ? "Unexpected error. Please try again."
+        : shape.message;
     return {
       ...shape,
+      message,
       data: {
         ...shape.data,
         reason,

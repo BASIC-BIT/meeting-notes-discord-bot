@@ -11,7 +11,7 @@ variable "REDIS_AUTH_TOKEN" {
 }
 
 locals {
-  redis_auth_token         = trim(var.REDIS_AUTH_TOKEN)
+  redis_auth_token         = trimspace(var.REDIS_AUTH_TOKEN)
   redis_auth_token_encoded = urlencode(local.redis_auth_token)
   redis_auth_prefix = local.redis_auth_token_encoded != "" ? ":${local.redis_auth_token_encoded}@" : ""
   redis_url = var.REDIS_URL != "" ? var.REDIS_URL : "rediss://${local.redis_auth_prefix}${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379"
