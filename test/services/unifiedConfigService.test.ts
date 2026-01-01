@@ -1,3 +1,4 @@
+import { CONFIG_KEYS } from "../../src/config/keys";
 import { resolveConfigSnapshot } from "../../src/services/unifiedConfigService";
 import { resetMockStore } from "../../src/repositories/mockStore";
 import { setConfigOverrideForScope } from "../../src/services/configOverridesService";
@@ -10,7 +11,7 @@ describe("unifiedConfigService", () => {
   test("gates premium transcription when experimental is off", async () => {
     await setConfigOverrideForScope(
       { scope: "server", guildId: "guild-1" },
-      "transcription.premium.enabled",
+      CONFIG_KEYS.transcription.premiumEnabled,
       true,
       "user-1",
     );
@@ -18,7 +19,7 @@ describe("unifiedConfigService", () => {
       guildId: "guild-1",
       tier: "pro",
     });
-    const premium = snapshot.values["transcription.premium.enabled"];
+    const premium = snapshot.values[CONFIG_KEYS.transcription.premiumEnabled];
     expect(premium.value).toBe(false);
     expect(premium.gated).toBe(true);
   });
@@ -26,13 +27,13 @@ describe("unifiedConfigService", () => {
   test("enables premium transcription for pro with experimental on", async () => {
     await setConfigOverrideForScope(
       { scope: "server", guildId: "guild-1" },
-      "features.experimental",
+      CONFIG_KEYS.features.experimental,
       true,
       "user-1",
     );
     await setConfigOverrideForScope(
       { scope: "server", guildId: "guild-1" },
-      "transcription.premium.enabled",
+      CONFIG_KEYS.transcription.premiumEnabled,
       true,
       "user-1",
     );
@@ -40,20 +41,20 @@ describe("unifiedConfigService", () => {
       guildId: "guild-1",
       tier: "pro",
     });
-    const premium = snapshot.values["transcription.premium.enabled"];
+    const premium = snapshot.values[CONFIG_KEYS.transcription.premiumEnabled];
     expect(premium.value).toBe(true);
   });
 
   test("gates premium transcription for non-pro tiers", async () => {
     await setConfigOverrideForScope(
       { scope: "server", guildId: "guild-1" },
-      "features.experimental",
+      CONFIG_KEYS.features.experimental,
       true,
       "user-1",
     );
     await setConfigOverrideForScope(
       { scope: "server", guildId: "guild-1" },
-      "transcription.premium.enabled",
+      CONFIG_KEYS.transcription.premiumEnabled,
       true,
       "user-1",
     );
@@ -61,7 +62,7 @@ describe("unifiedConfigService", () => {
       guildId: "guild-1",
       tier: "basic",
     });
-    const premium = snapshot.values["transcription.premium.enabled"];
+    const premium = snapshot.values[CONFIG_KEYS.transcription.premiumEnabled];
     expect(premium.value).toBe(false);
     expect(premium.gated).toBe(true);
   });

@@ -7,7 +7,7 @@
 
 ## Tech stack
 
-- Runtime: Node.js 20, TypeScript.
+- Runtime: Node.js 22, TypeScript.
 - Discord: discord.js v14, discord-api-types, @discordjs/voice for audio capture, @discordjs/opus, prism-media.
 - AI: openai SDK; gpt-4o-transcribe for transcription; gpt-5.1 for cleanup/notes/corrections; gpt-5-mini for live gate; DALL-E 3 for images.
 - Observability and prompt management: Langfuse for tracing, prompt versioning, and prompt sync scripts.
@@ -65,6 +65,9 @@
 ## Frontend
 
 - Vite + React 19 lives in `src/frontend/`; production build is static assets in `build/frontend/` served via S3/CloudFront (see deploy workflow). Use `yarn frontend:dev` for local HMR.
+- Storybook lives in `.storybook/` for component development. Start it with `yarn storybook` (port 6006 by default).
+- To capture component screenshots, run `yarn test-storybook` while Storybook is running. Screenshots are written to `test/storybook/screenshots`.
+- When making UI changes, use the VLM to review the Storybook screenshots so you can verify the component changes without scanning the full page.
 
 ## Infra (Terraform)
 
@@ -81,6 +84,11 @@
 - Prompt fragments live in `prompts/_fragments` and are composed via `extends` in front matter. `prompts:pull` skips prompts that use `extends` unless `--force` is passed.
 - **Current outbound network rules (ECS service SG)**: temporarily allowing all egress (UDP/TCP any port) for Discord voice debugging. Previously it was limited to TCP 443 and DNS (53) only. Remember to tighten this once voice is stable and update this note.
 - Avoid `in`/`instanceof`/`typeof` hedging for core platform APIs; we target a known Node/SDK set. Prefer simple, direct calls with minimal branching.
+- Config UX: treat overrides as implicit (setting a value creates an override), show a clear inherited vs overridden indicator, keep a reset-to-default action, and avoid disabling inputs just to signal default values.
+- Config taxonomy: avoid hardcoded group names in UI, derive them from the registry or make them required, and keep advanced and experimental settings collapsed by default to reduce noise.
+- Config typing: avoid freeform strings for fixed option sets (for example TTS voice), use enumerated options and shared constants, and avoid hardcoded config key strings in consumers by relying on shared key constants or typed accessors.
+- Config constraints: when numeric settings depend on caps, use minKey/maxKey to reference other config entries, clamp inputs in the UI, and enforce bounds in API validation.
+- Playwright mock mode: ensure only the mock API (port 3001) and frontend dev server (port 5173) are running. If ports are occupied, stop them first (`Get-NetTCPConnection -LocalPort 3001,5173 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ }`). Clear `VITE_API_BASE_URL` (for example via `.env.local`) so the frontend uses the mock server.
 - Comment hygiene: don’t leave transient or change-log style comments (e.g., “SDK v3 exposes transformToString”). Use comments only to clarify non-obvious logic, constraints, or intent.
 - Writing style: do not use em dashes in copy/docs/comments; prefer commas, parentheses, or hyphens.
 - README should stay high signal for users, avoid listing research outcomes like query parameter details. Put rationale or research notes in planning documentation files instead.
@@ -107,7 +115,7 @@
 ## Checks
 
 - Local full gate: `yarn run check` (lint --fix, prettier --write, then in parallel test, build:all, code:stats, prompts:check).
-- CI-parity local gate: `yarn run check:ci` (lint:check, prettier:check, test, build:all, test:e2e, checkov, code:stats, prompts:check). Avoid `yarn check` (built-in Yarn integrity command).
+- CI-parity local gate: `yarn run check:ci` (lint:check, prettier:check, test, build:all, test:e2e, checkov, code:stats, prompts:check, docker:build). Avoid `yarn check` (built-in Yarn integrity command).
 - CI runs the same set as `check:ci` (see `.github/workflows/ci.yml`).
 - Visual regression baselines: update with `yarn test:visual:update`.
 
@@ -155,3 +163,7 @@ Known Context7 IDs:
 - Langfuse JS/TS SDKs: /langfuse/langfuse-js
 - Stripe Node SDK: /stripe/stripe-node
 - Vite: /vitejs/vite
+
+# Testing Strategy
+
+Look for an appropriate spread of testing across our various different layers to determine the appropriate layer to add any new or modified features to. There are going to be lots of cases, especially in the back-end right now, where we don't have an appropriate level of unit testing and end-to-end integration testing, Playwright snapshot tests, etc., That we should consider adding if we don't already have for any given change. Really any file we modify, we should be able to back it up with some sort of automated testing. Keep in mind that when I make that consideration, I am also thinking about coverage. I'm thinking about making sure builds pass, making sure that a lot of our checks are in place to make sure that the code will truly work in practice, you know running the Docker build, running the TypeScript build, as well as complexity checks. We currently have a lot of ignoring in our complexity checks which we define for SCC and Lizard. We should strive if we make a change in a place that has complexity ignored, or has low coverage of tests that we should go in as part of that work to consider how we can at a minimum not make the problem worse but hopefully also rectify the deficiency while still primarily focusing on the goal at hand.

@@ -1,9 +1,10 @@
+import { CONFIG_KEYS } from "../config/keys";
 import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
-import { fetchServerContext } from "./appContextService";
 import { fetchChannelContext } from "./channelContextService";
 import { listRecentMeetingsForChannelService } from "./meetingHistoryService";
 import { config } from "./configService";
+import { resolveConfigSnapshot } from "./unifiedConfigService";
 
 export interface MeetingContextData {
   meetingContext?: string; // From /startmeeting command
@@ -30,10 +31,13 @@ export async function buildMeetingContext(
   }
 
   try {
-    // Fetch server context
-    const serverContext = await fetchServerContext(meeting.guildId);
-    if (serverContext) {
-      contextData.serverContext = serverContext.context;
+    const serverSnapshot = await resolveConfigSnapshot({
+      guildId: meeting.guildId,
+    });
+    const serverContextValue =
+      serverSnapshot.values[CONFIG_KEYS.context.instructions]?.value;
+    if (typeof serverContextValue === "string" && serverContextValue.trim()) {
+      contextData.serverContext = serverContextValue;
     }
 
     // Fetch channel context

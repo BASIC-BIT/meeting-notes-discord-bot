@@ -133,6 +133,18 @@ jobs:
       - name: Build backend and frontend
         run: yarn build:all
 
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t meeting-notes-bot-ci .
+          docker run --rm meeting-notes-bot-ci ls -la dist/index.js
+
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest

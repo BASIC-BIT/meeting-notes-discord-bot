@@ -113,4 +113,22 @@ test.describe("visual regression", () => {
     await waitForVisualReady(page);
     await expect(settingsDialog).toHaveScreenshot("settings-modal.png");
   });
+
+  test("admin config page @visual", async ({
+    serverSelectPage,
+    nav,
+    adminConfigPage,
+    page,
+  }) => {
+    await serverSelectPage.goto();
+    await serverSelectPage.openServerByName(mockGuilds.ddm.name);
+    await nav.goToAdminConfig();
+    await adminConfigPage.waitForLoaded();
+    await adminConfigPage.expandGroup("Experimental");
+    await adminConfigPage
+      .entryByKey("transcription.premium.enabled")
+      .waitFor({ state: "visible" });
+    await waitForVisualReady(page);
+    await expect(adminConfigPage.root()).toHaveScreenshot("admin-config.png");
+  });
 });

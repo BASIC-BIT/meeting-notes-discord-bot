@@ -3,6 +3,7 @@ import {
   deleteConfigOverride,
   getConfigOverride,
   listConfigOverrides,
+  scanConfigOverridesByScopePrefix,
   writeConfigOverride,
 } from "../db";
 import { config } from "../services/configService";
@@ -14,6 +15,7 @@ export type ConfigOverridesRepository = {
     configKey: string,
   ) => Promise<ConfigOverrideRecord | undefined>;
   listByScope: (scopeId: string) => Promise<ConfigOverrideRecord[]>;
+  listByScopePrefix: (scopePrefix: string) => Promise<ConfigOverrideRecord[]>;
   write: (record: ConfigOverrideRecord) => Promise<void>;
   remove: (scopeId: string, configKey: string) => Promise<void>;
 };
@@ -21,6 +23,7 @@ export type ConfigOverridesRepository = {
 const realRepository: ConfigOverridesRepository = {
   get: getConfigOverride,
   listByScope: listConfigOverrides,
+  listByScopePrefix: scanConfigOverridesByScopePrefix,
   write: writeConfigOverride,
   remove: deleteConfigOverride,
 };
@@ -35,6 +38,12 @@ const mockRepository: ConfigOverridesRepository = {
   async listByScope(scopeId) {
     const items = Array.from(getMockStore().configOverrides.values()).filter(
       (record) => record.scopeId === scopeId,
+    );
+    return items;
+  },
+  async listByScopePrefix(scopePrefix) {
+    const items = Array.from(getMockStore().configOverrides.values()).filter(
+      (record) => record.scopeId.startsWith(scopePrefix),
     );
     return items;
   },

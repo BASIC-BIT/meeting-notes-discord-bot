@@ -73,9 +73,10 @@ export const formatChannelLabel = (name?: string, fallback?: string) => {
 };
 
 export const formatDurationLabel = (seconds: number) => {
-  const safe = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const totalMinutes = Math.max(1, Math.floor(safeSeconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
   if (hours > 0) {
     return `${hours}h ${String(minutes).padStart(2, "0")}m`;
   }

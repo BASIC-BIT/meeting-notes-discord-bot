@@ -120,6 +120,7 @@ type ChannelContextsData = { contexts: ChannelContext[] };
 type ConfigSnapshot = {
   values: Record<string, { value?: unknown; gated?: boolean; source?: string }>;
   tier?: "free" | "basic" | "pro";
+  missingRequired: string[];
 };
 type ConfigServerData = {
   registry: {
@@ -139,6 +140,14 @@ type ConfigServerData = {
   }[];
   snapshot: ConfigSnapshot;
   overrides: { scopeId: string; configKey: string; value: unknown }[];
+};
+type ConfigGlobalData = {
+  registry: ConfigServerData["registry"];
+  values: { key: string; value?: unknown; source: string }[];
+  appconfigValues: Record<string, unknown>;
+  overrides: { scopeId: string; configKey: string; value: unknown }[];
+  appconfigEnabled: boolean;
+  validation?: { missingRequired: string[] };
 };
 
 const buildQueryState = <T>(data: T | null): QueryState<T> => ({
@@ -223,8 +232,15 @@ export const channelContextsQuery = buildQueryState<ChannelContextsData>({
 });
 export const configServerQuery = buildQueryState<ConfigServerData>({
   registry: [],
-  snapshot: { values: {}, tier: "free" },
+  snapshot: { values: {}, tier: "free", missingRequired: [] },
   overrides: [],
+});
+export const configGlobalQuery = buildQueryState<ConfigGlobalData>({
+  registry: [],
+  values: [],
+  appconfigValues: {},
+  overrides: [],
+  appconfigEnabled: false,
 });
 
 export const billingCheckoutMutation = buildMutationState<
@@ -260,6 +276,12 @@ export const configSetServerMutation = buildMutationState<[unknown], void>(
   undefined,
 );
 export const configClearServerMutation = buildMutationState<[unknown], void>(
+  undefined,
+);
+export const configPublishGlobalMutation = buildMutationState<[unknown], void>(
+  undefined,
+);
+export const configClearGlobalMutation = buildMutationState<[unknown], void>(
   undefined,
 );
 
@@ -300,6 +322,7 @@ export const trpcUtils = {
   },
   config: {
     server: { invalidate: jest.fn<Promise<void>, [unknown]>() },
+    global: { invalidate: jest.fn<Promise<void>, [unknown]>() },
   },
 };
 
@@ -336,8 +359,15 @@ export const resetTrpcMocks = () => {
   resetQueryState(channelContextsQuery, { contexts: [] });
   resetQueryState(configServerQuery, {
     registry: [],
-    snapshot: { values: {}, tier: "free" },
+    snapshot: { values: {}, tier: "free", missingRequired: [] },
     overrides: [],
+  });
+  resetQueryState(configGlobalQuery, {
+    registry: [],
+    values: [],
+    appconfigValues: {},
+    overrides: [],
+    appconfigEnabled: false,
   });
 
   resetMutationState(billingCheckoutMutation, {
@@ -356,6 +386,8 @@ export const resetTrpcMocks = () => {
   resetMutationState(channelContextsClearMutation, undefined);
   resetMutationState(configSetServerMutation, undefined);
   resetMutationState(configClearServerMutation, undefined);
+  resetMutationState(configPublishGlobalMutation, undefined);
+  resetMutationState(configClearGlobalMutation, undefined);
 
   trpcUtils.ask.listConversations.invalidate.mockReset();
   trpcUtils.ask.listConversations.invalidate.mockResolvedValue(undefined);
@@ -383,6 +415,8 @@ export const resetTrpcMocks = () => {
   trpcUtils.channelContexts.list.invalidate.mockResolvedValue(undefined);
   trpcUtils.config.server.invalidate.mockReset();
   trpcUtils.config.server.invalidate.mockResolvedValue(undefined);
+  trpcUtils.config.global.invalidate.mockReset();
+  trpcUtils.config.global.invalidate.mockResolvedValue(undefined);
 };
 
 export const setPricingQuery = (
@@ -473,6 +507,12 @@ export const setConfigServerQuery = (
   Object.assign(configServerQuery, next);
 };
 
+export const setConfigGlobalQuery = (
+  next: Partial<QueryState<ConfigGlobalData>>,
+) => {
+  Object.assign(configGlobalQuery, next);
+};
+
 export const setAuthQuery = (
   next: Partial<QueryState<{ id: string } | null>>,
 ) => {
@@ -534,8 +574,11 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
     },
     config: {
       server: { useQuery: () => configServerQuery },
+      global: { useQuery: () => configGlobalQuery },
       setServerOverride: { useMutation: () => configSetServerMutation },
       clearServerOverride: { useMutation: () => configClearServerMutation },
+      publishGlobal: { useMutation: () => configPublishGlobalMutation },
+      clearGlobal: { useMutation: () => configClearGlobalMutation },
     },
   },
 }));

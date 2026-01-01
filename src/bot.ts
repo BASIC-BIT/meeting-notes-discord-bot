@@ -13,6 +13,7 @@ import {
   ChannelSelectMenuInteraction,
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
+import { CONFIG_KEYS } from "./config/keys";
 import { getAllMeetings, getMeeting } from "./meetings";
 import {
   handleRequestStartMeeting,
@@ -21,10 +22,11 @@ import {
 import { handleAutoRecordCommand } from "./commands/autorecord";
 import { handleContextCommand } from "./commands/context";
 import { getAutoRecordSettingByChannel } from "./services/autorecordService";
-import { fetchServerContext } from "./services/appContextService";
 import { resolveMeetingVoiceSettings } from "./services/meetingVoiceSettingsService";
+import { resolveConfigSnapshot } from "./services/unifiedConfigService";
 import { getGuildLimits } from "./services/subscriptionService";
 import { formatParticipantLabel, fromMember } from "./utils/participants";
+import { parseTags } from "./utils/tags";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
@@ -424,10 +426,33 @@ async function handleUserJoin(newState: VoiceState) {
 
       // If auto-record is enabled, start recording
       if (autoRecordSetting && autoRecordSetting.enabled) {
-        const serverContext = await fetchServerContext(newState.guild.id);
+        let defaultNotesChannelId: string | undefined;
+        let defaultTags: string[] | undefined;
+        const { subscription, limits } = await getGuildLimits(
+          newState.guild.id,
+        );
+        try {
+          const snapshot = await resolveConfigSnapshot({
+            guildId: newState.guild.id,
+            tier: subscription.tier,
+          });
+          const notesChannelValue =
+            snapshot.values[CONFIG_KEYS.notes.channelId]?.value;
+          if (
+            typeof notesChannelValue === "string" &&
+            notesChannelValue.trim().length > 0
+          ) {
+            defaultNotesChannelId = notesChannelValue;
+          }
+          const notesTagsValue = snapshot.values[CONFIG_KEYS.notes.tags]?.value;
+          if (typeof notesTagsValue === "string") {
+            defaultTags = parseTags(notesTagsValue);
+          }
+        } catch (error) {
+          console.error("Failed to resolve server config defaults", error);
+        }
         const resolvedTextChannelId =
-          autoRecordSetting.textChannelId ??
-          serverContext?.defaultNotesChannelId;
+          autoRecordSetting.textChannelId ?? defaultNotesChannelId;
         if (!resolvedTextChannelId) {
           console.error(
             `No default notes channel configured for auto-record in guild ${newState.guild.id}`,
@@ -442,7 +467,6 @@ async function handleUserJoin(newState: VoiceState) {
           console.log(
             `Auto-starting recording in ${newState.channel.name} due to auto-record settings`,
           );
-          const { limits } = await getGuildLimits(newState.guild.id);
           const {
             liveVoiceEnabled,
             liveVoiceCommandsEnabled,
@@ -454,7 +478,7 @@ async function handleUserJoin(newState: VoiceState) {
             newState.channelId!,
             limits,
           );
-          const tags = autoRecordSetting.tags ?? serverContext?.defaultTags;
+          const tags = autoRecordSetting.tags ?? defaultTags;
           const startReason = autoRecordSetting.recordAll
             ? MEETING_START_REASONS.AUTO_RECORD_ALL
             : MEETING_START_REASONS.AUTO_RECORD_CHANNEL;

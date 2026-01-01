@@ -1,9 +1,9 @@
 import express from "express";
+import { SERVER_CONTEXT_KEY_LIST, SERVER_CONTEXT_KEYS } from "../config/keys";
 import {
-  clearServerContextService,
-  fetchServerContext,
-  setServerContext,
-} from "../services/appContextService";
+  clearConfigOverrideForScope,
+  setConfigOverrideForScope,
+} from "../services/configOverridesService";
 import {
   listAutoRecordSettings,
   removeAutoRecordSetting,
@@ -16,11 +16,16 @@ import {
 } from "../services/guildAccessService";
 import { answerQuestionService } from "../services/askService";
 import { config } from "../services/configService";
+import { resolveConfigSnapshot } from "../services/unifiedConfigService";
+import { normalizeTags, parseTags } from "../utils/tags";
 
 type AuthedUser = {
   accessToken?: string;
   id?: string;
 };
+
+const resolveStringValue = (value: unknown) =>
+  typeof value === "string" && value.trim().length > 0 ? value : null;
 
 export function registerGuildRoutes(app: express.Express) {
   const ensureBotPresence = async (
@@ -99,11 +104,24 @@ export function registerGuildRoutes(app: express.Express) {
       if (!(await ensureBotPresence(req, res, guildId))) {
         return;
       }
-      const ctx = await fetchServerContext(guildId);
+      const snapshot = await resolveConfigSnapshot({ guildId });
+      const contextValue =
+        resolveStringValue(
+          snapshot.values[SERVER_CONTEXT_KEYS.context]?.value,
+        ) ?? "";
+      const defaultNotesChannelId = resolveStringValue(
+        snapshot.values[SERVER_CONTEXT_KEYS.defaultNotesChannelId]?.value,
+      );
+      const defaultTagsValue =
+        snapshot.values[SERVER_CONTEXT_KEYS.defaultTags]?.value;
+      const defaultTags =
+        typeof defaultTagsValue === "string"
+          ? (parseTags(defaultTagsValue) ?? [])
+          : [];
       res.json({
-        context: ctx?.context ?? "",
-        defaultNotesChannelId: ctx?.defaultNotesChannelId ?? null,
-        defaultTags: ctx?.defaultTags ?? [],
+        context: contextValue,
+        defaultNotesChannelId,
+        defaultTags,
       });
     },
   );
@@ -125,18 +143,70 @@ export function registerGuildRoutes(app: express.Express) {
         defaultNotesChannelId?: string | null;
         defaultTags?: string[];
       };
-      const update = {
-        ...(context !== undefined ? { context } : {}),
-        ...(defaultNotesChannelId !== undefined
-          ? { defaultNotesChannelId }
-          : {}),
-        ...(defaultTags !== undefined ? { defaultTags } : {}),
-      };
-      if (Object.keys(update).length === 0) {
+      if (
+        context === undefined &&
+        defaultNotesChannelId === undefined &&
+        defaultTags === undefined
+      ) {
         res.status(400).json({ error: "No updates provided" });
         return;
       }
-      await setServerContext(guildId, user.id, update);
+      const scope = { scope: "server", guildId } as const;
+      const tasks: Promise<void>[] = [];
+      if (context !== undefined) {
+        const trimmed = context.trim();
+        if (trimmed.length > 0) {
+          tasks.push(
+            setConfigOverrideForScope(
+              scope,
+              SERVER_CONTEXT_KEYS.context,
+              trimmed,
+              user.id,
+            ),
+          );
+        } else {
+          tasks.push(
+            clearConfigOverrideForScope(scope, SERVER_CONTEXT_KEYS.context),
+          );
+        }
+      }
+      if (defaultNotesChannelId !== undefined) {
+        if (defaultNotesChannelId) {
+          tasks.push(
+            setConfigOverrideForScope(
+              scope,
+              SERVER_CONTEXT_KEYS.defaultNotesChannelId,
+              defaultNotesChannelId,
+              user.id,
+            ),
+          );
+        } else {
+          tasks.push(
+            clearConfigOverrideForScope(
+              scope,
+              SERVER_CONTEXT_KEYS.defaultNotesChannelId,
+            ),
+          );
+        }
+      }
+      if (defaultTags !== undefined) {
+        const normalized = normalizeTags(defaultTags);
+        if (normalized) {
+          tasks.push(
+            setConfigOverrideForScope(
+              scope,
+              SERVER_CONTEXT_KEYS.defaultTags,
+              normalized.join(", "),
+              user.id,
+            ),
+          );
+        } else {
+          tasks.push(
+            clearConfigOverrideForScope(scope, SERVER_CONTEXT_KEYS.defaultTags),
+          );
+        }
+      }
+      await Promise.all(tasks);
       res.json({ ok: true });
     },
   );
@@ -153,7 +223,12 @@ export function registerGuildRoutes(app: express.Express) {
       if (!(await ensureBotPresence(req, res, guildId))) {
         return;
       }
-      await clearServerContextService(guildId);
+      const scope = { scope: "server", guildId } as const;
+      await Promise.all(
+        SERVER_CONTEXT_KEY_LIST.map((key) =>
+          clearConfigOverrideForScope(scope, key),
+        ),
+      );
       res.json({ ok: true });
     },
   );

@@ -17,6 +17,7 @@ import type {
   AskMessage,
   AskSharedConversation,
 } from "../types/ask";
+import { CONFIG_KEYS } from "../config/keys";
 import { config } from "../services/configService";
 import type {
   DiscordChannel,
@@ -205,6 +206,265 @@ function buildDefaultStore(): MockStore {
   const onboardingStates = new Map<string, OnboardingState>();
   const userSpeechSettings = new Map<string, UserSpeechSettings>();
   const configOverrides = new Map<string, ConfigOverrideRecord>();
+
+  const addOverride = (record: ConfigOverrideRecord) => {
+    configOverrides.set(`${record.scopeId}#${record.configKey}`, record);
+  };
+
+  const addServerOverride = (
+    guildId: string,
+    configKey: string,
+    value: unknown,
+    updatedAt: string,
+    updatedBy: string,
+  ) => {
+    addOverride({
+      scopeId: `server#${guildId}`,
+      configKey,
+      value,
+      updatedAt,
+      updatedBy,
+    });
+  };
+
+  const addChannelOverride = (
+    guildId: string,
+    channelId: string,
+    configKey: string,
+    value: unknown,
+    updatedAt: string,
+    updatedBy: string,
+  ) => {
+    addOverride({
+      scopeId: `channel#${guildId}#${channelId}`,
+      configKey,
+      value,
+      updatedAt,
+      updatedBy,
+    });
+  };
+
+  serverContexts.forEach((context) => {
+    const updatedAt = context.updatedAt;
+    const updatedBy = context.updatedBy;
+    addServerOverride(
+      context.guildId,
+      CONFIG_KEYS.context.instructions,
+      context.context,
+      updatedAt,
+      updatedBy,
+    );
+    if (context.defaultNotesChannelId) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.notes.channelId,
+        context.defaultNotesChannelId,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.defaultTags?.length) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.notes.tags,
+        context.defaultTags.join(", "),
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceEnabled !== undefined) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.liveVoice.enabled,
+        context.liveVoiceEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceCommandsEnabled !== undefined) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.liveVoice.commandsEnabled,
+        context.liveVoiceCommandsEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceTtsVoice) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.liveVoice.ttsVoice,
+        context.liveVoiceTtsVoice,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.chatTtsEnabled !== undefined) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.chatTts.enabled,
+        context.chatTtsEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.chatTtsVoice) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.chatTts.voice,
+        context.chatTtsVoice,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.askMembersEnabled !== undefined) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.ask.membersEnabled,
+        context.askMembersEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.askSharingPolicy) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.ask.sharingPolicy,
+        context.askSharingPolicy,
+        updatedAt,
+        updatedBy,
+      );
+    }
+  });
+
+  channelContexts.forEach((context) => {
+    const updatedAt = context.updatedAt;
+    const updatedBy = context.updatedBy;
+    if (context.context) {
+      addChannelOverride(
+        context.guildId,
+        context.channelId,
+        CONFIG_KEYS.context.instructions,
+        context.context,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceEnabled !== undefined) {
+      addChannelOverride(
+        context.guildId,
+        context.channelId,
+        CONFIG_KEYS.liveVoice.enabled,
+        context.liveVoiceEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceCommandsEnabled !== undefined) {
+      addChannelOverride(
+        context.guildId,
+        context.channelId,
+        CONFIG_KEYS.liveVoice.commandsEnabled,
+        context.liveVoiceCommandsEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.chatTtsEnabled !== undefined) {
+      addChannelOverride(
+        context.guildId,
+        context.channelId,
+        CONFIG_KEYS.chatTts.enabled,
+        context.chatTtsEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+  });
+
+  autoRecordByGuild.forEach((rules, guildId) => {
+    rules.forEach((rule) => {
+      const updatedAt = rule.createdAt;
+      const updatedBy = rule.createdBy;
+      if (rule.recordAll || rule.channelId === "ALL") {
+        addServerOverride(
+          guildId,
+          CONFIG_KEYS.autorecord.enabled,
+          rule.enabled,
+          updatedAt,
+          updatedBy,
+        );
+        if (rule.enabled && rule.textChannelId) {
+          addServerOverride(
+            guildId,
+            CONFIG_KEYS.notes.channelId,
+            rule.textChannelId,
+            updatedAt,
+            updatedBy,
+          );
+        }
+        if (rule.enabled && rule.tags?.length) {
+          addServerOverride(
+            guildId,
+            CONFIG_KEYS.notes.tags,
+            rule.tags.join(", "),
+            updatedAt,
+            updatedBy,
+          );
+        }
+        return;
+      }
+      addChannelOverride(
+        guildId,
+        rule.channelId,
+        CONFIG_KEYS.autorecord.enabled,
+        rule.enabled,
+        updatedAt,
+        updatedBy,
+      );
+      if (rule.enabled && rule.textChannelId) {
+        addChannelOverride(
+          guildId,
+          rule.channelId,
+          CONFIG_KEYS.notes.channelId,
+          rule.textChannelId,
+          updatedAt,
+          updatedBy,
+        );
+      }
+      if (rule.enabled && rule.tags?.length) {
+        addChannelOverride(
+          guildId,
+          rule.channelId,
+          CONFIG_KEYS.notes.tags,
+          rule.tags.join(", "),
+          updatedAt,
+          updatedBy,
+        );
+      }
+    });
+  });
+
+  const ensureServerDefault = (
+    guildId: string,
+    key: string,
+    value: unknown,
+  ) => {
+    const scopeId = `server#${guildId}`;
+    const mapKey = `${scopeId}#${key}`;
+    if (configOverrides.has(mapKey)) return;
+    addServerOverride(guildId, key, value, mockNowIso(), mockUser.id);
+  };
+
+  userGuilds.forEach((guild) => {
+    ensureServerDefault(guild.id, CONFIG_KEYS.features.experimental, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.autorecord.enabled, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.liveVoice.enabled, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.liveVoice.commandsEnabled, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.chatTts.enabled, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.ask.membersEnabled, true);
+    ensureServerDefault(guild.id, CONFIG_KEYS.ask.sharingPolicy, "server");
+  });
 
   const meetingHistoryByGuild = new Map<string, MeetingHistory[]>();
   const buildMeeting = (params: {

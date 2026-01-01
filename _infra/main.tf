@@ -1200,6 +1200,10 @@ resource "aws_ecs_task_definition" "app_task" {
           value = aws_appconfig_configuration_profile.chronote_config_profile.configuration_profile_id
         },
         {
+          name  = "APP_CONFIG_DEPLOYMENT_STRATEGY_ID"
+          value = aws_appconfig_deployment_strategy.chronote_config_strategy.id
+        },
+        {
           name  = "TRANSCRIPTS_BUCKET"
           value = local.transcripts_bucket_name
         },

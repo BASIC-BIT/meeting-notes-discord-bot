@@ -2,6 +2,7 @@ import { expect, test } from "./fixtures";
 import { mockGuilds, mockSettings } from "./mockData";
 
 test("settings page shows overrides and updates tags (mock)", async ({
+  page,
   serverSelectPage,
   nav,
   settingsPage,
@@ -15,11 +16,33 @@ test("settings page shows overrides and updates tags (mock)", async ({
     mockSettings.overrideChannelName || undefined,
   );
 
-  await expect(settingsPage.chatTtsToggle()).toBeVisible();
-  await settingsPage.chatTtsToggle().click();
-  await settingsPage.selectChronoteVoice("Nova");
-  await settingsPage.selectChatTtsVoice("Alloy");
-  await settingsPage.saveDefaultsButton().click();
+  const chatTtsEntry = page.getByTestId(
+    "settings-config-entry-chatTts.enabled",
+  );
+  await chatTtsEntry.scrollIntoViewIfNeeded();
+  await chatTtsEntry.getByText("On", { exact: true }).click();
+
+  const liveVoiceEntry = page.getByTestId(
+    "settings-config-entry-liveVoice.enabled",
+  );
+  await liveVoiceEntry.scrollIntoViewIfNeeded();
+  await liveVoiceEntry.getByText("On", { exact: true }).click();
+
+  const liveVoiceVoiceEntry = page.getByTestId(
+    "settings-config-entry-liveVoice.ttsVoice",
+  );
+  await liveVoiceVoiceEntry.scrollIntoViewIfNeeded();
+  await liveVoiceVoiceEntry.getByLabel("liveVoice.ttsVoice").click();
+  await page.getByRole("option", { name: "Nova" }).click();
+
+  const chatTtsVoiceEntry = page.getByTestId(
+    "settings-config-entry-chatTts.voice",
+  );
+  await chatTtsVoiceEntry.scrollIntoViewIfNeeded();
+  await chatTtsVoiceEntry.getByLabel("chatTts.voice").click();
+  await page.getByRole("option", { name: "Alloy" }).click();
+
+  await page.getByRole("button", { name: /save settings/i }).click();
 
   const override = mockSettings.overrideChannelName
     ? settingsPage.overrideByName(mockSettings.overrideChannelName)

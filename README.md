@@ -154,7 +154,7 @@ Coverage update rule:
 
 ## Backend / services
 
-- Bot + API: Node 20, Express 5. API routes are modularized under `src/api/` (billing, guilds). New typed API surface is tRPC at `/trpc` (routers in `src/trpc/`).
+- Bot + API: Node 22, Express 5. API routes are modularized under `src/api/` (billing, guilds). New typed API surface is tRPC at `/trpc` (routers in `src/trpc/`).
 - Voice capture: discord.js v14, @discordjs/voice/opus, prism-media.
 - OpenAI: gpt-4o-transcribe for ASR, gpt-5.1 for notes/corrections, gpt-5-mini for live gate, DALL-E 3 for images.
 - Prompt management and tracing: Langfuse for prompt versioning, tracing, and prompt sync scripts.

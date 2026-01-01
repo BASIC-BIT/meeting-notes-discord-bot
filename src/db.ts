@@ -232,6 +232,28 @@ export async function getAllAutoRecordSettings(
   return [];
 }
 
+export async function scanAutoRecordSettings(): Promise<AutoRecordSettings[]> {
+  const items: AutoRecordSettings[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("AutoRecordSettingsTable"),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as AutoRecordSettings),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 // Delete AutoRecordSetting
 export async function deleteAutoRecordSetting(
   guildId: string,
@@ -427,6 +449,37 @@ export async function listConfigOverrides(
   return [];
 }
 
+export async function scanConfigOverridesByScopePrefix(
+  scopePrefix: string,
+): Promise<ConfigOverrideRecord[]> {
+  const items: ConfigOverrideRecord[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("ConfigOverridesTable"),
+      FilterExpression: "begins_with(#scopeId, :scopePrefix)",
+      ExpressionAttributeNames: {
+        "#scopeId": "scopeId",
+      },
+      ExpressionAttributeValues: marshall({
+        ":scopePrefix": scopePrefix,
+      }),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as ConfigOverrideRecord),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 export async function getAllChannelContexts(
   guildId: string,
 ): Promise<ChannelContext[]> {
@@ -445,6 +498,28 @@ export async function getAllChannelContexts(
   return [];
 }
 
+export async function scanChannelContexts(): Promise<ChannelContext[]> {
+  const items: ChannelContext[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("ChannelContextTable"),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as ChannelContext),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 export async function deleteChannelContext(
   guildId: string,
   channelId: string,
@@ -455,6 +530,28 @@ export async function deleteChannelContext(
   };
   const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+export async function scanServerContexts(): Promise<ServerContext[]> {
+  const items: ServerContext[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("ServerContextTable"),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as ServerContext),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
 }
 
 // Guild installer mapping

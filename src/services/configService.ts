@@ -100,6 +100,7 @@ class ConfigService {
     applicationId: process.env.APP_CONFIG_APPLICATION_ID || "",
     environmentId: process.env.APP_CONFIG_ENVIRONMENT_ID || "",
     profileId: process.env.APP_CONFIG_PROFILE_ID || "",
+    deploymentStrategyId: process.env.APP_CONFIG_DEPLOYMENT_STRATEGY_ID || "",
     cacheTtlMs:
       parseInt(process.env.APP_CONFIG_CACHE_TTL_MS || "60000", 10) || 60000,
   };
@@ -313,6 +314,10 @@ class ConfigService {
           value: this.appConfig.environmentId,
         },
         { name: "APP_CONFIG_PROFILE_ID", value: this.appConfig.profileId },
+        {
+          name: "APP_CONFIG_DEPLOYMENT_STRATEGY_ID",
+          value: this.appConfig.deploymentStrategyId,
+        },
       );
     }
 

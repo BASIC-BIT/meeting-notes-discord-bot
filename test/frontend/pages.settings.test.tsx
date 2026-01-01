@@ -6,10 +6,11 @@ import { guildState } from "./testUtils";
 import {
   setAutorecordListQuery,
   setChannelContextsQuery,
-  setContextQuery,
+  setConfigServerQuery,
   setServersChannelsQuery,
 } from "./mocks/trpc";
 import Settings from "../../src/frontend/pages/Settings";
+import { CONFIG_KEYS } from "../../src/config/keys";
 
 describe("Settings page", () => {
   beforeEach(() => {
@@ -36,15 +37,78 @@ describe("Settings page", () => {
         ],
       },
     });
-    setContextQuery({
+    setConfigServerQuery({
       data: {
-        context: "",
-        defaultTags: [],
-        defaultNotesChannelId: null,
-        liveVoiceEnabled: false,
-        chatTtsEnabled: false,
-        askMembersEnabled: true,
-        askSharingPolicy: "server",
+        registry: [
+          {
+            key: CONFIG_KEYS.autorecord.enabled,
+            label: "Auto-record",
+            description: "Automatically record meetings by default.",
+            category: "Auto-record",
+            valueType: "boolean",
+            defaultValue: false,
+            scopes: {
+              server: {
+                enabled: true,
+                required: true,
+                role: "admin",
+                control: "toggle",
+              },
+            },
+            ui: { type: "toggle" },
+          },
+          {
+            key: CONFIG_KEYS.notes.channelId,
+            label: "Notes channel",
+            description:
+              "Default notes channel for meetings and auto-recording.",
+            category: "Notes",
+            valueType: "string",
+            scopes: {
+              server: {
+                enabled: true,
+                required: false,
+                role: "admin",
+                control: "text",
+              },
+            },
+            ui: { type: "custom", renderer: "NotesChannelSelect" },
+          },
+          {
+            key: CONFIG_KEYS.ask.sharingPolicy,
+            label: "Ask sharing policy",
+            description: "Default sharing policy for Ask conversations.",
+            category: "Ask",
+            valueType: "select",
+            defaultValue: "server",
+            scopes: {
+              server: {
+                enabled: true,
+                required: false,
+                role: "admin",
+                control: "select",
+              },
+            },
+            ui: { type: "segmented", options: ["off", "server", "public"] },
+          },
+        ],
+        snapshot: {
+          values: {
+            [CONFIG_KEYS.autorecord.enabled]: {
+              value: true,
+              source: "server",
+            },
+            [CONFIG_KEYS.notes.channelId]: { value: "", source: "server" },
+            [CONFIG_KEYS.ask.sharingPolicy]: {
+              value: "server",
+              source: "server",
+            },
+          },
+          experimentalEnabled: false,
+          tier: "free",
+          missingRequired: [],
+        },
+        overrides: [],
       },
     });
     setChannelContextsQuery({ data: { contexts: [] } });
@@ -55,28 +119,23 @@ describe("Settings page", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(
-          /Recording all channels uses the default notes channel/i,
-        ),
+        screen.getByText(/Record-all requires a default notes channel/i),
       ).toBeInTheDocument();
     });
-    expect(
-      screen.getByText(
-        /Default notes channel is required when record all is enabled/i,
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("settings-add-channel")).toBeDisabled();
+    const saveButtons = screen.getAllByRole("button", {
+      name: /save settings/i,
+    });
+    saveButtons.forEach((button) => {
+      expect(button).toBeDisabled();
+    });
   });
 
   test("shows public sharing policy option and helper copy", async () => {
     renderWithMantine(<Settings />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Sharing policy/i)).toBeInTheDocument();
+      expect(screen.getByText(/Ask sharing policy/i)).toBeInTheDocument();
     });
     expect(screen.getByText("Public")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Public links are read only and visible without login/i),
-    ).toBeInTheDocument();
   });
 });

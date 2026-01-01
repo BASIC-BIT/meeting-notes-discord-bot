@@ -24,8 +24,8 @@ export class SettingsPage {
     return this.page.getByTestId(testIds.settings.override);
   }
 
-  loadingGlobal(): Locator {
-    return this.page.getByTestId(testIds.settings.loadingGlobal).first();
+  loadingConfig(): Locator {
+    return this.page.getByTestId(testIds.settings.loadingConfig).first();
   }
 
   loadingOverrides(): Locator {
@@ -34,7 +34,7 @@ export class SettingsPage {
 
   async waitForLoaded(expectedOverrideName?: string): Promise<void> {
     await this.root().waitFor({ state: "visible" });
-    await this.loadingGlobal().waitFor({ state: "hidden" });
+    await this.loadingConfig().waitFor({ state: "hidden" });
     await this.loadingOverrides().waitFor({ state: "hidden" });
     if (expectedOverrideName) {
       await this.overrideByName(expectedOverrideName).waitFor({
