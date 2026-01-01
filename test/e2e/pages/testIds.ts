@@ -13,6 +13,7 @@ export const testIds = {
     ask: "nav-ask",
     billing: "nav-billing",
     settings: "nav-settings",
+    adminConfig: "nav-admin-config",
   },
   library: {
     page: "library-page",
@@ -52,7 +53,13 @@ export const testIds = {
     override: "settings-override",
     removeOverride: "settings-remove-override",
     saveChannel: "settings-save-channel",
-    loadingGlobal: "settings-loading-global",
+    saveConfig: "settings-save-config",
+    loadingConfig: "settings-loading-config",
     loadingOverrides: "settings-loading-overrides",
+  },
+  adminConfig: {
+    page: "admin-config-page",
+    publish: "admin-config-publish",
+    refresh: "admin-config-refresh",
   },
 } as const;

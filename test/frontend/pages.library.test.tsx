@@ -30,6 +30,7 @@ describe("Library page", () => {
       error: null,
     });
     renderWithMantine(<Library />);
+    expect(screen.getByTestId("library-refresh-top")).toBeInTheDocument();
     expect(
       screen.getByText(/No meetings match these filters yet/i),
     ).toBeInTheDocument();

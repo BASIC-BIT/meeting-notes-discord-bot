@@ -127,6 +127,17 @@ export interface UserSpeechSettings {
   updatedBy: string; // User ID who last updated
 }
 
+export interface DictionaryEntry {
+  guildId: string; // Partition key
+  termKey: string; // Sort key, normalized term
+  term: string; // Display term
+  definition?: string;
+  createdAt: string; // ISO timestamp
+  createdBy: string; // User ID who created
+  updatedAt: string; // ISO timestamp
+  updatedBy: string; // User ID who last updated
+}
+
 export interface ConfigOverrideRecord {
   scopeId: string; // Partition key, formatted as scope#id
   configKey: string; // Sort key

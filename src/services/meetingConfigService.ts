@@ -1,18 +1,19 @@
+import { CONFIG_KEYS } from "../config/keys";
 import { CONFIG_REGISTRY } from "../config/registry";
 import type { ConfigTier, MeetingRuntimeConfig } from "../config/types";
 import { resolveConfigSnapshot } from "./unifiedConfigService";
-import {
-  FAST_SILENCE_THRESHOLD,
-  MAX_SNIPPET_LENGTH,
-  MINIMUM_TRANSCRIPTION_LENGTH,
-  SILENCE_THRESHOLD,
-} from "../constants";
+import { resolveDictionaryBudgets } from "../utils/dictionary";
 
-const getValue = (
+const requireValue = (
   snapshot: Awaited<ReturnType<typeof resolveConfigSnapshot>>,
   key: string,
-  fallback: unknown,
-) => snapshot.values[key]?.value ?? fallback;
+) => {
+  const entry = snapshot.values[key];
+  if (!entry || entry.value === undefined || entry.value === null) {
+    throw new Error(`Missing required config value for ${key}.`);
+  }
+  return entry.value;
+};
 
 export async function resolveMeetingRuntimeConfig(input: {
   guildId: string;
@@ -26,45 +27,54 @@ export async function resolveMeetingRuntimeConfig(input: {
     userId: input.userId,
     tier: input.tier,
   });
+  const valuesByKey: Record<string, unknown> = {};
+  Object.entries(snapshot.values).forEach(([key, entry]) => {
+    valuesByKey[key] = entry.value;
+  });
+  const dictionaryBudgets = resolveDictionaryBudgets(valuesByKey, input.tier);
 
   return {
     transcription: {
       fastSilenceMs: Number(
-        getValue(
-          snapshot,
-          "transcription.fastSilenceMs",
-          FAST_SILENCE_THRESHOLD,
-        ),
+        requireValue(snapshot, CONFIG_KEYS.transcription.fastSilenceMs),
       ),
       slowSilenceMs: Number(
-        getValue(snapshot, "transcription.slowSilenceMs", SILENCE_THRESHOLD),
+        requireValue(snapshot, CONFIG_KEYS.transcription.slowSilenceMs),
       ),
       minSnippetSeconds: Number(
-        getValue(
-          snapshot,
-          "transcription.minSnippetSeconds",
-          MINIMUM_TRANSCRIPTION_LENGTH,
-        ),
+        requireValue(snapshot, CONFIG_KEYS.transcription.minSnippetSeconds),
       ),
       maxSnippetMs: Number(
-        getValue(snapshot, "transcription.maxSnippetMs", MAX_SNIPPET_LENGTH),
+        requireValue(snapshot, CONFIG_KEYS.transcription.maxSnippetMs),
+      ),
+      fastFinalizationEnabled: Boolean(
+        requireValue(
+          snapshot,
+          CONFIG_KEYS.transcription.fastFinalizationEnabled,
+        ),
+      ),
+      interjectionEnabled: Boolean(
+        requireValue(snapshot, CONFIG_KEYS.transcription.interjectionEnabled),
+      ),
+      interjectionMinSpeakerSeconds: Number(
+        requireValue(
+          snapshot,
+          CONFIG_KEYS.transcription.interjectionMinSpeakerSeconds,
+        ),
       ),
     },
     premiumTranscription: {
       enabled: Boolean(
-        getValue(snapshot, "transcription.premium.enabled", false),
+        requireValue(snapshot, CONFIG_KEYS.transcription.premiumEnabled),
       ),
       cleanupEnabled: Boolean(
-        getValue(snapshot, "transcription.premium.cleanup.enabled", true),
+        requireValue(snapshot, CONFIG_KEYS.transcription.premiumCleanupEnabled),
       ),
       coalesceModel: String(
-        getValue(
-          snapshot,
-          "transcription.premium.coalesce.model",
-          "gpt-5-mini",
-        ),
+        requireValue(snapshot, CONFIG_KEYS.transcription.premiumCoalesceModel),
       ),
     },
+    dictionary: dictionaryBudgets,
   };
 }
 

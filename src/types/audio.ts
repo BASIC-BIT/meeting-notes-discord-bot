@@ -6,8 +6,12 @@ export interface AudioSnippet {
   timestamp: number;
   userId: string;
   audioFileData?: AudioFileData;
+  audioBytes?: number;
   fastRevision?: number;
   fastTranscribed?: boolean;
+  lastFastTranscriptBytes?: number;
+  interjectionTriggered?: boolean;
+  interjectionForced?: boolean;
 }
 
 export type TranscriptVariant = {
@@ -29,6 +33,12 @@ export interface AudioCueEvent {
   text: string;
   source?: AudioSegmentSource;
 }
+
+export type SpeakerState = {
+  active: boolean;
+  lastStartMs?: number;
+  lastEndMs?: number;
+};
 
 export interface AudioFileData {
   userId: string;
@@ -57,6 +67,7 @@ export interface AudioSegmentFile {
 export interface AudioData {
   currentSnippets: Map<string, AudioSnippet>; // Map of userId to their current AudioSnippet
   silenceTimers?: Map<string, { fast?: NodeJS.Timeout; slow?: NodeJS.Timeout }>; // Optional: Map of userId to their silence timers
+  speakerStates?: Map<string, SpeakerState>;
   audioFiles: AudioFileData[];
   cueEvents?: AudioCueEvent[];
   audioPassThrough?: PassThrough;

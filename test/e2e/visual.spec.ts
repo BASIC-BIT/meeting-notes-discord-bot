@@ -105,6 +105,14 @@ test.describe("visual regression", () => {
     await waitForVisualReady(page);
     await expect(settingsPage.root()).toHaveScreenshot("settings.png");
 
+    await settingsPage.expandGroup("Experimental");
+    const experimentalGroup = settingsPage.groupByName("Experimental");
+    await expect(experimentalGroup).toBeVisible();
+    await waitForVisualReady(page);
+    await expect(experimentalGroup).toHaveScreenshot(
+      "settings-experimental.png",
+    );
+
     await settingsPage.openFirstOverrideEdit();
     const settingsDialog = page.getByRole("dialog", {
       name: /channel settings/i,
@@ -112,5 +120,23 @@ test.describe("visual regression", () => {
     await expect(settingsDialog).toBeVisible();
     await waitForVisualReady(page);
     await expect(settingsDialog).toHaveScreenshot("settings-modal.png");
+  });
+
+  test("admin config page @visual", async ({
+    serverSelectPage,
+    nav,
+    adminConfigPage,
+    page,
+  }) => {
+    await serverSelectPage.goto();
+    await serverSelectPage.openServerByName(mockGuilds.ddm.name);
+    await nav.goToAdminConfig();
+    await adminConfigPage.waitForLoaded();
+    await adminConfigPage.expandGroup("Experimental");
+    await adminConfigPage
+      .entryByKey("transcription.premium.enabled")
+      .waitFor({ state: "visible" });
+    await waitForVisualReady(page);
+    await expect(adminConfigPage.root()).toHaveScreenshot("admin-config.png");
   });
 });

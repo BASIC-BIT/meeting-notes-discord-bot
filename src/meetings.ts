@@ -14,10 +14,9 @@ import {
 import { DiscordGatewayAdapterCreator } from "@discordjs/voice/dist";
 import { AudioSnippet } from "./types/audio";
 import {
-  clearSnippetTimer,
   openOutputFile,
   subscribeToUserVoice,
-  updateSnippetsIfNecessary,
+  userStartTalking,
   userStopTalking,
 } from "./audio";
 import {
@@ -34,6 +33,7 @@ import {
 } from "./utils/participants";
 import { config } from "./services/configService";
 import { resolveMeetingRuntimeConfig } from "./services/meetingConfigService";
+import { listDictionaryEntriesService } from "./services/dictionaryService";
 import { createTtsQueue } from "./ttsQueue";
 import { maybeSpeakChatMessage } from "./chatTts";
 import {
@@ -275,8 +275,7 @@ export async function initializeMeeting(
 
   // Set up speaking event handlers
   receiver.speaking.on("start", (userId) => {
-    clearSnippetTimer(meeting, userId);
-    updateSnippetsIfNecessary(meeting, userId);
+    userStartTalking(meeting, userId);
   });
 
   receiver.speaking.on("end", (userId) => {
@@ -328,6 +327,14 @@ export async function initializeMeeting(
     });
   } catch (error) {
     console.warn("Failed to resolve meeting runtime config:", error);
+  }
+
+  try {
+    meeting.dictionaryEntries = await listDictionaryEntriesService(
+      meeting.guildId,
+    );
+  } catch (error) {
+    console.warn("Failed to load dictionary entries:", error);
   }
 
   // Set a timer to automatically end the meeting after the specified duration

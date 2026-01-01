@@ -14,7 +14,7 @@ export type ConfigOverrideScopeContext = {
 export function buildScopeId(context: ConfigOverrideScopeContext): string {
   const { scope } = context;
   if (scope === "global") {
-    return "global#default";
+    throw new Error("Global overrides are not supported.");
   }
   if (scope === "server") {
     if (!context.guildId) {
@@ -40,7 +40,7 @@ export function buildScopeId(context: ConfigOverrideScopeContext): string {
     }
     return `meeting#${context.meetingId}`;
   }
-  return "global#default";
+  throw new Error(`Unsupported scope: ${scope}`);
 }
 
 export async function listConfigOverridesForScope(
@@ -48,6 +48,19 @@ export async function listConfigOverridesForScope(
 ): Promise<ConfigOverrideRecord[]> {
   const scopeId = buildScopeId(context);
   return getConfigOverridesRepository().listByScope(scopeId);
+}
+
+export async function listConfigOverridesForScopePrefix(
+  scopePrefix: string,
+): Promise<ConfigOverrideRecord[]> {
+  return getConfigOverridesRepository().listByScopePrefix(scopePrefix);
+}
+
+export function buildScopePrefix(scope: "channel" | "user", guildId: string) {
+  if (scope === "channel") {
+    return `channel#${guildId}#`;
+  }
+  return `user#${guildId}#`;
 }
 
 export async function getConfigOverrideForScope(

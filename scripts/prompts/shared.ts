@@ -263,7 +263,36 @@ export function formatPromptFile(
   frontMatter: Record<string, unknown>,
   content: string,
 ): string {
-  return matter.stringify(content.trimEnd(), frontMatter);
+  const sanitized = stripUndefinedRecord(frontMatter);
+  return matter.stringify(content.trimEnd(), sanitized);
+}
+
+function stripUndefinedRecord(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.entries(value).reduce<Record<string, unknown>>(
+    (acc, [key, val]) => {
+      const cleaned = stripUndefinedValue(val);
+      if (cleaned !== undefined) {
+        acc[key] = cleaned;
+      }
+      return acc;
+    },
+    {},
+  );
+}
+
+function stripUndefinedValue(value: unknown): unknown | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    return value
+      .map(stripUndefinedValue)
+      .filter((entry) => entry !== undefined);
+  }
+  if (value && typeof value === "object") {
+    return stripUndefinedRecord(value as Record<string, unknown>);
+  }
+  return value;
 }
 
 export function normalizePromptText(value: string): string {

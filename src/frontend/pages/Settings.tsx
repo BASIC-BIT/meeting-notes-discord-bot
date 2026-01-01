@@ -3,7 +3,6 @@ import {
   Alert,
   Button,
   Group,
-  LoadingOverlay,
   Modal,
   SegmentedControl,
   Stack,
@@ -16,244 +15,26 @@ import { useDisclosure } from "@mantine/hooks";
 import { IconAlertTriangle, IconRefresh } from "@tabler/icons-react";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
-import Surface from "../components/Surface";
 import FormSelect from "../components/FormSelect";
 import { trpc } from "../services/trpc";
 import { uiOverlays } from "../uiTokens";
 import { parseTags } from "../../utils/tags";
+import { TTS_VOICE_OPTIONS } from "../../utils/ttsVoices";
+import { CONFIG_KEYS } from "../../config/keys";
+import {
+  DEFAULT_DICTIONARY_BUDGETS,
+  resolveDictionaryBudgets,
+} from "../../utils/dictionary";
 
 import {
   buildChannelOverrides,
   formatChannelLabel,
-  resolveDefaultNotesChannelId,
   type ChannelOption,
   type ChannelOverride,
 } from "../utils/settingsChannels";
-import type { AutoRecordSettings } from "../../types/db";
-import { AskSharingCard } from "../features/settings/AskSharingCard";
-import { GlobalDefaultsCard } from "../features/settings/GlobalDefaultsCard";
 import { ChannelOverridesCard } from "../features/settings/ChannelOverridesCard";
-
-type GlobalContextData = {
-  context?: string | null;
-  defaultTags?: string[] | null;
-  defaultNotesChannelId?: string | null;
-  liveVoiceEnabled?: boolean | null;
-  liveVoiceCommandsEnabled?: boolean | null;
-  liveVoiceTtsVoice?: string | null;
-  chatTtsEnabled?: boolean | null;
-  chatTtsVoice?: string | null;
-  askMembersEnabled?: boolean | null;
-  askSharingPolicy?: "off" | "server" | "public" | null;
-};
-
-export type AskSharingPolicy = "off" | "server" | "public";
-
-const resolveDefaultTags = (contextData?: GlobalContextData | null) =>
-  (contextData?.defaultTags ?? []).join(", ");
-
-const resolveAskMembersEnabled = (contextData?: GlobalContextData | null) =>
-  contextData?.askMembersEnabled ?? true;
-
-const resolveAskSharingPolicy = (contextData?: GlobalContextData | null) =>
-  contextData?.askSharingPolicy ?? "server";
-
-const coalesce = <T,>(value: T | null | undefined, fallback: T) =>
-  value ?? fallback;
-
-const resetGlobalDefaults = (options: {
-  setServerContext: (value: string) => void;
-  setDefaultTags: (value: string) => void;
-  setDefaultNotesChannelId: (value: string | null) => void;
-  setGlobalLiveVoiceEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
-  setGlobalChatTtsEnabled: (value: boolean) => void;
-  setGlobalChatTtsVoice: (value: string | null) => void;
-  setRecordAllEnabled: (value: boolean) => void;
-  setGlobalDirty: (value: boolean) => void;
-}) => {
-  const {
-    setServerContext,
-    setDefaultTags,
-    setDefaultNotesChannelId,
-    setGlobalLiveVoiceEnabled,
-    setGlobalLiveVoiceCommandsEnabled,
-    setGlobalLiveVoiceTtsVoice,
-    setGlobalChatTtsEnabled,
-    setGlobalChatTtsVoice,
-    setRecordAllEnabled,
-    setGlobalDirty,
-  } = options;
-  setServerContext("");
-  setDefaultNotesChannelId(null);
-  setDefaultTags("");
-  setGlobalLiveVoiceEnabled(false);
-  setGlobalLiveVoiceCommandsEnabled(false);
-  setGlobalLiveVoiceTtsVoice(null);
-  setGlobalChatTtsEnabled(false);
-  setGlobalChatTtsVoice(null);
-  setRecordAllEnabled(false);
-  setGlobalDirty(false);
-};
-
-const applyGlobalDefaults = (options: {
-  contextData: GlobalContextData;
-  recordAllRule: AutoRecordSettings | null;
-  setServerContext: (value: string) => void;
-  setDefaultTags: (value: string) => void;
-  setDefaultNotesChannelId: (value: string | null) => void;
-  setGlobalLiveVoiceEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
-  setGlobalChatTtsEnabled: (value: boolean) => void;
-  setGlobalChatTtsVoice: (value: string | null) => void;
-  setRecordAllEnabled: (value: boolean) => void;
-}) => {
-  const {
-    contextData,
-    recordAllRule,
-    setServerContext,
-    setDefaultTags,
-    setDefaultNotesChannelId,
-    setGlobalLiveVoiceEnabled,
-    setGlobalLiveVoiceCommandsEnabled,
-    setGlobalLiveVoiceTtsVoice,
-    setGlobalChatTtsEnabled,
-    setGlobalChatTtsVoice,
-    setRecordAllEnabled,
-  } = options;
-  setServerContext(coalesce(contextData.context, ""));
-  setDefaultTags(resolveDefaultTags(contextData));
-  setDefaultNotesChannelId(
-    resolveDefaultNotesChannelId({ contextData, recordAllRule }),
-  );
-  setGlobalLiveVoiceEnabled(coalesce(contextData.liveVoiceEnabled, false));
-  setGlobalLiveVoiceCommandsEnabled(
-    coalesce(contextData.liveVoiceCommandsEnabled, false),
-  );
-  setGlobalLiveVoiceTtsVoice(coalesce(contextData.liveVoiceTtsVoice, null));
-  setGlobalChatTtsEnabled(coalesce(contextData.chatTtsEnabled, false));
-  setGlobalChatTtsVoice(coalesce(contextData.chatTtsVoice, null));
-  setRecordAllEnabled(Boolean(recordAllRule));
-};
-
-const syncGlobalDefaults = (options: {
-  selectedGuildId: string | null;
-  contextData?: GlobalContextData | null;
-  recordAllRule: AutoRecordSettings | null;
-  globalDirty: boolean;
-  setServerContext: (value: string) => void;
-  setDefaultTags: (value: string) => void;
-  setDefaultNotesChannelId: (value: string | null) => void;
-  setGlobalLiveVoiceEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
-  setGlobalChatTtsEnabled: (value: boolean) => void;
-  setGlobalChatTtsVoice: (value: string | null) => void;
-  setRecordAllEnabled: (value: boolean) => void;
-  setGlobalDirty: (value: boolean) => void;
-}) => {
-  const {
-    selectedGuildId,
-    contextData,
-    recordAllRule,
-    globalDirty,
-    setServerContext,
-    setDefaultTags,
-    setDefaultNotesChannelId,
-    setGlobalLiveVoiceEnabled,
-    setGlobalLiveVoiceCommandsEnabled,
-    setGlobalLiveVoiceTtsVoice,
-    setGlobalChatTtsEnabled,
-    setGlobalChatTtsVoice,
-    setRecordAllEnabled,
-    setGlobalDirty,
-  } = options;
-
-  if (!selectedGuildId) {
-    resetGlobalDefaults({
-      setServerContext,
-      setDefaultNotesChannelId,
-      setDefaultTags,
-      setGlobalLiveVoiceEnabled,
-      setGlobalLiveVoiceCommandsEnabled,
-      setGlobalLiveVoiceTtsVoice,
-      setGlobalChatTtsEnabled,
-      setGlobalChatTtsVoice,
-      setRecordAllEnabled,
-      setGlobalDirty,
-    });
-    return;
-  }
-  if (!contextData || globalDirty) return;
-  applyGlobalDefaults({
-    contextData,
-    recordAllRule,
-    setServerContext,
-    setDefaultTags,
-    setDefaultNotesChannelId,
-    setGlobalLiveVoiceEnabled,
-    setGlobalLiveVoiceCommandsEnabled,
-    setGlobalLiveVoiceTtsVoice,
-    setGlobalChatTtsEnabled,
-    setGlobalChatTtsVoice,
-    setRecordAllEnabled,
-  });
-};
-
-const resetAskSettings = (options: {
-  setAskMembersEnabled: (value: boolean) => void;
-  setAskSharingPolicy: (value: AskSharingPolicy) => void;
-  setAskDirty: (value: boolean) => void;
-}) => {
-  const { setAskMembersEnabled, setAskSharingPolicy, setAskDirty } = options;
-  setAskMembersEnabled(true);
-  setAskSharingPolicy("server");
-  setAskDirty(false);
-};
-
-const applyAskSettings = (options: {
-  contextData: GlobalContextData;
-  setAskMembersEnabled: (value: boolean) => void;
-  setAskSharingPolicy: (value: AskSharingPolicy) => void;
-}) => {
-  const { contextData, setAskMembersEnabled, setAskSharingPolicy } = options;
-  setAskMembersEnabled(resolveAskMembersEnabled(contextData));
-  setAskSharingPolicy(resolveAskSharingPolicy(contextData));
-};
-
-const syncAskSettings = (options: {
-  selectedGuildId: string | null;
-  contextData?: GlobalContextData | null;
-  askDirty: boolean;
-  setAskMembersEnabled: (value: boolean) => void;
-  setAskSharingPolicy: (value: AskSharingPolicy) => void;
-  setAskDirty: (value: boolean) => void;
-}) => {
-  const {
-    selectedGuildId,
-    contextData,
-    askDirty,
-    setAskMembersEnabled,
-    setAskSharingPolicy,
-    setAskDirty,
-  } = options;
-  if (!selectedGuildId) {
-    resetAskSettings({
-      setAskMembersEnabled,
-      setAskSharingPolicy,
-      setAskDirty,
-    });
-    return;
-  }
-  if (!contextData || askDirty) return;
-  applyAskSettings({
-    contextData,
-    setAskMembersEnabled,
-    setAskSharingPolicy,
-  });
-};
+import { ServerConfigCard } from "../features/settings/ServerConfigCard";
+import { DictionaryCard } from "../features/settings/DictionaryCard";
 
 export default function Settings() {
   const { selectedGuildId, loading: guildLoading } = useGuildContext();
@@ -266,10 +47,6 @@ export default function Settings() {
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
   );
-  const contextQuery = trpc.context.get.useQuery(
-    { serverId: selectedGuildId ?? "" },
-    { enabled: Boolean(selectedGuildId) && !guildLoading },
-  );
   const configQuery = trpc.config.server.useQuery(
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
@@ -278,45 +55,21 @@ export default function Settings() {
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
   );
+  const dictionaryQuery = trpc.dictionary.list.useQuery(
+    { serverId: selectedGuildId ?? "" },
+    { enabled: Boolean(selectedGuildId) && !guildLoading },
+  );
 
   const addRuleMutation = trpc.autorecord.add.useMutation();
   const removeRuleMutation = trpc.autorecord.remove.useMutation();
-  const saveContextMutation = trpc.context.set.useMutation();
   const setServerConfigMutation = trpc.config.setServerOverride.useMutation();
+  const clearServerConfigMutation =
+    trpc.config.clearServerOverride.useMutation();
   const setChannelContextMutation = trpc.channelContexts.set.useMutation();
   const clearChannelContextMutation = trpc.channelContexts.clear.useMutation();
-
-  const [serverContext, setServerContext] = useState("");
-  const [defaultNotesChannelId, setDefaultNotesChannelId] = useState<
-    string | null
-  >(null);
-  const [defaultTags, setDefaultTags] = useState("");
-  const [globalLiveVoiceEnabled, setGlobalLiveVoiceEnabled] = useState(false);
-  const [globalLiveVoiceCommandsEnabled, setGlobalLiveVoiceCommandsEnabled] =
-    useState(false);
-  const [globalLiveVoiceTtsVoice, setGlobalLiveVoiceTtsVoice] = useState<
-    string | null
-  >(null);
-  const [globalChatTtsEnabled, setGlobalChatTtsEnabled] = useState(false);
-  const [globalChatTtsVoice, setGlobalChatTtsVoice] = useState<string | null>(
-    null,
-  );
-  const [recordAllEnabled, setRecordAllEnabled] = useState(false);
-  const [globalDirty, setGlobalDirty] = useState(false);
-  const [savingGlobal, setSavingGlobal] = useState(false);
-  const [askMembersEnabled, setAskMembersEnabled] = useState(true);
-  const [askSharingPolicy, setAskSharingPolicy] =
-    useState<AskSharingPolicy>("server");
-  const [askDirty, setAskDirty] = useState(false);
-  const [savingAsk, setSavingAsk] = useState(false);
-  const [experimentalEnabled, setExperimentalEnabled] = useState(false);
-  const [premiumTranscriptionEnabled, setPremiumTranscriptionEnabled] =
-    useState(false);
-  const [premiumCleanupEnabled, setPremiumCleanupEnabled] = useState(true);
-  const [premiumCoalesceModel, setPremiumCoalesceModel] =
-    useState("gpt-5-mini");
-  const [configDirty, setConfigDirty] = useState(false);
-  const [configSaving, setConfigSaving] = useState(false);
+  const dictionaryUpsertMutation = trpc.dictionary.upsert.useMutation();
+  const dictionaryRemoveMutation = trpc.dictionary.remove.useMutation();
+  const dictionaryClearMutation = trpc.dictionary.clear.useMutation();
 
   const [channelModalOpen, channelModal] = useDisclosure(false);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
@@ -339,16 +92,6 @@ export default function Settings() {
   >("inherit");
 
   useEffect(() => {
-    setGlobalDirty(false);
-    setAskDirty(false);
-    setAskMembersEnabled(true);
-    setAskSharingPolicy("server");
-    setExperimentalEnabled(false);
-    setPremiumTranscriptionEnabled(false);
-    setPremiumCleanupEnabled(true);
-    setPremiumCoalesceModel("gpt-5-mini");
-    setConfigDirty(false);
-    setConfigSaving(false);
     setEditingChannelId(null);
     setChannelVoiceChannelId(null);
     setChannelAutoRecord(true);
@@ -371,6 +114,16 @@ export default function Settings() {
   const recordAllRule = autoRecordRules.find((rule) => rule.recordAll) ?? null;
   const channelRules = autoRecordRules.filter((rule) => !rule.recordAll);
   const channelContexts = channelContextsQuery.data?.contexts ?? [];
+  const recordAllEnabled = Boolean(recordAllRule);
+  const serverNotesChannelValue =
+    configQuery.data?.snapshot?.values[CONFIG_KEYS.notes.channelId]?.value;
+  const serverNotesChannelId =
+    typeof serverNotesChannelValue === "string" &&
+    serverNotesChannelValue.trim().length > 0
+      ? serverNotesChannelValue
+      : null;
+  const defaultNotesChannelId =
+    serverNotesChannelId ?? recordAllRule?.textChannelId ?? null;
 
   const voiceChannels = useMemo<ChannelOption[]>(
     () =>
@@ -411,6 +164,12 @@ export default function Settings() {
     () => new Map(textChannels.map((channel) => [channel.value, channel])),
     [textChannels],
   );
+  const defaultNotesAccess = defaultNotesChannelId
+    ? textChannelAccess.get(defaultNotesChannelId)
+    : undefined;
+  const defaultNotesLabel = defaultNotesAccess
+    ? formatChannelLabel(defaultNotesAccess)
+    : undefined;
 
   const overrides = useMemo(
     () =>
@@ -448,95 +207,31 @@ export default function Settings() {
     removeRuleMutation.isPending ||
     setChannelContextMutation.isPending ||
     clearChannelContextMutation.isPending;
-  const globalBusy =
-    rulesQuery.isLoading ||
-    channelsQuery.isLoading ||
-    contextQuery.isLoading ||
-    savingGlobal;
-  const askBusy = contextQuery.isLoading || savingAsk;
-  const configBusy = configQuery.isLoading || configSaving;
+  const configBusy =
+    configQuery.isLoading || configQuery.isFetching || channelsQuery.isLoading;
+  const configUiContext = useMemo(
+    () => ({
+      textChannels,
+      ttsVoiceOptions: TTS_VOICE_OPTIONS,
+    }),
+    [textChannels],
+  );
 
-  useEffect(() => {
-    syncGlobalDefaults({
-      selectedGuildId,
-      contextData: contextQuery.data,
-      recordAllRule,
-      globalDirty,
-      setServerContext,
-      setDefaultTags,
-      setDefaultNotesChannelId,
-      setGlobalLiveVoiceEnabled,
-      setGlobalLiveVoiceCommandsEnabled,
-      setGlobalLiveVoiceTtsVoice,
-      setGlobalChatTtsEnabled,
-      setGlobalChatTtsVoice,
-      setRecordAllEnabled,
-      setGlobalDirty,
+  const dictionaryBudgets = useMemo(() => {
+    const snapshot = configQuery.data?.snapshot;
+    if (!snapshot?.values) return DEFAULT_DICTIONARY_BUDGETS;
+    const valuesByKey: Record<string, unknown> = {};
+    Object.entries(snapshot.values).forEach(([key, entry]) => {
+      valuesByKey[key] = entry.value;
     });
-  }, [contextQuery.data, recordAllRule, selectedGuildId, globalDirty]);
+    return resolveDictionaryBudgets(valuesByKey, snapshot.tier);
+  }, [configQuery.data?.snapshot]);
 
-  useEffect(() => {
-    syncAskSettings({
-      selectedGuildId,
-      contextData: contextQuery.data,
-      askDirty,
-      setAskMembersEnabled,
-      setAskSharingPolicy,
-      setAskDirty,
-    });
-  }, [contextQuery.data, selectedGuildId, askDirty]);
-
-  useEffect(() => {
-    if (!selectedGuildId) {
-      setConfigDirty(false);
-      return;
-    }
-    if (!configQuery.data || configDirty) return;
-    const snapshot = configQuery.data.snapshot;
-    const values =
-      (snapshot?.values as Record<
-        string,
-        { value?: unknown; gated?: boolean }
-      >) ?? {};
-    const experimental = values["features.experimental"]?.value ?? false;
-    const premiumEnabled =
-      values["transcription.premium.enabled"]?.value ?? false;
-    const premiumCleanup =
-      values["transcription.premium.cleanup.enabled"]?.value ?? true;
-    const coalesceModel =
-      values["transcription.premium.coalesce.model"]?.value ?? "gpt-5-mini";
-
-    setExperimentalEnabled(Boolean(experimental));
-    setPremiumTranscriptionEnabled(Boolean(premiumEnabled));
-    setPremiumCleanupEnabled(Boolean(premiumCleanup));
-    setPremiumCoalesceModel(String(coalesceModel));
-    setConfigDirty(false);
-  }, [configQuery.data, selectedGuildId, configDirty]);
-
-  const recordAllRequiresNotesChannel =
-    recordAllEnabled && !defaultNotesChannelId;
-  const defaultNotesAccess = defaultNotesChannelId
-    ? textChannelAccess.get(defaultNotesChannelId)
-    : undefined;
-  const defaultNotesLabel = defaultNotesAccess
-    ? formatChannelLabel(defaultNotesAccess)
-    : undefined;
-  const defaultNotesMissingPermissions =
-    defaultNotesAccess && !defaultNotesAccess.botAccess
-      ? defaultNotesAccess.missingPermissions
-      : [];
-
-  const canSaveGlobal =
-    Boolean(selectedGuildId) &&
-    !recordAllRequiresNotesChannel &&
-    (!recordAllEnabled || defaultNotesMissingPermissions.length === 0);
-  const canSaveAsk = Boolean(selectedGuildId);
-  const canSaveConfig = Boolean(selectedGuildId);
-  const configTier = configQuery.data?.snapshot?.tier ?? "free";
-  const premiumTierLocked = configTier !== "pro";
-  const premiumRequiresExperimental = !experimentalEnabled;
-  const premiumControlsDisabled =
-    configBusy || premiumTierLocked || premiumRequiresExperimental;
+  const dictionaryBusy =
+    dictionaryQuery.isLoading ||
+    dictionaryUpsertMutation.isPending ||
+    dictionaryRemoveMutation.isPending ||
+    dictionaryClearMutation.isPending;
 
   const openAddChannel = () => {
     setEditingChannelId(null);
@@ -610,103 +305,6 @@ export default function Settings() {
     voiceMissingPermissions.length > 0 ||
     (channelAutoRecord &&
       (!resolvedTextChannelId || textMissingPermissions.length > 0));
-
-  const handleSaveGlobal = async () => {
-    if (!selectedGuildId) return;
-    if (recordAllRequiresNotesChannel) return;
-    const parsedDefaultTags = parseTags(defaultTags) ?? [];
-    const trimmedContext = serverContext.trim();
-    try {
-      setSavingGlobal(true);
-      await saveContextMutation.mutateAsync({
-        serverId: selectedGuildId,
-        context: trimmedContext,
-        defaultNotesChannelId: defaultNotesChannelId ?? null,
-        defaultTags: parsedDefaultTags,
-        liveVoiceEnabled: globalLiveVoiceEnabled,
-        liveVoiceCommandsEnabled: globalLiveVoiceCommandsEnabled,
-        liveVoiceTtsVoice: globalLiveVoiceTtsVoice,
-        chatTtsEnabled: globalChatTtsEnabled,
-        chatTtsVoice: globalChatTtsVoice,
-      });
-      if (recordAllEnabled) {
-        if (!defaultNotesChannelId) return;
-        await addRuleMutation.mutateAsync({
-          serverId: selectedGuildId,
-          mode: "all",
-          textChannelId: defaultNotesChannelId,
-          tags: parsedDefaultTags,
-        });
-      } else if (recordAllRule) {
-        await removeRuleMutation.mutateAsync({
-          serverId: selectedGuildId,
-          channelId: "ALL",
-        });
-      }
-      await Promise.all([
-        trpcUtils.context.get.invalidate({ serverId: selectedGuildId }),
-        trpcUtils.autorecord.list.invalidate({ serverId: selectedGuildId }),
-      ]);
-      setGlobalDirty(false);
-    } catch (error) {
-      console.error("Failed to save global settings", error);
-    } finally {
-      setSavingGlobal(false);
-    }
-  };
-
-  const handleSaveAsk = async () => {
-    if (!selectedGuildId) return;
-    try {
-      setSavingAsk(true);
-      await saveContextMutation.mutateAsync({
-        serverId: selectedGuildId,
-        askMembersEnabled,
-        askSharingPolicy,
-      });
-      await trpcUtils.context.get.invalidate({ serverId: selectedGuildId });
-      setAskDirty(false);
-    } catch (error) {
-      console.error("Failed to save Ask settings", error);
-    } finally {
-      setSavingAsk(false);
-    }
-  };
-
-  const handleSaveConfig = async () => {
-    if (!selectedGuildId) return;
-    try {
-      setConfigSaving(true);
-      await Promise.all([
-        setServerConfigMutation.mutateAsync({
-          serverId: selectedGuildId,
-          key: "features.experimental",
-          value: experimentalEnabled,
-        }),
-        setServerConfigMutation.mutateAsync({
-          serverId: selectedGuildId,
-          key: "transcription.premium.enabled",
-          value: premiumTranscriptionEnabled,
-        }),
-        setServerConfigMutation.mutateAsync({
-          serverId: selectedGuildId,
-          key: "transcription.premium.cleanup.enabled",
-          value: premiumCleanupEnabled,
-        }),
-        setServerConfigMutation.mutateAsync({
-          serverId: selectedGuildId,
-          key: "transcription.premium.coalesce.model",
-          value: premiumCoalesceModel,
-        }),
-      ]);
-      await trpcUtils.config.server.invalidate({ serverId: selectedGuildId });
-      setConfigDirty(false);
-    } catch (error) {
-      console.error("Failed to save config settings", error);
-    } finally {
-      setConfigSaving(false);
-    }
-  };
 
   const handleSaveChannel = async () => {
     if (!selectedGuildId || !channelVoiceChannelId) return;
@@ -823,155 +421,79 @@ export default function Settings() {
         description="Configure how Chronote records, tags, and summarizes this server."
       />
 
-      <GlobalDefaultsCard
-        busy={globalBusy}
-        canSave={canSaveGlobal}
-        saving={savingGlobal}
-        serverContext={serverContext}
-        onServerContextChange={(value) => {
-          setServerContext(value);
-          setGlobalDirty(true);
+      <ServerConfigCard
+        busy={configBusy || !selectedGuildId}
+        registry={configQuery.data?.registry ?? []}
+        snapshot={configQuery.data?.snapshot}
+        overrides={configQuery.data?.overrides ?? []}
+        uiContext={configUiContext}
+        onSet={async (key, value) => {
+          if (!selectedGuildId) return;
+          await setServerConfigMutation.mutateAsync({
+            serverId: selectedGuildId,
+            key,
+            value,
+          });
         }}
-        defaultNotesChannelId={defaultNotesChannelId}
-        onDefaultNotesChannelChange={(value) => {
-          setDefaultNotesChannelId(value);
-          setGlobalDirty(true);
+        onClear={async (key) => {
+          if (!selectedGuildId) return;
+          await clearServerConfigMutation.mutateAsync({
+            serverId: selectedGuildId,
+            key,
+          });
         }}
-        defaultTags={defaultTags}
-        onDefaultTagsChange={(value) => {
-          setDefaultTags(value);
-          setGlobalDirty(true);
-        }}
-        textChannels={textChannels}
-        defaultNotesAccess={defaultNotesAccess}
-        globalLiveVoiceEnabled={globalLiveVoiceEnabled}
-        onGlobalLiveVoiceEnabledChange={(value) => {
-          setGlobalLiveVoiceEnabled(value);
-          setGlobalDirty(true);
-        }}
-        globalLiveVoiceCommandsEnabled={globalLiveVoiceCommandsEnabled}
-        onGlobalLiveVoiceCommandsEnabledChange={(value) => {
-          setGlobalLiveVoiceCommandsEnabled(value);
-          setGlobalDirty(true);
-        }}
-        globalLiveVoiceTtsVoice={globalLiveVoiceTtsVoice}
-        onGlobalLiveVoiceTtsVoiceChange={(value) => {
-          setGlobalLiveVoiceTtsVoice(value);
-          setGlobalDirty(true);
-        }}
-        globalChatTtsEnabled={globalChatTtsEnabled}
-        onGlobalChatTtsEnabledChange={(value) => {
-          setGlobalChatTtsEnabled(value);
-          setGlobalDirty(true);
-        }}
-        globalChatTtsVoice={globalChatTtsVoice}
-        onGlobalChatTtsVoiceChange={(value) => {
-          setGlobalChatTtsVoice(value);
-          setGlobalDirty(true);
-        }}
-        recordAllEnabled={recordAllEnabled}
-        onRecordAllEnabledChange={(value) => {
-          setRecordAllEnabled(value);
-          setGlobalDirty(true);
-        }}
-        onSave={handleSaveGlobal}
+        onSaved={() =>
+          selectedGuildId
+            ? Promise.all([
+                trpcUtils.config.server.invalidate({
+                  serverId: selectedGuildId,
+                }),
+                trpcUtils.autorecord.list.invalidate({
+                  serverId: selectedGuildId,
+                }),
+                trpcUtils.channelContexts.list.invalidate({
+                  serverId: selectedGuildId,
+                }),
+              ])
+            : Promise.resolve()
+        }
       />
 
-      <Surface p="lg" style={{ position: "relative", overflow: "hidden" }}>
-        <AskSharingCard
-          askMembersEnabled={askMembersEnabled}
-          askSharingPolicy={askSharingPolicy}
-          askBusy={askBusy}
-          canSaveAsk={canSaveAsk}
-          savingAsk={savingAsk}
-          onMembersChange={(value) => {
-            setAskMembersEnabled(value);
-            setAskDirty(true);
-          }}
-          onPolicyChange={(value) => {
-            setAskSharingPolicy(value);
-            setAskDirty(true);
-          }}
-          onSave={handleSaveAsk}
-        />
-      </Surface>
-
-      <Surface p="lg" style={{ position: "relative", overflow: "hidden" }}>
-        <LoadingOverlay
-          visible={configBusy}
-          overlayProps={uiOverlays.loading}
-          loaderProps={{ size: "md" }}
-        />
-        <Stack gap="md">
-          <Text fw={600}>Experimental and premium features</Text>
-          <Switch
-            label="Enable experimental features for this server"
-            checked={experimentalEnabled}
-            onChange={(event) => {
-              setExperimentalEnabled(event.currentTarget.checked);
-              setConfigDirty(true);
-            }}
-            disabled={configBusy}
-          />
-          <Switch
-            label="Premium transcription (pro only)"
-            checked={premiumTranscriptionEnabled}
-            onChange={(event) => {
-              setPremiumTranscriptionEnabled(event.currentTarget.checked);
-              setConfigDirty(true);
-            }}
-            disabled={premiumControlsDisabled}
-          />
-          {premiumTierLocked ? (
-            <Alert
-              icon={<IconAlertTriangle size={16} />}
-              color="yellow"
-              variant="light"
-            >
-              Premium transcription requires a pro plan. Upgrade in Billing to
-              enable it.
-            </Alert>
-          ) : null}
-          {premiumRequiresExperimental ? (
-            <Alert
-              icon={<IconAlertTriangle size={16} />}
-              color="yellow"
-              variant="light"
-            >
-              Turn on experimental features to enable premium transcription.
-            </Alert>
-          ) : null}
-          <FormSelect
-            label="Premium coalesce model"
-            data={["gpt-5-nano", "gpt-5-mini", "gpt-5.2", "gpt-5.2-pro"]}
-            value={premiumCoalesceModel}
-            onChange={(value) => {
-              if (!value) return;
-              setPremiumCoalesceModel(value);
-              setConfigDirty(true);
-            }}
-            disabled={premiumControlsDisabled}
-          />
-          <Switch
-            label="Enable premium transcription cleanup"
-            checked={premiumCleanupEnabled}
-            onChange={(event) => {
-              setPremiumCleanupEnabled(event.currentTarget.checked);
-              setConfigDirty(true);
-            }}
-            disabled={premiumControlsDisabled}
-          />
-          <Group justify="flex-end">
-            <Button
-              onClick={handleSaveConfig}
-              disabled={!canSaveConfig || configBusy}
-              loading={configSaving}
-            >
-              Save experimental settings
-            </Button>
-          </Group>
-        </Stack>
-      </Surface>
+      <DictionaryCard
+        busy={dictionaryBusy || !selectedGuildId}
+        entries={dictionaryQuery.data?.entries ?? []}
+        budgets={dictionaryBudgets}
+        onUpsert={async (term, definition) => {
+          if (!selectedGuildId) return;
+          await dictionaryUpsertMutation.mutateAsync({
+            serverId: selectedGuildId,
+            term,
+            definition,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
+        onRemove={async (term) => {
+          if (!selectedGuildId) return;
+          await dictionaryRemoveMutation.mutateAsync({
+            serverId: selectedGuildId,
+            term,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
+        onClear={async () => {
+          if (!selectedGuildId) return;
+          await dictionaryClearMutation.mutateAsync({
+            serverId: selectedGuildId,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
+      />
 
       <ChannelOverridesCard
         busy={channelBusy}

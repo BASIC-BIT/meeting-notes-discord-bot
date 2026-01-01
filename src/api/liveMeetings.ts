@@ -132,6 +132,7 @@ export function registerLiveMeetingRoutes(app: express.Express) {
       if (!cachedHasGuild) {
         const inGuild = await ensureUserInGuild(user.accessToken, guildId, {
           session: req.session,
+          userId: user.id,
         });
         if (inGuild === null) {
           res

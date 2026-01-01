@@ -1,23 +1,49 @@
 export type ConfigScope = "global" | "server" | "channel" | "user" | "meeting";
-
 export type ConfigValueType = "boolean" | "string" | "number" | "select";
-
 export type ConfigTier = "free" | "basic" | "pro";
-
+export type ConfigGroup =
+  | "Recommended"
+  | "Standard"
+  | "Experimental"
+  | "Advanced";
+export type ConfigScopeRole = "superadmin" | "admin" | "member";
+export type ConfigScopeControl =
+  | "toggle"
+  | "tri-state"
+  | "select"
+  | "number"
+  | "text";
+export type ConfigScopeConfig = {
+  enabled: boolean;
+  required: boolean;
+  role: ConfigScopeRole;
+  control: ConfigScopeControl;
+  notes?: string;
+};
 export type ConfigUiControl =
   | { type: "toggle" }
-  | { type: "text" }
-  | { type: "number"; min?: number; max?: number; step?: number }
-  | { type: "select"; options: string[] };
-
+  | { type: "text"; placeholder?: string }
+  | {
+      type: "number";
+      min?: number;
+      max?: number;
+      step?: number;
+      minKey?: string;
+      maxKey?: string;
+    }
+  | { type: "select"; options: string[]; placeholder?: string }
+  | { type: "segmented"; options: string[] }
+  | { type: "custom"; renderer: string; options?: string[] };
 export type ConfigEntry = {
   key: string;
   label: string;
   description: string;
   category: string;
+  group?: ConfigGroup;
   valueType: ConfigValueType;
-  defaultValue: unknown;
-  scopes: ConfigScope[];
+  defaultValue?: unknown;
+  experimentalValue?: unknown;
+  scopes: Partial<Record<ConfigScope, ConfigScopeConfig>>;
   minTier?: ConfigTier;
   requiresExperimentalTag?: boolean;
   ui: ConfigUiControl;
@@ -32,7 +58,7 @@ export type ConfigOverrideValue = {
 export type ResolvedConfigValue = {
   key: string;
   value: unknown;
-  source: ConfigScope | "default" | "appconfig" | "global_override" | "gated";
+  source: ConfigScope | "appconfig" | "default" | "experimental" | "gated";
   gated?: boolean;
 };
 
@@ -40,6 +66,7 @@ export type ResolvedConfigSnapshot = {
   values: Record<string, ResolvedConfigValue>;
   experimentalEnabled: boolean;
   tier?: ConfigTier;
+  missingRequired: string[];
 };
 
 export type MeetingRuntimeConfig = {
@@ -48,10 +75,18 @@ export type MeetingRuntimeConfig = {
     slowSilenceMs: number;
     minSnippetSeconds: number;
     maxSnippetMs: number;
+    fastFinalizationEnabled: boolean;
+    interjectionEnabled: boolean;
+    interjectionMinSpeakerSeconds: number;
   };
   premiumTranscription: {
     enabled: boolean;
     cleanupEnabled: boolean;
     coalesceModel: string;
+  };
+  dictionary: {
+    maxEntries: number;
+    maxCharsTranscription: number;
+    maxCharsContext: number;
   };
 };

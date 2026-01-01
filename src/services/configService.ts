@@ -100,6 +100,7 @@ class ConfigService {
     applicationId: process.env.APP_CONFIG_APPLICATION_ID || "",
     environmentId: process.env.APP_CONFIG_ENVIRONMENT_ID || "",
     profileId: process.env.APP_CONFIG_PROFILE_ID || "",
+    deploymentStrategyId: process.env.APP_CONFIG_DEPLOYMENT_STRATEGY_ID || "",
     cacheTtlMs:
       parseInt(process.env.APP_CONFIG_CACHE_TTL_MS || "60000", 10) || 60000,
   };
@@ -224,6 +225,44 @@ class ConfigService {
     // future: rate limit/budget configs per API route can live here
   };
 
+  // Cache configuration
+  readonly cache = {
+    enabled: process.env.CACHE_ENABLED !== "false",
+    redisUrl: process.env.REDIS_URL || process.env.CACHE_REDIS_URL || "",
+    keyPrefix:
+      process.env.CACHE_KEY_PREFIX ||
+      process.env.DDB_TABLE_PREFIX ||
+      process.env.NODE_ENV ||
+      "development",
+    memorySize: parseInt(process.env.CACHE_MEMORY_SIZE || "2000", 10) || 2000,
+    invalidationEnabled: process.env.CACHE_INVALIDATION_ENABLED !== "false",
+    referencesTtlSeconds:
+      parseInt(process.env.CACHE_REFERENCES_TTL_SECONDS || "86400", 10) ||
+      86400,
+    defaultTtlSeconds:
+      parseInt(process.env.CACHE_DEFAULT_TTL_SECONDS || "60", 10) || 60,
+    discord: {
+      userGuildsTtlSeconds:
+        parseInt(
+          process.env.CACHE_DISCORD_USER_GUILDS_TTL_SECONDS || "60",
+          10,
+        ) || 60,
+      botGuildsTtlSeconds:
+        parseInt(
+          process.env.CACHE_DISCORD_BOT_GUILDS_TTL_SECONDS || "300",
+          10,
+        ) || 300,
+      channelsTtlSeconds:
+        parseInt(process.env.CACHE_DISCORD_CHANNELS_TTL_SECONDS || "60", 10) ||
+        60,
+      rolesTtlSeconds:
+        parseInt(process.env.CACHE_DISCORD_ROLES_TTL_SECONDS || "60", 10) || 60,
+      membersTtlSeconds:
+        parseInt(process.env.CACHE_DISCORD_MEMBERS_TTL_SECONDS || "30", 10) ||
+        30,
+    },
+  };
+
   readonly stripe = {
     secretKey: process.env.STRIPE_SECRET_KEY || "",
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
@@ -313,6 +352,10 @@ class ConfigService {
           value: this.appConfig.environmentId,
         },
         { name: "APP_CONFIG_PROFILE_ID", value: this.appConfig.profileId },
+        {
+          name: "APP_CONFIG_DEPLOYMENT_STRATEGY_ID",
+          value: this.appConfig.deploymentStrategyId,
+        },
       );
     }
 

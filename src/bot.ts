@@ -13,6 +13,7 @@ import {
   ChannelSelectMenuInteraction,
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
+import { CONFIG_KEYS } from "./config/keys";
 import { getAllMeetings, getMeeting } from "./meetings";
 import {
   handleRequestStartMeeting,
@@ -21,10 +22,14 @@ import {
 import { handleAutoRecordCommand } from "./commands/autorecord";
 import { handleContextCommand } from "./commands/context";
 import { getAutoRecordSettingByChannel } from "./services/autorecordService";
-import { fetchServerContext } from "./services/appContextService";
 import { resolveMeetingVoiceSettings } from "./services/meetingVoiceSettingsService";
+import {
+  getSnapshotString,
+  resolveConfigSnapshot,
+} from "./services/unifiedConfigService";
 import { getGuildLimits } from "./services/subscriptionService";
 import { formatParticipantLabel, fromMember } from "./utils/participants";
+import { parseTags } from "./utils/tags";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
@@ -53,10 +58,16 @@ import {
   isEditTagsHistoryModal,
 } from "./commands/tags";
 import { handleAskCommand } from "./commands/ask";
+import { handleDictionaryCommand } from "./commands/dictionary";
 import { billingCommand, handleBillingCommand } from "./commands/billing";
 import { handleSayCommand } from "./commands/say";
 import { handleTtsCommand } from "./commands/tts";
 import { TTS_VOICE_OPTIONS } from "./utils/ttsVoices";
+import {
+  invalidateDiscordBotGuildsCache,
+  invalidateDiscordGuildCache,
+  invalidateDiscordUserCache,
+} from "./services/discordCacheService";
 import {
   handleOnboardButtonInteraction,
   handleOnboardChannelSelect,
@@ -102,12 +113,37 @@ const replyOnboardingDisabled = async (interaction: RepliableInteraction) => {
   });
 };
 
+const invalidateGuildCache = async (guildId: string, label: string) => {
+  try {
+    await invalidateDiscordGuildCache(guildId);
+  } catch (error) {
+    console.warn(`${label} cache invalidation failed`, { guildId, error });
+  }
+};
+
+const invalidateUserCache = async (userId: string, label: string) => {
+  try {
+    await invalidateDiscordUserCache(userId);
+  } catch (error) {
+    console.warn(`${label} cache invalidation failed`, { userId, error });
+  }
+};
+
+const invalidateBotGuildCache = async (label: string) => {
+  try {
+    await invalidateDiscordBotGuildsCache();
+  } catch (error) {
+    console.warn(`${label} cache invalidation failed`, error);
+  }
+};
+
 const commandHandlers: Record<
   string,
   (interaction: ChatInputCommandInteraction) => Promise<void>
 > = {
   autorecord: handleAutoRecordCommand,
   ask: handleAskCommand,
+  dictionary: handleDictionaryCommand,
   context: handleContextCommand,
   billing: handleBillingCommand,
   say: handleSayCommand,
@@ -267,6 +303,8 @@ export async function setupBot() {
   });
 
   client.on("guildCreate", async (guild) => {
+    await invalidateBotGuildCache("guildCreate");
+    await invalidateGuildCache(guild.id, "guildCreate");
     if (!config.server.onboardingEnabled) {
       return;
     }
@@ -285,6 +323,58 @@ export async function setupBot() {
     } catch (err) {
       console.warn("Could not DM installer/owner on join", err);
     }
+  });
+
+  client.on("guildDelete", async (guild) => {
+    await invalidateBotGuildCache("guildDelete");
+    await invalidateGuildCache(guild.id, "guildDelete");
+  });
+
+  client.on("guildUpdate", async (_oldGuild, newGuild) => {
+    await invalidateGuildCache(newGuild.id, "guildUpdate");
+  });
+
+  client.on("channelCreate", async (channel) => {
+    const guildId = channel.guild?.id;
+    if (!guildId) return;
+    await invalidateGuildCache(guildId, "channelCreate");
+  });
+
+  client.on("channelUpdate", async (_oldChannel, newChannel) => {
+    if (newChannel.isDMBased()) return;
+    await invalidateGuildCache(newChannel.guild.id, "channelUpdate");
+  });
+
+  client.on("channelDelete", async (channel) => {
+    if (channel.isDMBased()) return;
+    await invalidateGuildCache(channel.guild.id, "channelDelete");
+  });
+
+  client.on("roleCreate", async (role) => {
+    await invalidateGuildCache(role.guild.id, "roleCreate");
+  });
+
+  client.on("roleUpdate", async (_oldRole, newRole) => {
+    await invalidateGuildCache(newRole.guild.id, "roleUpdate");
+  });
+
+  client.on("roleDelete", async (role) => {
+    await invalidateGuildCache(role.guild.id, "roleDelete");
+  });
+
+  client.on("guildMemberAdd", async (member) => {
+    await invalidateUserCache(member.id, "guildMemberAdd");
+    await invalidateGuildCache(member.guild.id, "guildMemberAdd");
+  });
+
+  client.on("guildMemberRemove", async (member) => {
+    await invalidateUserCache(member.id, "guildMemberRemove");
+    await invalidateGuildCache(member.guild.id, "guildMemberRemove");
+  });
+
+  client.on("guildMemberUpdate", async (_oldMember, newMember) => {
+    await invalidateUserCache(newMember.id, "guildMemberUpdate");
+    await invalidateGuildCache(newMember.guild.id, "guildMemberUpdate");
   });
 
   client.on("interactionCreate", async (interaction) => {
@@ -424,10 +514,34 @@ async function handleUserJoin(newState: VoiceState) {
 
       // If auto-record is enabled, start recording
       if (autoRecordSetting && autoRecordSetting.enabled) {
-        const serverContext = await fetchServerContext(newState.guild.id);
+        let defaultNotesChannelId: string | undefined;
+        let defaultTags: string[] | undefined;
+        const { subscription, limits } = await getGuildLimits(
+          newState.guild.id,
+        );
+        try {
+          const snapshot = await resolveConfigSnapshot({
+            guildId: newState.guild.id,
+            tier: subscription.tier,
+          });
+          defaultNotesChannelId = getSnapshotString(
+            snapshot,
+            CONFIG_KEYS.notes.channelId,
+            { trim: true },
+          );
+          const notesTagsValue = getSnapshotString(
+            snapshot,
+            CONFIG_KEYS.notes.tags,
+            { trim: true },
+          );
+          if (notesTagsValue) {
+            defaultTags = parseTags(notesTagsValue);
+          }
+        } catch (error) {
+          console.error("Failed to resolve server config defaults", error);
+        }
         const resolvedTextChannelId =
-          autoRecordSetting.textChannelId ??
-          serverContext?.defaultNotesChannelId;
+          autoRecordSetting.textChannelId ?? defaultNotesChannelId;
         if (!resolvedTextChannelId) {
           console.error(
             `No default notes channel configured for auto-record in guild ${newState.guild.id}`,
@@ -442,7 +556,6 @@ async function handleUserJoin(newState: VoiceState) {
           console.log(
             `Auto-starting recording in ${newState.channel.name} due to auto-record settings`,
           );
-          const { limits } = await getGuildLimits(newState.guild.id);
           const {
             liveVoiceEnabled,
             liveVoiceCommandsEnabled,
@@ -454,7 +567,7 @@ async function handleUserJoin(newState: VoiceState) {
             newState.channelId!,
             limits,
           );
-          const tags = autoRecordSetting.tags ?? serverContext?.defaultTags;
+          const tags = autoRecordSetting.tags ?? defaultTags;
           const startReason = autoRecordSetting.recordAll
             ? MEETING_START_REASONS.AUTO_RECORD_ALL
             : MEETING_START_REASONS.AUTO_RECORD_CHANNEL;
@@ -764,6 +877,50 @@ async function setupApplicationCommands() {
         subcommand
           .setName("list")
           .setDescription("List all contexts in this server"),
+      ),
+    new SlashCommandBuilder()
+      .setName("dictionary")
+      .setDescription("Manage dictionary terms for better transcription")
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("list")
+          .setDescription("List dictionary entries for this server"),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("add")
+          .setDescription("Add or update a dictionary entry")
+          .addStringOption((option) =>
+            option
+              .setName("term")
+              .setDescription("Word or phrase to capture")
+              .setRequired(true)
+              .setMaxLength(80),
+          )
+          .addStringOption((option) =>
+            option
+              .setName("definition")
+              .setDescription("Optional definition or explanation")
+              .setRequired(false)
+              .setMaxLength(400),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("remove")
+          .setDescription("Remove a dictionary entry")
+          .addStringOption((option) =>
+            option
+              .setName("term")
+              .setDescription("Term to remove")
+              .setRequired(true)
+              .setMaxLength(80),
+          ),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("clear")
+          .setDescription("Remove all dictionary entries for this server"),
       ),
   ];
 

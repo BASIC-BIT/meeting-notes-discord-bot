@@ -1,67 +1,17 @@
+import { isDiscordApiError } from "./discordService";
 import {
-  getGuildMember,
-  isDiscordApiError,
-  listGuildChannels,
-  listGuildRoles,
-} from "./discordService";
+  getGuildMemberCached,
+  listGuildChannelsCached,
+  listGuildRolesCached,
+} from "./discordCacheService";
 import type {
   DiscordChannel,
-  DiscordGuildMember,
   DiscordPermissionOverwrite,
-  DiscordRole,
 } from "../repositories/types";
 
 const PERMISSION_ADMIN = 1n << 3n;
 const PERMISSION_VIEW_CHANNEL = 1n << 10n;
 const PERMISSION_CONNECT = 1n << 20n;
-
-type CacheEntry<T> = {
-  value: T;
-  expiresAt: number;
-};
-
-const CHANNEL_CACHE_TTL_MS = 60_000;
-const ROLE_CACHE_TTL_MS = 60_000;
-const MEMBER_CACHE_TTL_MS = 30_000;
-
-const channelCache = new Map<string, CacheEntry<DiscordChannel[]>>();
-const roleCache = new Map<string, CacheEntry<DiscordRole[]>>();
-const memberCache = new Map<string, CacheEntry<DiscordGuildMember>>();
-
-const readCache = <T>(
-  cache: Map<string, CacheEntry<T>>,
-  key: string,
-): T | null => {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt <= Date.now()) {
-    cache.delete(key);
-    return null;
-  }
-  return entry.value;
-};
-
-const writeCache = <T>(
-  cache: Map<string, CacheEntry<T>>,
-  key: string,
-  value: T,
-  ttlMs: number,
-) => {
-  cache.set(key, { value, expiresAt: Date.now() + ttlMs });
-};
-
-const fetchWithCache = async <T>(
-  cache: Map<string, CacheEntry<T>>,
-  key: string,
-  ttlMs: number,
-  fetcher: () => Promise<T>,
-): Promise<T> => {
-  const cached = readCache(cache, key);
-  if (cached) return cached;
-  const fresh = await fetcher();
-  writeCache(cache, key, fresh, ttlMs);
-  return fresh;
-};
 
 const parsePermissions = (value?: string | null): bigint => {
   if (!value) return 0n;
@@ -120,18 +70,9 @@ const ensureUserHasChannelPermissions = async (options: {
   const { guildId, channelId, userId, required, logLabel } = options;
   try {
     const [channels, roles, member] = await Promise.all([
-      fetchWithCache(channelCache, guildId, CHANNEL_CACHE_TTL_MS, () =>
-        listGuildChannels(guildId),
-      ),
-      fetchWithCache(roleCache, guildId, ROLE_CACHE_TTL_MS, () =>
-        listGuildRoles(guildId),
-      ),
-      fetchWithCache(
-        memberCache,
-        `${guildId}:${userId}`,
-        MEMBER_CACHE_TTL_MS,
-        () => getGuildMember(guildId, userId),
-      ),
+      listGuildChannelsCached(guildId),
+      listGuildRolesCached(guildId),
+      getGuildMemberCached(guildId, userId),
     ]);
 
     const channel = resolveChannel(channels, channelId);

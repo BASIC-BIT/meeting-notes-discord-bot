@@ -1,14 +1,14 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { ensureBotInGuild } from "../../services/guildAccessService";
+import { isDiscordApiError } from "../../services/discordService";
 import {
-  isDiscordApiError,
-  listBotGuilds,
-  getGuildMember,
-  listGuildChannels,
-  listGuildRoles,
-  listUserGuilds,
-} from "../../services/discordService";
+  getGuildMemberCached,
+  listBotGuildsCached,
+  listGuildChannelsCached,
+  listGuildRolesCached,
+  listUserGuildsCached,
+} from "../../services/discordCacheService";
 import type {
   DiscordChannel,
   DiscordGuild,
@@ -83,7 +83,7 @@ const ensureBotPresence = async (
 
 const fetchGuildChannels = async (serverId: string) => {
   try {
-    return await listGuildChannels(serverId);
+    return await listGuildChannelsCached(serverId);
   } catch (err) {
     if (isDiscordApiError(err) && err.status === 429) {
       throw createRateLimitError();
@@ -94,8 +94,8 @@ const fetchGuildChannels = async (serverId: string) => {
 
 const fetchPermissionSnapshot = async (serverId: string, botUserId: string) => {
   try {
-    const roles = await listGuildRoles(serverId);
-    const botMember = await getGuildMember(serverId, botUserId);
+    const roles = await listGuildRolesCached(serverId);
+    const botMember = await getGuildMemberCached(serverId, botUserId);
     return buildPermissionSnapshot(roles, botMember.roles ?? [], serverId);
   } catch (err) {
     if (isDiscordApiError(err) && err.status === 429) {
@@ -111,9 +111,9 @@ const fetchPermissionSnapshot = async (serverId: string, botUserId: string) => {
 const isCacheFresh = (fetchedAt: number | undefined, ttlMs: number) =>
   fetchedAt != null ? Date.now() - fetchedAt < ttlMs : false;
 
-const fetchUserGuilds = async (accessToken: string) => {
+const fetchUserGuilds = async (accessToken: string, userId?: string) => {
   try {
-    return await listUserGuilds(accessToken);
+    return await listUserGuildsCached({ accessToken, userId });
   } catch (err) {
     if (isDiscordApiError(err) && err.status === 429) {
       throw createRateLimitError();
@@ -124,7 +124,7 @@ const fetchUserGuilds = async (accessToken: string) => {
 
 const fetchBotGuilds = async () => {
   try {
-    return await listBotGuilds();
+    return await listBotGuildsCached();
   } catch (err) {
     if (isDiscordApiError(err) && err.status === 429) {
       throw createRateLimitError();
@@ -136,6 +136,7 @@ const fetchBotGuilds = async () => {
 const getUserGuildsWithCache = async (
   accessToken: string,
   sessionData: SessionGuildCache,
+  userId?: string,
 ) => {
   if (
     isCacheFresh(sessionData.userGuildsFetchedAt, USER_GUILD_CACHE_TTL_MS) &&
@@ -146,7 +147,7 @@ const getUserGuildsWithCache = async (
     return sessionData.userGuilds;
   }
 
-  const userGuilds = await fetchUserGuilds(accessToken);
+  const userGuilds = await fetchUserGuilds(accessToken, userId);
   sessionData.userGuilds = userGuilds;
   sessionData.userGuildsFetchedAt = Date.now();
   sessionData.guildIds = userGuilds.map((guild) => guild.id);
@@ -174,6 +175,7 @@ const listEligible = authedProcedure.query(async ({ ctx }) => {
   const userGuilds = await getUserGuildsWithCache(
     ctx.user.accessToken ?? "",
     sessionData,
+    ctx.user.id,
   );
   const botGuildIds = await getBotGuildIdsWithCache(sessionData);
 

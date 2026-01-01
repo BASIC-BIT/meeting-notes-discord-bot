@@ -1,11 +1,18 @@
 import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
 import { config } from "./configService";
+import { listDictionaryEntriesService } from "./dictionaryService";
 import { normalizeTags, parseTags } from "../utils/tags";
 import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
 import { ensureUserCanViewChannel } from "./discordPermissionsService";
 import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
 import { getLangfuseChatPrompt } from "./langfusePromptService";
+import { resolveConfigSnapshot } from "./unifiedConfigService";
+import { resolveGuildSubscription } from "./subscriptionService";
+import {
+  buildDictionaryPromptLines,
+  resolveDictionaryBudgets,
+} from "../utils/dictionary";
 
 export type AskScope = "guild" | "channel";
 
@@ -44,6 +51,30 @@ const scrubInternalIds = (text: string) =>
     .replace(/\bid [0-9a-f-]{8,}\b/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+
+const buildDictionaryBlock = async (guildId: string): Promise<string> => {
+  try {
+    const [entries, subscription] = await Promise.all([
+      listDictionaryEntriesService(guildId),
+      resolveGuildSubscription(guildId),
+    ]);
+    const snapshot = await resolveConfigSnapshot({
+      guildId,
+      tier: subscription.tier,
+    });
+    if (!entries.length) return "None.";
+    const valuesByKey: Record<string, unknown> = {};
+    Object.entries(snapshot.values).forEach(([key, entry]) => {
+      valuesByKey[key] = entry.value;
+    });
+    const budgets = resolveDictionaryBudgets(valuesByKey, snapshot.tier);
+    const { contextLines } = buildDictionaryPromptLines(entries, budgets);
+    return contextLines.length > 0 ? contextLines.join("\n") : "None.";
+  } catch (error) {
+    console.warn("Failed to build dictionary block for Ask:", error);
+    return "None.";
+  }
+};
 
 const buildContextBlocks = (meetings: MeetingSummary[], guildId: string) =>
   meetings.map((m) => {
@@ -175,6 +206,8 @@ export async function answerQuestionService(
     return buildNoMeetingsResponse(allMeetings, maxMeetings);
   }
 
+  const dictionaryBlock = await buildDictionaryBlock(guildId);
+
   const sourceMeetingIds = meetings.map(
     (meeting) => meeting.channelId_timestamp,
   );
@@ -197,6 +230,7 @@ export async function answerQuestionService(
       question,
       contextBlocks: contextBlocks.join("\n"),
       historyBlock,
+      dictionaryBlock,
     },
   });
 

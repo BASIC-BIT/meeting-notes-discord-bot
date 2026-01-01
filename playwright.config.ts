@@ -14,6 +14,7 @@ const mockEnv = {
   FORCE_TIER: "pro",
   MOCK_FIXED_NOW: "2025-01-01T00:00:00.000Z",
   VITE_MOCK_FIXED_NOW: "2025-01-01T00:00:00.000Z",
+  SUPER_ADMIN_USER_IDS: "211750261922725888",
 };
 
 for (const [key, value] of Object.entries(mockEnv)) {

@@ -1,0 +1,44 @@
+.list {
+  --library-divider-color: var(--mantine-color-dark-5);
+  --library-row-hover: var(--mantine-color-dark-6);
+  --library-row-selected: var(--mantine-color-dark-6);
+}
+
+:global(html[data-mantine-color-scheme="light"]) .list {
+  --library-divider-color: var(--mantine-color-gray-2);
+  --library-row-hover: var(--mantine-color-gray-0);
+  --library-row-selected: var(--mantine-color-gray-1);
+}
+
+.row {
+  cursor: pointer;
+  border-bottom: 1px solid var(--library-divider-color);
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.row:last-of-type {
+  border-bottom: none;
+}
+
+.row:hover {
+  background-color: var(--library-row-hover);
+}
+
+.row[data-selected="true"] {
+  background-color: var(--library-row-selected);
+}
+
+.chevron {
+  opacity: 0.6;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.row:hover .chevron {
+  opacity: 1;
+  transform: translateX(2px);
+}

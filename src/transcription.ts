@@ -47,6 +47,10 @@ import { getBotNameVariants } from "./utils/botNames";
 import { createOpenAIClient } from "./services/openaiClient";
 import { getModelChoice } from "./services/modelFactory";
 import {
+  buildDictionaryPromptLines,
+  DEFAULT_DICTIONARY_BUDGETS,
+} from "./utils/dictionary";
+import {
   getLangfuseChatPrompt,
   type LangfusePromptMeta,
 } from "./services/langfusePromptService";
@@ -525,6 +529,16 @@ Channel: ${channelName}`;
 // Get keywords from the server that are likely to help the translation, such as server name, channel names, role names, and attendee names
 export function getTranscriptionKeywords(meeting: MeetingData): string {
   let content = getTranscriptionGlossaryContent(meeting);
+
+  const budgets =
+    meeting.runtimeConfig?.dictionary ?? DEFAULT_DICTIONARY_BUDGETS;
+  const { transcriptionLines } = buildDictionaryPromptLines(
+    meeting.dictionaryEntries ?? [],
+    budgets,
+  );
+  if (transcriptionLines.length > 0) {
+    content += `\nDictionary terms:\n${transcriptionLines.join("\n")}`;
+  }
 
   // Add meeting context if provided
   if (meeting.meetingContext) {

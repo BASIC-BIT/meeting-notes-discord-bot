@@ -2,7 +2,6 @@
   ActionIcon,
   Badge,
   Box,
-  Button,
   Center,
   Group,
   Loader,
@@ -12,9 +11,11 @@
 } from "@mantine/core";
 import { IconChevronRight, IconFilter, IconUsers } from "@tabler/icons-react";
 import Surface from "../../components/Surface";
+import { RefreshButton } from "../../components/RefreshButton";
 import type { MeetingStatus } from "../../../types/meetingLifecycle";
 import { MEETING_STATUS } from "../../../types/meetingLifecycle";
 import type { MeetingListItem } from "../../pages/Library";
+import classes from "./MeetingList.module.css";
 
 const renderListStatusBadge = (status?: MeetingStatus) => {
   switch (status) {
@@ -53,7 +54,12 @@ export function MeetingList({
   selectedMeetingId,
 }: MeetingListProps) {
   return (
-    <Surface p={0} style={{ position: "relative" }} data-testid="library-list">
+    <Surface
+      p={0}
+      className={classes.list}
+      style={{ position: "relative" }}
+      data-testid="library-list"
+    >
       {listLoading ? (
         <Center
           py="xl"
@@ -83,28 +89,26 @@ export function MeetingList({
               px={{ base: "md", md: "lg" }}
               py="md"
               onClick={() => onSelect(meetingItem.id)}
-              style={{
-                cursor: "pointer",
-                backgroundColor:
-                  selectedMeetingId === meetingItem.id
-                    ? "var(--mantine-color-dark-6)"
-                    : undefined,
-              }}
+              className={classes.row}
+              data-selected={selectedMeetingId === meetingItem.id}
               data-testid="library-meeting-row"
               data-meeting-id={meetingItem.id}
             >
               <Group justify="space-between" align="flex-start" wrap="nowrap">
-                <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
+                <Stack gap="xs" style={{ flex: 1, minWidth: 0 }}>
                   <Group gap="xs" align="center">
                     <Text fw={600} truncate>
                       {meetingItem.title}
                     </Text>
                     {renderListStatusBadge(meetingItem.status)}
                   </Group>
+                  <Text size="xs" c="dimmed">
+                    {meetingItem.summaryLabel ?? "Summary"}
+                  </Text>
                   <Text size="sm" c="dimmed" lineClamp={2}>
                     {meetingItem.summary || "No summary yet."}
                   </Text>
-                  <Group gap="sm" align="center">
+                  <Group gap="md" align="center" mt={2}>
                     <Group gap={4} align="center">
                       <Text size="xs" c="dimmed">
                         {meetingItem.dateLabel} | {meetingItem.durationLabel}
@@ -123,7 +127,11 @@ export function MeetingList({
                     ) : null}
                   </Group>
                 </Stack>
-                <ActionIcon variant="subtle" aria-label="Open details">
+                <ActionIcon
+                  variant="subtle"
+                  aria-label="Open details"
+                  className={classes.chevron}
+                >
                   <IconChevronRight size={16} />
                 </ActionIcon>
               </Group>
@@ -132,15 +140,12 @@ export function MeetingList({
         </Stack>
       )}
       <Group justify="flex-end" p="md">
-        <Button
+        <RefreshButton
           size="xs"
           variant="subtle"
-          leftSection={<IconFilter size={14} />}
           onClick={onRefresh}
           data-testid="library-refresh"
-        >
-          Refresh
-        </Button>
+        />
       </Group>
     </Surface>
   );

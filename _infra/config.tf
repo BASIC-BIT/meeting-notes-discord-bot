@@ -59,7 +59,7 @@ resource "aws_appconfig_deployment" "chronote_config_deployment" {
 
 resource "aws_iam_policy" "appconfig_access_policy" {
   #checkov:skip=CKV_AWS_355 reason: AppConfigData session actions require resource "*" and are scoped by app/env/profile IDs.
-  #checkov:skip=CKV_AWS_290 reason: AppConfigData access is read-only and session scoped.
+  #checkov:skip=CKV_AWS_290 reason: AppConfigData session actions require "*" and publish actions are limited to the app config workflow.
   name        = "${local.name_prefix}-bot-appconfig-policy"
   description = "Policy for Meeting Notes Bot to access AppConfig data"
   policy = jsonencode({
@@ -68,8 +68,10 @@ resource "aws_iam_policy" "appconfig_access_policy" {
       {
         Effect = "Allow",
         Action = [
+          "appconfig:CreateHostedConfigurationVersion",
           "appconfig:GetLatestConfiguration",
-          "appconfig:StartConfigurationSession"
+          "appconfig:StartConfigurationSession",
+          "appconfig:StartDeployment"
         ],
         Resource = "*"
       }
@@ -130,4 +132,8 @@ output "appconfig_environment_id" {
 
 output "appconfig_profile_id" {
   value = aws_appconfig_configuration_profile.chronote_config_profile.configuration_profile_id
+}
+
+output "appconfig_deployment_strategy_id" {
+  value = aws_appconfig_deployment_strategy.chronote_config_strategy.id
 }

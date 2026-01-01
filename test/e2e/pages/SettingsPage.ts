@@ -24,8 +24,8 @@ export class SettingsPage {
     return this.page.getByTestId(testIds.settings.override);
   }
 
-  loadingGlobal(): Locator {
-    return this.page.getByTestId(testIds.settings.loadingGlobal).first();
+  loadingConfig(): Locator {
+    return this.page.getByTestId(testIds.settings.loadingConfig).first();
   }
 
   loadingOverrides(): Locator {
@@ -34,7 +34,7 @@ export class SettingsPage {
 
   async waitForLoaded(expectedOverrideName?: string): Promise<void> {
     await this.root().waitFor({ state: "visible" });
-    await this.loadingGlobal().waitFor({ state: "hidden" });
+    await this.loadingConfig().waitFor({ state: "hidden" });
     await this.loadingOverrides().waitFor({ state: "hidden" });
     if (expectedOverrideName) {
       await this.overrideByName(expectedOverrideName).waitFor({
@@ -43,6 +43,21 @@ export class SettingsPage {
     } else {
       await this.firstOverride().waitFor({ state: "visible" });
     }
+  }
+
+  async expandGroup(label: string): Promise<void> {
+    const control = this.root().getByRole("button", { name: label }).first();
+    if (await control.count()) {
+      const expanded = await control.getAttribute("aria-expanded");
+      if (expanded !== "true") {
+        await control.click();
+      }
+    }
+  }
+
+  groupByName(label: string): Locator {
+    const slug = label.toLowerCase().replace(/\s+/g, "-");
+    return this.page.getByTestId(`settings-config-group-${slug}`);
   }
 
   overrideByName(name: string): Locator {
@@ -77,6 +92,10 @@ export class SettingsPage {
 
   saveDefaultsButton(): Locator {
     return this.page.getByTestId("settings-save-defaults");
+  }
+
+  saveConfigButton(): Locator {
+    return this.page.getByTestId(testIds.settings.saveConfig);
   }
 
   chatTtsToggle(): Locator {

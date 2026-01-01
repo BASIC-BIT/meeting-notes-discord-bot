@@ -1,50 +1,69 @@
-# Caching strategy, Redis plan
+# Cache strategy and Redis plan
 
 ## Goals
 
 - Reduce Discord API pressure and rate limit risk.
-- Share cache across processes and instances.
-- Keep cache behavior predictable with TTLs and size limits.
+- Share cache across processes and instances when Redis is enabled.
+- Keep cache behavior predictable with TTLs, size limits, and explicit invalidation.
 
-## Scope
+## Current implementation
 
-- Discord data: user guilds, bot guilds, guild roles, guild channels, guild members.
-- Application data that is derived from or adjacent to Discord data.
+- `async-cache-dedupe` provides single flight per key and TTL based caching.
+- Cache storage is memory by default and switches to Redis when `REDIS_URL` is set.
+- Discord reads are routed through cached wrappers in `src/services/discordCacheService.ts`.
+- Session level caching still exists for quick per user lookups.
 
-## Proposed Redis layers
+## Cache capabilities
 
-- **Shared cache:** Redis as the primary cache with per key TTLs.
-- **In-process hot cache:** small LRU for per request burst smoothing.
-- **In-flight de-duplication:** single flight per key for high fan-out requests.
+- Single item cache and list cache entries with per entry TTLs.
+- Tag based invalidation using references for guild and user scopes.
+- Manual invalidation helpers for Discord caches:
+  - `invalidateDiscordGuildCache(guildId)`
+  - `invalidateDiscordUserCache(userId)`
 
-## Key namespaces
+## Key and reference patterns
 
-- `discord:userGuilds:{userId}`
-- `discord:botGuilds`
-- `discord:guildRoles:{guildId}`
-- `discord:guildChannels:{guildId}`
-- `discord:guildMember:{guildId}:{userId}`
-- `discord:manageGuild:{guildId}:{userId}`
+- Key namespace examples:
+  - `discord:userGuilds:{userKey}`
+  - `discord:botGuilds`
+  - `discord:guildChannels:{guildId}`
+  - `discord:guildRoles:{guildId}`
+  - `discord:guildMember:{guildId}:{userId}`
+- Reference tags for invalidation:
+  - `discord:guild:{guildId}`
+  - `discord:guild:{guildId}:channels`
+  - `discord:guild:{guildId}:roles`
+  - `discord:guild:{guildId}:member:{userId}`
+  - `discord:user:{userKey}`
 
 ## TTL guidance
 
 - User guilds: 60 seconds.
-- Bot guilds: 5 minutes.
+- Bot guilds: 300 seconds.
 - Roles and channels: 60 seconds.
-- Members and manage checks: 30 to 60 seconds.
+- Members: 30 seconds.
 
-## Invalidation
+## Mutation flow
 
-- Prefer TTL driven expiry for Discord data.
-- For app authored writes, update caches after the write completes.
+- When we write to Discord or another external service, prefer updating cached entries after a successful response.
+- If the updated object is returned, update the cache directly instead of invalidating.
+- If no updated object is returned, invalidate relevant tags and allow the next read to refresh.
 
-## Observability
+## Configuration
 
-- Track cache hit and miss rates, and measure rate limit responses over time.
-- Log slow upstream calls and count in-flight de-duplication wins.
+- `REDIS_URL` enables Redis caching. Leave it empty to stay in memory mode.
+- `CACHE_ENABLED` can disable caching entirely.
+- `CACHE_KEY_PREFIX` scopes keys between environments.
+- `CACHE_MEMORY_SIZE` caps the in process cache size.
+- `CACHE_DISCORD_*` envs tune TTLs per Discord cache.
 
-## Rollout notes
+## Local dev
 
-- Add Redis locally in docker-compose and in AWS managed service.
-- Introduce a cache interface that can be backed by memory or Redis.
-- Migrate existing caches behind the interface in small batches.
+- `docker-compose.yml` now includes a Redis service for local use.
+- `REDIS_URL=redis://localhost:6379` works for a host running the bot.
+- AWS Redis uses TLS, so the ECS task is configured with a `rediss://` URL.
+
+## Next steps
+
+- Add cached wrappers for Dynamo and LLM calls when needed.
+- Introduce lightweight metrics for hit, miss, and dedupe counts.

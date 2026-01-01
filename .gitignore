@@ -25,6 +25,7 @@ _infra_state_mgmt/.terraform
 /coverage
 /playwright-report
 /test-results
+/test/storybook/screenshots
 
 # production
 /build

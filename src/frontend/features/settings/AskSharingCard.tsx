@@ -10,7 +10,8 @@ import {
 } from "@mantine/core";
 import { IconShare2 } from "@tabler/icons-react";
 import { uiOverlays } from "../../uiTokens";
-import type { AskSharingPolicy } from "../../pages/Settings";
+
+type AskSharingPolicy = "off" | "server" | "public";
 
 type AskSharingCardProps = {
   askMembersEnabled: boolean;

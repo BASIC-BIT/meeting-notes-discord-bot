@@ -1,6 +1,10 @@
-import { fetchServerContext } from "./appContextService";
-import { fetchChannelContext } from "./channelContextService";
+import { CONFIG_KEYS } from "../config/keys";
 import type { TierLimits } from "./subscriptionService";
+import {
+  getSnapshotBoolean,
+  getSnapshotString,
+  resolveConfigSnapshot,
+} from "./unifiedConfigService";
 
 export type MeetingVoiceSettings = {
   liveVoiceEnabled: boolean;
@@ -10,61 +14,41 @@ export type MeetingVoiceSettings = {
   chatTtsVoice?: string;
 };
 
-type VoiceToggleKey =
-  | "liveVoiceEnabled"
-  | "liveVoiceCommandsEnabled"
-  | "chatTtsEnabled";
-
-type VoiceToggleContext = {
-  liveVoiceEnabled?: boolean;
-  liveVoiceCommandsEnabled?: boolean;
-  chatTtsEnabled?: boolean;
-};
-
-function resolveVoiceToggle(
-  limits: TierLimits,
-  serverContext: VoiceToggleContext | null | undefined,
-  channelContext: VoiceToggleContext | null | undefined,
-  key: VoiceToggleKey,
-): boolean {
-  if (!limits.liveVoiceEnabled) return false;
-  const serverDefault = serverContext?.[key] ?? false;
-  const override = channelContext?.[key];
-  return override ?? serverDefault;
-}
-
 export async function resolveMeetingVoiceSettings(
   guildId: string,
   channelId: string,
   limits: TierLimits,
 ): Promise<MeetingVoiceSettings> {
-  const [serverContext, channelContext] = await Promise.all([
-    fetchServerContext(guildId),
-    fetchChannelContext(guildId, channelId),
-  ]);
-  const liveVoiceEnabled = resolveVoiceToggle(
-    limits,
-    serverContext,
-    channelContext,
-    "liveVoiceEnabled",
+  const snapshot = await resolveConfigSnapshot({ guildId, channelId });
+  const liveVoiceEnabledRaw = getSnapshotBoolean(
+    snapshot,
+    CONFIG_KEYS.liveVoice.enabled,
   );
-  const liveVoiceCommandsEnabled = resolveVoiceToggle(
-    limits,
-    serverContext,
-    channelContext,
-    "liveVoiceCommandsEnabled",
+  const liveVoiceCommandsRaw = getSnapshotBoolean(
+    snapshot,
+    CONFIG_KEYS.liveVoice.commandsEnabled,
   );
-  const chatTtsEnabled = resolveVoiceToggle(
-    limits,
-    serverContext,
-    channelContext,
-    "chatTtsEnabled",
+  const chatTtsEnabledRaw = getSnapshotBoolean(
+    snapshot,
+    CONFIG_KEYS.chatTts.enabled,
   );
+  const liveVoiceEnabled = limits.liveVoiceEnabled && liveVoiceEnabledRaw;
+  const liveVoiceCommandsEnabled =
+    limits.liveVoiceEnabled && liveVoiceCommandsRaw;
+  const chatTtsEnabled = limits.liveVoiceEnabled && chatTtsEnabledRaw;
+  const liveVoiceTtsVoice = getSnapshotString(
+    snapshot,
+    CONFIG_KEYS.liveVoice.ttsVoice,
+    { trim: true },
+  );
+  const chatTtsVoice = getSnapshotString(snapshot, CONFIG_KEYS.chatTts.voice, {
+    trim: true,
+  });
   return {
     liveVoiceEnabled,
     liveVoiceCommandsEnabled,
     chatTtsEnabled,
-    liveVoiceTtsVoice: serverContext?.liveVoiceTtsVoice,
-    chatTtsVoice: serverContext?.chatTtsVoice,
+    liveVoiceTtsVoice,
+    chatTtsVoice,
   };
 }

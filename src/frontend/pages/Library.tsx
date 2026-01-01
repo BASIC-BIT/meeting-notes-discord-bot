@@ -28,6 +28,7 @@ import {
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
+import { RefreshButton } from "../components/RefreshButton";
 import MeetingTimeline, {
   MEETING_TIMELINE_FILTERS,
 } from "../components/MeetingTimeline";
@@ -444,13 +445,19 @@ export default function Library() {
         <Text c="dimmed" size="sm">
           {filtered.length} meetings
         </Text>
-        <Group gap="sm" align="center">
+        <Group gap="xs" align="center">
           <Text size="xs" c="dimmed">
             Sorted by recency |{" "}
             {selectedRange === "all"
               ? "All time"
               : `Range: ${selectedRange} days`}
           </Text>
+          <RefreshButton
+            onClick={handleRefresh}
+            size="xs"
+            variant="subtle"
+            data-testid="library-refresh-top"
+          />
         </Group>
       </Group>
       <MeetingList

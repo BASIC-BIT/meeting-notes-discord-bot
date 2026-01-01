@@ -43,6 +43,9 @@ describe("MeetingList", () => {
       </MantineProvider>,
     );
 
+    expect(screen.getByText("Summary label")).toBeInTheDocument();
+    expect(screen.getByTestId("library-refresh")).toBeInTheDocument();
+
     fireEvent.click(screen.getByTestId("library-meeting-row"));
     expect(onSelect).toHaveBeenCalledWith("m1");
   });

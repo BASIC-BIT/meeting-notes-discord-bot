@@ -11,7 +11,7 @@ import type { SpanContext } from "@opentelemetry/api";
 import { AudioData } from "./audio";
 import { ChatEntry } from "./chat";
 import { Participant } from "./participants";
-import type { UserSpeechSettings } from "./db";
+import type { DictionaryEntry, UserSpeechSettings } from "./db";
 import type { TtsQueue } from "../ttsQueue";
 import type {
   AutoRecordRule,
@@ -98,6 +98,7 @@ export interface MeetingData {
   audioS3Key?: string;
   chatS3Key?: string;
   tags?: string[];
+  dictionaryEntries?: DictionaryEntry[];
   startMessageId?: string;
   messagesToDelete?: string[];
 }

@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { CONFIG_KEYS } from "../../config/keys";
 import {
   askWithConversation,
   getAskConversationWithMessages,
@@ -9,7 +10,11 @@ import {
   renameAskConversation,
   setAskConversationVisibility,
 } from "../../services/askConversationService";
-import { fetchServerContext } from "../../services/appContextService";
+import {
+  getSnapshotBoolean,
+  getSnapshotEnum,
+  resolveConfigSnapshot,
+} from "../../services/unifiedConfigService";
 import {
   ensureManageGuildWithUserToken,
   type GuildSessionCache,
@@ -18,11 +23,18 @@ import { guildMemberProcedure, publicProcedure, router } from "../trpc";
 import { PERMISSION_REASONS } from "../permissions";
 
 const resolveAskSettings = async (guildId: string) => {
-  const context = await fetchServerContext(guildId);
-  return {
-    askMembersEnabled: context?.askMembersEnabled ?? true,
-    askSharingPolicy: context?.askSharingPolicy ?? "server",
-  };
+  const snapshot = await resolveConfigSnapshot({ guildId });
+  const askMembersEnabled = getSnapshotBoolean(
+    snapshot,
+    CONFIG_KEYS.ask.membersEnabled,
+  );
+  const askSharingPolicy =
+    getSnapshotEnum(snapshot, CONFIG_KEYS.ask.sharingPolicy, [
+      "off",
+      "server",
+      "public",
+    ]) ?? "server";
+  return { askMembersEnabled, askSharingPolicy };
 };
 
 const resolveAskAccess = async (options: {
