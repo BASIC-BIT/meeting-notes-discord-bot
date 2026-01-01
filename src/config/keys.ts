@@ -10,6 +10,10 @@ export const CONFIG_KEYS = {
     slowSilenceMs: "transcription.slowSilenceMs",
     minSnippetSeconds: "transcription.minSnippetSeconds",
     maxSnippetMs: "transcription.maxSnippetMs",
+    fastFinalizationEnabled: "transcription.fastFinalization.enabled",
+    interjectionEnabled: "transcription.interjection.enabled",
+    interjectionMinSpeakerSeconds:
+      "transcription.interjection.minSpeakerSeconds",
   },
   context: {
     instructions: "context.instructions",

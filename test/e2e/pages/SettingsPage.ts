@@ -45,6 +45,21 @@ export class SettingsPage {
     }
   }
 
+  async expandGroup(label: string): Promise<void> {
+    const control = this.root().getByRole("button", { name: label }).first();
+    if (await control.count()) {
+      const expanded = await control.getAttribute("aria-expanded");
+      if (expanded !== "true") {
+        await control.click();
+      }
+    }
+  }
+
+  groupByName(label: string): Locator {
+    const slug = label.toLowerCase().replace(/\s+/g, "-");
+    return this.page.getByTestId(`settings-config-group-${slug}`);
+  }
+
   overrideByName(name: string): Locator {
     return this.overrides().filter({ hasText: name }).first();
   }
@@ -77,6 +92,10 @@ export class SettingsPage {
 
   saveDefaultsButton(): Locator {
     return this.page.getByTestId("settings-save-defaults");
+  }
+
+  saveConfigButton(): Locator {
+    return this.page.getByTestId(testIds.settings.saveConfig);
   }
 
   chatTtsToggle(): Locator {

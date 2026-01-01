@@ -147,6 +147,51 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
     ui: { type: "number", min: 5000, max: 180000, step: 1000 },
   },
   {
+    key: "transcription.fastFinalization.enabled",
+    label: "Fast-only finalization",
+    description:
+      "Skip the slow transcription pass when the latest fast transcript covers the full snippet.",
+    category: "Transcription",
+    group: "Advanced",
+    valueType: "boolean",
+    defaultValue: false,
+    scopes: {
+      global: scope(true, true, "superadmin", "toggle"),
+      server: scope(true, false, "admin", "tri-state"),
+    },
+    ui: { type: "toggle" },
+  },
+  {
+    key: "transcription.interjection.enabled",
+    label: "Interjection-aware splitting",
+    description:
+      "Finalize paused snippets when another speaker interjects to improve ordering.",
+    category: "Transcription",
+    group: "Advanced",
+    valueType: "boolean",
+    defaultValue: false,
+    scopes: {
+      global: scope(true, true, "superadmin", "toggle"),
+      server: scope(true, false, "admin", "tri-state"),
+    },
+    ui: { type: "toggle" },
+  },
+  {
+    key: "transcription.interjection.minSpeakerSeconds",
+    label: "Interjection minimum speaker seconds",
+    description:
+      "Minimum audio seconds for an interjection before we split paused snippets.",
+    category: "Transcription",
+    group: "Advanced",
+    valueType: "number",
+    defaultValue: MINIMUM_TRANSCRIPTION_LENGTH,
+    scopes: {
+      global: scope(true, true, "superadmin", "number"),
+      server: scope(true, false, "admin", "number"),
+    },
+    ui: { type: "number", min: 0.1, max: 5, step: 0.1 },
+  },
+  {
     key: "context.instructions",
     label: "Context instructions",
     description: "Context instructions applied to meetings.",

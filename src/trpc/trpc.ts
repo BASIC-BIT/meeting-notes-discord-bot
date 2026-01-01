@@ -59,6 +59,7 @@ const isGuildMember = t.middleware(
     const guildId = requireGuildId(resolvedInput);
     const allowed = await ensureUserInGuild(ctx.user.accessToken, guildId, {
       session: ctx.req.session,
+      userId: ctx.user.id,
     });
     if (allowed === null) {
       throw new TRPCError({

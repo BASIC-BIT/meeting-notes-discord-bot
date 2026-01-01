@@ -29,3 +29,4 @@ The dictionary feature lets server admins add domain terms and optional definiti
 
 - Optional automation that suggests dictionary entries from corrections or frequently corrected terms.
 - LLM based pruning or selection of dictionary terms per meeting before injecting into prompts.
+- Dictionary packs: curated sets of terms by domain or interest (for example, gaming, sales, engineering). Packs could be selectable during onboarding or later via search, with popular packs surfaced first. We can also suggest packs based on meeting notes or tags, or promote packs as a lightweight marketing prompt. Packs should be easy to preview and apply, and their terms should remain editable after import.

@@ -64,6 +64,11 @@ import { handleSayCommand } from "./commands/say";
 import { handleTtsCommand } from "./commands/tts";
 import { TTS_VOICE_OPTIONS } from "./utils/ttsVoices";
 import {
+  invalidateDiscordBotGuildsCache,
+  invalidateDiscordGuildCache,
+  invalidateDiscordUserCache,
+} from "./services/discordCacheService";
+import {
   handleOnboardButtonInteraction,
   handleOnboardChannelSelect,
   handleOnboardCommand,
@@ -106,6 +111,30 @@ const replyOnboardingDisabled = async (interaction: RepliableInteraction) => {
     content: "Onboarding is currently disabled for this bot.",
     ephemeral: true,
   });
+};
+
+const invalidateGuildCache = async (guildId: string, label: string) => {
+  try {
+    await invalidateDiscordGuildCache(guildId);
+  } catch (error) {
+    console.warn(`${label} cache invalidation failed`, { guildId, error });
+  }
+};
+
+const invalidateUserCache = async (userId: string, label: string) => {
+  try {
+    await invalidateDiscordUserCache(userId);
+  } catch (error) {
+    console.warn(`${label} cache invalidation failed`, { userId, error });
+  }
+};
+
+const invalidateBotGuildCache = async (label: string) => {
+  try {
+    await invalidateDiscordBotGuildsCache();
+  } catch (error) {
+    console.warn(`${label} cache invalidation failed`, error);
+  }
 };
 
 const commandHandlers: Record<
@@ -274,6 +303,8 @@ export async function setupBot() {
   });
 
   client.on("guildCreate", async (guild) => {
+    await invalidateBotGuildCache("guildCreate");
+    await invalidateGuildCache(guild.id, "guildCreate");
     if (!config.server.onboardingEnabled) {
       return;
     }
@@ -292,6 +323,58 @@ export async function setupBot() {
     } catch (err) {
       console.warn("Could not DM installer/owner on join", err);
     }
+  });
+
+  client.on("guildDelete", async (guild) => {
+    await invalidateBotGuildCache("guildDelete");
+    await invalidateGuildCache(guild.id, "guildDelete");
+  });
+
+  client.on("guildUpdate", async (_oldGuild, newGuild) => {
+    await invalidateGuildCache(newGuild.id, "guildUpdate");
+  });
+
+  client.on("channelCreate", async (channel) => {
+    const guildId = channel.guild?.id;
+    if (!guildId) return;
+    await invalidateGuildCache(guildId, "channelCreate");
+  });
+
+  client.on("channelUpdate", async (_oldChannel, newChannel) => {
+    if (newChannel.isDMBased()) return;
+    await invalidateGuildCache(newChannel.guild.id, "channelUpdate");
+  });
+
+  client.on("channelDelete", async (channel) => {
+    if (channel.isDMBased()) return;
+    await invalidateGuildCache(channel.guild.id, "channelDelete");
+  });
+
+  client.on("roleCreate", async (role) => {
+    await invalidateGuildCache(role.guild.id, "roleCreate");
+  });
+
+  client.on("roleUpdate", async (_oldRole, newRole) => {
+    await invalidateGuildCache(newRole.guild.id, "roleUpdate");
+  });
+
+  client.on("roleDelete", async (role) => {
+    await invalidateGuildCache(role.guild.id, "roleDelete");
+  });
+
+  client.on("guildMemberAdd", async (member) => {
+    await invalidateUserCache(member.id, "guildMemberAdd");
+    await invalidateGuildCache(member.guild.id, "guildMemberAdd");
+  });
+
+  client.on("guildMemberRemove", async (member) => {
+    await invalidateUserCache(member.id, "guildMemberRemove");
+    await invalidateGuildCache(member.guild.id, "guildMemberRemove");
+  });
+
+  client.on("guildMemberUpdate", async (_oldMember, newMember) => {
+    await invalidateUserCache(newMember.id, "guildMemberUpdate");
+    await invalidateGuildCache(newMember.guild.id, "guildMemberUpdate");
   });
 
   client.on("interactionCreate", async (interaction) => {

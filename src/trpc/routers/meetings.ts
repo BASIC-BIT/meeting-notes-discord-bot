@@ -11,10 +11,8 @@ import {
   fetchJsonFromS3,
   getSignedObjectUrl,
 } from "../../services/storageService";
-import {
-  isDiscordApiError,
-  listGuildChannels,
-} from "../../services/discordService";
+import { isDiscordApiError } from "../../services/discordService";
+import { listGuildChannelsCached } from "../../services/discordCacheService";
 import type { ChatEntry } from "../../types/chat";
 import type { MeetingEvent } from "../../types/meetingTimeline";
 import type { Participant } from "../../types/participants";
@@ -59,7 +57,7 @@ const list = manageGuildProcedure
 
     let channels: Array<{ id: string; name: string; type: number }> = [];
     try {
-      channels = await listGuildChannels(input.serverId);
+      channels = await listGuildChannelsCached(input.serverId);
     } catch (err) {
       if (isDiscordApiError(err) && err.status === 429) {
         throw new TRPCError({

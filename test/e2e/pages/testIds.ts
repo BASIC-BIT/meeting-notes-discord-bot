@@ -53,6 +53,7 @@ export const testIds = {
     override: "settings-override",
     removeOverride: "settings-remove-override",
     saveChannel: "settings-save-channel",
+    saveConfig: "settings-save-config",
     loadingConfig: "settings-loading-config",
     loadingOverrides: "settings-loading-overrides",
   },

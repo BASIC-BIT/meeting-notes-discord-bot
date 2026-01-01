@@ -15,6 +15,7 @@ import {
   AudioSegmentFile,
   AudioSnippet,
   ChunkInfo,
+  SpeakerState,
 } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType } from "@discordjs/voice";
@@ -40,6 +41,7 @@ const TRANSCRIPTION_HEADER =
 function generateNewSnippet(userId: string): AudioSnippet {
   return {
     chunks: [],
+    audioBytes: 0,
     timestamp: Date.now(),
     userId,
     fastRevision: 0,
@@ -57,6 +59,41 @@ type SnippetTimers = {
   slow?: NodeJS.Timeout;
 };
 
+function getSpeakerStates(meeting: MeetingData): Map<string, SpeakerState> {
+  if (!meeting.audioData.speakerStates) {
+    meeting.audioData.speakerStates = new Map();
+  }
+  return meeting.audioData.speakerStates;
+}
+
+function getSpeakerState(
+  meeting: MeetingData,
+  userId: string,
+): SpeakerState | undefined {
+  return getSpeakerStates(meeting).get(userId);
+}
+
+function markSpeakerStart(meeting: MeetingData, userId: string) {
+  const states = getSpeakerStates(meeting);
+  const existing = states.get(userId) ?? { active: false };
+  states.set(userId, { ...existing, active: true, lastStartMs: Date.now() });
+  meeting.audioData.speakerStates = states;
+}
+
+function markSpeakerEnd(meeting: MeetingData, userId: string) {
+  const states = getSpeakerStates(meeting);
+  const existing = states.get(userId) ?? { active: false };
+  states.set(userId, { ...existing, active: false, lastEndMs: Date.now() });
+  meeting.audioData.speakerStates = states;
+}
+
+function getAudioBytes(audio: AudioSnippet): number {
+  if (typeof audio.audioBytes === "number") {
+    return audio.audioBytes;
+  }
+  return audio.chunks.reduce((acc, cur) => acc + cur.length, 0);
+}
+
 function cloneSnippet(snippet: AudioSnippet): AudioSnippet {
   return {
     ...snippet,
@@ -73,6 +110,12 @@ function getTranscriptionTiming(meeting: MeetingData) {
     minSnippetSeconds:
       runtime?.transcription.minSnippetSeconds ?? MINIMUM_TRANSCRIPTION_LENGTH,
     maxSnippetMs: runtime?.transcription.maxSnippetMs ?? MAX_SNIPPET_LENGTH,
+    fastFinalizationEnabled:
+      runtime?.transcription.fastFinalizationEnabled ?? false,
+    interjectionEnabled: runtime?.transcription.interjectionEnabled ?? false,
+    interjectionMinSpeakerSeconds:
+      runtime?.transcription.interjectionMinSpeakerSeconds ??
+      MINIMUM_TRANSCRIPTION_LENGTH,
   };
 }
 
@@ -178,6 +221,7 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
   snippet.fastRevision = revision;
 
   const snapshot = cloneSnippet(snippet);
+  const snapshotBytes = getAudioBytes(snapshot);
   void transcribeSnippet(meeting, snapshot, {
     tempSuffix: `fast-${revision}`,
   })
@@ -197,6 +241,7 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
       audioFileData.fastTranscripts.push(entry);
       audioFileData.transcript = transcription;
       snippet.fastTranscribed = true;
+      snippet.lastFastTranscriptBytes = snapshotBytes;
       void maybeRespondLive(meeting, {
         userId: snippet.userId,
         text: transcription,
@@ -249,10 +294,29 @@ export function startProcessingSnippet(
 
   const promises: Promise<void>[] = [];
 
-  const { minSnippetSeconds } = getTranscriptionTiming(meeting);
+  const { minSnippetSeconds, fastFinalizationEnabled } =
+    getTranscriptionTiming(meeting);
   const duration = getAudioDuration(snippet);
   const hasAudio = snippet.chunks.length > 0;
-  if (hasAudio && (duration > minSnippetSeconds || options.forceTranscribe)) {
+  const latestFastTranscript =
+    audioFileData.fastTranscripts?.[audioFileData.fastTranscripts.length - 1];
+  const latestFastText =
+    latestFastTranscript && latestFastTranscript.text.trim().length > 0
+      ? latestFastTranscript.text
+      : undefined;
+  const fastCoversSnippet =
+    fastFinalizationEnabled &&
+    !options.forceTranscribe &&
+    hasAudio &&
+    Boolean(latestFastText) &&
+    snippet.lastFastTranscriptBytes !== undefined &&
+    getAudioBytes(snippet) === snippet.lastFastTranscriptBytes;
+  if (fastCoversSnippet && latestFastText) {
+    audioFileData.transcript = latestFastText;
+  } else if (
+    hasAudio &&
+    (duration > minSnippetSeconds || options.forceTranscribe)
+  ) {
     promises.push(
       transcribeSnippet(meeting, snippet)
         .then(async (transcription) => {
@@ -319,6 +383,38 @@ export function startProcessingSnippet(
   });
 
   meeting.audioData.currentSnippets.delete(userId); // Remove snippet after processing
+}
+
+function maybeFinalizeSnippetsForInterjection(
+  meeting: MeetingData,
+  interjectorId: string,
+  interjectorSnippet: AudioSnippet,
+) {
+  const { interjectionEnabled, interjectionMinSpeakerSeconds, slowSilenceMs } =
+    getTranscriptionTiming(meeting);
+  if (!interjectionEnabled) return;
+  if (interjectorSnippet.interjectionTriggered) return;
+  const duration = getAudioDuration(interjectorSnippet);
+  if (duration < interjectionMinSpeakerSeconds) return;
+
+  interjectorSnippet.interjectionTriggered = true;
+  const interjectionStartMs =
+    getSpeakerState(meeting, interjectorId)?.lastStartMs ??
+    interjectorSnippet.timestamp;
+
+  meeting.audioData.currentSnippets.forEach((snippet, userId) => {
+    if (userId === interjectorId) return;
+    if (snippet.interjectionForced) return;
+    const state = getSpeakerState(meeting, userId);
+    if (!state || state.active || !state.lastEndMs) return;
+    if (interjectionStartMs < state.lastEndMs) return;
+    if (interjectionStartMs - state.lastEndMs > slowSilenceMs) return;
+    snippet.interjectionForced = true;
+    clearSnippetTimer(meeting, userId);
+    startProcessingSnippet(meeting, userId, {
+      skipLiveVoice: Boolean(snippet.fastTranscribed),
+    });
+  });
 }
 
 // Set timers to run fast transcription and finalize the snippet after silence
@@ -429,11 +525,20 @@ export async function subscribeToUserVoice(
     const snippet = meeting.audioData.currentSnippets.get(userId);
     if (snippet) {
       snippet.chunks.push(chunk);
+      snippet.audioBytes = (snippet.audioBytes ?? 0) + chunk.length;
+      maybeFinalizeSnippetsForInterjection(meeting, userId, snippet);
     }
   });
 }
 
+export function userStartTalking(meeting: MeetingData, userId: string) {
+  markSpeakerStart(meeting, userId);
+  clearSnippetTimer(meeting, userId);
+  updateSnippetsIfNecessary(meeting, userId);
+}
+
 export function userStopTalking(meeting: MeetingData, userId: string) {
+  markSpeakerEnd(meeting, userId);
   const pending = meeting.liveVoiceCommandPending;
   if (pending && pending.expiresAt > Date.now() && pending.userId === userId) {
     clearSnippetTimer(meeting, userId);
@@ -461,8 +566,7 @@ export async function waitForAudioOnlyFinishProcessing(meeting: MeetingData) {
 
 function getAudioDuration(audio: AudioSnippet): number {
   return (
-    audio.chunks.reduce((acc, cur) => acc + cur.length, 0) /
-    (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)
+    getAudioBytes(audio) / (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)
   );
 }
 

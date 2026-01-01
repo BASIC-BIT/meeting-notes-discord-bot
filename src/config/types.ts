@@ -75,6 +75,9 @@ export type MeetingRuntimeConfig = {
     slowSilenceMs: number;
     minSnippetSeconds: number;
     maxSnippetMs: number;
+    fastFinalizationEnabled: boolean;
+    interjectionEnabled: boolean;
+    interjectionMinSpeakerSeconds: number;
   };
   premiumTranscription: {
     enabled: boolean;

@@ -1,10 +1,10 @@
+import { isDiscordApiError } from "./discordService";
 import {
-  getGuildMember,
-  isDiscordApiError,
-  listBotGuilds,
-  listGuildRoles,
-  listUserGuilds,
-} from "./discordService";
+  getGuildMemberCached,
+  listBotGuildsCached,
+  listGuildRolesCached,
+  listUserGuildsCached,
+} from "./discordCacheService";
 import type { Session, SessionData } from "express-session";
 import type {
   DiscordGuild,
@@ -37,6 +37,7 @@ type EnsureManageGuildOptions = {
 
 type EnsureUserGuildOptions = {
   session?: GuildSessionCache;
+  userId?: string;
 };
 
 const isCacheFresh = (fetchedAt: number | undefined, ttlMs: number) =>
@@ -107,13 +108,16 @@ const storeUserGuilds = (
 
 const getUserGuildsWithCache = async (
   accessToken: string,
-  session?: GuildSessionCache,
+  options?: EnsureUserGuildOptions,
 ) => {
-  const cached = getCachedUserGuilds(session);
+  const cached = getCachedUserGuilds(options?.session);
   if (cached) return cached;
-  const guilds = await listUserGuilds(accessToken);
-  if (session) {
-    storeUserGuilds(session, guilds);
+  const guilds = await listUserGuildsCached({
+    accessToken,
+    userId: options?.userId,
+  });
+  if (options?.session) {
+    storeUserGuilds(options.session, guilds);
   }
   return guilds;
 };
@@ -170,8 +174,8 @@ const checkManageGuildWithBot = async (
 > => {
   try {
     const [roles, member] = await Promise.all([
-      listGuildRoles(guildId),
-      getGuildMember(guildId, userId),
+      listGuildRolesCached(guildId),
+      getGuildMemberCached(guildId, userId),
     ]);
     const permissions = computePermissionsFromRoles(roles, member, guildId);
     return { status: "ok", allowed: hasManageGuildPermissions(permissions) };
@@ -221,7 +225,10 @@ export async function ensureManageGuildWithUserToken(
     }
   }
   try {
-    const guilds = await getUserGuildsWithCache(userAccessToken, session);
+    const guilds = await getUserGuildsWithCache(userAccessToken, {
+      session,
+      userId: options?.userId,
+    });
     const allowed = resolveManageFromUserGuilds(guilds, guildId);
     writeManageCache(session, guildId, allowed);
     return allowed;
@@ -246,10 +253,10 @@ export async function ensureUserInGuild(
     return cachedGuildIds.includes(guildId);
   }
   try {
-    const guilds = await getUserGuildsWithCache(
-      userAccessToken,
-      options?.session,
-    );
+    const guilds = await getUserGuildsWithCache(userAccessToken, {
+      session: options?.session,
+      userId: options?.userId,
+    });
     const ok = guilds.some((g) => g.id === guildId);
     if (!ok) {
       console.warn("ensureUserInGuild missing guild", {
@@ -273,7 +280,7 @@ export async function ensureBotInGuild(
   guildId: string,
 ): Promise<boolean | null> {
   try {
-    const guilds = await listBotGuilds();
+    const guilds = await listBotGuildsCached();
     return guilds.some((g) => g.id === guildId);
   } catch (err) {
     if (isDiscordApiError(err) && err.status === 429) {

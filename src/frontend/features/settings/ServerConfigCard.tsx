@@ -112,6 +112,12 @@ const resolveEntryDraft = (
   };
 };
 
+const toGroupTestId = (group: string) =>
+  `settings-config-group-${group.toLowerCase().replace(/\s+/g, "-")}`;
+
+const formatTierLabel = (tier?: ConfigTier) =>
+  tier ? tier.charAt(0).toUpperCase() + tier.slice(1) : "Required";
+
 const formatInheritedStatus = (source: string, value: unknown) => {
   if (value === "") return "Status: Default (empty)";
   if (value === undefined || value === null) return "Status: Needs value";
@@ -120,15 +126,6 @@ const formatInheritedStatus = (source: string, value: unknown) => {
   if (source === "experimental") return "Status: Experimental default";
   if (source === "gated") return "Status: Locked";
   return `Status: Inherited from ${formatSourceLabel(source)}`;
-};
-
-const isEntryGated = (
-  entry: ConfigEntryInput,
-  tier: ConfigTier | undefined,
-  experimentalEnabled: boolean,
-) => {
-  if (!isTierAllowed(tier, entry.minTier)) return true;
-  return Boolean(entry.requiresExperimentalTag && !experimentalEnabled);
 };
 
 export function ServerConfigCard({
@@ -494,19 +491,30 @@ export function ServerConfigCard({
     );
   };
 
-  const renderEntry = (entry: ConfigEntryInput) => {
+  const renderEntry = (entry: ConfigEntryInput, group?: string) => {
     const scopeConfig = resolveScopeConfigInput(entry, "server");
     const entryDraft = resolveEntryDraft(entry, scopeConfig, draft, snapshot);
     const resolved = snapshot?.values[entry.key];
     const resolvedSource = resolved?.source ?? "appconfig";
     const resolvedValue = resolved?.value;
-    const isGated = isEntryGated(entry, snapshot?.tier, experimentalEnabled);
+    const isExperimentalGroup = group === "Experimental";
+    const isExperimentalToggle =
+      entry.key === CONFIG_KEYS.features.experimental;
+    const isTierLocked = !isTierAllowed(snapshot?.tier, entry.minTier);
+    const isExperimentalLocked =
+      Boolean(entry.requiresExperimentalTag) && !experimentalEnabled;
+    const isLocked = isExperimentalGroup
+      ? !isExperimentalToggle && (isExperimentalLocked || isTierLocked)
+      : isExperimentalLocked || isTierLocked;
     const isOverridden = entryDraft.mode === "override";
+    const showLockedStatus = !isExperimentalGroup && isLocked;
     const fallbackSource =
-      !isGated && resolvedSource === "gated" ? "appconfig" : resolvedSource;
+      !showLockedStatus && resolvedSource === "gated"
+        ? "appconfig"
+        : resolvedSource;
     const statusLabel = isOverridden
       ? "Status: Overridden"
-      : isGated
+      : showLockedStatus
         ? "Status: Locked"
         : formatInheritedStatus(fallbackSource, resolvedValue);
     const entryTestId = `settings-config-entry-${entry.key}`;
@@ -518,7 +526,7 @@ export function ServerConfigCard({
       : isMissingRequired
         ? "Required"
         : undefined;
-    const valueDisabled = busy || saving;
+    const valueDisabled = busy || saving || isLocked;
     const canReset =
       isOverridden && snapshot !== undefined && !isMissingRequired;
     const tone = isOverridden ? "default" : "soft";
@@ -549,7 +557,7 @@ export function ServerConfigCard({
             uiContext={uiContext}
           />
 
-          {isGated ? (
+          {showLockedStatus ? (
             <EntryGateAlert
               entry={entry}
               tier={snapshot?.tier}
@@ -558,6 +566,92 @@ export function ServerConfigCard({
           ) : null}
         </Stack>
       </Surface>
+    );
+  };
+
+  const renderGroupSections = (
+    group: string,
+    groupEntries: Map<string, ConfigEntryInput[]>,
+  ) => {
+    const isExperimentalGroup = group === "Experimental";
+    const flattenedEntries = Array.from(groupEntries.values()).flat();
+    const gatedEntries = flattenedEntries.filter(
+      (entry) => entry.key !== CONFIG_KEYS.features.experimental,
+    );
+    const needsExperimental = isExperimentalGroup && !experimentalEnabled;
+    const maxTier = gatedEntries.reduce<ConfigTier | undefined>(
+      (acc, entry) => {
+        if (!entry.minTier) return acc;
+        if (!acc) return entry.minTier;
+        return TIER_ORDER[entry.minTier] > TIER_ORDER[acc]
+          ? entry.minTier
+          : acc;
+      },
+      undefined,
+    );
+    const needsTier =
+      isExperimentalGroup &&
+      gatedEntries.some(
+        (entry) => !isTierAllowed(snapshot?.tier, entry.minTier),
+      );
+    let gateMessage: string | null = null;
+    if (needsExperimental && needsTier) {
+      gateMessage = `Enable experimental features or upgrade to ${formatTierLabel(
+        maxTier,
+      )} to edit these settings.`;
+    } else if (needsExperimental) {
+      gateMessage = "Enable experimental features to edit these settings.";
+    } else if (needsTier) {
+      gateMessage = `Upgrade to ${formatTierLabel(
+        maxTier,
+      )} to edit these settings.`;
+    }
+
+    let gateInserted = false;
+
+    return (
+      <Stack gap="sm" data-testid={toGroupTestId(group)}>
+        {Array.from(groupEntries.entries()).map(
+          ([category, categoryEntries]) => (
+            <Stack key={`${group}-${category}`} gap="sm">
+              <Text fw={600}>{category}</Text>
+              {categoryEntries.map((entry) => {
+                const entryNode = renderEntry(entry, group);
+                const shouldInsertGate =
+                  isExperimentalGroup &&
+                  gateMessage &&
+                  !gateInserted &&
+                  entry.key === CONFIG_KEYS.features.experimental;
+                if (shouldInsertGate) {
+                  gateInserted = true;
+                  return (
+                    <Stack key={entry.key} gap="sm">
+                      {entryNode}
+                      <Alert
+                        icon={<IconAlertTriangle size={16} />}
+                        color="yellow"
+                        variant="light"
+                      >
+                        {gateMessage}
+                      </Alert>
+                    </Stack>
+                  );
+                }
+                return <Stack key={entry.key}>{entryNode}</Stack>;
+              })}
+            </Stack>
+          ),
+        )}
+        {!gateInserted && gateMessage ? (
+          <Alert
+            icon={<IconAlertTriangle size={16} />}
+            color="yellow"
+            variant="light"
+          >
+            {gateMessage}
+          </Alert>
+        ) : null}
+      </Stack>
     );
   };
 
@@ -589,7 +683,12 @@ export function ServerConfigCard({
             </ThemeIcon>
             <Text fw={600}>Server configuration</Text>
           </Group>
-          <Button variant="light" onClick={handleSave} disabled={saveDisabled}>
+          <Button
+            variant="light"
+            onClick={handleSave}
+            disabled={saveDisabled}
+            data-testid="settings-save-config"
+          >
             Save settings
           </Button>
         </Group>
@@ -618,7 +717,9 @@ export function ServerConfigCard({
           {attentionEntries.length > 0 ? (
             <Stack gap="sm">
               <Text fw={600}>Needs attention</Text>
-              {attentionEntries.map(renderEntry)}
+              {attentionEntries.map((entry) =>
+                renderEntry(entry, resolveConfigGroup(entry)),
+              )}
             </Stack>
           ) : null}
 
@@ -628,14 +729,7 @@ export function ServerConfigCard({
             return (
               <Stack key={group} gap="sm">
                 <Text fw={600}>{group}</Text>
-                {Array.from(groupEntries.entries()).map(
-                  ([category, categoryEntries]) => (
-                    <Stack key={`${group}-${category}`} gap="sm">
-                      <Text fw={600}>{category}</Text>
-                      {categoryEntries.map(renderEntry)}
-                    </Stack>
-                  ),
-                )}
+                {renderGroupSections(group, groupEntries)}
               </Stack>
             );
           })}
@@ -649,14 +743,7 @@ export function ServerConfigCard({
                   <Accordion.Item key={group} value={group}>
                     <Accordion.Control>{group}</Accordion.Control>
                     <Accordion.Panel>
-                      {Array.from(groupEntries.entries()).map(
-                        ([category, categoryEntries]) => (
-                          <Stack key={`${group}-${category}`} gap="sm">
-                            <Text fw={600}>{category}</Text>
-                            {categoryEntries.map(renderEntry)}
-                          </Stack>
-                        ),
-                      )}
+                      {renderGroupSections(group, groupEntries)}
                     </Accordion.Panel>
                   </Accordion.Item>
                 );

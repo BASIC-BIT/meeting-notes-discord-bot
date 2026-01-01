@@ -42,7 +42,7 @@ test("settings page shows overrides and updates tags (mock)", async ({
   await chatTtsVoiceEntry.getByLabel("chatTts.voice").click();
   await page.getByRole("option", { name: "Alloy" }).click();
 
-  await page.getByRole("button", { name: /save settings/i }).click();
+  await settingsPage.saveConfigButton().click();
 
   const override = mockSettings.overrideChannelName
     ? settingsPage.overrideByName(mockSettings.overrideChannelName)

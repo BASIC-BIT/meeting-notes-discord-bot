@@ -14,8 +14,13 @@ import {
   ensureManageGuildWithUserToken,
   ensureUserInGuild,
 } from "../services/guildAccessService";
+import {
+  listBotGuildsCached,
+  listGuildChannelsCached,
+  listUserGuildsCached,
+} from "../services/discordCacheService";
+import type { DiscordGuild } from "../repositories/types";
 import { answerQuestionService } from "../services/askService";
-import { config } from "../services/configService";
 import {
   getSnapshotString,
   resolveConfigSnapshot,
@@ -25,6 +30,15 @@ import { normalizeTags, parseTags } from "../utils/tags";
 type AuthedUser = {
   accessToken?: string;
   id?: string;
+};
+
+type SessionGuildCache = {
+  guildIds?: string[];
+  guildIdsFetchedAt?: number;
+  userGuilds?: DiscordGuild[];
+  userGuildsFetchedAt?: number;
+  botGuildIds?: string[];
+  botGuildIdsFetchedAt?: number;
 };
 
 export function registerGuildRoutes(app: express.Express) {
@@ -314,25 +328,13 @@ export function registerGuildRoutes(app: express.Express) {
         res.status(401).json({ error: "No access token. Please re-login." });
         return;
       }
-      const sessionData = req.session as typeof req.session & {
-        guildIds?: string[];
-        guildIdsFetchedAt?: number;
-        userGuilds?: Array<{
-          id: string;
-          name: string;
-          icon?: string;
-          permissions: string;
-          owner?: boolean;
-        }>;
-        userGuildsFetchedAt?: number;
-        botGuildIds?: string[];
-        botGuildIdsFetchedAt?: number;
-      };
+      const sessionData = req.session as typeof req.session & SessionGuildCache;
       const cachedGuilds = sessionData.guildIds ?? [];
       const cachedHasGuild = cachedGuilds.includes(guildId);
       if (!cachedHasGuild) {
         const accessCheck = await ensureUserInGuild(user.accessToken, guildId, {
           session: req.session,
+          userId: user.id,
         });
         if (accessCheck === null) {
           res
@@ -353,22 +355,7 @@ export function registerGuildRoutes(app: express.Express) {
         return;
       }
       try {
-        const resp = await fetch(
-          `https://discord.com/api/guilds/${guildId}/channels`,
-          {
-            headers: { Authorization: `Bot ${config.discord.botToken}` },
-          },
-        );
-        if (!resp.ok) {
-          res.status(500).json({ error: "Unable to fetch guild channels" });
-          return;
-        }
-        const channels = (await resp.json()) as Array<{
-          id: string;
-          name: string;
-          type: number;
-          position?: number;
-        }>;
+        const channels = await listGuildChannelsCached(guildId);
         const voiceTypes = new Set([2, 13]);
         const textTypes = new Set([0, 5]);
         const byPosition = (
@@ -434,54 +421,18 @@ export function registerGuildRoutes(app: express.Express) {
       return;
     }
     try {
-      const userGuildsResp = await fetch(
-        "https://discord.com/api/users/@me/guilds",
-        {
-          headers: { Authorization: `Bearer ${user.accessToken}` },
-        },
-      );
-      if (!userGuildsResp.ok) {
-        res.status(500).json({ error: "Unable to fetch user guilds" });
-        return;
-      }
-      const userGuilds = (await userGuildsResp.json()) as Array<{
-        id: string;
-        name: string;
-        icon?: string;
-        permissions: string;
-        owner?: boolean;
-      }>;
+      const userGuilds = await listUserGuildsCached({
+        accessToken: user.accessToken,
+        userId: user.id,
+      });
 
-      const sessionData = req.session as typeof req.session & {
-        guildIds?: string[];
-        guildIdsFetchedAt?: number;
-        userGuilds?: Array<{
-          id: string;
-          name: string;
-          icon?: string;
-          permissions: string;
-          owner?: boolean;
-        }>;
-        userGuildsFetchedAt?: number;
-        botGuildIds?: string[];
-        botGuildIdsFetchedAt?: number;
-      };
+      const sessionData = req.session as typeof req.session & SessionGuildCache;
       sessionData.guildIds = userGuilds.map((guild) => guild.id);
       sessionData.guildIdsFetchedAt = Date.now();
       sessionData.userGuilds = userGuilds;
       sessionData.userGuildsFetchedAt = sessionData.guildIdsFetchedAt;
 
-      const botGuildsResp = await fetch(
-        "https://discord.com/api/users/@me/guilds",
-        {
-          headers: { Authorization: `Bot ${config.discord.botToken}` },
-        },
-      );
-      if (!botGuildsResp.ok) {
-        res.status(500).json({ error: "Unable to fetch bot guilds" });
-        return;
-      }
-      const botGuilds = (await botGuildsResp.json()) as Array<{ id: string }>;
+      const botGuilds = await listBotGuildsCached();
       const botGuildIds = new Set(botGuilds.map((g) => g.id));
       sessionData.botGuildIds = botGuilds.map((guild) => guild.id);
       sessionData.botGuildIdsFetchedAt = Date.now();
@@ -492,7 +443,7 @@ export function registerGuildRoutes(app: express.Express) {
       const eligible = userGuilds
         .filter((g) => botGuildIds.has(g.id))
         .filter((g) => {
-          const perms = BigInt(g.permissions);
+          const perms = BigInt(g.permissions ?? "0");
           return (
             g.owner ||
             (perms & BigInt(MANAGE_GUILD)) !== BigInt(0) ||

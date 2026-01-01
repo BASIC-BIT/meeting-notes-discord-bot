@@ -14,10 +14,9 @@ import {
 import { DiscordGatewayAdapterCreator } from "@discordjs/voice/dist";
 import { AudioSnippet } from "./types/audio";
 import {
-  clearSnippetTimer,
   openOutputFile,
   subscribeToUserVoice,
-  updateSnippetsIfNecessary,
+  userStartTalking,
   userStopTalking,
 } from "./audio";
 import {
@@ -276,8 +275,7 @@ export async function initializeMeeting(
 
   // Set up speaking event handlers
   receiver.speaking.on("start", (userId) => {
-    clearSnippetTimer(meeting, userId);
-    updateSnippetsIfNecessary(meeting, userId);
+    userStartTalking(meeting, userId);
   });
 
   receiver.speaking.on("end", (userId) => {

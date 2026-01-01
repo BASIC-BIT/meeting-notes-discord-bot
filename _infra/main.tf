@@ -346,21 +346,21 @@ provider "github" {
   token = var.GITHUB_TOKEN
 }
 
-locals {
-  name_prefix             = "${var.project_name}-${var.environment}"
-  transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "${local.name_prefix}-transcripts-${data.aws_caller_identity.current.account_id}"
-  frontend_bucket_name    = var.FRONTEND_BUCKET != "" ? var.FRONTEND_BUCKET : "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}"
+  locals {
+    name_prefix             = "${var.project_name}-${var.environment}"
+    transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "${local.name_prefix}-transcripts-${data.aws_caller_identity.current.account_id}"
+    frontend_bucket_name    = var.FRONTEND_BUCKET != "" ? var.FRONTEND_BUCKET : "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}"
   frontend_cert_arn = var.FRONTEND_CERT_ARN != "" ? var.FRONTEND_CERT_ARN : (
     length(aws_acm_certificate_validation.frontend_cert) > 0 ? aws_acm_certificate_validation.frontend_cert[0].certificate_arn : ""
   )
   api_cert_arn = var.API_CERT_ARN != "" ? var.API_CERT_ARN : (
     length(aws_acm_certificate_validation.api_cert) > 0 ? aws_acm_certificate_validation.api_cert[0].certificate_arn : ""
   )
-  api_base_url = var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}" : "http://${aws_lb.api_alb.dns_name}"
-  discord_callback_url = var.DISCORD_CALLBACK_URL != "" ? var.DISCORD_CALLBACK_URL : (
-    var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}/auth/discord/callback" : ""
-  )
-}
+    api_base_url = var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}" : "http://${aws_lb.api_alb.dns_name}"
+    discord_callback_url = var.DISCORD_CALLBACK_URL != "" ? var.DISCORD_CALLBACK_URL : (
+      var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}/auth/discord/callback" : ""
+    )
+  }
 
 resource "aws_ecr_repository" "app_ecr_repo" {
   name                 = "${local.name_prefix}-bot-repo"
@@ -1147,10 +1147,14 @@ resource "aws_ecs_task_definition" "app_task" {
           name  = "OPENAI_ORGANIZATION_ID"
           value = var.OPENAI_ORGANIZATION_ID
         },
-        {
-          name  = "OPENAI_PROJECT_ID"
-          value = var.OPENAI_PROJECT_ID
-        },
+          {
+            name  = "OPENAI_PROJECT_ID"
+            value = var.OPENAI_PROJECT_ID
+          },
+          {
+            name  = "REDIS_URL"
+            value = local.redis_url
+          },
         {
           name  = "LANGFUSE_BASE_URL"
           value = var.LANGFUSE_BASE_URL

@@ -59,7 +59,7 @@ test("server config saves overrides to the mock repository", async ({
   await tagsInput.fill("campaign, weekly");
   await tagsInput.blur();
 
-  await page.getByRole("button", { name: /save settings/i }).click();
+  await settingsPage.saveConfigButton().click();
 
   const client = createClient();
   await expect

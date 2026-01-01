@@ -28,3 +28,7 @@ src/services/unifiedConfigService.ts:(anonymous)
 src\services\unifiedConfigService.ts:(anonymous)
 src/trpc/routers/context.ts:(anonymous)
 src\trpc\routers\context.ts:(anonymous)
+src/services/contextService.ts:formatContextForPrompt
+src\services\contextService.ts:formatContextForPrompt
+src/audio.ts:getAudioBytes
+src\audio.ts:getAudioBytes

@@ -105,6 +105,14 @@ test.describe("visual regression", () => {
     await waitForVisualReady(page);
     await expect(settingsPage.root()).toHaveScreenshot("settings.png");
 
+    await settingsPage.expandGroup("Experimental");
+    const experimentalGroup = settingsPage.groupByName("Experimental");
+    await expect(experimentalGroup).toBeVisible();
+    await waitForVisualReady(page);
+    await expect(experimentalGroup).toHaveScreenshot(
+      "settings-experimental.png",
+    );
+
     await settingsPage.openFirstOverrideEdit();
     const settingsDialog = page.getByRole("dialog", {
       name: /channel settings/i,

@@ -47,6 +47,21 @@ export async function resolveMeetingRuntimeConfig(input: {
       maxSnippetMs: Number(
         requireValue(snapshot, CONFIG_KEYS.transcription.maxSnippetMs),
       ),
+      fastFinalizationEnabled: Boolean(
+        requireValue(
+          snapshot,
+          CONFIG_KEYS.transcription.fastFinalizationEnabled,
+        ),
+      ),
+      interjectionEnabled: Boolean(
+        requireValue(snapshot, CONFIG_KEYS.transcription.interjectionEnabled),
+      ),
+      interjectionMinSpeakerSeconds: Number(
+        requireValue(
+          snapshot,
+          CONFIG_KEYS.transcription.interjectionMinSpeakerSeconds,
+        ),
+      ),
     },
     premiumTranscription: {
       enabled: Boolean(

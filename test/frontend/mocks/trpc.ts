@@ -4,6 +4,7 @@ import type {
   AskMessage,
   AskSharedConversation,
 } from "../../../src/types/ask";
+import type { DictionaryItem } from "../../../src/utils/dictionary";
 import type { AutoRecordSettings, ChannelContext } from "../../../src/types/db";
 import type { MeetingStatus } from "../../../src/types/meetingLifecycle";
 import type { PaidPlan } from "../../../src/types/pricing";
@@ -117,6 +118,7 @@ type ContextData = {
   askSharingPolicy?: "off" | "server" | "public" | null;
 };
 type ChannelContextsData = { contexts: ChannelContext[] };
+type DictionaryListData = { entries: DictionaryItem[] };
 type ConfigSnapshot = {
   values: Record<string, { value?: unknown; gated?: boolean; source?: string }>;
   tier?: "free" | "basic" | "pro";
@@ -230,6 +232,9 @@ export const contextQuery = buildQueryState<ContextData | null>(null);
 export const channelContextsQuery = buildQueryState<ChannelContextsData>({
   contexts: [],
 });
+export const dictionaryListQuery = buildQueryState<DictionaryListData>({
+  entries: [],
+});
 export const configServerQuery = buildQueryState<ConfigServerData>({
   registry: [],
   snapshot: { values: {}, tier: "free", missingRequired: [] },
@@ -272,6 +277,18 @@ export const channelContextsSetMutation = buildMutationState<[unknown], void>(
 export const channelContextsClearMutation = buildMutationState<[unknown], void>(
   undefined,
 );
+export const dictionaryUpsertMutation = buildMutationState<
+  [unknown],
+  { entry: DictionaryItem }
+>({ entry: { term: "Example" } });
+export const dictionaryRemoveMutation = buildMutationState<
+  [unknown],
+  { ok: true }
+>({ ok: true });
+export const dictionaryClearMutation = buildMutationState<
+  [unknown],
+  { ok: true }
+>({ ok: true });
 export const configSetServerMutation = buildMutationState<[unknown], void>(
   undefined,
 );
@@ -320,6 +337,9 @@ export const trpcUtils = {
   channelContexts: {
     list: { invalidate: jest.fn<Promise<void>, [unknown]>() },
   },
+  dictionary: {
+    list: { invalidate: jest.fn<Promise<void>, [unknown]>() },
+  },
   config: {
     server: { invalidate: jest.fn<Promise<void>, [unknown]>() },
     global: { invalidate: jest.fn<Promise<void>, [unknown]>() },
@@ -357,6 +377,7 @@ export const resetTrpcMocks = () => {
   resetQueryState(autorecordListQuery, { rules: [] });
   resetQueryState(contextQuery, null);
   resetQueryState(channelContextsQuery, { contexts: [] });
+  resetQueryState(dictionaryListQuery, { entries: [] });
   resetQueryState(configServerQuery, {
     registry: [],
     snapshot: { values: {}, tier: "free", missingRequired: [] },
@@ -384,6 +405,9 @@ export const resetTrpcMocks = () => {
   resetMutationState(contextSetMutation, undefined);
   resetMutationState(channelContextsSetMutation, undefined);
   resetMutationState(channelContextsClearMutation, undefined);
+  resetMutationState(dictionaryUpsertMutation, { entry: { term: "Example" } });
+  resetMutationState(dictionaryRemoveMutation, { ok: true });
+  resetMutationState(dictionaryClearMutation, { ok: true });
   resetMutationState(configSetServerMutation, undefined);
   resetMutationState(configClearServerMutation, undefined);
   resetMutationState(configPublishGlobalMutation, undefined);
@@ -413,6 +437,8 @@ export const resetTrpcMocks = () => {
   trpcUtils.autorecord.list.invalidate.mockResolvedValue(undefined);
   trpcUtils.channelContexts.list.invalidate.mockReset();
   trpcUtils.channelContexts.list.invalidate.mockResolvedValue(undefined);
+  trpcUtils.dictionary.list.invalidate.mockReset();
+  trpcUtils.dictionary.list.invalidate.mockResolvedValue(undefined);
   trpcUtils.config.server.invalidate.mockReset();
   trpcUtils.config.server.invalidate.mockResolvedValue(undefined);
   trpcUtils.config.global.invalidate.mockReset();
@@ -501,6 +527,12 @@ export const setChannelContextsQuery = (
   Object.assign(channelContextsQuery, next);
 };
 
+export const setDictionaryListQuery = (
+  next: Partial<QueryState<DictionaryListData>>,
+) => {
+  Object.assign(dictionaryListQuery, next);
+};
+
 export const setConfigServerQuery = (
   next: Partial<QueryState<ConfigServerData>>,
 ) => {
@@ -571,6 +603,12 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
       list: { useQuery: () => channelContextsQuery },
       set: { useMutation: () => channelContextsSetMutation },
       clear: { useMutation: () => channelContextsClearMutation },
+    },
+    dictionary: {
+      list: { useQuery: () => dictionaryListQuery },
+      upsert: { useMutation: () => dictionaryUpsertMutation },
+      remove: { useMutation: () => dictionaryRemoveMutation },
+      clear: { useMutation: () => dictionaryClearMutation },
     },
     config: {
       server: { useQuery: () => configServerQuery },
