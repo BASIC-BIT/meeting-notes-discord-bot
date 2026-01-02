@@ -126,6 +126,7 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
           offsetScrollbars
           type="always"
           scrollbarSize={10}
+          data-visual-scroll
           data-testid="ask-list"
           styles={{
             viewport: {

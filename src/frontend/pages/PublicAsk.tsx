@@ -25,6 +25,7 @@ import SiteFooter from "../components/SiteFooter";
 import SiteHeader from "../components/SiteHeader";
 import Surface from "../components/Surface";
 import { trpc } from "../services/trpc";
+import { useVisualMode } from "../hooks/useVisualMode";
 import { getDiscordOpenUrl } from "../utils/discordLinks";
 import {
   appBackground,
@@ -46,6 +47,7 @@ export default function PublicAsk() {
   const theme = useMantineTheme();
   const colorScheme = useComputedColorScheme("dark");
   const isDark = colorScheme === "dark";
+  const visualMode = useVisualMode();
   const params = useParams({ strict: false }) as {
     serverId?: string;
     conversationId?: string;
@@ -111,6 +113,7 @@ export default function PublicAsk() {
           type="always"
           offsetScrollbars
           scrollbarSize={10}
+          data-visual-scroll
           styles={{
             viewport: {
               paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
@@ -187,16 +190,40 @@ export default function PublicAsk() {
     <AppShell
       padding={0}
       header={{ height: shellHeights.header }}
+      style={{
+        minHeight: visualMode ? "100vh" : undefined,
+        height: visualMode ? "auto" : undefined,
+        overflow: visualMode ? "visible" : undefined,
+      }}
       styles={{
-        header: {
-          borderBottom: shellBorder(theme, isDark),
-          backgroundColor: shellHeaderBackground(isDark),
-          backdropFilter: "blur(16px)",
-          boxShadow: shellShadow(isDark),
-        },
-        main: {
-          backgroundColor: appBackground(theme, isDark),
-        },
+        header: visualMode
+          ? {
+              borderBottom: shellBorder(theme, isDark),
+              backgroundColor: shellHeaderBackground(isDark),
+              backdropFilter: "blur(16px)",
+              boxShadow: shellShadow(isDark),
+              position: "static",
+            }
+          : {
+              borderBottom: shellBorder(theme, isDark),
+              backgroundColor: shellHeaderBackground(isDark),
+              backdropFilter: "blur(16px)",
+              boxShadow: shellShadow(isDark),
+            },
+        main: visualMode
+          ? {
+              backgroundColor: appBackground(theme, isDark),
+              paddingTop: 0,
+              paddingBottom: 0,
+              paddingInlineStart: 0,
+              paddingInlineEnd: 0,
+              minHeight: "auto",
+              height: "auto",
+              overflow: "visible",
+            }
+          : {
+              backgroundColor: appBackground(theme, isDark),
+            },
       }}
     >
       <AppShell.Header p="md">

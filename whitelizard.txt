@@ -20,12 +20,16 @@ src/frontend/pages/Settings.tsx:(anonymous)
 src\frontend\pages\Settings.tsx:(anonymous)
 src/frontend/pages/AdminConfig.tsx:useAdminConfigState
 src\frontend\pages\AdminConfig.tsx:useAdminConfigState
+src/frontend/layouts/PortalLayout.tsx:PortalLayout
+src\frontend\layouts\PortalLayout.tsx:PortalLayout
 src/services/appConfigService.ts:getGlobalConfigValues
 src\services\appConfigService.ts:getGlobalConfigValues
 src/services/unifiedConfigService.ts:coerceValue
 src\services\unifiedConfigService.ts:coerceValue
 src/services/unifiedConfigService.ts:(anonymous)
 src\services\unifiedConfigService.ts:(anonymous)
+src/trpc/routers/billing.ts:(anonymous)
+src\trpc\routers\billing.ts:(anonymous)
 src/trpc/routers/context.ts:(anonymous)
 src\trpc\routers\context.ts:(anonymous)
 src/services/contextService.ts:formatContextForPrompt

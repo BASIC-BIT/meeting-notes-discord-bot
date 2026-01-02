@@ -952,6 +952,7 @@ export default function Ask() {
                   type="always"
                   offsetScrollbars
                   scrollbarSize={10}
+                  data-visual-scroll
                   data-testid="ask-messages"
                   styles={{
                     viewport: {

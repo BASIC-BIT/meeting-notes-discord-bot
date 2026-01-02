@@ -628,7 +628,11 @@ export default function Library() {
                       {meeting.summary}
                     </Text>
                     <Divider my="sm" />
-                    <ScrollArea h={fullScreen ? 260 : 200} offsetScrollbars>
+                    <ScrollArea
+                      h={fullScreen ? 260 : 200}
+                      offsetScrollbars
+                      data-visual-scroll
+                    >
                       <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
                         {meeting.notes}
                       </Text>

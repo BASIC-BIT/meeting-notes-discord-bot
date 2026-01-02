@@ -18,10 +18,10 @@ FRONTEND_SITE_URL="https://staging.chronote.gg"
 
 # Stripe (staging uses test mode)
 STRIPE_MODE="test"
-STRIPE_SUCCESS_URL="https://staging.chronote.gg/"
-STRIPE_CANCEL_URL="https://staging.chronote.gg/"
-STRIPE_PORTAL_RETURN_URL="https://staging.chronote.gg/"
-BILLING_LANDING_URL="https://staging.chronote.gg/"
+STRIPE_SUCCESS_URL="https://staging.chronote.gg/upgrade/success"
+STRIPE_CANCEL_URL="https://staging.chronote.gg/upgrade/select-server?canceled=true"
+STRIPE_PORTAL_RETURN_URL="https://staging.chronote.gg/portal/select-server"
+BILLING_LANDING_URL="https://staging.chronote.gg/upgrade"
 
 # Optional overrides
 TRANSCRIPTS_PREFIX=""

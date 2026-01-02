@@ -6,7 +6,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type { ConfigEntryInput } from "../types/configEntry";
 import FormSelect from "./FormSelect";
 import type { ChannelOption } from "../utils/settingsChannels";
@@ -29,6 +29,20 @@ export type ConfigUiContext = {
   showLimitSources?: boolean;
 };
 
+const resolveSegmentedClickValue = (
+  event: MouseEvent<HTMLElement>,
+): string | undefined => {
+  const target = event.target as HTMLElement | null;
+  const label = target?.closest("label");
+  const labelTarget = label?.getAttribute("for");
+  if (labelTarget && label?.ownerDocument) {
+    const input = label.ownerDocument.getElementById(labelTarget);
+    return (input as HTMLInputElement | null)?.value;
+  }
+  const input = target?.closest("input");
+  return (input as HTMLInputElement | null)?.value;
+};
+
 const formatOptionLabel = (option: string) =>
   option
     .split(/[\s-_]+/g)
@@ -48,8 +62,14 @@ const AskSharingPolicySegment: CustomRenderer = ({
     <SegmentedControl
       value={typeof value === "string" ? value : ""}
       onChange={(next) => onChange(next)}
-      onClickCapture={() => {
-        if (!disabled) onOverrideIntent?.();
+      onClickCapture={(event) => {
+        if (disabled) return;
+        const clicked =
+          resolveSegmentedClickValue(event) ??
+          (typeof value === "string" ? value : undefined);
+        if (clicked !== undefined) {
+          onOverrideIntent?.(clicked);
+        }
       }}
       data={options.map((option) => ({
         value: option,
@@ -181,8 +201,12 @@ export function ConfigValueField({
         aria-label={entry.key}
         value={toggleValue}
         onChange={(next) => onChange(next === "on")}
-        onClickCapture={() => {
-          if (!disabled) onOverrideIntent?.();
+        onClickCapture={(event) => {
+          if (disabled) return;
+          const clicked = resolveSegmentedClickValue(event);
+          const nextValue =
+            clicked !== undefined ? clicked === "on" : value === true;
+          onOverrideIntent?.(nextValue);
         }}
         data={[
           { label: "Off", value: "off" },
@@ -261,8 +285,14 @@ export function ConfigValueField({
       <SegmentedControl
         value={typeof value === "string" ? value : ""}
         onChange={(next) => onChange(next)}
-        onClickCapture={() => {
-          if (!disabled) onOverrideIntent?.();
+        onClickCapture={(event) => {
+          if (disabled) return;
+          const clicked =
+            resolveSegmentedClickValue(event) ??
+            (typeof value === "string" ? value : undefined);
+          if (clicked !== undefined) {
+            onOverrideIntent?.(clicked);
+          }
         }}
         data={(entry.ui.options ?? []).map((option) => ({
           value: option,

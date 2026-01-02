@@ -39,8 +39,9 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
   {
     key: "transcription.premium.enabled",
     label: "Premium transcription",
-    description:
-      "Enable premium transcription for this server, requires pro tier.",
+    description: "Enable premium transcription for this server.",
+    notes:
+      "Product note: marketed as pro, currently enabled for all tiers to improve default transcription quality.",
     category: "Transcription",
     group: "Experimental",
     valueType: "boolean",
@@ -49,8 +50,6 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
       global: scope(true, true, "superadmin", "toggle"),
       server: scope(true, false, "admin", "tri-state"),
     },
-    minTier: "pro",
-    requiresExperimentalTag: true,
     ui: { type: "toggle" },
   },
   {
@@ -58,6 +57,8 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
     label: "Premium cleanup pass",
     description:
       "Run the transcription cleanup pass for premium transcription.",
+    notes:
+      "Product note: marketed as pro, currently enabled for all tiers to improve default transcription quality.",
     category: "Transcription",
     group: "Experimental",
     valueType: "boolean",
@@ -66,14 +67,14 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
       global: scope(true, true, "superadmin", "toggle"),
       server: scope(true, false, "admin", "tri-state"),
     },
-    minTier: "pro",
-    requiresExperimentalTag: true,
     ui: { type: "toggle" },
   },
   {
     key: "transcription.premium.coalesce.model",
     label: "Premium coalesce model",
     description: "Model used to coalesce premium transcription outputs.",
+    notes:
+      "Product note: marketed as pro, currently enabled for all tiers to improve default transcription quality.",
     category: "Transcription",
     group: "Experimental",
     valueType: "select",
@@ -82,8 +83,6 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
       global: scope(true, true, "superadmin", "select"),
       server: scope(true, false, "admin", "select"),
     },
-    minTier: "pro",
-    requiresExperimentalTag: true,
     ui: {
       type: "select",
       options: ["gpt-5-nano", "gpt-5-mini", "gpt-5.2", "gpt-5.2-pro"],

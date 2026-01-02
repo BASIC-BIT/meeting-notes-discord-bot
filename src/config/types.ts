@@ -38,6 +38,7 @@ export type ConfigEntry = {
   key: string;
   label: string;
   description: string;
+  notes?: string;
   category: string;
   group?: ConfigGroup;
   valueType: ConfigValueType;

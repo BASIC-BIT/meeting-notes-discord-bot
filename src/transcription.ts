@@ -60,6 +60,7 @@ import {
   updateActiveObservation,
   updateActiveTrace,
 } from "@langfuse/tracing";
+import { buildLangfuseTranscriptionAudioAttachment } from "./observability/langfuseAudioAttachment";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 // Check if transcription is too similar to the prompt or glossary content (likely verbatim output)
@@ -186,24 +187,41 @@ async function transcribeInternal(
   return await startActiveObservation(
     "transcription",
     async () => {
+      const audioAttachment =
+        await buildLangfuseTranscriptionAudioAttachment(file);
+      const langfuseTraceMetadata = audioAttachment
+        ? {
+            ...traceMetadata,
+            audioAttachmentBytes: audioAttachment.byteLength,
+            audioAttachmentContentType: audioAttachment.contentType,
+          }
+        : traceMetadata;
+
       updateActiveTrace({
         name: "transcription",
         userId: context?.userId,
         tags: ["feature:transcription"],
-        metadata: traceMetadata,
+        metadata: langfuseTraceMetadata,
       });
-      updateActiveObservation(
-        {
-          input: {
+      const observationInput = audioAttachment
+        ? {
             language: "en",
             prompt,
-          },
+            audio: audioAttachment.media,
+          }
+        : {
+            language: "en",
+            prompt,
+          };
+      updateActiveObservation(
+        {
+          input: observationInput,
           model: modelChoice.model,
           modelParameters: {
             temperature: 0,
             response_format: "json",
           },
-          metadata: traceMetadata,
+          metadata: langfuseTraceMetadata,
         },
         { asType: "generation" },
       );

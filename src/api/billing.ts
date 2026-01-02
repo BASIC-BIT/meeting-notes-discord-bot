@@ -68,7 +68,7 @@ const resolveInvoiceSubscription = (
 const resolveInvoiceMetadata = (
   invoice: Stripe.Invoice,
 ): Stripe.Metadata | null | undefined =>
-  invoice.parent?.subscription_details?.metadata;
+  invoice.parent?.subscription_details?.metadata ?? invoice.metadata;
 
 const resolveInvoiceDiscountCode = (
   invoice: Stripe.Invoice,

@@ -38,3 +38,15 @@ html[data-mantine-color-scheme] #root * {
     transition: none;
   }
 }
+
+html[data-visual-mode="true"] [data-visual-scroll] {
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+html[data-visual-mode="true"] [data-visual-scroll] [data-scrollbars] {
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}

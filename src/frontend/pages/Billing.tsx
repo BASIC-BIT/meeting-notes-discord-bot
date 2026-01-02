@@ -14,12 +14,14 @@ import {
   SimpleGrid,
   Stack,
   Text,
+  TextInput,
   ThemeIcon,
   Title,
   useComputedColorScheme,
 } from "@mantine/core";
 import { IconCheck, IconCreditCard } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
+import { useSearch } from "@tanstack/react-router";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
@@ -78,6 +80,8 @@ type BillingPlansProps = {
   onExpandPlans: () => void;
   onTogglePlans: () => void;
   onCheckout: (tier: PaidTier) => void;
+  promoCode: string;
+  onPromoCodeChange: (value: string) => void;
   basicPlan: ReturnType<typeof resolvePaidPlan>;
   proPlan: ReturnType<typeof resolvePaidPlan>;
 };
@@ -330,11 +334,14 @@ const BillingPlansSection = ({
   onExpandPlans,
   onTogglePlans,
   onCheckout,
+  promoCode,
+  onPromoCodeChange,
   basicPlan,
   proPlan,
 }: BillingPlansProps) => {
   const isFreePlan = data.tier === "free";
   const plansExpanded = isFreePlan ? true : showPlans;
+  const hasPromo = promoCode.trim().length > 0;
   return (
     <Surface
       p="lg"
@@ -381,6 +388,30 @@ const BillingPlansSection = ({
             </Button>
           )}
         </Group>
+        <Stack gap={4}>
+          <Group gap="sm" align="flex-end" wrap="wrap">
+            <TextInput
+              label="Promo code"
+              placeholder="Enter code"
+              value={promoCode}
+              onChange={(event) => onPromoCodeChange(event.currentTarget.value)}
+              style={{ flex: "1 1 220px" }}
+            />
+            {hasPromo ? (
+              <Button
+                variant="subtle"
+                color="gray"
+                size="xs"
+                onClick={() => onPromoCodeChange("")}
+              >
+                Clear
+              </Button>
+            ) : null}
+          </Group>
+          <Text size="xs" c="dimmed">
+            One code per purchase. Applied at checkout.
+          </Text>
+        </Stack>
         {!plansExpanded ? (
           <Text size="sm" c="dimmed">
             Compare plan details when you are ready to change tiers.
@@ -471,6 +502,8 @@ const BillingPlansSection = ({
 export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
   const [interval, setInterval] = useState<BillingInterval>("month");
+  const search = useSearch({ from: "/portal/server/$serverId/billing" });
+  const [promoCode, setPromoCode] = useState(() => search.promo ?? "");
   const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
   const billingQuery = trpc.billing.me.useQuery(
     { serverId: selectedGuildId ?? undefined },
@@ -518,18 +551,24 @@ export function Billing() {
         });
         return;
       }
+      const promotionCode = promoCode.trim();
       const body = await checkoutMutation.mutateAsync({
         serverId: selectedGuildId,
         tier,
         interval,
+        promotionCode: promotionCode.length ? promotionCode : undefined,
       });
       window.location.href = body.url;
     } catch (err) {
       console.error(err);
+      const errorMessage =
+        err instanceof Error && err.message.includes("promotion")
+          ? err.message
+          : "Could not start checkout. Please try again.";
       notifications.show({
         color: "red",
         title: "Checkout failed",
-        message: "Could not start checkout. Please try again.",
+        message: errorMessage,
       });
     }
   };
@@ -600,6 +639,8 @@ export function Billing() {
         onExpandPlans={() => setShowPlans(true)}
         onTogglePlans={() => setShowPlans((prev) => !prev)}
         onCheckout={handleCheckout}
+        promoCode={promoCode}
+        onPromoCodeChange={setPromoCode}
         basicPlan={basicPlan}
         proPlan={proPlan}
       />

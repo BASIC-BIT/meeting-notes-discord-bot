@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Button,
+  Center,
   Group,
+  Loader,
   Modal,
   SegmentedControl,
   Stack,
@@ -16,6 +18,7 @@ import { IconAlertTriangle, IconRefresh } from "@tabler/icons-react";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import FormSelect from "../components/FormSelect";
+import Surface from "../components/Surface";
 import { trpc } from "../services/trpc";
 import { uiOverlays } from "../uiTokens";
 import { parseTags } from "../../utils/tags";
@@ -35,6 +38,23 @@ import {
 import { ChannelOverridesCard } from "../features/settings/ChannelOverridesCard";
 import { ServerConfigCard } from "../features/settings/ServerConfigCard";
 import { DictionaryCard } from "../features/settings/DictionaryCard";
+
+const SettingsLoadingState = () => (
+  <Stack gap="xl" data-testid="settings-page-loading">
+    <PageHeader
+      title="Server settings"
+      description="Configure how Chronote records, tags, and summarizes this server."
+    />
+    <Surface p="xl">
+      <Center py="xl">
+        <Stack gap="xs" align="center">
+          <Loader color="brand" />
+          <Text c="dimmed">Loading server settings...</Text>
+        </Stack>
+      </Center>
+    </Surface>
+  </Stack>
+);
 
 export default function Settings() {
   const { selectedGuildId, loading: guildLoading } = useGuildContext();
@@ -233,6 +253,15 @@ export default function Settings() {
     dictionaryRemoveMutation.isPending ||
     dictionaryClearMutation.isPending;
 
+  const settingsInitialLoading =
+    guildLoading ||
+    !selectedGuildId ||
+    rulesQuery.isLoading ||
+    channelsQuery.isLoading ||
+    configQuery.isLoading ||
+    channelContextsQuery.isLoading ||
+    dictionaryQuery.isLoading;
+
   const openAddChannel = () => {
     setEditingChannelId(null);
     setChannelVoiceChannelId(null);
@@ -413,6 +442,10 @@ export default function Settings() {
       console.error("Failed to remove channel override", error);
     }
   };
+
+  if (settingsInitialLoading) {
+    return <SettingsLoadingState />;
+  }
 
   return (
     <Stack gap="xl" data-testid="settings-page">

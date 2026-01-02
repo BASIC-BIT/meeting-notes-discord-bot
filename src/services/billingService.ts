@@ -5,6 +5,7 @@ import { config } from "./configService";
 import { getLimitsForTier } from "./subscriptionService";
 import { getRollingUsageForGuild } from "./meetingUsageService";
 import { nowIso } from "../utils/time";
+import type { BillingInterval, PaidTier } from "../types/pricing";
 import type { GuildSubscription, PaymentTransaction } from "../types/db";
 
 export type BillingSnapshot = {
@@ -176,37 +177,106 @@ export async function ensureStripeCustomer(
   return created.id;
 }
 
+export async function resolvePromotionCodeId(
+  stripe: Pick<Stripe, "promotionCodes">,
+  code: string,
+): Promise<string | null> {
+  const normalized = code.trim();
+  if (!normalized) return null;
+  const matches = await stripe.promotionCodes.list({
+    code: normalized,
+    active: true,
+    limit: 1,
+  });
+  return matches.data[0]?.id ?? null;
+}
+
+function appendQueryParams(
+  baseUrl: string,
+  params: Record<string, string | undefined>,
+): string {
+  const entries = Object.entries(params).filter(([, value]) => value?.length);
+  if (!entries.length) return baseUrl;
+  try {
+    const url = new URL(baseUrl);
+    entries.forEach(([key, value]) => {
+      if (value) url.searchParams.set(key, value);
+    });
+    return url.toString();
+  } catch {
+    const [path, query = ""] = baseUrl.split("?");
+    const searchParams = new URLSearchParams(query);
+    entries.forEach(([key, value]) => {
+      if (value) searchParams.set(key, value);
+    });
+    const next = searchParams.toString();
+    return next ? `${path}?${next}` : path;
+  }
+}
+
 export async function createCheckoutSession(params: {
   stripe: Stripe;
   user: StripeUser;
   guildId: string;
   priceId?: string | null;
+  promotionCodeId?: string | null;
+  promotionCode?: string | null;
+  allowPromotionCodes?: boolean;
+  tier?: PaidTier;
+  interval?: BillingInterval;
 }): Promise<string> {
-  const { stripe, user, guildId, priceId } = params;
+  const {
+    stripe,
+    user,
+    guildId,
+    priceId,
+    promotionCodeId,
+    promotionCode,
+    allowPromotionCodes,
+    tier,
+    interval,
+  } = params;
   const checkoutPriceId = priceId || config.stripe.priceBasic;
   if (!checkoutPriceId?.startsWith("price_")) {
     throw new Error("Stripe price not configured");
   }
   const customerId = await ensureStripeCustomer(stripe, user);
+  const promoValue = promotionCode?.trim();
+  const successUrl = appendQueryParams(config.stripe.successUrl, {
+    promo: promoValue || undefined,
+    serverId: guildId,
+    plan: tier,
+    interval,
+  });
+  const cancelUrl = appendQueryParams(config.stripe.cancelUrl, {
+    promo: promoValue || undefined,
+    serverId: guildId,
+    plan: tier,
+    interval,
+  });
+  const metadata = {
+    discord_id: user.id,
+    discord_username: user.username ?? "",
+    guild_id: guildId,
+    ...(promoValue ? { promo_code: promoValue } : {}),
+  };
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
     line_items: [{ price: checkoutPriceId, quantity: 1 }],
-    success_url: config.stripe.successUrl,
-    cancel_url: config.stripe.cancelUrl,
+    success_url: successUrl,
+    cancel_url: cancelUrl,
     customer: customerId,
     client_reference_id: user.id,
+    allow_promotion_codes: promotionCodeId
+      ? undefined
+      : (allowPromotionCodes ?? true),
+    discounts: promotionCodeId
+      ? [{ promotion_code: promotionCodeId }]
+      : undefined,
     subscription_data: {
-      metadata: {
-        discord_id: user.id,
-        discord_username: user.username ?? "",
-        guild_id: guildId,
-      },
+      metadata,
     },
-    metadata: {
-      discord_id: user.id,
-      discord_username: user.username ?? "",
-      guild_id: guildId,
-    },
+    metadata,
   });
   if (!session.url) {
     throw new Error("Stripe did not return a checkout URL");

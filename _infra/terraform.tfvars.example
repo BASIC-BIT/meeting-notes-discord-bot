@@ -68,10 +68,10 @@ STRIPE_PRICE_LOOKUP_BASIC_MONTHLY="chronote_basic_monthly"
 STRIPE_PRICE_LOOKUP_BASIC_ANNUAL="chronote_basic_annual"
 STRIPE_PRICE_LOOKUP_PRO_MONTHLY="chronote_pro_monthly"
 STRIPE_PRICE_LOOKUP_PRO_ANNUAL="chronote_pro_annual"
-STRIPE_SUCCESS_URL=""
-STRIPE_CANCEL_URL=""
-STRIPE_PORTAL_RETURN_URL=""
-BILLING_LANDING_URL=""
+STRIPE_SUCCESS_URL=""                      # e.g., https://app.example.com/upgrade/success
+STRIPE_CANCEL_URL=""                       # e.g., https://app.example.com/upgrade/select-server?canceled=true
+STRIPE_PORTAL_RETURN_URL=""                # e.g., https://app.example.com/portal/select-server
+BILLING_LANDING_URL=""                     # e.g., https://app.example.com/upgrade
 
 # Observability (hosted AMG/AMP)
 # Create a Grafana service account token (preferred) or AMG API key, then set these:
