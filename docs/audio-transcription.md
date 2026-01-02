@@ -19,6 +19,16 @@ Chronote records voice audio, builds per speaker snippets, and runs transcriptio
 - Fast only finalization can skip the slow pass if the latest fast transcript covers the full snippet byte length.
 - Interjection splitting checks for a validated interjection snippet before finalizing other paused snippets.
 
+## Langfuse audio attachments
+
+When Langfuse tracing is enabled, each transcription snippet uploads an audio attachment to the trace for debugging.
+
+- The attachment is always an MP3 generated from the snippet WAV file.
+- Encoding is VBR quality 6, mono, 16 kHz to keep size down while staying intelligible.
+- Attachments are skipped if the MP3 exceeds 8 MB.
+- The MP3 file is temporary and is deleted after upload.
+- The compressed MP3 is for observability only and does not affect transcription quality.
+
 ## Config keys
 
 All values are set via the config system and can be overridden at the global or server level.

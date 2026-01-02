@@ -14,6 +14,15 @@ const PortalServerLayout = lazyRouteComponent(
   () => import("./layouts/PortalServerLayout"),
 );
 const ServerSelect = lazyRouteComponent(() => import("./pages/ServerSelect"));
+const Home = lazyRouteComponent(() => import("./pages/Home"));
+const PromoLanding = lazyRouteComponent(() => import("./pages/PromoLanding"));
+const Upgrade = lazyRouteComponent(() => import("./pages/Upgrade"));
+const UpgradeServerSelect = lazyRouteComponent(
+  () => import("./pages/UpgradeServerSelect"),
+);
+const UpgradeSuccess = lazyRouteComponent(
+  () => import("./pages/UpgradeSuccess"),
+);
 const Library = lazyRouteComponent(() => import("./pages/Library"));
 const Ask = lazyRouteComponent(() => import("./pages/Ask"));
 const PublicAsk = lazyRouteComponent(() => import("./pages/PublicAsk"));
@@ -32,10 +41,80 @@ const rootRoute = new RootRoute({
   component: RootLayout,
 });
 
-const homeRoute = new Route({
+const marketingRoute = new Route({
   getParentRoute: () => rootRoute,
-  path: "/",
+  id: "marketing",
   component: MarketingLayout,
+});
+
+const optionalStringParam = z
+  .preprocess((value) => {
+    if (value === undefined || value === null) return undefined;
+    return String(value);
+  }, z.string())
+  .optional();
+
+const homeRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "/",
+  component: Home,
+});
+
+const promoRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "promo/$code",
+  component: PromoLanding,
+});
+
+const upgradeRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "upgrade",
+  component: Upgrade,
+  validateSearch: z.object({
+    promo: z.string().optional(),
+    serverId: optionalStringParam,
+    plan: z.enum(["basic", "pro"]).optional(),
+    interval: z.enum(["month", "year"]).optional(),
+    canceled: z
+      .preprocess((value) => {
+        if (value === "true") return true;
+        if (value === "false") return false;
+        return value;
+      }, z.boolean().optional())
+      .optional(),
+  }).parse,
+});
+
+const upgradeSelectRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "upgrade/select-server",
+  component: UpgradeServerSelect,
+  validateSearch: z.object({
+    promo: z.string().optional(),
+    serverId: optionalStringParam,
+    plan: z.enum(["basic", "pro"]).optional(),
+    interval: z.enum(["month", "year"]).optional(),
+    canceled: z
+      .preprocess((value) => {
+        if (value === "true") return true;
+        if (value === "false") return false;
+        return value;
+      }, z.boolean().optional())
+      .optional(),
+  }).parse,
+});
+
+const upgradeSuccessRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "upgrade/success",
+  component: UpgradeSuccess,
+  validateSearch: z.object({
+    promo: z.string().optional(),
+    serverId: optionalStringParam,
+    plan: z.enum(["basic", "pro"]).optional(),
+    interval: z.enum(["month", "year"]).optional(),
+    session_id: z.string().optional(),
+  }).parse,
 });
 
 const liveMeetingRoute = new Route({
@@ -81,6 +160,7 @@ const portalSelectRoute = new Route({
   getParentRoute: () => portalRoute,
   path: "select-server",
   component: ServerSelect,
+  validateSearch: z.object({ promo: z.string().optional() }).parse,
 });
 
 const portalServerRoute = new Route({
@@ -97,7 +177,7 @@ const portalLibraryRoute = new Route({
 });
 
 const askSearchSchema = z.object({
-  list: z.enum(["mine", "shared"]).optional(),
+  list: z.enum(["mine", "shared", "archived"]).optional(),
   messageId: z.string().optional(),
 }).parse;
 
@@ -130,6 +210,7 @@ const portalBillingRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "billing",
   component: Billing,
+  validateSearch: z.object({ promo: z.string().optional() }).parse,
 });
 
 const portalSettingsRoute = new Route({
@@ -145,7 +226,13 @@ const portalAdminConfigRoute = new Route({
 });
 
 const routeTree = rootRoute.addChildren([
-  homeRoute,
+  marketingRoute.addChildren([
+    homeRoute,
+    promoRoute,
+    upgradeRoute,
+    upgradeSelectRoute,
+    upgradeSuccessRoute,
+  ]),
   liveMeetingRoute,
   publicAskRoute,
   portalRoute.addChildren([

@@ -110,7 +110,12 @@ export default function MeetingTimeline({
             : null}
         </Group>
       </Group>
-      <ScrollArea h={height} offsetScrollbars viewportRef={viewportRef}>
+      <ScrollArea
+        h={height}
+        offsetScrollbars
+        viewportRef={viewportRef}
+        data-visual-scroll
+      >
         {visibleEvents.length === 0 ? (
           <Center py="xl">
             <Text size="sm" c="dimmed">

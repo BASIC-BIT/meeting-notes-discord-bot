@@ -16,8 +16,13 @@ export async function getMeetingHistoryService(
 export async function listRecentMeetingsForGuildService(
   guildId: string,
   limit?: number,
+  options?: { archivedOnly?: boolean; includeArchived?: boolean },
 ) {
-  return getMeetingHistoryRepository().listRecentByGuild(guildId, limit);
+  return getMeetingHistoryRepository().listRecentByGuild(
+    guildId,
+    limit,
+    options,
+  );
 }
 
 export async function listMeetingsForGuildInRangeService(
@@ -81,4 +86,13 @@ export async function updateMeetingStatusService(params: {
     params.channelId_timestamp,
     params.status,
   );
+}
+
+export async function updateMeetingArchiveService(params: {
+  guildId: string;
+  channelId_timestamp: string;
+  archived: boolean;
+  archivedByUserId: string;
+}) {
+  return getMeetingHistoryRepository().updateArchive(params);
 }

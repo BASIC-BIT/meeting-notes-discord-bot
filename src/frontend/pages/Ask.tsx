@@ -27,10 +27,12 @@ import {
   IconShare2,
   IconLink,
   IconCopy,
+  IconArchive,
+  IconArchiveOff,
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
+import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
 import { ConversationListPanel } from "../features/ask/ConversationListPanel";
@@ -56,18 +58,32 @@ import {
 } from "../utils/askLinks";
 import { resolveNowMs } from "../utils/now";
 
+const buildConversationListUpdate =
+  (conversation: AskConversation) =>
+  (prev?: { conversations: AskConversation[] } | null) => {
+    const existing = prev?.conversations ?? [];
+    const updated = existing.filter((conv) => conv.id !== conversation.id);
+    return { conversations: [conversation, ...updated] };
+  };
+
+const buildConversationDetailUpdate =
+  (conversation: AskConversation) =>
+  (prev?: { messages: AskMessage[] } | null) => ({
+    conversation,
+    messages: prev?.messages ?? [],
+  });
+
 export default function Ask() {
   const { selectedGuildId, guilds } = useGuildContext();
   const trpcUtils = trpc.useUtils();
   const navigate = useNavigate();
   const params = useParams({ strict: false }) as { conversationId?: string };
-  const location = useRouterState({ select: (state) => state.location });
-  const searchParams = useMemo(
-    () => new URLSearchParams(location.search),
-    [location.search],
-  );
-  const listMode = resolveListMode(searchParams.get("list"));
-  const highlightedMessageId = searchParams.get("messageId");
+  const search = useSearch({ strict: false }) as {
+    list?: "mine" | "shared" | "archived";
+    messageId?: string;
+  };
+  const listMode = resolveListMode(search.list ?? null);
+  const highlightedMessageId = search.messageId ?? null;
   const routeConversationId = params.conversationId ?? null;
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
@@ -78,6 +94,7 @@ export default function Ask() {
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<AskMessage[]>(
     [],
   );
@@ -85,6 +102,7 @@ export default function Ask() {
     useState<AskConversation | null>(null);
   const chatViewportRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const previousListModeRef = useRef<ListMode>(listMode);
   const activeId = isCreatingNew ? null : routeConversationId;
   const selectedGuild = selectedGuildId
     ? (guilds.find((guild) => guild.id === selectedGuildId) ?? null)
@@ -124,7 +142,10 @@ export default function Ask() {
     { serverId: selectedGuildId ?? "", conversationId: activeId ?? "" },
     {
       enabled: Boolean(
-        selectedGuildId && askAccessAllowed && activeId && listMode === "mine",
+        selectedGuildId &&
+        askAccessAllowed &&
+        activeId &&
+        listMode !== "shared",
       ),
       staleTime: 30_000,
       placeholderData: (prev) => prev,
@@ -147,9 +168,18 @@ export default function Ask() {
   const askMutation = trpc.ask.ask.useMutation();
   const renameMutation = trpc.ask.rename.useMutation();
   const shareMutation = trpc.ask.setVisibility.useMutation();
+  const archiveMutation = trpc.ask.setArchived.useMutation();
 
   const mineConversations = listQuery.data?.conversations ?? [];
   const sharedConversations = sharedListQuery.data?.conversations ?? [];
+  const activeConversations = useMemo(
+    () => mineConversations.filter((conv) => !conv.archivedAt),
+    [mineConversations],
+  );
+  const archivedConversations = useMemo(
+    () => mineConversations.filter((conv) => conv.archivedAt),
+    [mineConversations],
+  );
   const listBusy =
     listMode === "shared"
       ? sharedListQuery.isLoading || sharedListQuery.isFetching
@@ -162,6 +192,20 @@ export default function Ask() {
     listMode === "shared"
       ? sharedConversationQuery.error
       : conversationQuery.error;
+  const activeConversation = isCreatingNew
+    ? null
+    : listMode === "shared"
+      ? (sharedConversationQuery.data?.conversation ?? null)
+      : (conversationQuery.data?.conversation ?? null);
+  const activeMessages = isCreatingNew
+    ? []
+    : listMode === "shared"
+      ? (sharedConversationQuery.data?.messages ?? [])
+      : (conversationQuery.data?.messages ?? []);
+  const sharedMeta =
+    listMode === "shared"
+      ? (sharedConversationQuery.data?.shared ?? null)
+      : null;
 
   const navigateToConversation = useCallback(
     (conversationId: string | null, mode: ListMode) => {
@@ -203,8 +247,10 @@ export default function Ask() {
     () =>
       listMode === "shared"
         ? sharedConversations.map((conv) => conv.conversationId)
-        : mineConversations.map((conv) => conv.id),
-    [listMode, mineConversations, sharedConversations],
+        : listMode === "archived"
+          ? archivedConversations.map((conv) => conv.id)
+          : activeConversations.map((conv) => conv.id),
+    [listMode, activeConversations, archivedConversations, sharedConversations],
   );
 
   useEffect(() => {
@@ -220,14 +266,24 @@ export default function Ask() {
   }, [selectedGuildId, askAccessAllowed]);
 
   useEffect(() => {
-    if (listMode !== "shared") return;
-    if (!sharingEnabled) {
-      if (activeId) {
-        navigateToConversation(null, listMode);
+    const previousListMode = previousListModeRef.current;
+    if (listMode === "shared") {
+      if (!sharingEnabled) {
+        if (activeId) {
+          navigateToConversation(null, listMode);
+        }
+        return;
+      }
+      if (isCreatingNew) {
+        setIsCreatingNew(false);
       }
       return;
     }
-    if (isCreatingNew) {
+    if (
+      listMode === "archived" &&
+      isCreatingNew &&
+      previousListMode !== "archived"
+    ) {
       setIsCreatingNew(false);
     }
   }, [
@@ -239,20 +295,34 @@ export default function Ask() {
   ]);
 
   useEffect(() => {
+    previousListModeRef.current = listMode;
+  }, [listMode]);
+
+  useEffect(() => {
     if (!selectedGuildId || !askAccessAllowed) return;
     if (listMode === "shared" && !sharingEnabled) return;
+    if (listBusy || conversationBusy) return;
     if (isCreatingNew) return;
+    const hasActiveConversation = Boolean(
+      activeConversation && activeConversation.id === activeId,
+    );
+    const allowMissingFromList =
+      hasActiveConversation &&
+      (listMode === "shared" ||
+        (listMode === "archived" && Boolean(activeConversation?.archivedAt)));
     if (listIds.length === 0) {
-      if (activeId) {
+      if (activeId && !allowMissingFromList) {
         navigateToConversation(null, listMode);
       }
       return;
     }
-    if (!activeId || !listIds.includes(activeId)) {
+    if (!activeId || (!listIds.includes(activeId) && !allowMissingFromList)) {
       const nextId =
         listMode === "shared"
           ? sharedConversations[0]?.conversationId
-          : mineConversations[0]?.id;
+          : listMode === "archived"
+            ? archivedConversations[0]?.id
+            : activeConversations[0]?.id;
       if (nextId) {
         navigateToConversation(nextId, listMode);
       }
@@ -262,24 +332,43 @@ export default function Ask() {
     askAccessAllowed,
     listMode,
     sharingEnabled,
+    listBusy,
+    conversationBusy,
     isCreatingNew,
     listIds,
     activeId,
     sharedConversations,
-    mineConversations,
+    activeConversations,
+    archivedConversations,
+    activeConversation,
     navigateToConversation,
   ]);
 
+  useEffect(() => {
+    if (!activeConversation || !activeConversation.archivedAt) return;
+    if (listMode !== "mine") return;
+    if (isCreatingNew) return;
+    navigateToConversation(activeConversation.id, "archived");
+  }, [activeConversation, listMode, isCreatingNew, navigateToConversation]);
+
   const filteredMine = useMemo(() => {
     const source = optimisticConversation
-      ? [optimisticConversation, ...mineConversations]
-      : mineConversations;
+      ? [optimisticConversation, ...activeConversations]
+      : activeConversations;
     if (!query) return source;
     const needle = query.toLowerCase();
     return source.filter((conv) =>
       `${conv.title} ${conv.summary}`.toLowerCase().includes(needle),
     );
-  }, [query, mineConversations, optimisticConversation]);
+  }, [query, activeConversations, optimisticConversation]);
+
+  const filteredArchived = useMemo(() => {
+    if (!query) return archivedConversations;
+    const needle = query.toLowerCase();
+    return archivedConversations.filter((conv) =>
+      `${conv.title} ${conv.summary}`.toLowerCase().includes(needle),
+    );
+  }, [query, archivedConversations]);
 
   const filteredShared = useMemo(() => {
     if (!query) return sharedConversations;
@@ -293,22 +382,9 @@ export default function Ask() {
   const listError =
     listMode === "shared" ? sharedListQuery.error : listQuery.error;
 
-  const activeConversation = isCreatingNew
-    ? null
-    : listMode === "shared"
-      ? (sharedConversationQuery.data?.conversation ?? null)
-      : (conversationQuery.data?.conversation ?? null);
-  const activeMessages = isCreatingNew
-    ? []
-    : listMode === "shared"
-      ? (sharedConversationQuery.data?.messages ?? [])
-      : (conversationQuery.data?.messages ?? []);
-  const sharedMeta =
-    listMode === "shared"
-      ? (sharedConversationQuery.data?.shared ?? null)
-      : null;
   const displayTitle =
     activeConversation?.title ?? optimisticConversation?.title ?? "New chat";
+  const isArchived = Boolean(activeConversation?.archivedAt);
   const activeVisibility = activeConversation?.visibility ?? "private";
   const shareDisplayVisibility =
     activeVisibility === "public" && !publicSharingEnabled
@@ -321,6 +397,7 @@ export default function Ask() {
     !selectedGuildId ||
     !activeConversation ||
     listMode !== "mine" ||
+    isArchived ||
     !sharingEnabled ||
     !askAccessAllowed;
   const serverShareUrl =
@@ -342,13 +419,14 @@ export default function Ask() {
       : "";
   const shareUrl =
     shareDisplayVisibility === "public" ? publicShareUrl : serverShareUrl;
+  const allowOptimistic = listMode === "mine" && !isArchived;
   const displayMessages = useMemo(() => {
-    const pending = listMode === "shared" ? false : askMutation.isPending;
+    const pending = allowOptimistic ? askMutation.isPending : false;
     return buildDisplayMessages({
       activeConversation,
       activeId,
       activeMessages,
-      optimisticMessages: listMode === "shared" ? [] : optimisticMessages,
+      optimisticMessages: allowOptimistic ? optimisticMessages : [],
       isPending: pending,
     });
   }, [
@@ -357,11 +435,12 @@ export default function Ask() {
     activeMessages,
     optimisticMessages,
     askMutation.isPending,
-    listMode,
+    allowOptimistic,
   ]);
   const showRename =
     listMode === "mine" &&
-    Boolean(activeConversation && displayMessages.length > 0);
+    Boolean(activeConversation && displayMessages.length > 0) &&
+    !isArchived;
 
   useEffect(() => {
     const viewport = chatViewportRef.current;
@@ -421,6 +500,7 @@ export default function Ask() {
       setRenameDraft(activeConversation.title);
       setRenaming(false);
       setRenameError(null);
+      setArchiveError(null);
     }
   }, [activeConversation?.id, activeConversation?.title]);
 
@@ -474,6 +554,7 @@ export default function Ask() {
     const question = draft.trim();
     if (!selectedGuildId || !question || listMode !== "mine") return;
     if (!askAccessAllowed) return;
+    if (isArchived) return;
     setErrorMessage(null);
     const now = new Date(resolveNowMs()).toISOString();
     setOptimisticMessages([
@@ -624,6 +705,52 @@ export default function Ask() {
     }
   };
 
+  const closeArchiveOverlays = () => {
+    setShareModalOpen(false);
+    setRenaming(false);
+  };
+
+  const updateConversationCaches = (conversation: AskConversation) => {
+    const serverId = selectedGuildId ?? "";
+    trpcUtils.ask.listConversations.setData(
+      { serverId },
+      buildConversationListUpdate(conversation),
+    );
+    trpcUtils.ask.getConversation.setData(
+      { serverId, conversationId: conversation.id },
+      buildConversationDetailUpdate(conversation),
+    );
+  };
+
+  const maybeExitArchivedView = (conversationId: string, archived: boolean) => {
+    if (!archived && listMode === "archived") {
+      navigateToConversation(conversationId, "mine");
+    }
+  };
+
+  const handleArchiveToggle = async (archived: boolean) => {
+    if (!selectedGuildId || !activeConversation) return;
+    if (listMode === "shared") return;
+    setArchiveError(null);
+    try {
+      const result = await archiveMutation.mutateAsync({
+        serverId: selectedGuildId,
+        conversationId: activeConversation.id,
+        archived,
+      });
+      closeArchiveOverlays();
+      updateConversationCaches(result.conversation);
+      await trpcUtils.ask.listSharedConversations.invalidate({
+        serverId: selectedGuildId,
+      });
+      maybeExitArchivedView(result.conversation.id, archived);
+    } catch (err) {
+      setArchiveError(
+        err instanceof Error ? err.message : "Unable to update archive state.",
+      );
+    }
+  };
+
   return (
     <Stack
       gap="md"
@@ -765,6 +892,7 @@ export default function Ask() {
               query={query}
               onQueryChange={setQuery}
               mineConversations={filteredMine}
+              archivedConversations={filteredArchived}
               sharedConversations={filteredShared}
               listBusy={listBusy}
               listError={listError}
@@ -853,6 +981,11 @@ export default function Ask() {
                             {shareBadgeLabel}
                           </Badge>
                         ) : null}
+                        {isArchived ? (
+                          <Badge size="xs" variant="light" color="gray">
+                            Archived
+                          </Badge>
+                        ) : null}
                       </Group>
                     )}
                   </Group>
@@ -867,6 +1000,26 @@ export default function Ask() {
                         data-testid="ask-share"
                       >
                         Share
+                      </Button>
+                    ) : null}
+                    {listMode !== "shared" && activeConversation ? (
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        leftSection={
+                          isArchived ? (
+                            <IconArchiveOff size={14} />
+                          ) : (
+                            <IconArchive size={14} />
+                          )
+                        }
+                        onClick={() => handleArchiveToggle(!isArchived)}
+                        loading={archiveMutation.isPending}
+                        data-testid={
+                          isArchived ? "ask-unarchive" : "ask-archive"
+                        }
+                      >
+                        {isArchived ? "Unarchive" : "Archive"}
                       </Button>
                     ) : null}
                     {showRename && selectedGuildId ? (
@@ -928,6 +1081,11 @@ export default function Ask() {
                     {renameError}
                   </Text>
                 ) : null}
+                {archiveError ? (
+                  <Text size="xs" c="red">
+                    {archiveError}
+                  </Text>
+                ) : null}
                 {listMode === "shared" && activeConversation ? (
                   <Surface p="sm" tone="soft">
                     <Group justify="space-between" align="center" wrap="wrap">
@@ -945,6 +1103,15 @@ export default function Ask() {
                     </Group>
                   </Surface>
                 ) : null}
+                {isArchived ? (
+                  <Surface p="sm" tone="soft">
+                    <Text size="sm" c="dimmed">
+                      {listMode === "shared"
+                        ? "This thread was archived by its owner and is read only."
+                        : "Archived chats are read only. Unarchive to continue."}
+                    </Text>
+                  </Surface>
+                ) : null}
                 <Divider />
                 <ScrollArea
                   style={{ flex: 1, minHeight: 0 }}
@@ -952,6 +1119,7 @@ export default function Ask() {
                   type="always"
                   offsetScrollbars
                   scrollbarSize={10}
+                  data-visual-scroll
                   data-testid="ask-messages"
                   styles={{
                     viewport: {
@@ -1100,7 +1268,9 @@ export default function Ask() {
                     placeholder={
                       listMode === "shared"
                         ? "Shared threads are read only."
-                        : "Ask about decisions, action items, or what was discussed..."
+                        : isArchived
+                          ? "Archived chats are read only."
+                          : "Ask about decisions, action items, or what was discussed..."
                     }
                     minRows={3}
                     value={draft}
@@ -1109,6 +1279,7 @@ export default function Ask() {
                       !selectedGuildId ||
                       !askAccessAllowed ||
                       listMode !== "mine" ||
+                      isArchived ||
                       askMutation.isPending
                     }
                     ref={inputRef}
@@ -1143,6 +1314,7 @@ export default function Ask() {
                         !selectedGuildId ||
                         !askAccessAllowed ||
                         listMode !== "mine" ||
+                        isArchived ||
                         askMutation.isPending
                       }
                       loading={askMutation.isPending}

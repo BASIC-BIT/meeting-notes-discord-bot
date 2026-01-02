@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import {
   AppShell,
   Box,
@@ -18,13 +18,14 @@ import { IconMessage } from "@tabler/icons-react";
 import { format } from "date-fns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useParams, useRouterState } from "@tanstack/react-router";
+import { useParams, useSearch } from "@tanstack/react-router";
 import AuthBanner from "../components/AuthBanner";
 import PageHeader from "../components/PageHeader";
 import SiteFooter from "../components/SiteFooter";
 import SiteHeader from "../components/SiteHeader";
 import Surface from "../components/Surface";
 import { trpc } from "../services/trpc";
+import { useVisualMode } from "../hooks/useVisualMode";
 import { getDiscordOpenUrl } from "../utils/discordLinks";
 import {
   appBackground,
@@ -46,16 +47,15 @@ export default function PublicAsk() {
   const theme = useMantineTheme();
   const colorScheme = useComputedColorScheme("dark");
   const isDark = colorScheme === "dark";
+  const visualMode = useVisualMode();
   const params = useParams({ strict: false }) as {
     serverId?: string;
     conversationId?: string;
   };
-  const location = useRouterState({ select: (state) => state.location });
-  const searchParams = useMemo(
-    () => new URLSearchParams(location.search),
-    [location.search],
-  );
-  const highlightedMessageId = searchParams.get("messageId");
+  const search = useSearch({ strict: false }) as {
+    messageId?: string;
+  };
+  const highlightedMessageId = search.messageId ?? null;
 
   const query = trpc.ask.getPublicConversation.useQuery(
     {
@@ -111,6 +111,7 @@ export default function PublicAsk() {
           type="always"
           offsetScrollbars
           scrollbarSize={10}
+          data-visual-scroll
           styles={{
             viewport: {
               paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
@@ -187,16 +188,40 @@ export default function PublicAsk() {
     <AppShell
       padding={0}
       header={{ height: shellHeights.header }}
+      style={{
+        minHeight: visualMode ? "100vh" : undefined,
+        height: visualMode ? "auto" : undefined,
+        overflow: visualMode ? "visible" : undefined,
+      }}
       styles={{
-        header: {
-          borderBottom: shellBorder(theme, isDark),
-          backgroundColor: shellHeaderBackground(isDark),
-          backdropFilter: "blur(16px)",
-          boxShadow: shellShadow(isDark),
-        },
-        main: {
-          backgroundColor: appBackground(theme, isDark),
-        },
+        header: visualMode
+          ? {
+              borderBottom: shellBorder(theme, isDark),
+              backgroundColor: shellHeaderBackground(isDark),
+              backdropFilter: "blur(16px)",
+              boxShadow: shellShadow(isDark),
+              position: "static",
+            }
+          : {
+              borderBottom: shellBorder(theme, isDark),
+              backgroundColor: shellHeaderBackground(isDark),
+              backdropFilter: "blur(16px)",
+              boxShadow: shellShadow(isDark),
+            },
+        main: visualMode
+          ? {
+              backgroundColor: appBackground(theme, isDark),
+              paddingTop: 0,
+              paddingBottom: 0,
+              paddingInlineStart: 0,
+              paddingInlineEnd: 0,
+              minHeight: "auto",
+              height: "auto",
+              overflow: "visible",
+            }
+          : {
+              backgroundColor: appBackground(theme, isDark),
+            },
       }}
     >
       <AppShell.Header p="md">

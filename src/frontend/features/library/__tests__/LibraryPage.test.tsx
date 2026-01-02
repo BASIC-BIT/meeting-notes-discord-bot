@@ -68,4 +68,28 @@ describe("MeetingList", () => {
       screen.getByText("No meetings match these filters yet."),
     ).toBeInTheDocument();
   });
+
+  it("shows archived badge when meeting is archived", () => {
+    const archivedItem: MeetingListItem = {
+      ...baseItem,
+      id: "m2",
+      meetingId: "meeting-2",
+      archivedAt: "2025-12-30T12:00:00.000Z",
+      title: "Archived sync",
+    };
+    render(
+      <MantineProvider>
+        <MeetingList
+          items={[archivedItem]}
+          listLoading={false}
+          listError={false}
+          onRefresh={jest.fn()}
+          onSelect={jest.fn()}
+          selectedMeetingId={null}
+        />
+      </MantineProvider>,
+    );
+
+    expect(screen.getByText("Archived")).toBeInTheDocument();
+  });
 });

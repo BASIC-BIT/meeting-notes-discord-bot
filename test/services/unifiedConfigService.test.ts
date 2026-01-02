@@ -8,7 +8,7 @@ describe("unifiedConfigService", () => {
     resetMockStore();
   });
 
-  test("gates premium transcription when experimental is off", async () => {
+  test("allows premium transcription when experimental is off", async () => {
     await setConfigOverrideForScope(
       { scope: "server", guildId: "guild-1" },
       CONFIG_KEYS.transcription.premiumEnabled,
@@ -20,8 +20,8 @@ describe("unifiedConfigService", () => {
       tier: "pro",
     });
     const premium = snapshot.values[CONFIG_KEYS.transcription.premiumEnabled];
-    expect(premium.value).toBe(false);
-    expect(premium.gated).toBe(true);
+    expect(premium.value).toBe(true);
+    expect(premium.gated).toBeFalsy();
   });
 
   test("enables premium transcription for pro with experimental on", async () => {
@@ -43,9 +43,10 @@ describe("unifiedConfigService", () => {
     });
     const premium = snapshot.values[CONFIG_KEYS.transcription.premiumEnabled];
     expect(premium.value).toBe(true);
+    expect(premium.gated).toBeFalsy();
   });
 
-  test("gates premium transcription for non-pro tiers", async () => {
+  test("allows premium transcription for non-pro tiers", async () => {
     await setConfigOverrideForScope(
       { scope: "server", guildId: "guild-1" },
       CONFIG_KEYS.features.experimental,
@@ -63,7 +64,7 @@ describe("unifiedConfigService", () => {
       tier: "basic",
     });
     const premium = snapshot.values[CONFIG_KEYS.transcription.premiumEnabled];
-    expect(premium.value).toBe(false);
-    expect(premium.gated).toBe(true);
+    expect(premium.value).toBe(true);
+    expect(premium.gated).toBeFalsy();
   });
 });

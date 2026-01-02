@@ -578,7 +578,10 @@ export function ServerConfigCard({
     const gatedEntries = flattenedEntries.filter(
       (entry) => entry.key !== CONFIG_KEYS.features.experimental,
     );
-    const needsExperimental = isExperimentalGroup && !experimentalEnabled;
+    const needsExperimental =
+      isExperimentalGroup &&
+      !experimentalEnabled &&
+      gatedEntries.some((entry) => entry.requiresExperimentalTag);
     const maxTier = gatedEntries.reduce<ConfigTier | undefined>(
       (acc, entry) => {
         if (!entry.minTier) return acc;

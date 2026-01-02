@@ -148,6 +148,7 @@ Coverage update rule:
 - Marketing site is public at `/`; the authenticated portal lives under `/portal/*`:
   - `/portal/select-server`
   - `/portal/server/:serverId/{library|ask|billing|settings}`
+- Upgrade flow entry points live under `/upgrade`, `/promo/:code`, and `/upgrade/select-server` with a success page at `/upgrade/success`. See `docs/upgrade-flow.md` for details and planned short-link support.
 - Deployed via GitHub Actions to S3 + CloudFront (see `_infra/` and `.github/workflows/deploy.yml`).
 - Static hosting variables: `FRONTEND_BUCKET`, `FRONTEND_DOMAIN` (optional), `FRONTEND_CERT_ARN` (when custom domain is set). Allow the SPA to call the API by setting `FRONTEND_ALLOWED_ORIGINS` (comma-separated, e.g., CloudFront domain). CloudFront distribution outputs are emitted by Terraform.
 - API hosting: backend runs behind an ALB when `API_DOMAIN` is set (e.g., `api.chronote.gg`). Terraform sets a GitHub Actions env var `VITE_API_BASE_URL` so the frontend uses the API domain at build time. OAuth callback should be `https://api.<domain>/auth/discord/callback`.
@@ -161,6 +162,7 @@ Coverage update rule:
 - Feature toggle evaluation checklist: `docs/feature-toggles.md`.
 - OpenAI: gpt-4o-transcribe for ASR, gpt-5.1 for notes/corrections, gpt-5-mini for live gate, DALL-E 3 for images.
 - Prompt management and tracing: Langfuse for prompt versioning, tracing, and prompt sync scripts.
+- Langfuse transcription traces attach compressed MP3 snippets (mono 16 kHz VBR, 8 MB cap) for observability.
 - Billing: Stripe Checkout + Billing Portal; webhook handler persists GuildSubscription and PaymentTransaction in DynamoDB and handles payment_failed / subscription_deleted to downgrade appropriately (guild-scoped billing only).
 - Sessions: Express sessions stored in DynamoDB `SessionTable` (TTL on `expiresAt`).
 - Storage: DynamoDB tables include GuildSubscription, PaymentTransaction, StripeWebhookEventTable (idempotency with TTL), AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, DictionaryTable, MeetingHistory, AskConversationTable, SessionTable, InstallerTable, OnboardingStateTable. Transcripts and audio artifacts go to S3 (`TRANSCRIPTS_BUCKET`).

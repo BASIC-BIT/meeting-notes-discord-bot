@@ -2,6 +2,13 @@
 
 Playwright visual tests capture screenshots for key UI pages and compare them
 against baselines to detect unintended UI changes.
+The visual suite captures two snapshots for each view. Component-level crops
+should live in Storybook instead.
+The viewport snapshot shows the exact first-load view at the Playwright
+viewport size with no layout overrides. The full snapshot enables visual mode
+so headers, footers, and scroll areas expand to show all content.
+Visual mode is toggled with query parameters. Use `?visual=1` (or `?screenshot=1`)
+to enable it and `?visual=0` to disable it.
 
 ## Running locally
 
@@ -42,3 +49,4 @@ filenames and diffs.
 - Add a new `@visual` test in `test/e2e/visual.spec.ts`.
 - Run `yarn test:visual:update`.
 - Commit the new snapshots in `test/e2e/visual.spec.ts-snapshots`.
+- Expect two snapshots per view, with `-viewport` and `-full` suffixes.

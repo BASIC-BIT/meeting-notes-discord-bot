@@ -2,7 +2,7 @@ import { format } from "date-fns";
 import { resolveNowMs } from "./now";
 import type { AskConversation, AskMessage } from "../../types/ask";
 
-export type ListMode = "mine" | "shared";
+export type ListMode = "mine" | "shared" | "archived";
 
 export const formatTime = (value: string) => format(new Date(value), "HH:mm");
 export const formatUpdated = (value: string) =>
@@ -10,8 +10,11 @@ export const formatUpdated = (value: string) =>
 export const truncate = (text: string, maxLen: number) =>
   text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
 
-export const resolveListMode = (value: string | null): ListMode =>
-  value === "shared" ? "shared" : "mine";
+export const resolveListMode = (value: string | null): ListMode => {
+  if (value === "shared") return "shared";
+  if (value === "archived") return "archived";
+  return "mine";
+};
 
 export const buildAskUrl = (options: {
   origin: string;

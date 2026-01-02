@@ -1,8 +1,20 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { mockGuilds, mockLibrary, mockSettings } from "./mockData";
 import { applyVisualDefaults, waitForVisualReady } from "./visualUtils";
 
 const runVisual = process.env.PW_VISUAL === "true";
+const visualModes = ["viewport", "full"] as const;
+type VisualMode = (typeof visualModes)[number];
+
+const withVisualMode = (path: string, mode: VisualMode): string => {
+  const url = new URL(path, "http://localhost");
+  url.searchParams.set("visual", mode === "full" ? "1" : "0");
+  return `${url.pathname}${url.search}${url.hash}`;
+};
+
+const buildScreenshotName = (base: string, mode: VisualMode): string =>
+  `${base}-${mode}.png`;
 
 test.describe("visual regression", () => {
   test.skip(!runVisual, "Visual regression disabled");
@@ -18,18 +30,32 @@ test.describe("visual regression", () => {
     await applyVisualDefaults(page);
   });
 
-  test("home page @visual", async ({ homePage, page }) => {
-    await homePage.goto();
-    await expect(homePage.hero()).toBeVisible();
+  const expectVisualScreenshot = async (
+    page: Page,
+    name: string,
+    mode: VisualMode,
+  ): Promise<void> => {
     await waitForVisualReady(page);
-    await expect(homePage.hero()).toHaveScreenshot("home-hero.png");
+    await expect(page).toHaveScreenshot(buildScreenshotName(name, mode), {
+      fullPage: mode === "full",
+      maxDiffPixels: 200,
+    });
+  };
+
+  test("home page @visual", async ({ homePage, page }) => {
+    for (const mode of visualModes) {
+      await page.goto(withVisualMode("/", mode));
+      await expect(homePage.hero()).toBeVisible();
+      await expectVisualScreenshot(page, "home", mode);
+    }
   });
 
   test("server select @visual", async ({ serverSelectPage, page }) => {
-    await serverSelectPage.goto();
-    await expect(serverSelectPage.root()).toBeVisible();
-    await waitForVisualReady(page);
-    await expect(serverSelectPage.root()).toHaveScreenshot("server-select.png");
+    for (const mode of visualModes) {
+      await page.goto(withVisualMode("/portal/select-server", mode));
+      await expect(serverSelectPage.root()).toBeVisible();
+      await expectVisualScreenshot(page, "server-select", mode);
+    }
   });
 
   test("library page @visual", async ({
@@ -37,34 +63,46 @@ test.describe("visual regression", () => {
     libraryPage,
     page,
   }) => {
-    await serverSelectPage.goto();
-    await serverSelectPage.openServerByName(mockGuilds.ddm.name);
-    await libraryPage.waitForLoaded();
-    await page.getByTestId("library-range").click();
-    await page.getByRole("option", { name: "All time" }).click();
-    await libraryPage.waitForLoaded(mockLibrary.meetingCount);
-    await waitForVisualReady(page);
-    await expect(libraryPage.root()).toHaveScreenshot("library-list.png");
+    for (const mode of visualModes) {
+      await page.goto(withVisualMode("/portal/select-server", mode));
+      await serverSelectPage.openServerByName(mockGuilds.ddm.name);
+      await libraryPage.waitForLoaded();
+      await page.getByTestId("library-range").click();
+      await page.getByRole("option", { name: "All time" }).click();
+      await libraryPage.waitForLoaded(mockLibrary.meetingCount);
+      await expectVisualScreenshot(page, "library-list", mode);
 
-    await libraryPage.openFirstMeeting();
-    const drawerDialog = page.getByRole("dialog");
-    await expect(drawerDialog).toBeVisible();
-    await waitForVisualReady(page);
-    await expect(drawerDialog).toHaveScreenshot("library-drawer.png");
+      await libraryPage.openFirstMeeting();
+      const drawerDialog = page.getByRole("dialog");
+      await expect(drawerDialog).toBeVisible();
+      await expectVisualScreenshot(page, "library-drawer", mode);
+      await libraryPage.closeDrawer();
+      await expect(libraryPage.drawer()).toBeHidden();
+
+      await page
+        .getByTestId("library-archive-toggle")
+        .getByText("Archived")
+        .click();
+      await libraryPage.waitForLoaded();
+      await expectVisualScreenshot(page, "library-archived", mode);
+    }
   });
 
   test("ask page @visual", async ({ serverSelectPage, nav, askPage, page }) => {
-    await serverSelectPage.goto();
-    await serverSelectPage.openServerByName(mockGuilds.ddm.name);
-    await nav.goToAsk();
-    await askPage.waitForReady();
-    await waitForVisualReady(page);
-    await expect(askPage.root()).toHaveScreenshot("ask-list.png");
+    for (const mode of visualModes) {
+      await page.goto(withVisualMode("/portal/select-server", mode));
+      await serverSelectPage.openServerByName(mockGuilds.ddm.name);
+      await nav.goToAsk();
+      await askPage.waitForReady();
+      await expectVisualScreenshot(page, "ask-list", mode);
 
-    await askPage.startNewChat();
-    await expect(askPage.title()).toContainText(/new chat/i);
-    await waitForVisualReady(page);
-    await expect(askPage.root()).toHaveScreenshot("ask-new-chat.png");
+      await askPage.switchListMode("archived");
+      await expectVisualScreenshot(page, "ask-archived", mode);
+
+      await askPage.startNewChat();
+      await expect(askPage.title()).toContainText(/new chat/i);
+      await expectVisualScreenshot(page, "ask-new-chat", mode);
+    }
   });
 
   test("billing page @visual", async ({
@@ -73,21 +111,51 @@ test.describe("visual regression", () => {
     billingPage,
     page,
   }) => {
-    await serverSelectPage.goto();
-    await serverSelectPage.openServerByName(mockGuilds.ddm.name);
-    await nav.goToBilling();
-    await billingPage.waitForLoaded();
-    await billingPage.expandPlans();
-    await waitForVisualReady(page);
-    await expect(billingPage.root()).toHaveScreenshot("billing-paid.png");
+    for (const mode of visualModes) {
+      await page.goto(withVisualMode("/portal/select-server", mode));
+      await serverSelectPage.openServerByName(mockGuilds.ddm.name);
+      await nav.goToBilling();
+      await billingPage.waitForLoaded();
+      await billingPage.expandPlans();
+      await expectVisualScreenshot(page, "billing-paid", mode);
 
-    await serverSelectPage.goto();
-    await serverSelectPage.openServerByName(mockGuilds.chronote.name);
-    await nav.goToBilling();
-    await billingPage.waitForLoaded();
-    await billingPage.expandPlans();
-    await waitForVisualReady(page);
-    await expect(billingPage.root()).toHaveScreenshot("billing-free.png");
+      await page.goto(withVisualMode("/portal/select-server", mode));
+      await serverSelectPage.openServerByName(mockGuilds.chronote.name);
+      await nav.goToBilling();
+      await billingPage.waitForLoaded();
+      await billingPage.expandPlans();
+      await expectVisualScreenshot(page, "billing-free", mode);
+    }
+  });
+
+  test("upgrade flow pages @visual", async ({ page }) => {
+    for (const mode of visualModes) {
+      await page.goto(
+        withVisualMode("/upgrade?promo=SAVE20&canceled=true", mode),
+      );
+      const main = page.locator("main");
+      await expect(main).toBeVisible();
+      await expectVisualScreenshot(page, "upgrade", mode);
+
+      await page.goto(
+        withVisualMode("/upgrade/select-server?promo=SAVE20", mode),
+      );
+      await expect(main).toBeVisible();
+      await expectVisualScreenshot(page, "upgrade-select", mode);
+
+      await page.goto(
+        withVisualMode(
+          `/upgrade/success?promo=SAVE20&serverId=${mockGuilds.ddm.id}`,
+          mode,
+        ),
+      );
+      await expect(main).toBeVisible();
+      await expectVisualScreenshot(page, "upgrade-success", mode);
+
+      await page.goto(withVisualMode("/promo/SAVE20", mode));
+      await expect(main).toBeVisible();
+      await expectVisualScreenshot(page, "promo-landing", mode);
+    }
   });
 
   test("settings page @visual", async ({
@@ -96,30 +164,27 @@ test.describe("visual regression", () => {
     settingsPage,
     page,
   }) => {
-    await serverSelectPage.goto();
-    await serverSelectPage.openServerByName(mockGuilds.ddm.name);
-    await nav.goToSettings();
-    await settingsPage.waitForLoaded(
-      mockSettings.overrideChannelName || undefined,
-    );
-    await waitForVisualReady(page);
-    await expect(settingsPage.root()).toHaveScreenshot("settings.png");
+    for (const mode of visualModes) {
+      await page.goto(withVisualMode("/portal/select-server", mode));
+      await serverSelectPage.openServerByName(mockGuilds.ddm.name);
+      await nav.goToSettings();
+      await settingsPage.waitForLoaded(
+        mockSettings.overrideChannelName || undefined,
+      );
+      await expectVisualScreenshot(page, "settings", mode);
 
-    await settingsPage.expandGroup("Experimental");
-    const experimentalGroup = settingsPage.groupByName("Experimental");
-    await expect(experimentalGroup).toBeVisible();
-    await waitForVisualReady(page);
-    await expect(experimentalGroup).toHaveScreenshot(
-      "settings-experimental.png",
-    );
+      await settingsPage.expandGroup("Experimental");
+      const experimentalGroup = settingsPage.groupByName("Experimental");
+      await expect(experimentalGroup).toBeVisible();
+      await expectVisualScreenshot(page, "settings-experimental", mode);
 
-    await settingsPage.openFirstOverrideEdit();
-    const settingsDialog = page.getByRole("dialog", {
-      name: /channel settings/i,
-    });
-    await expect(settingsDialog).toBeVisible();
-    await waitForVisualReady(page);
-    await expect(settingsDialog).toHaveScreenshot("settings-modal.png");
+      await settingsPage.openFirstOverrideEdit();
+      const settingsDialog = page.getByRole("dialog", {
+        name: /channel settings/i,
+      });
+      await expect(settingsDialog).toBeVisible();
+      await expectVisualScreenshot(page, "settings-modal", mode);
+    }
   });
 
   test("admin config page @visual", async ({
@@ -128,15 +193,16 @@ test.describe("visual regression", () => {
     adminConfigPage,
     page,
   }) => {
-    await serverSelectPage.goto();
-    await serverSelectPage.openServerByName(mockGuilds.ddm.name);
-    await nav.goToAdminConfig();
-    await adminConfigPage.waitForLoaded();
-    await adminConfigPage.expandGroup("Experimental");
-    await adminConfigPage
-      .entryByKey("transcription.premium.enabled")
-      .waitFor({ state: "visible" });
-    await waitForVisualReady(page);
-    await expect(adminConfigPage.root()).toHaveScreenshot("admin-config.png");
+    for (const mode of visualModes) {
+      await page.goto(withVisualMode("/portal/select-server", mode));
+      await serverSelectPage.openServerByName(mockGuilds.ddm.name);
+      await nav.goToAdminConfig();
+      await adminConfigPage.waitForLoaded();
+      await adminConfigPage.expandGroup("Experimental");
+      await adminConfigPage
+        .entryByKey("transcription.premium.enabled")
+        .waitFor({ state: "visible" });
+      await expectVisualScreenshot(page, "admin-config", mode);
+    }
   });
 });

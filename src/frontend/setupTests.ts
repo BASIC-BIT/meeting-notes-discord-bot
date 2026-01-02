@@ -10,3 +10,5 @@ import "@testing-library/jest-dom";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).__MOCK_FIXED_NOW__ =
   process.env.VITE_MOCK_FIXED_NOW || process.env.MOCK_FIXED_NOW || "";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__VISUAL_MODE__ = process.env.VITE_VISUAL_MODE || "";

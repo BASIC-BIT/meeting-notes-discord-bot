@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   getMeetingHistoryService,
   listRecentMeetingsForGuildService,
+  updateMeetingArchiveService,
 } from "../../services/meetingHistoryService";
 import { ensureBotInGuild } from "../../services/guildAccessService";
 import { config } from "../../services/configService";
@@ -32,6 +33,7 @@ const list = manageGuildProcedure
     z.object({
       serverId: z.string(),
       limit: z.number().min(1).max(100).optional(),
+      archivedOnly: z.boolean().optional(),
     }),
   )
   .query(async ({ input }) => {
@@ -53,6 +55,7 @@ const list = manageGuildProcedure
     const meetings = await listRecentMeetingsForGuildService(
       input.serverId,
       limit,
+      { archivedOnly: input.archivedOnly },
     );
 
     let channels: Array<{ id: string; name: string; type: number }> = [];
@@ -100,6 +103,8 @@ const list = manageGuildProcedure
         notesMessageId: meeting.notesMessageIds?.[0],
         audioAvailable: Boolean(meeting.audioS3Key),
         transcriptAvailable: Boolean(meeting.transcriptS3Key),
+        archivedAt: meeting.archivedAt,
+        archivedByUserId: meeting.archivedByUserId,
       })),
     };
   });
@@ -164,6 +169,8 @@ const detail = manageGuildProcedure
         notesMessageId: history.notesMessageIds?.[0],
         transcript,
         audioUrl,
+        archivedAt: history.archivedAt,
+        archivedByUserId: history.archivedByUserId,
         attendees:
           history.participants?.map((participant) =>
             resolveParticipantLabel(participant),
@@ -175,7 +182,29 @@ const detail = manageGuildProcedure
     };
   });
 
+const setArchived = manageGuildProcedure
+  .input(
+    z.object({
+      serverId: z.string(),
+      meetingId: z.string(),
+      archived: z.boolean(),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    const ok = await updateMeetingArchiveService({
+      guildId: input.serverId,
+      channelId_timestamp: input.meetingId,
+      archived: input.archived,
+      archivedByUserId: ctx.user.id,
+    });
+    if (!ok) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Meeting not found" });
+    }
+    return { ok: true };
+  });
+
 export const meetingsRouter = router({
   list,
   detail,
+  setArchived,
 });

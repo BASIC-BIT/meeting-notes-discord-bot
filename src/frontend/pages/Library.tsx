@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Box,
@@ -10,6 +10,7 @@ import {
   Loader,
   Modal,
   ScrollArea,
+  SegmentedControl,
   Stack,
   Text,
   ThemeIcon,
@@ -19,6 +20,8 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import {
+  IconArchive,
+  IconArchiveOff,
   IconDownload,
   IconFilter,
   IconMicrophone,
@@ -47,6 +50,7 @@ import {
   filterMeetingItems,
   formatChannelLabel,
   formatDateLabel,
+  formatDateTimeLabel,
   formatDurationLabel,
 } from "../utils/meetingLibrary";
 import { resolveNowMs } from "../utils/now";
@@ -74,6 +78,7 @@ type MeetingExport = {
     notesMessageId?: string;
     transcript: string;
     audioUrl?: string;
+    archivedAt?: string;
     attendees: string[];
     events: MeetingEvent[];
     title: string;
@@ -102,6 +107,8 @@ type MeetingSummaryRow = {
   audioAvailable: boolean;
   transcriptAvailable: boolean;
   status?: MeetingStatus;
+  archivedAt?: string;
+  archivedByUserId?: string;
 };
 
 export type MeetingListItem = MeetingSummaryRow & {
@@ -161,6 +168,9 @@ export default function Library() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedRange, setSelectedRange] = useState("30");
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
+  const [archiveView, setArchiveView] = useState<"active" | "archived">(
+    "active",
+  );
   const [activeFilters, setActiveFilters] = useState<MeetingEventType[]>(
     MEETING_TIMELINE_FILTERS.map((filter) => filter.value),
   );
@@ -178,6 +188,7 @@ export default function Library() {
     {
       serverId: selectedGuildId ?? "",
       limit: 50,
+      archivedOnly: archiveView === "archived",
     },
     { enabled: Boolean(selectedGuildId) },
   );
@@ -193,6 +204,7 @@ export default function Library() {
     },
     { enabled: Boolean(selectedGuildId && selectedMeetingId) },
   );
+  const archiveMutation = trpc.meetings.setArchived.useMutation();
 
   const channelNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -299,6 +311,20 @@ export default function Library() {
   const detailLoading = detailQuery.isLoading || detailQuery.isFetching;
   const refetchedMeetingRef = useRef<string | null>(null);
 
+  const invalidateMeetingLists = useCallback(async () => {
+    if (!selectedGuildId) return;
+    await Promise.all([
+      trpcUtils.meetings.list.invalidate({
+        serverId: selectedGuildId,
+        archivedOnly: false,
+      }),
+      trpcUtils.meetings.list.invalidate({
+        serverId: selectedGuildId,
+        archivedOnly: true,
+      }),
+    ]);
+  }, [selectedGuildId, trpcUtils.meetings.list]);
+
   const meetingKey = meeting?.id ?? null;
   useEffect(() => {
     if (!liveStreamEnabled) return;
@@ -312,7 +338,7 @@ export default function Library() {
     if (refetchedMeetingRef.current === meetingKey) return;
     refetchedMeetingRef.current = meetingKey;
     void trpcUtils.meetings.detail.invalidate();
-    void trpcUtils.meetings.list.invalidate({ serverId: selectedGuildId });
+    void invalidateMeetingLists();
   }, [
     liveStream.status,
     liveStreamEnabled,
@@ -320,12 +346,13 @@ export default function Library() {
     selectedGuildId,
     trpcUtils.meetings.detail,
     trpcUtils.meetings.list,
+    invalidateMeetingLists,
   ]);
 
   const handleRefresh = async () => {
     if (!selectedGuildId) return;
     await Promise.all([
-      trpcUtils.meetings.list.invalidate({ serverId: selectedGuildId }),
+      invalidateMeetingLists(),
       trpcUtils.meetings.detail.invalidate(),
       trpcUtils.servers.channels.invalidate({ serverId: selectedGuildId }),
     ]);
@@ -380,6 +407,41 @@ export default function Library() {
     }
   };
 
+  const handleCloseDrawer = () => {
+    navigate({
+      search: (prev) => ({ ...prev, meetingId: undefined }),
+    });
+    setFullScreen(false);
+    setEndMeetingModalOpen(false);
+  };
+
+  const handleArchiveToggle = async (archived: boolean) => {
+    if (!selectedGuildId || !meeting) return;
+    try {
+      await archiveMutation.mutateAsync({
+        serverId: selectedGuildId,
+        meetingId: meeting.id,
+        archived,
+      });
+      notifications.show({
+        color: "green",
+        message: archived
+          ? "Meeting archived. You can find it in the Archived view."
+          : "Meeting unarchived.",
+      });
+      await Promise.all([
+        invalidateMeetingLists(),
+        trpcUtils.meetings.detail.invalidate(),
+      ]);
+      handleCloseDrawer();
+    } catch {
+      notifications.show({
+        color: "red",
+        message: "Unable to update archive state. Please try again.",
+      });
+    }
+  };
+
   const handleDownload = () => {
     const detail = detailQuery.data?.meeting;
     if (!detail || !meeting) return;
@@ -396,6 +458,7 @@ export default function Library() {
         notesMessageId: detail.notesMessageId,
         transcript: detail.transcript ?? "",
         audioUrl: detail.audioUrl,
+        archivedAt: detail.archivedAt,
         attendees: detail.attendees ?? [],
         events: detail.events ?? [],
         title: meeting.title,
@@ -442,9 +505,23 @@ export default function Library() {
       />
 
       <Group justify="space-between" align="center" wrap="wrap">
-        <Text c="dimmed" size="sm">
-          {filtered.length} meetings
-        </Text>
+        <Group gap="sm" align="center" wrap="wrap">
+          <Text c="dimmed" size="sm">
+            {filtered.length}{" "}
+            {archiveView === "archived" ? "archived meetings" : "meetings"}
+          </Text>
+          <SegmentedControl
+            value={archiveView}
+            onChange={(value) =>
+              setArchiveView(value === "archived" ? "archived" : "active")
+            }
+            data-testid="library-archive-toggle"
+            data={[
+              { label: "Active", value: "active" },
+              { label: "Archived", value: "archived" },
+            ]}
+          />
+        </Group>
         <Group gap="xs" align="center">
           <Text size="xs" c="dimmed">
             Sorted by recency |{" "}
@@ -478,13 +555,7 @@ export default function Library() {
 
       <Drawer
         opened={!!selectedMeetingId}
-        onClose={() => {
-          navigate({
-            search: (prev) => ({ ...prev, meetingId: undefined }),
-          });
-          setFullScreen(false);
-          setEndMeetingModalOpen(false);
-        }}
+        onClose={handleCloseDrawer}
         position="right"
         size={fullScreen ? "100%" : "xl"}
         overlayProps={uiOverlays.modal}
@@ -541,6 +612,11 @@ export default function Library() {
                     <Group justify="space-between" align="center" wrap="wrap">
                       <Group gap="xs" align="center" wrap="wrap">
                         <Title order={3}>{meeting.title}</Title>
+                        {meeting.archivedAt ? (
+                          <Badge size="sm" variant="light" color="gray">
+                            Archived
+                          </Badge>
+                        ) : null}
                         {renderDetailStatusBadge(displayStatus)}
                       </Group>
                       <Group gap="sm">
@@ -564,6 +640,27 @@ export default function Library() {
                           Download
                         </Button>
                         <Button
+                          variant="subtle"
+                          leftSection={
+                            meeting.archivedAt ? (
+                              <IconArchiveOff size={16} />
+                            ) : (
+                              <IconArchive size={16} />
+                            )
+                          }
+                          onClick={() =>
+                            handleArchiveToggle(!meeting.archivedAt)
+                          }
+                          loading={archiveMutation.isPending}
+                          data-testid={
+                            meeting.archivedAt
+                              ? "meeting-unarchive"
+                              : "meeting-archive"
+                          }
+                        >
+                          {meeting.archivedAt ? "Unarchive" : "Archive"}
+                        </Button>
+                        <Button
                           variant="outline"
                           leftSection={<IconFilter size={16} />}
                           onClick={() => setFullScreen((prev) => !prev)}
@@ -576,6 +673,11 @@ export default function Library() {
                       {meeting.dateLabel} | {meeting.durationLabel} |{" "}
                       {meeting.channel}
                     </Text>
+                    {meeting.archivedAt ? (
+                      <Text size="xs" c="dimmed">
+                        Archived on {formatDateTimeLabel(meeting.archivedAt)}
+                      </Text>
+                    ) : null}
                     <Group gap="xs" wrap="wrap">
                       {meeting.tags.map((tag) => (
                         <Badge key={tag} variant="light" color="gray">
@@ -628,7 +730,11 @@ export default function Library() {
                       {meeting.summary}
                     </Text>
                     <Divider my="sm" />
-                    <ScrollArea h={fullScreen ? 260 : 200} offsetScrollbars>
+                    <ScrollArea
+                      h={fullScreen ? 260 : 200}
+                      offsetScrollbars
+                      data-visual-scroll
+                    >
                       <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
                         {meeting.notes}
                       </Text>

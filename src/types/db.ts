@@ -204,6 +204,8 @@ export interface MeetingHistory {
   updatedAt?: string; // Last time notes were edited
   notesLastEditedBy?: string; // User ID who last edited notes
   notesLastEditedAt?: string; // Timestamp of last notes edit
+  archivedAt?: string; // Timestamp when archived
+  archivedByUserId?: string; // User ID who archived
   transcript?: string; // Deprecated: transcript now stored in S3 JSON; kept only for legacy records
   transcriptS3Key?: string; // S3 object key where transcript JSON is stored
   suggestionsHistory?: SuggestionHistoryEntry[]; // Chronological list of suggestions applied
@@ -227,6 +229,8 @@ export interface AskConversationRecord {
   sharedAt?: string;
   sharedByUserId?: string;
   sharedByTag?: string;
+  archivedAt?: string;
+  archivedByUserId?: string;
 }
 
 export interface AskMessageRecord {
@@ -256,4 +260,6 @@ export interface AskConversationShareRecord {
   sharedAt: string;
   sharedByUserId: string;
   sharedByTag?: string;
+  archivedAt?: string;
+  archivedByUserId?: string;
 }

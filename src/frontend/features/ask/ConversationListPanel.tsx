@@ -29,6 +29,7 @@ type ConversationListPanelProps = {
   query: string;
   onQueryChange: (value: string) => void;
   mineConversations: AskConversation[];
+  archivedConversations: AskConversation[];
   sharedConversations: AskSharedConversation[];
   listBusy: boolean;
   listError: unknown;
@@ -49,6 +50,7 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
     query,
     onQueryChange,
     mineConversations,
+    archivedConversations,
     sharedConversations,
     listBusy,
     listError,
@@ -60,7 +62,11 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
   } = props;
 
   const listItems =
-    listMode === "shared" ? sharedConversations : mineConversations;
+    listMode === "shared"
+      ? sharedConversations
+      : listMode === "archived"
+        ? archivedConversations
+        : mineConversations;
 
   return (
     <Surface
@@ -107,11 +113,19 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
           fullWidth
           value={listMode}
           onChange={(value) =>
-            onListModeChange(value === "shared" ? "shared" : "mine")
+            onListModeChange(
+              value === "shared"
+                ? "shared"
+                : value === "archived"
+                  ? "archived"
+                  : "mine",
+            )
           }
+          data-testid="ask-list-mode"
           data={[
             { label: "My chats", value: "mine" },
             { label: "Shared", value: "shared", disabled: !sharingEnabled },
+            { label: "Archived", value: "archived" },
           ]}
         />
         <TextInput
@@ -126,6 +140,7 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
           offsetScrollbars
           type="always"
           scrollbarSize={10}
+          data-visual-scroll
           data-testid="ask-list"
           styles={{
             viewport: {
@@ -157,7 +172,9 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
                   <Text size="sm" c="dimmed">
                     {listMode === "shared"
                       ? "No shared conversations yet."
-                      : "Start by asking about a recent meeting."}
+                      : listMode === "archived"
+                        ? "No archived conversations yet."
+                        : "Start by asking about a recent meeting."}
                   </Text>
                   {listMode === "shared" ? (
                     <Text size="xs" c="dimmed">
@@ -175,6 +192,8 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
                   "visibility" in conv
                     ? (conv.visibility ?? "private")
                     : "shared";
+                const isArchived =
+                  "archivedAt" in conv ? Boolean(conv.archivedAt) : false;
                 return (
                   <Surface
                     key={convId}
@@ -228,6 +247,11 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
                           </Text>
                         </Group>
                       )}
+                      {listMode === "archived" || isArchived ? (
+                        <Badge size="xs" variant="light" color="gray">
+                          Archived
+                        </Badge>
+                      ) : null}
                     </Stack>
                   </Surface>
                 );

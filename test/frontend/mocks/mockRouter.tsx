@@ -8,14 +8,20 @@ import {
   subscribeRouteSearch,
 } from "./routerState";
 
+type RouteSearch = {
+  meetingId?: string;
+  list?: string;
+  messageId?: string;
+  promo?: string;
+  serverId?: string;
+  plan?: string;
+  interval?: string;
+  canceled?: boolean | string;
+  session_id?: string;
+};
+
 type NavigateOptions = {
-  search?:
-    | ((prev: { meetingId?: string; list?: string; messageId?: string }) => {
-        meetingId?: string;
-        list?: string;
-        messageId?: string;
-      })
-    | { meetingId?: string; list?: string; messageId?: string };
+  search?: RouteSearch | ((prev: RouteSearch) => RouteSearch);
 };
 
 const buildSearchString = () => {

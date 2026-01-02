@@ -86,6 +86,7 @@
     "@discordjs/rest": "^2.6.0",
     "@discordjs/voice": "^0.19.0",
     "@langfuse/client": "^4.5.1",
+    "@langfuse/core": "^4.5.1",
     "@langfuse/openai": "^4.5.1",
     "@langfuse/otel": "^4.5.1",
     "@langfuse/tracing": "^4.5.1",

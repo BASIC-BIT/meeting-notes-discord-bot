@@ -100,6 +100,11 @@ export function MeetingList({
                     <Text fw={600} truncate>
                       {meetingItem.title}
                     </Text>
+                    {meetingItem.archivedAt ? (
+                      <Badge size="xs" variant="light" color="gray">
+                        Archived
+                      </Badge>
+                    ) : null}
                     {renderListStatusBadge(meetingItem.status)}
                   </Group>
                   <Text size="xs" c="dimmed">

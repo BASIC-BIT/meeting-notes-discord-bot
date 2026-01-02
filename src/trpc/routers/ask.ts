@@ -8,6 +8,7 @@ import {
   listSharedAskConversations,
   listAskConversations,
   renameAskConversation,
+  setAskConversationArchived,
   setAskConversationVisibility,
 } from "../../services/askConversationService";
 import {
@@ -292,6 +293,36 @@ const setVisibility = guildMemberProcedure
     return { conversation: updated };
   });
 
+const setArchived = guildMemberProcedure
+  .input(
+    z.object({
+      serverId: z.string(),
+      conversationId: z.string(),
+      archived: z.boolean(),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    await resolveAskAccess({
+      accessToken: ctx.user.accessToken ?? "",
+      guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
+    });
+    const updated = await setAskConversationArchived({
+      userId: ctx.user.id,
+      guildId: input.serverId,
+      conversationId: input.conversationId,
+      archived: input.archived,
+    });
+    if (!updated) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Conversation not found",
+      });
+    }
+    return { conversation: updated };
+  });
+
 export const askRouter = router({
   settings,
   ask,
@@ -302,4 +333,5 @@ export const askRouter = router({
   getPublicConversation,
   rename,
   setVisibility,
+  setArchived,
 });
