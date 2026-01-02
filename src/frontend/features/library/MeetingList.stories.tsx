@@ -52,6 +52,16 @@ const items: MeetingListItem[] = [
   },
 ];
 
+const archivedItems: MeetingListItem[] = [
+  {
+    ...items[0],
+    id: "m3",
+    meetingId: "meeting-3",
+    title: "Archived planning sync",
+    archivedAt: "2025-12-31T12:00:00.000Z",
+  },
+];
+
 const meta: Meta<typeof MeetingList> = {
   title: "Library/MeetingList",
   component: MeetingList,
@@ -80,5 +90,11 @@ export const Loading: Story = {
 export const Empty: Story = {
   args: {
     items: [],
+  },
+};
+
+export const Archived: Story = {
+  args: {
+    items: archivedItems,
   },
 };

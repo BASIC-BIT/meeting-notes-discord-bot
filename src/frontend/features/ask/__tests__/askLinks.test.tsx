@@ -34,6 +34,7 @@ describe("askLinks helpers", () => {
 
   it("resolves list mode", () => {
     expect(resolveListMode("shared")).toBe("shared");
+    expect(resolveListMode("archived")).toBe("archived");
     expect(resolveListMode("mine")).toBe("mine");
     expect(resolveListMode(null)).toBe("mine");
   });

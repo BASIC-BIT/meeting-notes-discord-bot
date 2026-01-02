@@ -54,6 +54,7 @@ export default function ServerPicker({
   filter,
   emptyTitle,
   emptyDescription,
+  searchEmptyMessage,
   searchPlaceholder = "Search servers",
   rootTestId,
   cardTestId,

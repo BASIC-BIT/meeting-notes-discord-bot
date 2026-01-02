@@ -51,6 +51,7 @@ const config: Config.InitialOptions = {
     "\\.(jpg|jpeg|png|gif|svg)$": "<rootDir>/test/__mocks__/fileMock.js",
     "^react-markdown$": "<rootDir>/test/__mocks__/reactMarkdown.tsx",
     "^remark-gfm$": "<rootDir>/test/__mocks__/remarkGfm.ts",
+    "^uuid$": "<rootDir>/test/__mocks__/uuid.ts",
   },
 
   // A map from regular expressions to paths to transformers

@@ -28,6 +28,12 @@ test("library page shows meetings and drawer details (mock)", async ({
   await expect(libraryPage.drawerSummaryLabel()).toBeVisible();
   await expect(libraryPage.drawerTimelineLabel()).toBeVisible();
   await expect(libraryPage.drawerDownload()).toBeVisible();
-  await libraryPage.closeDrawer();
+  await libraryPage.drawerArchive().click();
   await expect(libraryPage.drawer()).toBeHidden();
+
+  await libraryPage.selectArchiveView("archived");
+  await libraryPage.waitForLoaded();
+  await expect(
+    libraryPage.meetingRowByText(mockLibrary.meetingTitle),
+  ).toBeVisible();
 });

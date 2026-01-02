@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import {
   AppShell,
   Box,
@@ -18,7 +18,7 @@ import { IconMessage } from "@tabler/icons-react";
 import { format } from "date-fns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useParams, useRouterState } from "@tanstack/react-router";
+import { useParams, useSearch } from "@tanstack/react-router";
 import AuthBanner from "../components/AuthBanner";
 import PageHeader from "../components/PageHeader";
 import SiteFooter from "../components/SiteFooter";
@@ -52,12 +52,10 @@ export default function PublicAsk() {
     serverId?: string;
     conversationId?: string;
   };
-  const location = useRouterState({ select: (state) => state.location });
-  const searchParams = useMemo(
-    () => new URLSearchParams(location.search),
-    [location.search],
-  );
-  const highlightedMessageId = searchParams.get("messageId");
+  const search = useSearch({ strict: false }) as {
+    messageId?: string;
+  };
+  const highlightedMessageId = search.messageId ?? null;
 
   const query = trpc.ask.getPublicConversation.useQuery(
     {

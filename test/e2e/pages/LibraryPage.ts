@@ -16,6 +16,15 @@ export class LibraryPage {
     return this.page.getByTestId(testIds.library.refresh);
   }
 
+  archiveToggle(): Locator {
+    return this.page.getByTestId(testIds.library.archiveToggle);
+  }
+
+  async selectArchiveView(view: "active" | "archived"): Promise<void> {
+    const label = view === "archived" ? "Archived" : "Active";
+    await this.archiveToggle().getByText(label).click();
+  }
+
   meetingRows(): Locator {
     return this.page.getByTestId(testIds.library.meetingRow);
   }
@@ -53,6 +62,14 @@ export class LibraryPage {
 
   drawerDownload(): Locator {
     return this.drawer().getByTestId(testIds.library.download);
+  }
+
+  drawerArchive(): Locator {
+    return this.drawer().getByTestId(testIds.library.archive);
+  }
+
+  drawerUnarchive(): Locator {
+    return this.drawer().getByTestId(testIds.library.unarchive);
   }
 
   drawerSummaryLabel(): Locator {

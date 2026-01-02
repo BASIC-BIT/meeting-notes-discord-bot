@@ -2,10 +2,12 @@ import {
   AppShell,
   Box,
   Container,
+  type AppShellStylesNames,
   useComputedColorScheme,
   useMantineTheme,
 } from "@mantine/core";
 import { Outlet } from "@tanstack/react-router";
+import type { CSSProperties } from "react";
 import SiteFooter from "../components/SiteFooter";
 import SiteHeader from "../components/SiteHeader";
 import { useVisualMode } from "../hooks/useVisualMode";
@@ -31,7 +33,7 @@ export default function MarketingLayout() {
     overflow: visualMode ? "visible" : undefined,
   };
 
-  const appShellStyles = {
+  const appShellStyles: Partial<Record<AppShellStylesNames, CSSProperties>> = {
     header: visualMode
       ? {
           borderBottom: shellBorder(theme, isDark),

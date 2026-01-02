@@ -80,6 +80,7 @@ const buildContextBlocks = (meetings: MeetingSummary[], guildId: string) =>
   meetings.map((m) => {
     const date = new Date(m.timestamp).toLocaleDateString();
     const tagText = m.tags?.length ? `Tags: ${m.tags.join(", ")}` : "";
+    const archivedLine = m.archivedAt ? "\n  Status: Archived" : "";
     const notes = m.notes
       ? truncate(scrubInternalIds(m.notes), 900)
       : "(no notes)";
@@ -88,7 +89,7 @@ const buildContextBlocks = (meetings: MeetingSummary[], guildId: string) =>
         ? `https://discord.com/channels/${guildId}/${m.notesChannelId}/${m.notesMessageIds[0]}`
         : "";
     const sourceLine = sourceLink ? `\n  Source: ${sourceLink}` : "";
-    return `- Meeting ${date} ${tagText}\n  Notes: ${notes}${sourceLine}`;
+    return `- Meeting ${date} ${tagText}\n  Notes: ${notes}${archivedLine}${sourceLine}`;
   });
 
 const filterMeetings = (
@@ -188,6 +189,7 @@ export async function answerQuestionService(
   const allMeetings = await listRecentMeetingsForGuildService(
     guildId,
     maxMeetings,
+    { includeArchived: true },
   );
   const scopedMeetings = filterMeetings(allMeetings, channelId, scope, tags);
   const meetings = req.viewerUserId

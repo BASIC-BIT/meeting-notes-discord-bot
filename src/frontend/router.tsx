@@ -177,7 +177,7 @@ const portalLibraryRoute = new Route({
 });
 
 const askSearchSchema = z.object({
-  list: z.enum(["mine", "shared"]).optional(),
+  list: z.enum(["mine", "shared", "archived"]).optional(),
   messageId: z.string().optional(),
 }).parse;
 

@@ -501,6 +501,7 @@ function buildDefaultStore(): MockStore {
     tags?: string[];
     textChannelId: string;
     meetingIdSuffix: string;
+    archived?: boolean;
   }): MeetingHistory => {
     const timestamp = new Date(
       baseNowMs - params.minutesAgo * 60 * 1000,
@@ -568,6 +569,8 @@ function buildDefaultStore(): MockStore {
       notesChannelId: params.textChannelId,
       notesMessageIds: ["1451653357407174727"],
       transcriptS3Key: transcriptKey,
+      archivedAt: params.archived ? mockNowIso() : undefined,
+      archivedByUserId: params.archived ? mockUser.id : undefined,
     };
   };
   meetingHistoryByGuild.set("1249723747896918109", [
@@ -598,6 +601,7 @@ function buildDefaultStore(): MockStore {
       meetingIdSuffix: "ddm-3",
       textChannelId: "text-2",
       tags: ["community", "staff"],
+      archived: true,
       notes:
         "Chapter 01 - Crossed Wires\nSummary: Staff aligned on moderation changes, event schedule, and follow-ups.",
     }),
@@ -620,6 +624,7 @@ function buildDefaultStore(): MockStore {
   const askSharesByGuild = new Map<string, AskSharedConversation[]>();
   const conversationId = "conv-mock-1";
   const conversationIdTwo = "conv-mock-2";
+  const conversationIdThree = "conv-mock-3";
   const conversationKey = `USER#${mockUser.id}#GUILD#1249723747896918109`;
   const createdAt = mockNowIso();
   const updatedAt = mockNowIso();
@@ -643,6 +648,15 @@ function buildDefaultStore(): MockStore {
       sharedAt: updatedAt,
       sharedByUserId: mockUser.id,
       sharedByTag: `${mockUser.username}#${mockUser.discriminator}`,
+    },
+    {
+      id: conversationIdThree,
+      title: "Old combat recap",
+      summary: "Archived recap for a prior combat session.",
+      createdAt,
+      updatedAt,
+      archivedAt: updatedAt,
+      archivedByUserId: mockUser.id,
     },
   ]);
   askSharesByGuild.set("1249723747896918109", [

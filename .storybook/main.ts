@@ -1,6 +1,5 @@
 import type { StorybookConfig } from "@storybook/react-vite";
 import { mergeConfig } from "vite";
-import react from "@vitejs/plugin-react-swc";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +25,6 @@ const config: StorybookConfig = {
         tsconfigPaths({
           projects: [resolve(rootDir, "tsconfig.frontend.json")],
         }),
-        react(),
       ],
     });
   },

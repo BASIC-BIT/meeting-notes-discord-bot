@@ -70,12 +70,16 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
   const navigate = useNavigate();
 
   const serverIdFromPath = pathname.match(/\/portal\/server\/([^/]+)/)?.[1];
-  const activeServerId = selectedGuildId ?? serverIdFromPath;
-  const selectedGuild = activeServerId
-    ? (guilds.find((g) => g.id === activeServerId) ?? null)
+  const selectedGuild = selectedGuildId
+    ? (guilds.find((g) => g.id === selectedGuildId) ?? null)
     : null;
-  const selectedServerName = selectedGuild?.name ?? null;
-  const canManage = selectedGuild?.canManage ?? false;
+  const pathGuild = serverIdFromPath
+    ? (guilds.find((g) => g.id === serverIdFromPath) ?? null)
+    : null;
+  const resolvedGuild = selectedGuild ?? pathGuild;
+  const activeServerId = resolvedGuild?.id ?? selectedGuildId ?? null;
+  const selectedServerName = resolvedGuild?.name ?? null;
+  const canManage = resolvedGuild?.canManage ?? false;
   const isSuperAdmin = Boolean(user?.isSuperAdmin);
 
   const resolveServerPath = (page: string) =>

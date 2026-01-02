@@ -37,6 +37,7 @@ describe("ConversationListPanel", () => {
         query=""
         onQueryChange={noop}
         mineConversations={[baseConversation]}
+        archivedConversations={[]}
         sharedConversations={[]}
         listBusy={false}
         listError={null}
@@ -61,6 +62,7 @@ describe("ConversationListPanel", () => {
         query=""
         onQueryChange={noop}
         mineConversations={[]}
+        archivedConversations={[]}
         sharedConversations={[sharedConversation]}
         listBusy={false}
         listError={null}
@@ -74,5 +76,31 @@ describe("ConversationListPanel", () => {
 
     expect(screen.getByText("Shared chat")).toBeInTheDocument();
     expect(screen.getByText("User#0001")).toBeInTheDocument();
+  });
+
+  it("shows archived conversations list when mode is archived", () => {
+    renderWithProvider(
+      <ConversationListPanel
+        listMode="archived"
+        onListModeChange={noop}
+        query=""
+        onQueryChange={noop}
+        mineConversations={[]}
+        archivedConversations={[
+          { ...baseConversation, id: "archived-1", title: "Archived chat" },
+        ]}
+        sharedConversations={[]}
+        listBusy={false}
+        listError={null}
+        activeId={"archived-1"}
+        onNewConversation={noop}
+        navigateToConversation={noop}
+        sharingEnabled={true}
+        askAccessAllowed={true}
+      />,
+    );
+
+    expect(screen.getByText("Archived chat")).toBeInTheDocument();
+    expect(screen.getAllByText("Archived").length).toBeGreaterThan(0);
   });
 });

@@ -16,6 +16,20 @@ export class AskPage {
     return this.page.getByTestId(testIds.ask.title);
   }
 
+  listMode(): Locator {
+    return this.page.getByTestId(testIds.ask.listMode);
+  }
+
+  async switchListMode(mode: "mine" | "shared" | "archived"): Promise<void> {
+    const label =
+      mode === "shared"
+        ? "Shared"
+        : mode === "archived"
+          ? "Archived"
+          : "My chats";
+    await this.listMode().getByText(label).click();
+  }
+
   loadingList(): Locator {
     return this.page.getByTestId(testIds.ask.loadingList).first();
   }
@@ -62,6 +76,14 @@ export class AskPage {
 
   renameInput(): Locator {
     return this.page.getByTestId(testIds.ask.renameInput);
+  }
+
+  archiveButton(): Locator {
+    return this.page.getByTestId(testIds.ask.archive);
+  }
+
+  unarchiveButton(): Locator {
+    return this.page.getByTestId(testIds.ask.unarchive);
   }
 
   async renameTo(title: string): Promise<void> {

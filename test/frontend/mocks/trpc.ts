@@ -258,10 +258,26 @@ export const billingPortalMutation = buildMutationState<
 >({ url: "https://example.com/portal" });
 export const askMutation = buildMutationState<[unknown], void>(undefined);
 export const askRenameMutation = buildMutationState<[unknown], void>(undefined);
+const defaultAskConversation: AskConversation = {
+  id: "conv-1",
+  title: "Conversation",
+  summary: "",
+  createdAt: "2024-01-01T00:00:00Z",
+  updatedAt: "2024-01-01T00:00:00Z",
+};
 export const askVisibilityMutation = buildMutationState<
   [unknown],
   { conversation: AskConversation } | null
 >(null);
+export const askArchiveMutation = buildMutationState<
+  [unknown],
+  { conversation: AskConversation }
+>({
+  conversation: defaultAskConversation,
+});
+export const meetingsArchiveMutation = buildMutationState<[unknown], void>(
+  undefined,
+);
 export const autorecordAddMutation = buildMutationState<[unknown], void>(
   undefined,
 );
@@ -400,6 +416,10 @@ export const resetTrpcMocks = () => {
   resetMutationState(askMutation, undefined);
   resetMutationState(askRenameMutation, undefined);
   resetMutationState(askVisibilityMutation, null);
+  resetMutationState(askArchiveMutation, {
+    conversation: defaultAskConversation,
+  });
+  resetMutationState(meetingsArchiveMutation, undefined);
   resetMutationState(autorecordAddMutation, undefined);
   resetMutationState(autorecordRemoveMutation, undefined);
   resetMutationState(contextSetMutation, undefined);
@@ -585,10 +605,12 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
       ask: { useMutation: () => askMutation },
       rename: { useMutation: () => askRenameMutation },
       setVisibility: { useMutation: () => askVisibilityMutation },
+      setArchived: { useMutation: () => askArchiveMutation },
     },
     meetings: {
       list: { useQuery: () => meetingsListQuery },
       detail: { useQuery: () => meetingsDetailQuery },
+      setArchived: { useMutation: () => meetingsArchiveMutation },
     },
     autorecord: {
       list: { useQuery: () => autorecordListQuery },

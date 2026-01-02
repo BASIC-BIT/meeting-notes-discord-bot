@@ -65,6 +65,8 @@ const buildShareRecord = (options: {
     sharedAt,
     sharedByUserId,
     sharedByTag,
+    archivedAt: conversation.archivedAt,
+    archivedByUserId: conversation.archivedByUserId,
   };
 };
 
@@ -85,6 +87,7 @@ export async function listSharedAskConversations(
   const conversations = await repo.listSharedConversations(guildId);
   return conversations
     .filter((conv) => conv.ownerUserId !== viewerUserId)
+    .filter((conv) => !conv.archivedAt)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
@@ -209,6 +212,42 @@ export async function setAskConversationVisibility(params: {
     );
   } else {
     await repo.deleteSharedConversation(guildId, conversationId);
+  }
+  return updated;
+}
+
+export async function setAskConversationArchived(params: {
+  userId: string;
+  guildId: string;
+  conversationId: string;
+  archived: boolean;
+}) {
+  const repo = getAskConversationRepository();
+  const { userId, guildId, conversationId, archived } = params;
+  const existing = await repo.getConversation(userId, guildId, conversationId);
+  if (!existing) {
+    return undefined;
+  }
+  const now = nowIso();
+  const updated: AskConversation = {
+    ...existing,
+    archivedAt: archived ? now : undefined,
+    archivedByUserId: archived ? userId : undefined,
+    updatedAt: now,
+  };
+  await repo.writeConversation(userId, guildId, updated);
+  if (isSharedVisibility(updated.visibility) && updated.sharedAt) {
+    await repo.writeSharedConversation(
+      buildShareRecord({
+        guildId,
+        ownerUserId: userId,
+        ownerTag: updated.sharedByTag,
+        conversation: updated,
+        sharedAt: updated.sharedAt,
+        sharedByUserId: updated.sharedByUserId ?? userId,
+        sharedByTag: updated.sharedByTag,
+      }),
+    );
   }
   return updated;
 }

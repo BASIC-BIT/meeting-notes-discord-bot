@@ -15,10 +15,10 @@ import { useAuth } from "../contexts/AuthContext";
 import { buildApiUrl } from "../services/apiClient";
 
 export default function PromoLanding() {
-  const { code } = useParams({ from: "/marketing/promo/$code" });
-  const promoCode = code.trim();
+  const { code } = useParams({ strict: false }) as { code?: string };
+  const promoCode = code?.trim() ?? "";
   const { state: authState, loading: authLoading } = useAuth();
-  const navigate = useNavigate({ from: "/marketing/promo/$code" });
+  const navigate = useNavigate();
 
   const redirectTarget = `${window.location.origin}/upgrade/select-server?promo=${promoCode}`;
   const loginUrl = `${buildApiUrl("/auth/discord")}?redirect=${encodeURIComponent(

@@ -49,11 +49,17 @@ export default function Upgrade() {
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
   const { state: authState, loading: authLoading } = useAuth();
-  const search = useSearch({ from: "/marketing/upgrade" });
+  const search = useSearch({ strict: false }) as {
+    promo?: string;
+    serverId?: string;
+    plan?: "basic" | "pro";
+    interval?: "month" | "year";
+    canceled?: boolean;
+  };
   const promoCode = search.promo?.trim() ?? "";
   const preselectedServerId = search.serverId?.trim() ?? "";
   const wasCanceled = String(search.canceled) === "true";
-  const navigate = useNavigate({ from: "/marketing/upgrade" });
+  const navigate = useNavigate();
 
   const params = new URLSearchParams();
   if (promoCode) params.set("promo", promoCode);

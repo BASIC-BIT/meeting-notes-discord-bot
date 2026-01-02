@@ -78,8 +78,14 @@ const buildUpgradeQuery = (options: {
 export default function UpgradeServerSelect() {
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
-  const navigate = useNavigate({ from: "/marketing/upgrade/select-server" });
-  const search = useSearch({ from: "/marketing/upgrade/select-server" });
+  const navigate = useNavigate({ from: "/upgrade/select-server" });
+  const search = useSearch({ strict: false }) as {
+    promo?: string;
+    serverId?: string;
+    plan?: PaidTier;
+    interval?: BillingInterval;
+    canceled?: boolean;
+  };
   const { state: authState, loading: authLoading } = useAuth();
   const {
     guilds,

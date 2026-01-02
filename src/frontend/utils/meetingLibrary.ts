@@ -28,6 +28,7 @@ export type MeetingDetails = {
   tags: string[];
   channel: string;
   audioUrl?: string | null;
+  archivedAt?: string | null;
   attendees: string[];
   decisions: string[];
   actions: string[];
@@ -46,6 +47,7 @@ export type MeetingDetailInput = {
   summarySentence?: string | null;
   summaryLabel?: string | null;
   audioUrl?: string | null;
+  archivedAt?: string | null;
   attendees?: string[];
   events?: MeetingEvent[];
   status?: MeetingStatus;
@@ -245,6 +247,7 @@ export const buildMeetingDetails = (
     tags: resolveTags(detail.tags),
     channel: channelLabel,
     audioUrl: detail.audioUrl ?? null,
+    archivedAt: detail.archivedAt ?? null,
     attendees: resolveAttendees(detail.attendees),
     decisions: [],
     actions: [],

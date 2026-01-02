@@ -12,6 +12,8 @@ export interface AskConversation {
   sharedAt?: string;
   sharedByUserId?: string;
   sharedByTag?: string;
+  archivedAt?: string;
+  archivedByUserId?: string;
 }
 
 export interface AskMessage {
@@ -30,4 +32,5 @@ export interface AskSharedConversation {
   sharedAt?: string;
   ownerUserId: string;
   ownerTag?: string;
+  archivedAt?: string;
 }

@@ -75,6 +75,15 @@ test.describe("visual regression", () => {
       const drawerDialog = page.getByRole("dialog");
       await expect(drawerDialog).toBeVisible();
       await expectVisualScreenshot(page, "library-drawer", mode);
+      await libraryPage.closeDrawer();
+      await expect(libraryPage.drawer()).toBeHidden();
+
+      await page
+        .getByTestId("library-archive-toggle")
+        .getByText("Archived")
+        .click();
+      await libraryPage.waitForLoaded();
+      await expectVisualScreenshot(page, "library-archived", mode);
     }
   });
 
@@ -85,6 +94,9 @@ test.describe("visual regression", () => {
       await nav.goToAsk();
       await askPage.waitForReady();
       await expectVisualScreenshot(page, "ask-list", mode);
+
+      await askPage.switchListMode("archived");
+      await expectVisualScreenshot(page, "ask-archived", mode);
 
       await askPage.startNewChat();
       await expect(askPage.title()).toContainText(/new chat/i);

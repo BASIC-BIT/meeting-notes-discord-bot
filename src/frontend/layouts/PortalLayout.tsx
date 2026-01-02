@@ -5,11 +5,13 @@ import {
   Loader,
   Stack,
   Text,
+  type AppShellStylesNames,
   useComputedColorScheme,
   useMantineTheme,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { Outlet, Navigate, useRouterState } from "@tanstack/react-router";
+import type { CSSProperties } from "react";
 import SiteFooter from "../components/SiteFooter";
 import SiteHeader from "../components/SiteHeader";
 import SiteNavbar from "../components/SiteNavbar";
@@ -87,7 +89,7 @@ export default function PortalLayout() {
     backdropFilter: "blur(16px)",
   };
 
-  const appShellStyles = {
+  const appShellStyles: Partial<Record<AppShellStylesNames, CSSProperties>> = {
     header: visualMode
       ? { ...baseHeaderStyles, position: "static", gridArea: "header" }
       : baseHeaderStyles,
