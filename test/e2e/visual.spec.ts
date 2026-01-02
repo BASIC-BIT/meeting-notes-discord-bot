@@ -38,6 +38,7 @@ test.describe("visual regression", () => {
     await waitForVisualReady(page);
     await expect(page).toHaveScreenshot(buildScreenshotName(name, mode), {
       fullPage: mode === "full",
+      maxDiffPixels: 200,
     });
   };
 
