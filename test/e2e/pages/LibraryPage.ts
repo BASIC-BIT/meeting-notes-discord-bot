@@ -16,13 +16,15 @@ export class LibraryPage {
     return this.page.getByTestId(testIds.library.refresh);
   }
 
-  archiveToggle(): Locator {
-    return this.page.getByTestId(testIds.library.archiveToggle);
+  archiveFilter(): Locator {
+    return this.page.getByTestId(testIds.library.archiveFilter);
   }
 
-  async selectArchiveView(view: "active" | "archived"): Promise<void> {
-    const label = view === "archived" ? "Archived" : "Active";
-    await this.archiveToggle().getByText(label).click();
+  async selectArchiveView(view: "active" | "archived" | "all"): Promise<void> {
+    const label =
+      view === "archived" ? "Archived" : view === "all" ? "All" : "Active";
+    await this.archiveFilter().click();
+    await this.page.getByRole("option", { name: label }).click();
   }
 
   meetingRows(): Locator {
@@ -70,6 +72,10 @@ export class LibraryPage {
 
   drawerUnarchive(): Locator {
     return this.drawer().getByTestId(testIds.library.unarchive);
+  }
+
+  drawerArchiveConfirm(): Locator {
+    return this.page.getByTestId(testIds.library.archiveConfirm);
   }
 
   drawerSummaryLabel(): Locator {

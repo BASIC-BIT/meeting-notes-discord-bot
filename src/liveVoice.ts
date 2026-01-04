@@ -2,6 +2,7 @@ import { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
 import { createOpenAIClient } from "./services/openaiClient";
 import { getModelChoice } from "./services/modelFactory";
+import { resolveChatParamsForRole } from "./services/openaiModelParams";
 import { getLangfuseChatPrompt } from "./services/langfusePromptService";
 import {
   buildLiveResponderContext,
@@ -44,9 +45,6 @@ const RECENT_LINES = 3;
 const COMMAND_CONFIRM_TIMEOUT_MS = 30_000;
 const COMMAND_CONFIRM_PROMPT = "Chronote: Confirm end meeting?";
 const COMMAND_DENY_PROMPT = "Chronote: Okay, confirmed your denial.";
-
-const supportsTemperature = (model: string) =>
-  !model.toLowerCase().startsWith("gpt-5");
 
 function getSpeakerLabel(meeting: MeetingData, userId: string): string {
   const participant = meeting.participants.get(userId);
@@ -105,6 +103,11 @@ async function shouldAct(
 
   try {
     const modelChoice = getModelChoice("liveVoiceGate");
+    const modelParams = resolveChatParamsForRole({
+      role: "liveVoiceGate",
+      model: modelChoice.model,
+      config: meeting.runtimeConfig?.modelParams?.liveVoiceGate,
+    });
     const openAIClient = createOpenAIClient({
       traceName: "live-voice-gate",
       generationName: "live-voice-gate",
@@ -122,7 +125,7 @@ async function shouldAct(
       messages,
       max_completion_tokens: config.liveVoice.gateMaxOutputTokens,
       response_format: { type: "json_object" },
-      ...(supportsTemperature(modelChoice.model) ? { temperature: 0 } : {}),
+      ...modelParams,
     });
 
     const content = completion.choices[0].message.content ?? "";
@@ -175,6 +178,11 @@ async function generateReply(
 
   try {
     const modelChoice = getModelChoice("liveVoiceResponder");
+    const modelParams = resolveChatParamsForRole({
+      role: "liveVoiceResponder",
+      model: modelChoice.model,
+      config: meeting.runtimeConfig?.modelParams?.liveVoiceResponder,
+    });
     const openAIClient = createOpenAIClient({
       traceName: "live-voice-responder",
       generationName: "live-voice-responder",
@@ -191,6 +199,7 @@ async function generateReply(
       model: modelChoice.model,
       messages,
       max_completion_tokens: 200,
+      ...modelParams,
     });
 
     const content = completion.choices[0].message.content ?? "";
@@ -270,6 +279,11 @@ async function classifyConfirmation(
 
   try {
     const modelChoice = getModelChoice("liveVoiceGate");
+    const modelParams = resolveChatParamsForRole({
+      role: "liveVoiceGate",
+      model: modelChoice.model,
+      config: meeting.runtimeConfig?.modelParams?.liveVoiceGate,
+    });
     const openAIClient = createOpenAIClient({
       traceName: "live-voice-confirm",
       generationName: "live-voice-confirm",
@@ -287,7 +301,7 @@ async function classifyConfirmation(
       messages,
       max_completion_tokens: config.liveVoice.gateMaxOutputTokens,
       response_format: { type: "json_object" },
-      ...(supportsTemperature(modelChoice.model) ? { temperature: 0 } : {}),
+      ...modelParams,
     });
 
     const content = completion.choices[0].message.content ?? "";

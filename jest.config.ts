@@ -26,6 +26,7 @@ const config: Config.InitialOptions = {
     "src/**/*.{ts,tsx}",
     "!src/**/*.d.ts",
     "!src/**/setupTests.ts",
+    "!src/**/*.stories.{ts,tsx}",
   ],
 
   // The directory where Jest should output its coverage files

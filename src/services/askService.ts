@@ -7,6 +7,10 @@ import { ensureUserCanViewChannel } from "./discordPermissionsService";
 import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
 import { getLangfuseChatPrompt } from "./langfusePromptService";
+import {
+  resolveChatParamsForRole,
+  resolveModelParamsForContext,
+} from "./openaiModelParams";
 import { resolveConfigSnapshot } from "./unifiedConfigService";
 import { resolveGuildSubscription } from "./subscriptionService";
 import {
@@ -237,6 +241,16 @@ export async function answerQuestionService(
   });
 
   const modelChoice = getModelChoice("ask");
+  const modelParams = await resolveModelParamsForContext({
+    guildId,
+    channelId,
+    userId: req.viewerUserId,
+  });
+  const chatParams = resolveChatParamsForRole({
+    role: "ask",
+    model: modelChoice.model,
+    config: modelParams.ask,
+  });
   const openAIClient = createOpenAIClient({
     traceName: "ask",
     generationName: "ask",
@@ -252,6 +266,7 @@ export async function answerQuestionService(
     model: modelChoice.model,
     messages,
     max_completion_tokens: 300,
+    ...chatParams,
   });
 
   return {

@@ -10,7 +10,6 @@ import {
   Loader,
   Modal,
   ScrollArea,
-  SegmentedControl,
   Stack,
   Text,
   ThemeIcon,
@@ -168,9 +167,9 @@ export default function Library() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedRange, setSelectedRange] = useState("30");
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
-  const [archiveView, setArchiveView] = useState<"active" | "archived">(
-    "active",
-  );
+  const [archiveFilter, setArchiveFilter] = useState<
+    "active" | "archived" | "all"
+  >("active");
   const [activeFilters, setActiveFilters] = useState<MeetingEventType[]>(
     MEETING_TIMELINE_FILTERS.map((filter) => filter.value),
   );
@@ -179,6 +178,10 @@ export default function Library() {
   const [endMeetingLoading, setEndMeetingLoading] = useState(false);
   const [endMeetingPreflightLoading, setEndMeetingPreflightLoading] =
     useState(false);
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [archiveNextState, setArchiveNextState] = useState<boolean | null>(
+    null,
+  );
 
   const { guilds, selectedGuildId } = useGuildContext();
   const canManageSelectedGuild =
@@ -188,7 +191,8 @@ export default function Library() {
     {
       serverId: selectedGuildId ?? "",
       limit: 50,
-      archivedOnly: archiveView === "archived",
+      archivedOnly: archiveFilter === "archived",
+      includeArchived: archiveFilter === "all",
     },
     { enabled: Boolean(selectedGuildId) },
   );
@@ -322,6 +326,10 @@ export default function Library() {
         serverId: selectedGuildId,
         archivedOnly: true,
       }),
+      trpcUtils.meetings.list.invalidate({
+        serverId: selectedGuildId,
+        includeArchived: true,
+      }),
     ]);
   }, [selectedGuildId, trpcUtils.meetings.list]);
 
@@ -413,10 +421,12 @@ export default function Library() {
     });
     setFullScreen(false);
     setEndMeetingModalOpen(false);
+    setArchiveModalOpen(false);
+    setArchiveNextState(null);
   };
 
-  const handleArchiveToggle = async (archived: boolean) => {
-    if (!selectedGuildId || !meeting) return;
+  const handleArchiveToggle = async (archived: boolean): Promise<boolean> => {
+    if (!selectedGuildId || !meeting) return false;
     try {
       await archiveMutation.mutateAsync({
         serverId: selectedGuildId,
@@ -434,12 +444,22 @@ export default function Library() {
         trpcUtils.meetings.detail.invalidate(),
       ]);
       handleCloseDrawer();
+      return true;
     } catch {
       notifications.show({
         color: "red",
         message: "Unable to update archive state. Please try again.",
       });
+      return false;
     }
+  };
+
+  const handleArchiveConfirm = async () => {
+    if (archiveNextState === null) return;
+    const ok = await handleArchiveToggle(archiveNextState);
+    if (!ok) return;
+    setArchiveModalOpen(false);
+    setArchiveNextState(null);
   };
 
   const handleDownload = () => {
@@ -499,6 +519,8 @@ export default function Library() {
         onTagsChange={setSelectedTags}
         selectedRange={selectedRange}
         onRangeChange={(value) => setSelectedRange(value)}
+        archiveFilter={archiveFilter}
+        onArchiveFilterChange={setArchiveFilter}
         selectedChannel={selectedChannel}
         onChannelChange={setSelectedChannel}
         channelOptions={channelOptions}
@@ -508,19 +530,8 @@ export default function Library() {
         <Group gap="sm" align="center" wrap="wrap">
           <Text c="dimmed" size="sm">
             {filtered.length}{" "}
-            {archiveView === "archived" ? "archived meetings" : "meetings"}
+            {archiveFilter === "archived" ? "archived meetings" : "meetings"}
           </Text>
-          <SegmentedControl
-            value={archiveView}
-            onChange={(value) =>
-              setArchiveView(value === "archived" ? "archived" : "active")
-            }
-            data-testid="library-archive-toggle"
-            data={[
-              { label: "Active", value: "active" },
-              { label: "Archived", value: "archived" },
-            ]}
-          />
         </Group>
         <Group gap="xs" align="center">
           <Text size="xs" c="dimmed">
@@ -541,7 +552,6 @@ export default function Library() {
         items={filtered}
         listLoading={listLoading}
         listError={Boolean(listError)}
-        onRefresh={handleRefresh}
         onSelect={(meetingId) =>
           navigate({
             search: (prev) => ({
@@ -552,6 +562,14 @@ export default function Library() {
         }
         selectedMeetingId={selectedMeetingId}
       />
+      <Group justify="flex-end">
+        <RefreshButton
+          onClick={handleRefresh}
+          size="xs"
+          variant="subtle"
+          data-testid="library-refresh"
+        />
+      </Group>
 
       <Drawer
         opened={!!selectedMeetingId}
@@ -607,6 +625,46 @@ export default function Library() {
                     </Group>
                   </Stack>
                 </Modal>
+                <Modal
+                  opened={archiveModalOpen}
+                  onClose={() => {
+                    setArchiveModalOpen(false);
+                    setArchiveNextState(null);
+                  }}
+                  title={
+                    archiveNextState ? "Archive meeting" : "Unarchive meeting"
+                  }
+                  centered
+                >
+                  <Stack gap="md">
+                    <Text size="sm" c="dimmed">
+                      {archiveNextState
+                        ? "Archived meetings move to the Archived view. You can unarchive anytime."
+                        : "This meeting will move back to the active list."}
+                    </Text>
+                    <Group justify="flex-end">
+                      <Button
+                        variant="default"
+                        onClick={() => {
+                          setArchiveModalOpen(false);
+                          setArchiveNextState(null);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        color={archiveNextState ? "red" : "brand"}
+                        onClick={handleArchiveConfirm}
+                        loading={archiveMutation.isPending}
+                        data-testid="meeting-archive-confirm"
+                      >
+                        {archiveNextState
+                          ? "Archive meeting"
+                          : "Unarchive meeting"}
+                      </Button>
+                    </Group>
+                  </Stack>
+                </Modal>
                 <Stack gap="md">
                   <Stack gap={4}>
                     <Group justify="space-between" align="center" wrap="wrap">
@@ -648,9 +706,10 @@ export default function Library() {
                               <IconArchive size={16} />
                             )
                           }
-                          onClick={() =>
-                            handleArchiveToggle(!meeting.archivedAt)
-                          }
+                          onClick={() => {
+                            setArchiveNextState(!meeting.archivedAt);
+                            setArchiveModalOpen(true);
+                          }}
                           loading={archiveMutation.isPending}
                           data-testid={
                             meeting.archivedAt

@@ -3,6 +3,7 @@ import type { MeetingData } from "../types/meeting-data";
 import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
 import { config } from "./configService";
+import { resolveChatParamsForRole } from "./openaiModelParams";
 
 type CancellationDecision = {
   cancel: boolean;
@@ -97,7 +98,12 @@ export async function evaluateAutoRecordCancellation(
   ].join("\n");
 
   try {
-    const modelChoice = getModelChoice("liveVoiceGate");
+    const modelChoice = getModelChoice("autoRecordCancel");
+    const modelParams = resolveChatParamsForRole({
+      role: "autoRecordCancel",
+      model: modelChoice.model,
+      config: meeting.runtimeConfig?.modelParams?.autoRecordCancel,
+    });
     const openAIClient = createOpenAIClient({
       traceName: "auto-record-cancel",
       generationName: "auto-record-cancel",
@@ -116,7 +122,7 @@ export async function evaluateAutoRecordCancellation(
       ],
       max_completion_tokens: 120,
       response_format: { type: "json_object" },
-      temperature: 0,
+      ...modelParams,
     });
 
     const content = completion.choices[0].message.content ?? "";

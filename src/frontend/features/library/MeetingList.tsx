@@ -11,7 +11,6 @@
 } from "@mantine/core";
 import { IconChevronRight, IconFilter, IconUsers } from "@tabler/icons-react";
 import Surface from "../../components/Surface";
-import { RefreshButton } from "../../components/RefreshButton";
 import type { MeetingStatus } from "../../../types/meetingLifecycle";
 import { MEETING_STATUS } from "../../../types/meetingLifecycle";
 import type { MeetingListItem } from "../../pages/Library";
@@ -40,7 +39,6 @@ type MeetingListProps = {
   items: MeetingListItem[];
   listLoading: boolean;
   listError: boolean;
-  onRefresh: () => void;
   onSelect: (meetingId: string) => void;
   selectedMeetingId: string | null;
 };
@@ -49,7 +47,6 @@ export function MeetingList({
   items,
   listLoading,
   listError,
-  onRefresh,
   onSelect,
   selectedMeetingId,
 }: MeetingListProps) {
@@ -144,14 +141,6 @@ export function MeetingList({
           ))}
         </Stack>
       )}
-      <Group justify="flex-end" p="md">
-        <RefreshButton
-          size="xs"
-          variant="subtle"
-          onClick={onRefresh}
-          data-testid="library-refresh"
-        />
-      </Group>
     </Surface>
   );
 }

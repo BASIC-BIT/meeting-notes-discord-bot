@@ -24,12 +24,22 @@ export default function ServerSelect() {
     <Stack gap="xl" data-testid="server-select">
       <PageHeader
         title="Choose a server"
-        description="Pick a server to manage settings or view shared Ask threads."
+        description="Choose a server to continue."
       />
       <ServerPicker
         guilds={guilds}
         loading={loading}
         selectedGuildId={selectedGuildId}
+        sections={[
+          {
+            title: "Servers you manage",
+            filter: (guild) => guild.canManage,
+          },
+          {
+            title: "View-only servers",
+            filter: (guild) => !guild.canManage,
+          },
+        ]}
         onSelect={(guildId) => {
           setSelectedGuildId(guildId);
           setLastServerId(guildId);
@@ -48,11 +58,6 @@ export default function ServerSelect() {
         }}
         actionLabel={() => "Open server"}
         actionDisabled={() => false}
-        description={(guild) =>
-          guild.canManage
-            ? "Manage notes, Ask, and billing for this server."
-            : "View shared Ask threads for this server."
-        }
         emptyTitle="No servers found"
         emptyDescription="We could not find any servers with Chronote installed yet."
         cardTestId="server-card"

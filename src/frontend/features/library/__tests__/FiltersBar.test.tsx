@@ -11,6 +11,8 @@ describe("FiltersBar", () => {
     onTagsChange: jest.fn(),
     selectedRange: "30",
     onRangeChange: jest.fn(),
+    archiveFilter: "active" as const,
+    onArchiveFilterChange: jest.fn(),
     selectedChannel: null,
     onChannelChange: jest.fn(),
     channelOptions: [{ value: "1", label: "Channel 1" }],

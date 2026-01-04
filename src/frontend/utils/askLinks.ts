@@ -24,10 +24,8 @@ export const buildAskUrl = (options: {
   messageId?: string | null;
 }) => {
   const { origin, serverId, conversationId, listMode, messageId } = options;
-  const url = new URL(
-    `/portal/server/${serverId}/ask/${conversationId}`,
-    origin,
-  );
+  const url = new URL(`/portal/server/${serverId}/ask`, origin);
+  url.searchParams.set("conversationId", conversationId);
   url.searchParams.set("list", listMode);
   if (messageId) {
     url.searchParams.set("messageId", messageId);

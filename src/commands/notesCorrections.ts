@@ -27,6 +27,11 @@ import { createOpenAIClient } from "../services/openaiClient";
 import { getModelChoice } from "../services/modelFactory";
 import { config } from "../services/configService";
 import { getLangfuseChatPrompt } from "../services/langfusePromptService";
+import {
+  resolveChatParamsForRole,
+  resolveModelParamsForContext,
+} from "../services/openaiModelParams";
+import type { ModelParamConfig } from "../config/types";
 
 type PendingCorrection = {
   guildId: string;
@@ -44,6 +49,11 @@ type PendingCorrection = {
   notesVersion: number;
   requesterId: string;
   suggestion: SuggestionHistoryEntry;
+};
+
+type CorrectionSummariesResult = {
+  notesBody: string;
+  summaries: { summarySentence?: string; summaryLabel?: string };
 };
 
 const pendingCorrections = new Map<string, PendingCorrection>();
@@ -102,6 +112,7 @@ interface CorrectionInput {
   suggestion: string;
   requesterTag: string;
   previousSuggestions?: SuggestionHistoryEntry[];
+  modelParams?: ModelParamConfig;
 }
 
 function formatSuggestionsForPrompt(
@@ -125,6 +136,7 @@ async function generateCorrectedNotes({
   suggestion,
   requesterTag,
   previousSuggestions,
+  modelParams,
 }: CorrectionInput): Promise<string> {
   const priorSuggestions = formatSuggestionsForPrompt(previousSuggestions);
   const { messages, langfusePrompt } = await getLangfuseChatPrompt({
@@ -140,6 +152,11 @@ async function generateCorrectedNotes({
 
   try {
     const modelChoice = getModelChoice("notesCorrection");
+    const chatParams = resolveChatParamsForRole({
+      role: "notesCorrection",
+      model: modelChoice.model,
+      config: modelParams,
+    });
     const openAIClient = createOpenAIClient({
       traceName: "notes-correction",
       generationName: "notes-correction",
@@ -151,8 +168,8 @@ async function generateCorrectedNotes({
     });
     const completion = await openAIClient.chat.completions.create({
       model: modelChoice.model,
-      temperature: 0,
       messages,
+      ...chatParams,
     });
 
     const content = completion.choices[0]?.message?.content;
@@ -278,6 +295,11 @@ export async function handleNotesCorrectionModal(
   };
 
   const transcript = await resolveTranscript(history);
+  const modelParams = await resolveModelParamsForContext({
+    guildId,
+    channelId: history.channelId ?? channelIdTimestamp.split("#")[0],
+    userId: interaction.user.id,
+  });
 
   const newNotes = await generateCorrectedNotes({
     currentNotes: history.notes,
@@ -285,6 +307,7 @@ export async function handleNotesCorrectionModal(
     suggestion,
     requesterTag: interaction.user.tag,
     previousSuggestions: history.suggestionsHistory,
+    modelParams: modelParams.notesCorrection,
   });
 
   const diff = buildUnifiedDiff(history.notes, newNotes);
@@ -380,22 +403,31 @@ function resolveChannelName(
   interaction: ButtonInteraction,
   channelId: string,
 ): string {
-  const channel = interaction.guild?.channels.cache.get(channelId);
-  return channel?.name ?? channelId;
+  const guild = interaction.guild;
+  if (!guild) {
+    return channelId;
+  }
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel) {
+    return channelId;
+  }
+  return channel.name || channelId;
 }
 
 async function buildCorrectionSummaries(
   interaction: ButtonInteraction,
   pending: PendingCorrection,
-): Promise<{
-  notesBody: string;
-  summaries: { summarySentence?: string; summaryLabel?: string };
-}> {
+): Promise<CorrectionSummariesResult> {
   const serverName = interaction.guild?.name ?? "Unknown server";
   const channelName = resolveChannelName(
     interaction,
     pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
   );
+  const modelParams = await resolveModelParamsForContext({
+    guildId: pending.guildId,
+    channelId: pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
+    userId: interaction.user.id,
+  });
   const summaries = await generateMeetingSummaries({
     notes: pending.newNotes,
     serverName,
@@ -404,6 +436,7 @@ async function buildCorrectionSummaries(
     now: new Date(),
     previousSummarySentence: pending.summarySentence,
     previousSummaryLabel: pending.summaryLabel,
+    modelParams: modelParams.meetingSummary,
   });
   const summarySentence = summaries.summarySentence ?? pending.summarySentence;
   const summaryLabel = summaries.summaryLabel ?? pending.summaryLabel;

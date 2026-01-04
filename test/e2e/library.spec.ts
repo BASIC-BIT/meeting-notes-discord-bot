@@ -29,6 +29,8 @@ test("library page shows meetings and drawer details (mock)", async ({
   await expect(libraryPage.drawerTimelineLabel()).toBeVisible();
   await expect(libraryPage.drawerDownload()).toBeVisible();
   await libraryPage.drawerArchive().click();
+  await expect(libraryPage.drawerArchiveConfirm()).toBeVisible();
+  await libraryPage.drawerArchiveConfirm().click();
   await expect(libraryPage.drawer()).toBeHidden();
 
   await libraryPage.selectArchiveView("archived");

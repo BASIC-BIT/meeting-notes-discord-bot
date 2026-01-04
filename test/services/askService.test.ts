@@ -1,0 +1,162 @@
+import { describe, expect, test, jest } from "@jest/globals";
+import type { MeetingHistory } from "../../src/types/db";
+
+type LoadOptions = {
+  mockEnabled?: boolean;
+  meetings?: MeetingHistory[];
+  access?: boolean[];
+  maxMeetings?: number;
+};
+
+const buildMeeting = (
+  overrides: Partial<MeetingHistory> = {},
+): MeetingHistory => ({
+  guildId: "guild-1",
+  channelId_timestamp: "voice-1#2025-01-01T00:00:00.000Z",
+  meetingId: "meeting-1",
+  channelId: "voice-1",
+  timestamp: "2025-01-01T00:00:00.000Z",
+  participants: [],
+  duration: 60,
+  transcribeMeeting: true,
+  generateNotes: true,
+  ...overrides,
+});
+
+const loadModule = async (options: LoadOptions = {}) => {
+  jest.resetModules();
+
+  const listRecentMeetingsForGuildService = jest
+    .fn()
+    .mockResolvedValue(options.meetings ?? []);
+  const ensureUserCanViewChannel = jest.fn();
+  if (options.access?.length) {
+    options.access.forEach((value) =>
+      ensureUserCanViewChannel.mockResolvedValueOnce(value),
+    );
+  } else {
+    ensureUserCanViewChannel.mockResolvedValue(true);
+  }
+
+  const config = {
+    mock: { enabled: options.mockEnabled ?? true },
+    ask: { maxMeetings: options.maxMeetings ?? 25 },
+    database: { useLocalDynamoDB: false, tablePrefix: "" },
+    discord: { clientId: "mock-bot" },
+    notes: { model: "gpt-5.2" },
+    liveVoice: {
+      gateModel: "gpt-5-mini",
+      responderModel: "gpt-4o-mini",
+      ttsModel: "gpt-4o-mini-tts",
+    },
+    stripe: { billingLandingUrl: "https://example.com/billing" },
+    langfuse: { askPromptName: "chronote-ask-system-chat" },
+  };
+
+  jest.doMock("../../src/services/meetingHistoryService", () => ({
+    listRecentMeetingsForGuildService,
+  }));
+  jest.doMock("../../src/services/discordPermissionsService", () => ({
+    ensureUserCanViewChannel,
+  }));
+  jest.doMock("../../src/services/configService", () => ({ config }));
+
+  const module = await import("../../src/services/askService");
+  return {
+    ...module,
+    listRecentMeetingsForGuildService,
+    ensureUserCanViewChannel,
+  };
+};
+
+describe("askService (mock mode)", () => {
+  test("returns mock answer with source link when meetings exist", async () => {
+    const meeting = buildMeeting({
+      notes: "Notes",
+      notesChannelId: "text-1",
+      notesMessageIds: ["note-1"],
+    });
+    const { answerQuestionService } = await loadModule({
+      mockEnabled: true,
+      meetings: [meeting],
+    });
+
+    const result = await answerQuestionService({
+      guildId: "guild-1",
+      channelId: "voice-1",
+      question: "What did we decide?",
+    });
+
+    expect(result.answer).toContain('Mock answer for "What did we decide?"');
+    expect(result.answer).toContain(
+      "https://discord.com/channels/guild-1/text-1/note-1",
+    );
+    expect(result.sourceMeetingIds).toEqual([meeting.channelId_timestamp]);
+  });
+
+  test("filters by tags, channel, and viewer access", async () => {
+    const meetingA = buildMeeting({
+      channelId_timestamp: "voice-1#2025-01-01T00:00:00.000Z",
+      channelId: "voice-1",
+      tags: ["priority"],
+      notesChannelId: "text-1",
+      notesMessageIds: ["note-1"],
+    });
+    const meetingB = buildMeeting({
+      channelId_timestamp: "voice-2#2025-01-02T00:00:00.000Z",
+      channelId: "voice-2",
+      tags: ["priority"],
+    });
+    const meetingC = buildMeeting({
+      channelId_timestamp: "voice-1#2025-01-03T00:00:00.000Z",
+      channelId: "voice-1",
+      tags: ["other"],
+    });
+    const { answerQuestionService, ensureUserCanViewChannel } =
+      await loadModule({
+        mockEnabled: true,
+        meetings: [meetingA, meetingB, meetingC],
+        access: [true],
+      });
+
+    const result = await answerQuestionService({
+      guildId: "guild-1",
+      channelId: "voice-1",
+      question: "Show priority notes",
+      tags: ["priority"],
+      scope: "channel",
+      viewerUserId: "viewer-1",
+    });
+
+    expect(ensureUserCanViewChannel).toHaveBeenCalledTimes(1);
+    expect(result.sourceMeetingIds).toEqual([meetingA.channelId_timestamp]);
+  });
+});
+
+describe("askService (non-mock)", () => {
+  test("returns upgrade note when no meetings and maxMeetings is reduced", async () => {
+    const { answerQuestionService } = await loadModule({
+      mockEnabled: false,
+      meetings: [
+        buildMeeting({
+          channelId_timestamp: "voice-9#2025-01-02T00:00:00.000Z",
+          channelId: "voice-9",
+          tags: ["other"],
+        }),
+      ],
+      maxMeetings: 25,
+    });
+
+    const result = await answerQuestionService({
+      guildId: "guild-1",
+      channelId: "voice-1",
+      question: "Any updates?",
+      maxMeetings: 5,
+      tags: ["priority"],
+    });
+
+    expect(result.answer).toContain("No relevant meetings found.");
+    expect(result.answer).toContain("Upgrade:");
+    expect(result.sourceMeetingIds).toEqual([]);
+  });
+});

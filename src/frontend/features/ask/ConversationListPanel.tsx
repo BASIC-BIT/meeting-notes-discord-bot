@@ -67,6 +67,7 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
       : listMode === "archived"
         ? archivedConversations
         : mineConversations;
+  const emptyTone = listMode === "archived" ? "default" : "soft";
 
   return (
     <Surface
@@ -167,7 +168,7 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
                 </Text>
               </Surface>
             ) : listItems.length === 0 ? (
-              <Surface p="lg" tone="soft" style={{ textAlign: "center" }}>
+              <Surface p="lg" tone={emptyTone} style={{ textAlign: "center" }}>
                 <Stack gap={4}>
                   <Text size="sm" c="dimmed">
                     {listMode === "shared"
@@ -238,7 +239,7 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
                               : "Shared"}
                           </Badge>
                         ) : null
-                      ) : (
+                      ) : listMode === "shared" ? (
                         <Group gap="xs" align="center">
                           <IconUsers size={14} color={uiColors.linkAccent} />
                           <Text size="xs" c="dimmed">
@@ -246,7 +247,7 @@ export function ConversationListPanel(props: ConversationListPanelProps) {
                               "Unknown member"}
                           </Text>
                         </Group>
-                      )}
+                      ) : null}
                       {listMode === "archived" || isArchived ? (
                         <Badge size="xs" variant="light" color="gray">
                           Archived

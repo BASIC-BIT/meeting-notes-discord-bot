@@ -69,7 +69,6 @@ const meta: Meta<typeof MeetingList> = {
     items,
     listLoading: false,
     listError: false,
-    onRefresh: () => undefined,
     onSelect: () => undefined,
     selectedMeetingId: "m1",
   },

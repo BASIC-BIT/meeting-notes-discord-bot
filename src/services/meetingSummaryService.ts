@@ -4,6 +4,8 @@ import { formatLongDate } from "../utils/time";
 import { getLangfuseChatPrompt } from "./langfusePromptService";
 import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
+import { resolveChatParamsForRole } from "./openaiModelParams";
+import type { ModelParamConfig } from "../config/types";
 
 export type MeetingSummaries = {
   summarySentence?: string;
@@ -19,6 +21,7 @@ type MeetingSummaryInput = {
   previousSummarySentence?: string;
   previousSummaryLabel?: string;
   parentSpanContext?: SpanContext;
+  modelParams?: ModelParamConfig;
 };
 
 function normalizeSummarySentence(value?: string): string | undefined {
@@ -99,6 +102,11 @@ export async function generateMeetingSummaries(
 
   try {
     const modelChoice = getModelChoice("meetingSummary");
+    const chatParams = resolveChatParamsForRole({
+      role: "meetingSummary",
+      model: modelChoice.model,
+      config: input.modelParams,
+    });
     const openAIClient = createOpenAIClient({
       traceName: "meeting-summary",
       generationName: "meeting-summary",
@@ -113,7 +121,7 @@ export async function generateMeetingSummaries(
     const completion = await openAIClient.chat.completions.create({
       model: modelChoice.model,
       messages,
-      temperature: 0,
+      ...chatParams,
       response_format: { type: "json_object" },
       max_completion_tokens: 160,
     });

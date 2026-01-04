@@ -46,10 +46,12 @@ import { formatParticipantLabel } from "./utils/participants";
 import { getBotNameVariants } from "./utils/botNames";
 import { createOpenAIClient } from "./services/openaiClient";
 import { getModelChoice } from "./services/modelFactory";
+import { resolveChatParamsForRole } from "./services/openaiModelParams";
 import {
   buildDictionaryPromptLines,
   DEFAULT_DICTIONARY_BUDGETS,
 } from "./utils/dictionary";
+import type { ModelParamRole } from "./config/types";
 import {
   getLangfuseChatPrompt,
   type LangfusePromptMeta,
@@ -61,6 +63,7 @@ import {
   updateActiveTrace,
 } from "@langfuse/tracing";
 import { buildLangfuseTranscriptionAudioAttachment } from "./observability/langfuseAudioAttachment";
+import { buildLangfuseTranscriptionUsageDetails } from "./observability/langfuseUsageDetails";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 // Check if transcription is too similar to the prompt or glossary content (likely verbatim output)
@@ -229,11 +232,9 @@ async function transcribeInternal(
       const openAIClient = createOpenAIClient({ disableTracing: true });
       const output = await runTranscription(openAIClient);
 
-      const usageDetails = context?.audioSeconds
-        ? {
-            audioSeconds: Number(context.audioSeconds.toFixed(3)),
-          }
-        : undefined;
+      const usageDetails = buildLangfuseTranscriptionUsageDetails(
+        context?.audioSeconds,
+      );
       updateActiveObservation(
         {
           output,
@@ -381,7 +382,6 @@ export async function cleanupTranscription(
     meeting,
     {
       messages: [...messages],
-      temperature: 0,
     },
     {
       model: modelChoice.model,
@@ -390,6 +390,7 @@ export async function cleanupTranscription(
       tags: ["feature:transcription_cleanup"],
       langfusePrompt,
       parentSpanContext: meeting.langfuseParentSpanContext,
+      modelParamRole: "transcriptionCleanup",
     },
   );
 }
@@ -444,7 +445,6 @@ export async function coalesceTranscription(
     meeting,
     {
       messages: [...messages],
-      temperature: 0,
     },
     {
       model: modelChoice.model,
@@ -453,13 +453,14 @@ export async function coalesceTranscription(
       tags: ["feature:transcription_coalesce"],
       langfusePrompt,
       parentSpanContext: meeting.langfuseParentSpanContext,
+      modelParamRole: "transcriptionCoalesce",
     },
   );
 }
 
 type ChatInput = Omit<
   OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
-  "model" | "user"
+  "model" | "user" | "temperature" | "reasoning_effort" | "verbosity"
 >;
 
 type ChatOptions = {
@@ -470,6 +471,7 @@ type ChatOptions = {
   metadata?: Record<string, unknown>;
   langfusePrompt?: LangfusePromptMeta;
   parentSpanContext?: SpanContext;
+  modelParamRole?: ModelParamRole;
 };
 
 async function chat(
@@ -478,6 +480,12 @@ async function chat(
   options: ChatOptions = {},
 ): Promise<string> {
   const model = options.model ?? getModelChoice("notes").model;
+  const modelParamRole = options.modelParamRole ?? "notes";
+  const modelParams = resolveChatParamsForRole({
+    role: modelParamRole,
+    model,
+    config: meeting.runtimeConfig?.modelParams?.[modelParamRole],
+  });
   const openAIClient = createOpenAIClient({
     traceName: options.traceName ?? "notes",
     generationName: options.generationName ?? "notes",
@@ -500,6 +508,7 @@ async function chat(
       model,
       user: meeting.creator.id,
       ...body,
+      ...modelParams,
     });
     console.log(response.choices[0].finish_reason);
     if (response.choices[0].finish_reason !== "length") {
@@ -622,18 +631,20 @@ export async function getImage(meeting: MeetingData): Promise<string> {
     },
   });
 
+  const imagePromptModel = getModelChoice("imagePrompt");
   const imagePrompt = await chat(
     meeting,
     {
       messages: [...messages],
-      temperature: 0.5,
     },
     {
+      model: imagePromptModel.model,
       traceName: "image-prompt",
       generationName: "image-prompt",
       tags: ["feature:image_prompt"],
       langfusePrompt,
       parentSpanContext: meeting.langfuseParentSpanContext,
+      modelParamRole: "imagePrompt",
     },
   );
 
@@ -780,7 +791,6 @@ export async function getNotes(meeting: MeetingData): Promise<string> {
     meeting,
     {
       messages: [...messages],
-      temperature: 0,
     },
     {
       traceName: "notes",
@@ -788,6 +798,7 @@ export async function getNotes(meeting: MeetingData): Promise<string> {
       tags: ["feature:notes"],
       langfusePrompt,
       parentSpanContext: meeting.langfuseParentSpanContext,
+      modelParamRole: "notes",
     },
   );
 }

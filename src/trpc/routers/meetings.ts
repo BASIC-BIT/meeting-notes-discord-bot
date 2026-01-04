@@ -34,6 +34,7 @@ const list = manageGuildProcedure
       serverId: z.string(),
       limit: z.number().min(1).max(100).optional(),
       archivedOnly: z.boolean().optional(),
+      includeArchived: z.boolean().optional(),
     }),
   )
   .query(async ({ input }) => {
@@ -55,7 +56,10 @@ const list = manageGuildProcedure
     const meetings = await listRecentMeetingsForGuildService(
       input.serverId,
       limit,
-      { archivedOnly: input.archivedOnly },
+      {
+        archivedOnly: input.archivedOnly,
+        includeArchived: input.includeArchived,
+      },
     );
 
     let channels: Array<{ id: string; name: string; type: number }> = [];

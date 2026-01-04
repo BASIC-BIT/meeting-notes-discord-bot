@@ -11,6 +11,7 @@ import {
 type RouteSearch = {
   meetingId?: string;
   list?: string;
+  conversationId?: string;
   messageId?: string;
   promo?: string;
   serverId?: string;

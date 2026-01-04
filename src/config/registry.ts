@@ -6,6 +6,15 @@ import {
   SILENCE_THRESHOLD,
 } from "../constants";
 import { DEFAULT_TTS_VOICE, TTS_VOICES } from "../utils/ttsVoices";
+import {
+  MODEL_PARAM_DEFAULTS,
+  MODEL_PARAM_ROLE_LABELS,
+  MODEL_PARAM_ROLES,
+  MODEL_REASONING_EFFORTS,
+  MODEL_SAMPLING_MODES,
+  MODEL_VERBOSITY_OPTIONS,
+  buildModelParamKey,
+} from "./modelParams";
 
 const scope = (
   enabled: boolean,
@@ -20,6 +29,72 @@ const scope = (
   control,
   ...(notes ? { notes } : {}),
 });
+
+const buildModelParamEntries = (): ConfigEntry[] =>
+  MODEL_PARAM_ROLES.flatMap((role) => {
+    const labelBase = MODEL_PARAM_ROLE_LABELS[role];
+    const defaults = MODEL_PARAM_DEFAULTS[role];
+    const category = "Model tuning";
+    const group: ConfigEntry["group"] = "Advanced";
+    return [
+      {
+        key: buildModelParamKey(role, "samplingMode"),
+        label: `${labelBase} sampling mode`,
+        description: "Choose whether this role uses reasoning or temperature.",
+        category,
+        group,
+        valueType: "select",
+        defaultValue: defaults.samplingMode,
+        scopes: {
+          global: scope(true, true, "superadmin", "select"),
+          server: scope(true, false, "admin", "select"),
+        },
+        ui: { type: "segmented", options: [...MODEL_SAMPLING_MODES] },
+      },
+      {
+        key: buildModelParamKey(role, "reasoningEffort"),
+        label: `${labelBase} reasoning effort`,
+        description: "Reasoning effort used when sampling mode is reasoning.",
+        category,
+        group,
+        valueType: "select",
+        defaultValue: defaults.reasoningEffort,
+        scopes: {
+          global: scope(true, true, "superadmin", "select"),
+          server: scope(true, false, "admin", "select"),
+        },
+        ui: { type: "select", options: [...MODEL_REASONING_EFFORTS] },
+      },
+      {
+        key: buildModelParamKey(role, "temperature"),
+        label: `${labelBase} temperature`,
+        description: "Temperature used when sampling mode is temperature.",
+        category,
+        group,
+        valueType: "number",
+        defaultValue: defaults.temperature,
+        scopes: {
+          global: scope(true, true, "superadmin", "number"),
+          server: scope(true, false, "admin", "number"),
+        },
+        ui: { type: "number", min: 0, max: 2, step: 0.1 },
+      },
+      {
+        key: buildModelParamKey(role, "verbosity"),
+        label: `${labelBase} verbosity`,
+        description: "Verbosity hint for GPT-5 models.",
+        category,
+        group,
+        valueType: "select",
+        defaultValue: defaults.verbosity,
+        scopes: {
+          global: scope(true, true, "superadmin", "select"),
+          server: scope(true, false, "admin", "select"),
+        },
+        ui: { type: "select", options: [...MODEL_VERBOSITY_OPTIONS] },
+      },
+    ];
+  });
 
 export const CONFIG_REGISTRY: ConfigEntry[] = [
   {
@@ -517,6 +592,7 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
     },
     ui: { type: "segmented", options: ["off", "server", "public"] },
   },
+  ...buildModelParamEntries(),
 ];
 
 export const CONFIG_KEY_SET = new Set(

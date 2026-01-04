@@ -79,10 +79,8 @@ test.describe("visual regression", () => {
       await libraryPage.closeDrawer();
       await expect(libraryPage.drawer()).toBeHidden();
 
-      await page
-        .getByTestId("library-archive-toggle")
-        .getByText("Archived")
-        .click();
+      await page.getByTestId("library-archive-filter").click();
+      await page.getByRole("option", { name: "Archived" }).click();
       await libraryPage.waitForLoaded();
       await expectVisualScreenshot(page, "library-archived", mode);
     }

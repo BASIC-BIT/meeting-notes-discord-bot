@@ -11,6 +11,8 @@ type FiltersBarProps = {
   onTagsChange: (tags: string[]) => void;
   selectedRange: string;
   onRangeChange: (value: string) => void;
+  archiveFilter: "active" | "archived" | "all";
+  onArchiveFilterChange: (value: "active" | "archived" | "all") => void;
   selectedChannel: string | null;
   onChannelChange: (value: string | null) => void;
   channelOptions: { value: string; label: string }[];
@@ -24,13 +26,15 @@ export function FiltersBar({
   onTagsChange,
   selectedRange,
   onRangeChange,
+  archiveFilter,
+  onArchiveFilterChange,
   selectedChannel,
   onChannelChange,
   channelOptions,
 }: FiltersBarProps) {
   return (
     <Surface p="lg" tone="soft">
-      <SimpleGrid cols={{ base: 1, md: 4 }} spacing="md">
+      <SimpleGrid cols={{ base: 1, md: 5 }} spacing="md">
         <TextInput
           value={query}
           onChange={(event) => onQueryChange(event.currentTarget.value)}
@@ -45,6 +49,20 @@ export function FiltersBar({
           onChange={onTagsChange}
           searchable
           clearable
+        />
+        <FormSelect
+          value={archiveFilter}
+          onChange={(value) =>
+            onArchiveFilterChange(
+              value === "archived" || value === "all" ? value : "active",
+            )
+          }
+          data-testid="library-archive-filter"
+          data={[
+            { value: "active", label: "Active" },
+            { value: "archived", label: "Archived" },
+            { value: "all", label: "All" },
+          ]}
         />
         <FormSelect
           value={selectedRange}

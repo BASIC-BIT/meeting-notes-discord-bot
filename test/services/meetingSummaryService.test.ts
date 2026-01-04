@@ -123,6 +123,7 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
   const call = mockCreate.mock.calls[0][0];
   expect(call.model).toBe(config.notes.model);
   expect(call.temperature).toBe(0);
+  expect(call.reasoning_effort).toBe("none");
   expect(call.response_format).toEqual({ type: "json_object" });
   const userPrompt = call.messages[1].content;
   expect(userPrompt).toContain(`Today is ${expectedDate}.`);

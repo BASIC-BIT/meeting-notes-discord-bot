@@ -7,5 +7,7 @@ customModels:
   - gpt-5.2
   - gpt-5.1
   - gpt-5-mini
+  - gpt-4o-transcribe
+  - gpt-4o-transcribe-diarize
 extraHeadersEnv:
   OpenAI-Project: OPENAI_PROJECT_ID
