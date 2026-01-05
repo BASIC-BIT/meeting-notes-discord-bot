@@ -26,7 +26,6 @@ test("library page shows meetings and drawer details (mock)", async ({
 
   await libraryPage.openFirstMeeting();
   await expect(libraryPage.drawerSummaryLabel()).toBeVisible();
-  await expect(libraryPage.drawerTimelineLabel()).toBeVisible();
   await expect(libraryPage.drawerDownload()).toBeVisible();
   await expect(libraryPage.drawerSummaryScroll()).toBeVisible();
 

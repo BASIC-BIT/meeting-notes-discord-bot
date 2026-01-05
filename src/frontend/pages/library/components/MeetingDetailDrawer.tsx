@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { HTMLAttributes } from "react";
 import {
   ActionIcon,
   Badge,
@@ -417,7 +418,11 @@ export default function MeetingDetailDrawer({
           offsetScrollbars
           data-visual-scroll
           data-testid="meeting-summary-scroll"
-          viewportProps={{ "data-testid": "meeting-summary-scroll-viewport" }}
+          viewportProps={
+            {
+              "data-testid": "meeting-summary-scroll-viewport",
+            } as HTMLAttributes<HTMLDivElement>
+          }
         >
           <Stack gap="sm">{summaryBody}</Stack>
         </ScrollArea>

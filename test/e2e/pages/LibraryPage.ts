@@ -95,7 +95,7 @@ export class LibraryPage {
   }
 
   drawerTimelineLabel(): Locator {
-    return this.drawer().getByText("Timeline", { exact: true }).first();
+    return this.drawer().getByText("Transcript", { exact: true }).first();
   }
 
   async closeDrawer(): Promise<void> {
