@@ -117,12 +117,19 @@ export function setupWebServer() {
           callbackURL: config.discord.callbackUrl,
           scope: ["identify", "email", "guilds"],
         },
-        (accessToken, refreshToken, profile, done) => {
+        (
+          accessToken: string,
+          refreshToken: string,
+          params: { expires_in?: number | string },
+          profile: Profile,
+          done: (err: unknown, user?: AuthedProfile | false) => void,
+        ) => {
           // Preserve access token for API calls (e.g., guild listing)
           const authedProfile = buildDiscordAuthProfile(
             profile as Profile,
             accessToken,
             refreshToken,
+            params?.expires_in,
           );
           // Here you can save the profile information to your database if needed
           return done(null, authedProfile);
@@ -139,6 +146,31 @@ export function setupWebServer() {
       done(null, obj as User);
     });
 
+    const clearDiscordSession = async (req: express.Request) => {
+      if (typeof req.logout === "function") {
+        await new Promise<void>((resolve) => {
+          req.logout(() => resolve());
+        });
+      }
+      const sessionWithPassport = req.session as
+        | (typeof req.session & { passport?: { user?: unknown } })
+        | undefined;
+      if (sessionWithPassport?.passport?.user) {
+        sessionWithPassport.passport.user = undefined;
+      }
+      if (req.session) {
+        await new Promise<void>((resolve) => {
+          req.session.destroy((err) => {
+            if (err) {
+              console.error("Failed to destroy session", err);
+            }
+            resolve();
+          });
+        });
+      }
+      (req as typeof req & { user?: unknown }).user = undefined;
+    };
+
     app.use(async (req, _res, next) => {
       if (config.mock.enabled) {
         next();
@@ -149,8 +181,19 @@ export function setupWebServer() {
         return;
       }
       const user = req.user as AuthedProfile;
-      const updated = await ensureDiscordAccessToken(user);
-      if (updated !== user) {
+      const refreshResult = await ensureDiscordAccessToken(user);
+      if (refreshResult.shouldLogout) {
+        console.warn("Discord refresh token invalid, clearing session", {
+          userId: user.id,
+          status: refreshResult.error?.status,
+          error: refreshResult.error?.error,
+        });
+        await clearDiscordSession(req);
+        next();
+        return;
+      }
+      if (refreshResult.refreshed) {
+        const updated = refreshResult.user;
         req.user = updated;
         const sessionWithPassport = req.session as
           | (typeof req.session & { passport?: { user?: unknown } })

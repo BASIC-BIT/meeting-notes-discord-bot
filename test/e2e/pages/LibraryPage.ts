@@ -62,6 +62,18 @@ export class LibraryPage {
     return this.page.getByTestId(testIds.library.drawer);
   }
 
+  drawerContent(): Locator {
+    return this.drawer().getByTestId(testIds.library.drawerContent);
+  }
+
+  drawerSummaryScroll(): Locator {
+    return this.drawer().getByTestId(testIds.library.summaryScroll);
+  }
+
+  drawerSummaryViewport(): Locator {
+    return this.drawer().getByTestId(testIds.library.summaryViewport);
+  }
+
   drawerDownload(): Locator {
     return this.drawer().getByTestId(testIds.library.download);
   }
@@ -83,7 +95,7 @@ export class LibraryPage {
   }
 
   drawerTimelineLabel(): Locator {
-    return this.drawer().getByText("Timeline", { exact: true }).first();
+    return this.drawer().getByText("Transcript", { exact: true }).first();
   }
 
   async closeDrawer(): Promise<void> {

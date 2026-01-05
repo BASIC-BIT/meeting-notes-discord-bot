@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { MeetingList } from "../MeetingList";
 import { MEETING_STATUS } from "../../../../types/meetingLifecycle";
-import type { MeetingListItem } from "../../../pages/Library";
+import type { MeetingListItem } from "../../../pages/library/types";
 
 const baseItem: MeetingListItem = {
   id: "m1",

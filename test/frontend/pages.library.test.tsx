@@ -83,8 +83,6 @@ describe("Library page", () => {
     await waitFor(() => {
       expect(screen.getByText(/Audio isn/i)).toBeInTheDocument();
     });
-    expect(
-      screen.getByText(/Timeline data will appear after the meeting finishes/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Full transcript/i)).toBeInTheDocument();
   });
 });

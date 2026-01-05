@@ -26,8 +26,27 @@ test("library page shows meetings and drawer details (mock)", async ({
 
   await libraryPage.openFirstMeeting();
   await expect(libraryPage.drawerSummaryLabel()).toBeVisible();
-  await expect(libraryPage.drawerTimelineLabel()).toBeVisible();
   await expect(libraryPage.drawerDownload()).toBeVisible();
+  await expect(libraryPage.drawerSummaryScroll()).toBeVisible();
+
+  const drawerScroll = await libraryPage.drawerContent().evaluate((node) => ({
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight,
+  }));
+  expect(drawerScroll.scrollHeight).toBeLessThanOrEqual(
+    drawerScroll.clientHeight + 1,
+  );
+
+  const summaryScroll = await libraryPage
+    .drawerSummaryViewport()
+    .evaluate((node) => ({
+      scrollHeight: node.scrollHeight,
+      clientHeight: node.clientHeight,
+    }));
+  expect(summaryScroll.scrollHeight).toBeGreaterThan(
+    summaryScroll.clientHeight,
+  );
+
   await libraryPage.drawerArchive().click();
   await expect(libraryPage.drawerArchiveConfirm()).toBeVisible();
   await libraryPage.drawerArchiveConfirm().click();

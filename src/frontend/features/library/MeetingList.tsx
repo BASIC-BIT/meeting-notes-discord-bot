@@ -13,7 +13,7 @@ import { IconChevronRight, IconFilter, IconUsers } from "@tabler/icons-react";
 import Surface from "../../components/Surface";
 import type { MeetingStatus } from "../../../types/meetingLifecycle";
 import { MEETING_STATUS } from "../../../types/meetingLifecycle";
-import type { MeetingListItem } from "../../pages/Library";
+import type { MeetingListItem } from "../../pages/library/types";
 import classes from "./MeetingList.module.css";
 
 const renderListStatusBadge = (status?: MeetingStatus) => {

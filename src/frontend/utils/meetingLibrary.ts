@@ -37,6 +37,9 @@ export type MeetingDetailInput = {
   duration: number;
   tags?: string[];
   notes?: string | null;
+  notesChannelId?: string | null;
+  notesMessageId?: string | null;
+  transcript?: string | null;
   meetingName?: string | null;
   summarySentence?: string | null;
   summaryLabel?: string | null;

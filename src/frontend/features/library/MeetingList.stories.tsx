@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import { MeetingList } from "./MeetingList";
-import type { MeetingListItem } from "../../pages/Library";
+import type { MeetingListItem } from "../../pages/library/types";
 import { MEETING_STATUS } from "../../../types/meetingLifecycle";
 
 const items: MeetingListItem[] = [
