@@ -6,10 +6,10 @@ import { distance as levenshteinDistance } from "fastest-levenshtein";
 import {
   createReadStream,
   existsSync,
-  mkdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import path from "node:path";
 import {
   BYTES_PER_SAMPLE,
   CHANNELS,
@@ -64,6 +64,7 @@ import {
 } from "@langfuse/tracing";
 import { buildLangfuseTranscriptionAudioAttachment } from "./observability/langfuseAudioAttachment";
 import { buildLangfuseTranscriptionUsageDetails } from "./observability/langfuseUsageDetails";
+import { ensureMeetingTempDirSync } from "./services/tempFileService";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
 // Check if transcription is too similar to the prompt or glossary content (likely verbatim output)
@@ -286,14 +287,15 @@ export async function transcribeSnippet(
   options: { tempSuffix?: string } = {},
 ): Promise<string> {
   const suffix = options.tempSuffix ? `_${options.tempSuffix}` : "";
-  const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}_transcript.pcm`;
-  const tempWavFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}.wav`;
-
-  // Ensure the directories exist
-  const tempDir = "./";
-  if (!existsSync(tempDir)) {
-    mkdirSync(tempDir, { recursive: true });
-  }
+  const tempDir = ensureMeetingTempDirSync(meeting);
+  const tempPcmFileName = path.join(
+    tempDir,
+    `temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}_transcript.pcm`,
+  );
+  const tempWavFileName = path.join(
+    tempDir,
+    `temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}.wav`,
+  );
 
   // Write the PCM buffer to a file
   const buffer = Buffer.concat(snippet.chunks);

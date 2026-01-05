@@ -105,9 +105,6 @@ export function MeetingList({
                     {renderListStatusBadge(meetingItem.status)}
                   </Group>
                   <Text size="xs" c="dimmed">
-                    {meetingItem.summaryLabel ?? "Summary"}
-                  </Text>
-                  <Text size="sm" c="dimmed" lineClamp={2}>
                     {meetingItem.summary || "No summary yet."}
                   </Text>
                   <Group gap="md" align="center" mt={2}>

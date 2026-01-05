@@ -6,6 +6,7 @@ venv/
 dist/
 .env
 logs/
+tmp/
 recordings/
 dynamodb-data/
 

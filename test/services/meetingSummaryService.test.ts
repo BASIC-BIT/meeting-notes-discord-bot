@@ -68,6 +68,8 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
             `Server: ${variables?.serverName ?? ""}`,
             `Channel: ${variables?.channelName ?? ""}`,
             `Tags: ${variables?.tagLine ?? ""}`,
+            "Recent meeting names:",
+            `${variables?.recentMeetingNames ?? ""}`,
             `${variables?.previousSummaryBlock ?? ""}`,
             "Notes:",
             `${variables?.notes ?? ""}`,
@@ -92,6 +94,12 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
   jest.doMock("../../src/services/langfusePromptService", () => ({
     __esModule: true,
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
+  }));
+  jest.doMock("../../src/services/meetingNameService", () => ({
+    __esModule: true,
+    listRecentMeetingNamesForPrompt: jest
+      .fn()
+      .mockResolvedValue("- Sprint planning"),
   }));
 
   const { generateMeetingSummaries } =
@@ -130,6 +138,8 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
   expect(userPrompt).toContain("Server: Chronote HQ");
   expect(userPrompt).toContain("Channel: general");
   expect(userPrompt).toContain("Tags: alpha, beta");
+  expect(userPrompt).toContain("Recent meeting names:");
+  expect(userPrompt).toContain("- Sprint planning");
   expect(userPrompt).toContain("Previous summary sentence: Old summary.");
   expect(userPrompt).toContain("Previous summary label: Old label");
   expect(userPrompt).toContain("Notes:");

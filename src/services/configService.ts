@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import path from "node:path";
 
 // Load environment variables once
 dotenv.config();
@@ -165,6 +166,12 @@ class ConfigService {
       process.env.NODE_ENV === "development" &&
       process.env.USE_LOCAL_DYNAMODB === "true",
     tablePrefix: process.env.DDB_TABLE_PREFIX || "",
+  };
+
+  readonly paths = {
+    meetingTempDir:
+      process.env.MEETING_TEMP_DIR?.trim() ||
+      path.resolve(process.cwd(), "tmp", "meetings"),
   };
 
   // Storage Configuration

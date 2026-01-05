@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActionIcon,
   Badge,
   Box,
   Button,
@@ -13,6 +14,7 @@ import {
   Stack,
   Text,
   ThemeIcon,
+  TextInput,
   Title,
   useComputedColorScheme,
   useMantineTheme,
@@ -25,6 +27,7 @@ import {
   IconFilter,
   IconMicrophone,
   IconNote,
+  IconPencil,
   IconUsers,
 } from "@tabler/icons-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -45,12 +48,12 @@ import {
 import {
   buildMeetingDetails,
   deriveSummary,
-  deriveTitle,
   filterMeetingItems,
   formatChannelLabel,
   formatDateLabel,
   formatDateTimeLabel,
   formatDurationLabel,
+  resolveMeetingTitle,
 } from "../utils/meetingLibrary";
 import { resolveNowMs } from "../utils/now";
 import type {
@@ -81,6 +84,7 @@ type MeetingExport = {
     attendees: string[];
     events: MeetingEvent[];
     title: string;
+    meetingName?: string;
     summary: string;
     summaryLabel?: string;
     summarySentence?: string;
@@ -99,6 +103,7 @@ type MeetingSummaryRow = {
   duration: number;
   tags: string[];
   notes: string;
+  meetingName?: string;
   summarySentence?: string;
   summaryLabel?: string;
   notesChannelId?: string;
@@ -113,7 +118,6 @@ type MeetingSummaryRow = {
 export type MeetingListItem = MeetingSummaryRow & {
   title: string;
   summary: string;
-  summaryLabel?: string;
   dateLabel: string;
   durationLabel: string;
   channelLabel: string;
@@ -182,6 +186,9 @@ export default function Library() {
   const [archiveNextState, setArchiveNextState] = useState<boolean | null>(
     null,
   );
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const { guilds, selectedGuildId } = useGuildContext();
   const canManageSelectedGuild =
@@ -209,6 +216,7 @@ export default function Library() {
     { enabled: Boolean(selectedGuildId && selectedMeetingId) },
   );
   const archiveMutation = trpc.meetings.setArchived.useMutation();
+  const renameMutation = trpc.meetings.rename.useMutation();
 
   const channelNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -233,7 +241,12 @@ export default function Library() {
       );
       const dateLabel = formatDateLabel(meetingRow.timestamp);
       const durationLabel = formatDurationLabel(meetingRow.duration);
-      const title = deriveTitle(meetingRow.notes, channelLabel);
+      const title = resolveMeetingTitle({
+        meetingName: meetingRow.meetingName,
+        summaryLabel: meetingRow.summaryLabel,
+        summarySentence: meetingRow.summarySentence,
+        channelLabel,
+      });
       const summary = deriveSummary(
         meetingRow.notes,
         meetingRow.summarySentence,
@@ -242,7 +255,6 @@ export default function Library() {
         ...meetingRow,
         title,
         summary,
-        summaryLabel: meetingRow.summaryLabel ?? undefined,
         dateLabel,
         durationLabel,
         channelLabel,
@@ -286,6 +298,12 @@ export default function Library() {
     const detail = detailQuery.data?.meeting;
     return detail ? buildMeetingDetails(detail, channelNameMap) : null;
   }, [detailQuery.data, channelNameMap]);
+
+  useEffect(() => {
+    if (!meeting) return;
+    setRenameDraft(meeting.meetingName ?? meeting.summaryLabel ?? "");
+    setRenameError(null);
+  }, [meeting?.id, meeting?.meetingName, meeting?.summaryLabel]);
   const liveStreamEnabled = Boolean(
     meeting &&
     selectedGuildId &&
@@ -423,6 +441,7 @@ export default function Library() {
     setEndMeetingModalOpen(false);
     setArchiveModalOpen(false);
     setArchiveNextState(null);
+    setRenameModalOpen(false);
   };
 
   const handleArchiveToggle = async (archived: boolean): Promise<boolean> => {
@@ -462,6 +481,37 @@ export default function Library() {
     setArchiveNextState(null);
   };
 
+  const handleRenameSave = async () => {
+    if (!selectedGuildId || !meeting) return;
+    const trimmed = renameDraft.trim();
+    if (!trimmed) {
+      setRenameError("Meeting name cannot be empty.");
+      return;
+    }
+    setRenameError(null);
+    try {
+      const result = await renameMutation.mutateAsync({
+        serverId: selectedGuildId,
+        meetingId: meeting.id,
+        meetingName: trimmed,
+      });
+      notifications.show({
+        color: "green",
+        message: `Meeting renamed to ${result.meetingName}.`,
+      });
+      setRenameModalOpen(false);
+      setRenameDraft(result.meetingName);
+      await Promise.all([
+        invalidateMeetingLists(),
+        trpcUtils.meetings.detail.invalidate(),
+      ]);
+    } catch {
+      setRenameError(
+        renameMutation.error?.message ?? "Unable to rename meeting.",
+      );
+    }
+  };
+
   const handleDownload = () => {
     const detail = detailQuery.data?.meeting;
     if (!detail || !meeting) return;
@@ -482,9 +532,10 @@ export default function Library() {
         attendees: detail.attendees ?? [],
         events: detail.events ?? [],
         title: meeting.title,
+        meetingName: meeting.meetingName,
         summary: meeting.summary,
         summarySentence: detail.summarySentence ?? undefined,
-        summaryLabel: meeting.summaryLabel,
+        summaryLabel: detail.summaryLabel ?? undefined,
         dateLabel: meeting.dateLabel,
         durationLabel: meeting.durationLabel,
         channel: meeting.channel,
@@ -665,11 +716,52 @@ export default function Library() {
                     </Group>
                   </Stack>
                 </Modal>
+                <Modal
+                  opened={renameModalOpen}
+                  onClose={() => setRenameModalOpen(false)}
+                  title="Rename meeting"
+                  centered
+                >
+                  <Stack gap="md">
+                    <TextInput
+                      label="Meeting name"
+                      description="5 words or fewer, letters and numbers only."
+                      value={renameDraft}
+                      onChange={(event) =>
+                        setRenameDraft(event.currentTarget.value)
+                      }
+                      error={renameError ?? undefined}
+                      data-testid="meeting-rename-input"
+                    />
+                    <Group justify="flex-end">
+                      <Button
+                        variant="default"
+                        onClick={() => setRenameModalOpen(false)}
+                        disabled={renameMutation.isPending}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={handleRenameSave}
+                        loading={renameMutation.isPending}
+                      >
+                        Save name
+                      </Button>
+                    </Group>
+                  </Stack>
+                </Modal>
                 <Stack gap="md">
                   <Stack gap={4}>
                     <Group justify="space-between" align="center" wrap="wrap">
                       <Group gap="xs" align="center" wrap="wrap">
                         <Title order={3}>{meeting.title}</Title>
+                        <ActionIcon
+                          variant="subtle"
+                          aria-label="Rename meeting"
+                          onClick={() => setRenameModalOpen(true)}
+                        >
+                          <IconPencil size={16} />
+                        </ActionIcon>
                         {meeting.archivedAt ? (
                           <Badge size="sm" variant="light" color="gray">
                             Archived
@@ -780,11 +872,6 @@ export default function Library() {
                       </ThemeIcon>
                       <Text fw={600}>Summary</Text>
                     </Group>
-                    {meeting.summaryLabel ? (
-                      <Text size="xs" c="dimmed" mb={6}>
-                        {meeting.summaryLabel}
-                      </Text>
-                    ) : null}
                     <Text size="sm" c="dimmed">
                       {meeting.summary}
                     </Text>

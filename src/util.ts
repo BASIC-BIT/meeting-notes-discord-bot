@@ -19,6 +19,10 @@ export function deleteIfExists(path: string) {
 }
 export function deleteDirectoryRecursively(directoryPath: string): void {
   try {
+    if (!existsSync(directoryPath)) {
+      return;
+    }
+
     // Read all contents of the directory
     const files = readdirSync(directoryPath);
 

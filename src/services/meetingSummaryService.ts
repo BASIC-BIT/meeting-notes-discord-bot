@@ -6,6 +6,7 @@ import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
 import { resolveChatParamsForRole } from "./openaiModelParams";
 import type { ModelParamConfig } from "../config/types";
+import { listRecentMeetingNamesForPrompt } from "./meetingNameService";
 
 export type MeetingSummaries = {
   summarySentence?: string;
@@ -13,11 +14,13 @@ export type MeetingSummaries = {
 };
 
 type MeetingSummaryInput = {
+  guildId?: string;
   notes: string;
   serverName: string;
   channelName: string;
   tags?: string[];
   now?: Date;
+  meetingId?: string;
   previousSummarySentence?: string;
   previousSummaryLabel?: string;
   parentSpanContext?: SpanContext;
@@ -82,6 +85,10 @@ export async function generateMeetingSummaries(
   const tagLine = input.tags?.length ? input.tags.join(", ") : "None";
   const previousSentence = input.previousSummarySentence?.trim();
   const previousLabel = input.previousSummaryLabel?.trim();
+  const recentMeetingNames = await listRecentMeetingNamesForPrompt({
+    guildId: input.guildId,
+    excludeMeetingId: input.meetingId,
+  });
 
   const previousSummaryBlock =
     previousSentence || previousLabel
@@ -95,6 +102,7 @@ export async function generateMeetingSummaries(
       serverName: input.serverName,
       channelName: input.channelName,
       tagLine,
+      recentMeetingNames,
       previousSummaryBlock,
       notes: input.notes,
     },

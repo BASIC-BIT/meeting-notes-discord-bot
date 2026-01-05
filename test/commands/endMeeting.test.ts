@@ -82,6 +82,11 @@ jest.mock("../../src/utils/upgradePrompt", () => ({
   buildUpgradeTextOnly: jest.fn((content: string) => content),
 }));
 jest.mock("node:fs", () => ({
+  mkdirSync: jest.fn(),
+  promises: {
+    mkdir: jest.fn().mockResolvedValue(undefined),
+    rm: jest.fn().mockResolvedValue(undefined),
+  },
   writeFileSync: jest.fn(),
 }));
 

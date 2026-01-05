@@ -14,7 +14,6 @@ const items: MeetingListItem[] = [
     tags: ["checks"],
     notes: "Quick mic check.",
     summarySentence: "Quick mic and audio check before the weekly standup.",
-    summaryLabel: "Mic check",
     notesChannelId: "n1",
     notesMessageId: "msg-1",
     audioAvailable: true,
@@ -37,7 +36,6 @@ const items: MeetingListItem[] = [
     notes: "Summary and action items.",
     summarySentence:
       "Reviewed the Q1 roadmap, decisions, and key risks for next quarter.",
-    summaryLabel: "Q1 roadmap review",
     notesChannelId: "n2",
     notesMessageId: "msg-2",
     audioAvailable: true,

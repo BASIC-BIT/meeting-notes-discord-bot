@@ -5,6 +5,7 @@ import {
   getRecentMeetingsForChannel,
   getRecentMeetingsForGuild,
   updateMeetingNotes,
+  updateMeetingName,
   updateMeetingArchive,
   updateMeetingStatus,
   updateMeetingTags,
@@ -44,10 +45,16 @@ export type MeetingHistoryRepository = {
     editedBy: string;
     summarySentence?: string;
     summaryLabel?: string;
+    meetingName?: string;
     suggestion?: SuggestionHistoryEntry;
     expectedPreviousVersion?: number;
     metadata?: { notesMessageIds?: string[]; notesChannelId?: string };
   }) => Promise<boolean>;
+  updateMeetingName: (
+    guildId: string,
+    channelIdTimestamp: string,
+    meetingName: string,
+  ) => Promise<boolean>;
   updateStatus: (
     guildId: string,
     channelIdTimestamp: string,
@@ -119,10 +126,12 @@ const realRepository: MeetingHistoryRepository = {
       params.editedBy,
       params.summarySentence,
       params.summaryLabel,
+      params.meetingName,
       params.suggestion,
       params.expectedPreviousVersion,
       params.metadata,
     ),
+  updateMeetingName: updateMeetingName,
   updateStatus: updateMeetingStatus,
   updateArchive: updateMeetingArchive,
   updateTags: updateMeetingTags,
@@ -188,6 +197,7 @@ const mockRepository: MeetingHistoryRepository = {
       notes: params.notes,
       summarySentence: params.summarySentence ?? existing.summarySentence,
       summaryLabel: params.summaryLabel ?? existing.summaryLabel,
+      meetingName: params.meetingName ?? existing.meetingName,
       notesVersion: params.notesVersion,
       notesLastEditedBy: params.editedBy,
       notesLastEditedAt: now,
@@ -198,6 +208,21 @@ const mockRepository: MeetingHistoryRepository = {
         params.metadata?.notesChannelId ?? existing.notesChannelId,
     };
     getMockStore().meetingHistoryByGuild.set(params.guildId, items);
+    return true;
+  },
+  async updateMeetingName(guildId, channelIdTimestamp, meetingName) {
+    const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
+    const idx = items.findIndex(
+      (item) => item.channelId_timestamp === channelIdTimestamp,
+    );
+    if (idx === -1) return false;
+    const now = new Date().toISOString();
+    items[idx] = {
+      ...items[idx],
+      meetingName,
+      updatedAt: now,
+    };
+    getMockStore().meetingHistoryByGuild.set(guildId, items);
     return true;
   },
   async updateTags(guildId, channelIdTimestamp, tags) {

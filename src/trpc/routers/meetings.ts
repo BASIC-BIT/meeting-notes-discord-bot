@@ -4,6 +4,7 @@ import {
   getMeetingHistoryService,
   listRecentMeetingsForGuildService,
   updateMeetingArchiveService,
+  updateMeetingNameService,
 } from "../../services/meetingHistoryService";
 import { ensureBotInGuild } from "../../services/guildAccessService";
 import { config } from "../../services/configService";
@@ -14,6 +15,12 @@ import {
 } from "../../services/storageService";
 import { isDiscordApiError } from "../../services/discordService";
 import { listGuildChannelsCached } from "../../services/discordCacheService";
+import {
+  MEETING_NAME_REQUIREMENTS,
+  normalizeMeetingName,
+  resolveUniqueMeetingName,
+} from "../../services/meetingNameService";
+import { updateMeetingNotesEmbedTitles } from "../../services/meetingNotesEmbedService";
 import type { ChatEntry } from "../../types/chat";
 import type { MeetingEvent } from "../../types/meetingTimeline";
 import type { Participant } from "../../types/participants";
@@ -101,6 +108,7 @@ const list = manageGuildProcedure
             : meeting.duration,
         tags: meeting.tags ?? [],
         notes: meeting.notes ?? "",
+        meetingName: meeting.meetingName,
         summarySentence: meeting.summarySentence,
         summaryLabel: meeting.summaryLabel,
         notesChannelId: meeting.notesChannelId,
@@ -167,6 +175,7 @@ const detail = manageGuildProcedure
             : history.duration,
         tags: history.tags ?? [],
         notes: history.notes ?? "",
+        meetingName: history.meetingName,
         summarySentence: history.summarySentence,
         summaryLabel: history.summaryLabel,
         notesChannelId: history.notesChannelId,
@@ -207,8 +216,53 @@ const setArchived = manageGuildProcedure
     return { ok: true };
   });
 
+const rename = manageGuildProcedure
+  .input(
+    z.object({
+      serverId: z.string(),
+      meetingId: z.string(),
+      meetingName: z.string().min(1).max(60),
+    }),
+  )
+  .mutation(async ({ input }) => {
+    const history = await getMeetingHistoryService(
+      input.serverId,
+      input.meetingId,
+    );
+    if (!history) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Meeting not found" });
+    }
+    const normalized = normalizeMeetingName(input.meetingName);
+    if (!normalized) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: MEETING_NAME_REQUIREMENTS,
+      });
+    }
+    const meetingName = await resolveUniqueMeetingName({
+      guildId: input.serverId,
+      desiredName: normalized,
+      excludeMeetingId: history.meetingId,
+    });
+    const ok = await updateMeetingNameService({
+      guildId: input.serverId,
+      channelId_timestamp: input.meetingId,
+      meetingName,
+    });
+    if (!ok) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Meeting not found" });
+    }
+    await updateMeetingNotesEmbedTitles({
+      notesChannelId: history.notesChannelId,
+      notesMessageIds: history.notesMessageIds,
+      meetingName,
+    });
+    return { meetingName };
+  });
+
 export const meetingsRouter = router({
   list,
   detail,
   setArchived,
+  rename,
 });

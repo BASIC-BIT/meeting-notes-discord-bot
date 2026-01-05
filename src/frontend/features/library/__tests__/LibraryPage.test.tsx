@@ -14,7 +14,6 @@ const baseItem: MeetingListItem = {
   tags: ["tag"],
   notes: "notes",
   summarySentence: "Summary sentence",
-  summaryLabel: "Summary label",
   notesChannelId: "n1",
   notesMessageId: "msg1",
   audioAvailable: true,
@@ -42,7 +41,6 @@ describe("MeetingList", () => {
       </MantineProvider>,
     );
 
-    expect(screen.getByText("Summary label")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("library-meeting-row"));
     expect(onSelect).toHaveBeenCalledWith("m1");
   });
