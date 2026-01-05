@@ -1,6 +1,42 @@
 export type ConfigScope = "global" | "server" | "channel" | "user" | "meeting";
 export type ConfigValueType = "boolean" | "string" | "number" | "select";
 export type ConfigTier = "free" | "basic" | "pro";
+export type ModelRole =
+  | "notes"
+  | "meetingSummary"
+  | "notesCorrection"
+  | "transcription"
+  | "transcriptionCleanup"
+  | "transcriptionCoalesce"
+  | "image"
+  | "imagePrompt"
+  | "ask"
+  | "liveVoiceGate"
+  | "liveVoiceResponder"
+  | "liveVoiceTts"
+  | "autoRecordCancel";
+export type ModelParamRole = Exclude<
+  ModelRole,
+  "transcription" | "image" | "liveVoiceTts"
+>;
+export type ModelSamplingMode = "reasoning" | "temperature";
+export type ModelReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+export type ModelVerbosity = "default" | "low" | "medium" | "high";
+export type ModelParamConfig = {
+  samplingMode: ModelSamplingMode;
+  reasoningEffort: ModelReasoningEffort;
+  temperature?: number;
+  verbosity?: ModelVerbosity;
+};
+export type ModelParamsByRole = Partial<
+  Record<ModelParamRole, ModelParamConfig>
+>;
 export type ConfigGroup =
   | "Recommended"
   | "Standard"
@@ -90,4 +126,8 @@ export type MeetingRuntimeConfig = {
     maxCharsTranscription: number;
     maxCharsContext: number;
   };
+  autoRecordCancellation: {
+    enabled: boolean;
+  };
+  modelParams?: ModelParamsByRole;
 };

@@ -178,19 +178,13 @@ const portalLibraryRoute = new Route({
 
 const askSearchSchema = z.object({
   list: z.enum(["mine", "shared", "archived"]).optional(),
+  conversationId: z.string().optional(),
   messageId: z.string().optional(),
 }).parse;
 
 const portalAskRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "ask",
-  component: Ask,
-  validateSearch: askSearchSchema,
-});
-
-const portalAskConversationRoute = new Route({
-  getParentRoute: () => portalServerRoute,
-  path: "ask/$conversationId",
   component: Ask,
   validateSearch: askSearchSchema,
 });
@@ -241,7 +235,6 @@ const routeTree = rootRoute.addChildren([
     portalServerRoute.addChildren([
       portalLibraryRoute,
       portalAskRoute,
-      portalAskConversationRoute,
       portalBillingRoute,
       portalSettingsRoute,
     ]),

@@ -1,19 +1,7 @@
 import { config } from "./configService";
+import type { ModelRole } from "../config/types";
 
 export type ModelProvider = "openai";
-
-export type ModelRole =
-  | "notes"
-  | "meetingSummary"
-  | "notesCorrection"
-  | "transcription"
-  | "transcriptionCleanup"
-  | "transcriptionCoalesce"
-  | "image"
-  | "ask"
-  | "liveVoiceGate"
-  | "liveVoiceResponder"
-  | "liveVoiceTts";
 
 export type ModelChoice = {
   provider: ModelProvider;
@@ -30,6 +18,7 @@ const defaultModels: Record<ModelRole, ModelChoice> = {
   transcriptionCleanup: { provider: "openai", model: config.notes.model },
   transcriptionCoalesce: { provider: "openai", model: "gpt-5-mini" },
   image: { provider: "openai", model: "dall-e-3" },
+  imagePrompt: { provider: "openai", model: config.notes.model },
   ask: { provider: "openai", model: config.liveVoice.responderModel },
   liveVoiceGate: { provider: "openai", model: config.liveVoice.gateModel },
   liveVoiceResponder: {
@@ -37,6 +26,7 @@ const defaultModels: Record<ModelRole, ModelChoice> = {
     model: config.liveVoice.responderModel,
   },
   liveVoiceTts: { provider: "openai", model: config.liveVoice.ttsModel },
+  autoRecordCancel: { provider: "openai", model: config.liveVoice.gateModel },
 };
 
 export function getModelChoice(

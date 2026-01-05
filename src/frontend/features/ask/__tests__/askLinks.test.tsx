@@ -19,7 +19,7 @@ describe("askLinks helpers", () => {
       messageId: "mid",
     });
     expect(url).toBe(
-      "https://example.com/portal/server/123/ask/abc?list=shared&messageId=mid",
+      "https://example.com/portal/server/123/ask?conversationId=abc&list=shared&messageId=mid",
     );
   });
 

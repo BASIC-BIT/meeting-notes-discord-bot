@@ -11,6 +11,7 @@ import {
   TextChannel,
   VoiceState,
   ChannelSelectMenuInteraction,
+  Events,
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
 import { CONFIG_KEYS } from "./config/keys";
@@ -296,7 +297,7 @@ export async function setupBot() {
     );
   }
 
-  client.once("ready", () => {
+  client.once(Events.ClientReady, () => {
     console.log(`Logged in as ${client.user?.tag}!`);
 
     client.on("voiceStateUpdate", handleVoiceStateUpdate);

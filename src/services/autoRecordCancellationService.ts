@@ -3,6 +3,7 @@ import type { MeetingData } from "../types/meeting-data";
 import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
 import { config } from "./configService";
+import { resolveChatParamsForRole } from "./openaiModelParams";
 
 type CancellationDecision = {
   cancel: boolean;
@@ -15,8 +16,13 @@ const MAX_CHAT_MESSAGES = 1;
 const MAX_TRANSCRIPT_CHARS = 1200;
 const MAX_CHAT_LINES = 3;
 
-const isAutoCancelEnabled = () =>
-  config.server.nodeEnv !== "development" && !config.mock.enabled;
+const isAutoCancelEnabled = (meeting: MeetingData) => {
+  if (config.mock.enabled) return false;
+  if (meeting.runtimeConfig?.autoRecordCancellation?.enabled === false) {
+    return false;
+  }
+  return true;
+};
 
 const collectTranscriptText = (meeting: MeetingData) =>
   meeting.audioData.audioFiles
@@ -41,7 +47,7 @@ export async function evaluateAutoRecordCancellation(
   meeting: MeetingData,
 ): Promise<CancellationDecision> {
   if (!meeting.isAutoRecording) return { cancel: false };
-  if (!isAutoCancelEnabled()) return { cancel: false };
+  if (!isAutoCancelEnabled(meeting)) return { cancel: false };
 
   const durationSeconds = meeting.endTime
     ? Math.max(
@@ -97,7 +103,12 @@ export async function evaluateAutoRecordCancellation(
   ].join("\n");
 
   try {
-    const modelChoice = getModelChoice("liveVoiceGate");
+    const modelChoice = getModelChoice("autoRecordCancel");
+    const modelParams = resolveChatParamsForRole({
+      role: "autoRecordCancel",
+      model: modelChoice.model,
+      config: meeting.runtimeConfig?.modelParams?.autoRecordCancel,
+    });
     const openAIClient = createOpenAIClient({
       traceName: "auto-record-cancel",
       generationName: "auto-record-cancel",
@@ -116,7 +127,7 @@ export async function evaluateAutoRecordCancellation(
       ],
       max_completion_tokens: 120,
       response_format: { type: "json_object" },
-      temperature: 0,
+      ...modelParams,
     });
 
     const content = completion.choices[0].message.content ?? "";

@@ -15,6 +15,7 @@ export const routeParams: {
 let routeSearch: {
   meetingId?: string;
   list?: string;
+  conversationId?: string;
   messageId?: string;
   promo?: string;
   serverId?: string;
@@ -67,6 +68,7 @@ export const setRouteParams = (params: {
 export const setRouteSearch = (search: {
   meetingId?: string;
   list?: string;
+  conversationId?: string;
   messageId?: string;
   promo?: string;
   serverId?: string;

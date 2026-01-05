@@ -26,6 +26,7 @@ type ServerPickerProps = {
   actionDisabled?: (guild: Guild) => boolean;
   description?: (guild: Guild) => string;
   filter?: (guild: Guild) => boolean;
+  sections?: ServerPickerSection[];
   emptyTitle: string;
   emptyDescription: string;
   searchEmptyMessage?: string;
@@ -34,6 +35,13 @@ type ServerPickerProps = {
   cardTestId?: string;
   actionTestId?: string;
   showSearch?: boolean;
+};
+
+type ServerPickerSection = {
+  title: string;
+  description?: string;
+  filter: (guild: Guild) => boolean;
+  testId?: string;
 };
 
 const resolveGuildIconUrl = (guild: Guild): string | null => {
@@ -52,6 +60,7 @@ export default function ServerPicker({
   actionDisabled,
   description,
   filter,
+  sections,
   emptyTitle,
   emptyDescription,
   searchEmptyMessage,
@@ -109,6 +118,101 @@ export default function ServerPicker({
     );
   }
 
+  const renderGuildCards = (items: Guild[]) => (
+    <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+      {items.map((guild) => {
+        const selected = selectedGuildId === guild.id;
+        const handleAction = () => {
+          onSelect?.(guild.id);
+          onAction?.(guild);
+        };
+        const label = actionLabel ? actionLabel(guild) : "Select";
+        const disabled = actionDisabled ? actionDisabled(guild) : false;
+        const details = description ? description(guild) : "";
+        const iconUrl = resolveGuildIconUrl(guild);
+        return (
+          <Surface
+            key={guild.id}
+            p="lg"
+            tone="soft"
+            data-testid={cardTestId}
+            data-server-id={guild.id}
+            data-selected={selected ? "true" : "false"}
+            role="button"
+            tabIndex={disabled ? -1 : 0}
+            aria-disabled={disabled}
+            onClick={disabled ? undefined : handleAction}
+            onKeyDown={(event) => {
+              if (disabled) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                handleAction();
+              }
+            }}
+            style={{
+              borderWidth: selected ? uiBorders.highlightWidth : undefined,
+              borderColor: selected ? uiColors.highlightBorder : undefined,
+              cursor: disabled ? "not-allowed" : "pointer",
+              transition: "transform 120ms ease, box-shadow 120ms ease",
+            }}
+          >
+            <Stack gap="sm">
+              <Group justify="space-between" align="center" wrap="nowrap">
+                <Group gap="sm" align="center">
+                  <Avatar
+                    src={iconUrl ?? undefined}
+                    radius="md"
+                    size={48}
+                    color="brand"
+                    variant="light"
+                  >
+                    {guild.name.slice(0, 2).toUpperCase()}
+                  </Avatar>
+                  <Text fw={600}>{guild.name}</Text>
+                </Group>
+                <Group gap="xs" align="center">
+                  {selected ? (
+                    <ThemeIcon color="brand" variant="light" size="md">
+                      <IconCheck size={14} />
+                    </ThemeIcon>
+                  ) : null}
+                  <Button
+                    variant="subtle"
+                    color="brand"
+                    size="xs"
+                    rightSection={<IconArrowRight size={14} />}
+                    data-testid={actionTestId}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleAction();
+                    }}
+                    disabled={disabled}
+                  >
+                    {label}
+                  </Button>
+                </Group>
+              </Group>
+              {details ? (
+                <Text size="sm" c="dimmed">
+                  {details}
+                </Text>
+              ) : null}
+            </Stack>
+          </Surface>
+        );
+      })}
+    </SimpleGrid>
+  );
+
+  const resolvedSections = sections
+    ? sections
+        .map((section) => ({
+          ...section,
+          guilds: filteredGuilds.filter(section.filter),
+        }))
+        .filter((section) => section.guilds.length > 0)
+    : null;
+
   return (
     <Stack gap="lg" data-testid={rootTestId}>
       {showSearch ? (
@@ -126,72 +230,37 @@ export default function ServerPicker({
         style={{ maxHeight: "60vh" }}
         data-visual-scroll
       >
-        <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-          {filteredGuilds.map((guild) => {
-            const selected = selectedGuildId === guild.id;
-            const handleAction = () => {
-              onSelect?.(guild.id);
-              onAction?.(guild);
-            };
-            const label = actionLabel ? actionLabel(guild) : "Select";
-            const disabled = actionDisabled ? actionDisabled(guild) : false;
-            const details = description ? description(guild) : "";
-            const iconUrl = resolveGuildIconUrl(guild);
-            return (
-              <Surface
-                key={guild.id}
-                p="lg"
-                tone="soft"
-                data-testid={cardTestId}
-                data-server-id={guild.id}
-                data-selected={selected ? "true" : "false"}
-                style={{
-                  borderWidth: selected ? uiBorders.highlightWidth : undefined,
-                  borderColor: selected ? uiColors.highlightBorder : undefined,
-                }}
-              >
-                <Stack gap="sm">
-                  <Group justify="space-between" align="center" wrap="nowrap">
-                    <Group gap="sm" align="center">
-                      <Avatar
-                        src={iconUrl ?? undefined}
-                        radius="md"
-                        size={48}
-                        color="brand"
-                        variant="light"
-                      >
-                        {guild.name.slice(0, 2).toUpperCase()}
-                      </Avatar>
-                      <Stack gap={2}>
-                        <Text fw={600}>{guild.name}</Text>
-                        {details ? (
-                          <Text size="sm" c="dimmed">
-                            {details}
-                          </Text>
-                        ) : null}
-                      </Stack>
-                    </Group>
-                    {selected ? (
-                      <ThemeIcon color="brand" variant="light" size="md">
-                        <IconCheck size={14} />
-                      </ThemeIcon>
-                    ) : null}
-                  </Group>
-                  <Button
-                    variant={selected ? "light" : "outline"}
-                    color="brand"
-                    rightSection={<IconArrowRight size={16} />}
-                    data-testid={actionTestId}
-                    onClick={handleAction}
-                    disabled={disabled}
-                  >
-                    {label}
-                  </Button>
+        {resolvedSections ? (
+          resolvedSections.length > 0 ? (
+            <Stack gap="lg">
+              {resolvedSections.map((section) => (
+                <Stack
+                  key={section.title}
+                  gap="sm"
+                  data-testid={section.testId}
+                >
+                  <Text fw={600} size="sm">
+                    {section.title}
+                  </Text>
+                  {section.description ? (
+                    <Text size="sm" c="dimmed">
+                      {section.description}
+                    </Text>
+                  ) : null}
+                  {renderGuildCards(section.guilds)}
                 </Stack>
-              </Surface>
-            );
-          })}
-        </SimpleGrid>
+              ))}
+            </Stack>
+          ) : (
+            <Surface p="lg" tone="soft">
+              <Text size="sm" c="dimmed">
+                {searchEmptyMessage ?? "No servers match that search."}
+              </Text>
+            </Surface>
+          )
+        ) : (
+          renderGuildCards(filteredGuilds)
+        )}
       </ScrollArea>
     </Stack>
   );

@@ -36,7 +36,6 @@ describe("MeetingList", () => {
           items={[baseItem]}
           listLoading={false}
           listError={false}
-          onRefresh={jest.fn()}
           onSelect={onSelect}
           selectedMeetingId={null}
         />
@@ -44,8 +43,6 @@ describe("MeetingList", () => {
     );
 
     expect(screen.getByText("Summary label")).toBeInTheDocument();
-    expect(screen.getByTestId("library-refresh")).toBeInTheDocument();
-
     fireEvent.click(screen.getByTestId("library-meeting-row"));
     expect(onSelect).toHaveBeenCalledWith("m1");
   });
@@ -57,7 +54,6 @@ describe("MeetingList", () => {
           items={[]}
           listLoading={false}
           listError={false}
-          onRefresh={jest.fn()}
           onSelect={jest.fn()}
           selectedMeetingId={null}
         />
@@ -83,7 +79,6 @@ describe("MeetingList", () => {
           items={[archivedItem]}
           listLoading={false}
           listError={false}
-          onRefresh={jest.fn()}
           onSelect={jest.fn()}
           selectedMeetingId={null}
         />

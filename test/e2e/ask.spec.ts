@@ -45,10 +45,13 @@ test("ask page lists conversations and sends a question (mock)", async ({
     await askPage.conversationItemByTitle(mockAsk.conversationTitle).click();
     await expect(askPage.archiveButton()).toBeVisible();
     await askPage.archiveButton().click();
-    await expect(askPage.unarchiveButton()).toBeVisible();
+    await expect(askPage.archiveConfirmButton()).toBeVisible();
+    await askPage.archiveConfirmButton().click();
     await askPage.switchListMode("archived");
     await expect(
       askPage.conversationItemByTitle(mockAsk.conversationTitle),
     ).toBeVisible();
+    await askPage.conversationItemByTitle(mockAsk.conversationTitle).click();
+    await expect(askPage.unarchiveButton()).toBeVisible();
   }
 });

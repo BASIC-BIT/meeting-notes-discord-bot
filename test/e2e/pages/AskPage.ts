@@ -86,6 +86,10 @@ export class AskPage {
     return this.page.getByTestId(testIds.ask.unarchive);
   }
 
+  archiveConfirmButton(): Locator {
+    return this.page.getByTestId(testIds.ask.archiveConfirm);
+  }
+
   async renameTo(title: string): Promise<void> {
     await this.renameButton().click();
     await this.renameInput().fill(title);

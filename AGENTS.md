@@ -97,6 +97,7 @@
 - Comment hygiene: don’t leave transient or change-log style comments (e.g., “SDK v3 exposes transformToString”). Use comments only to clarify non-obvious logic, constraints, or intent.
 - Writing style: do not use em dashes in copy/docs/comments; prefer commas, parentheses, or hyphens.
 - README should stay high signal for users, avoid listing research outcomes like query parameter details. Put rationale or research notes in planning documentation files instead.
+- Backwards compatibility: ask the user whether changes need to preserve compatibility for URLs, API contracts, stored data, or behavior. If unsure, ask before implementing and favor simplicity for early-stage tradeoffs.
 - “Remember that …” shorthand: when the user says “remember that <rule>”, add it to AGENTS.md under the relevant section as a standing rule.
 - Do not suppress runtime warnings by monkey-patching globals (e.g., overriding console.error). Fix the underlying issue or accept the warning; never silence it via code hacks.
 - Stripe webhook parsing: keep a single `express.raw({ type: "application/json" })` at app-level in `webserver.ts`; do not add per-route raw parsers elsewhere.
@@ -172,3 +173,75 @@ Known Context7 IDs:
 # Testing Strategy
 
 Look for an appropriate spread of testing across our various different layers to determine the appropriate layer to add any new or modified features to. There are going to be lots of cases, especially in the back-end right now, where we don't have an appropriate level of unit testing and end-to-end integration testing, Playwright snapshot tests, etc., That we should consider adding if we don't already have for any given change. Really any file we modify, we should be able to back it up with some sort of automated testing. Keep in mind that when I make that consideration, I am also thinking about coverage. I'm thinking about making sure builds pass, making sure that a lot of our checks are in place to make sure that the code will truly work in practice, you know running the Docker build, running the TypeScript build, as well as complexity checks. We currently have a lot of ignoring in our complexity checks which we define for SCC and Lizard. We should strive if we make a change in a place that has complexity ignored, or has low coverage of tests that we should go in as part of that work to consider how we can at a minimum not make the problem worse but hopefully also rectify the deficiency while still primarily focusing on the goal at hand.
+
+## Clean Code Guidelines
+
+### Constants Over Magic Numbers
+
+- Replace hard-coded values with named constants
+- Use descriptive constant names that explain the value's purpose
+- Keep constants at the top of the file or in a dedicated constants file
+
+### Meaningful Names
+
+- Variables, functions, and classes should reveal their purpose
+- Names should explain why something exists and how it's used
+- Avoid abbreviations unless they're universally understood
+
+### Smart Comments
+
+- Don't comment on what the code does - make the code self-documenting
+- Use comments to explain why something is done a certain way
+- Document APIs, complex algorithms, and non-obvious side effects
+
+### Single Responsibility
+
+- Each function should do exactly one thing
+- Functions should be small and focused
+- If a function needs a comment to explain what it does, it should be split
+
+### DRY (Don't Repeat Yourself)
+
+- Extract repeated code into reusable functions
+- Share common logic through proper abstraction
+- Maintain single sources of truth
+
+### Clean Structure
+
+- Keep related code together
+- Organize code in a logical hierarchy
+- Use consistent file and folder naming conventions
+
+### Encapsulation
+
+- Hide implementation details
+- Expose clear interfaces
+- Move nested conditionals into well-named functions
+
+### Code Quality Maintenance
+
+- Refactor continuously
+- Fix technical debt early
+- Leave code cleaner than you found it
+
+### Testing
+
+- Write tests before fixing bugs
+- Keep tests readable and maintainable
+- Test edge cases and error conditions
+
+### Version Control
+
+- Write clear commit messages
+- Make small, focused commits
+- Use meaningful branch names
+
+## Code Quality Guidelines
+
+### Verify Information
+
+Always verify information before presenting it. Do not make assumptions or speculate without clear evidence.
+
+### No Apologies
+
+Never use apologies.

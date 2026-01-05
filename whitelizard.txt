@@ -36,3 +36,5 @@ src/services/contextService.ts:formatContextForPrompt
 src\services\contextService.ts:formatContextForPrompt
 src/audio.ts:getAudioBytes
 src\audio.ts:getAudioBytes
+src/commands/notesCorrections.ts:resolveChannelName
+src\commands\notesCorrections.ts:resolveChannelName

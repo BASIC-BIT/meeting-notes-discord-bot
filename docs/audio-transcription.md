@@ -29,6 +29,20 @@ When Langfuse tracing is enabled, each transcription snippet uploads an audio at
 - The MP3 file is temporary and is deleted after upload.
 - The compressed MP3 is for observability only and does not affect transcription quality.
 
+## Langfuse usage and cost
+
+Transcription traces report duration-based usage so Langfuse can calculate costs without audio token math.
+
+- Usage details include `input_audio_seconds`, rounded to three decimals.
+- Configure Langfuse model pricing to charge per second using `input_audio_seconds`.
+- We do not derive audio token counts for transcription, we keep it duration-based.
+
+Pricing checklist:
+
+- Add custom model definitions for `gpt-4o-transcribe` and `gpt-4o-transcribe-diarize` in Langfuse.
+- Set pricing to use the `input_audio_seconds` usage key with a per-second rate.
+- Set output token pricing to 0 if the model does not bill output tokens.
+
 ## Config keys
 
 All values are set via the config system and can be overridden at the global or server level.

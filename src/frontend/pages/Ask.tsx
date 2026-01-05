@@ -18,6 +18,7 @@ import {
   ThemeIcon,
   TypographyStylesProvider,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import {
   IconMessage,
   IconPencil,
@@ -32,7 +33,7 @@ import {
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import Surface from "../components/Surface";
 import PageHeader from "../components/PageHeader";
 import { ConversationListPanel } from "../features/ask/ConversationListPanel";
@@ -77,14 +78,14 @@ export default function Ask() {
   const { selectedGuildId, guilds } = useGuildContext();
   const trpcUtils = trpc.useUtils();
   const navigate = useNavigate();
-  const params = useParams({ strict: false }) as { conversationId?: string };
   const search = useSearch({ strict: false }) as {
     list?: "mine" | "shared" | "archived";
+    conversationId?: string;
     messageId?: string;
   };
   const listMode = resolveListMode(search.list ?? null);
   const highlightedMessageId = search.messageId ?? null;
-  const routeConversationId = params.conversationId ?? null;
+  const searchConversationId = search.conversationId || null;
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -92,9 +93,15 @@ export default function Ask() {
   const [renaming, setRenaming] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [newConversationRequested, setNewConversationRequested] =
+    useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [archiveNextState, setArchiveNextState] = useState<boolean | null>(
+    null,
+  );
   const [optimisticMessages, setOptimisticMessages] = useState<AskMessage[]>(
     [],
   );
@@ -103,7 +110,7 @@ export default function Ask() {
   const chatViewportRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const previousListModeRef = useRef<ListMode>(listMode);
-  const activeId = isCreatingNew ? null : routeConversationId;
+  const activeId = isCreatingNew ? null : searchConversationId;
   const selectedGuild = selectedGuildId
     ? (guilds.find((guild) => guild.id === selectedGuildId) ?? null)
     : null;
@@ -148,7 +155,8 @@ export default function Ask() {
         listMode !== "shared",
       ),
       staleTime: 30_000,
-      placeholderData: (prev) => prev,
+      placeholderData: (prev) =>
+        prev?.conversation?.id === activeId ? prev : undefined,
     },
   );
   const sharedConversationQuery = trpc.ask.getSharedConversation.useQuery(
@@ -162,7 +170,8 @@ export default function Ask() {
         sharingEnabled,
       ),
       staleTime: 30_000,
-      placeholderData: (prev) => prev,
+      placeholderData: (prev) =>
+        prev?.conversation?.id === activeId ? prev : undefined,
     },
   );
   const askMutation = trpc.ask.ask.useMutation();
@@ -192,45 +201,36 @@ export default function Ask() {
     listMode === "shared"
       ? sharedConversationQuery.error
       : conversationQuery.error;
-  const activeConversation = isCreatingNew
-    ? null
-    : listMode === "shared"
-      ? (sharedConversationQuery.data?.conversation ?? null)
-      : (conversationQuery.data?.conversation ?? null);
-  const activeMessages = isCreatingNew
-    ? []
-    : listMode === "shared"
-      ? (sharedConversationQuery.data?.messages ?? [])
-      : (conversationQuery.data?.messages ?? []);
+  const activeConversation =
+    isCreatingNew || !activeId
+      ? null
+      : listMode === "shared"
+        ? (sharedConversationQuery.data?.conversation ?? null)
+        : (conversationQuery.data?.conversation ?? null);
+  const activeMessages =
+    isCreatingNew || !activeId
+      ? []
+      : listMode === "shared"
+        ? (sharedConversationQuery.data?.messages ?? [])
+        : (conversationQuery.data?.messages ?? []);
   const sharedMeta =
-    listMode === "shared"
+    listMode === "shared" && activeId
       ? (sharedConversationQuery.data?.shared ?? null)
       : null;
 
   const navigateToConversation = useCallback(
     (conversationId: string | null, mode: ListMode) => {
       if (!selectedGuildId) return;
-      if (conversationId) {
-        navigate({
-          to: "/portal/server/$serverId/ask/$conversationId",
-          params: { serverId: selectedGuildId, conversationId },
-          search: (prev) => ({
-            ...prev,
-            list: mode,
-            messageId: undefined,
-          }),
-        });
-      } else {
-        navigate({
-          to: "/portal/server/$serverId/ask",
-          params: { serverId: selectedGuildId },
-          search: (prev) => ({
-            ...prev,
-            list: mode,
-            messageId: undefined,
-          }),
-        });
-      }
+      navigate({
+        to: "/portal/server/$serverId/ask",
+        params: { serverId: selectedGuildId },
+        search: (prev) => ({
+          ...prev,
+          list: mode,
+          conversationId: conversationId ?? undefined,
+          messageId: undefined,
+        }),
+      });
     },
     [navigate, selectedGuildId],
   );
@@ -238,9 +238,31 @@ export default function Ask() {
   const handleListModeChange = useCallback(
     (mode: ListMode) => {
       setIsCreatingNew(false);
-      navigateToConversation(activeId, mode);
+      setNewConversationRequested(false);
+      const nextId =
+        mode === "shared"
+          ? activeId &&
+            sharedConversations.some((conv) => conv.conversationId === activeId)
+            ? activeId
+            : sharedConversations[0]?.conversationId
+          : mode === "archived"
+            ? activeId &&
+              archivedConversations.some((conv) => conv.id === activeId)
+              ? activeId
+              : archivedConversations[0]?.id
+            : activeId &&
+                activeConversations.some((conv) => conv.id === activeId)
+              ? activeId
+              : activeConversations[0]?.id;
+      navigateToConversation(nextId ?? null, mode);
     },
-    [activeId, navigateToConversation],
+    [
+      activeId,
+      activeConversations,
+      archivedConversations,
+      sharedConversations,
+      navigateToConversation,
+    ],
   );
 
   const listIds = useMemo(
@@ -274,7 +296,7 @@ export default function Ask() {
         }
         return;
       }
-      if (isCreatingNew) {
+      if (isCreatingNew && !newConversationRequested) {
         setIsCreatingNew(false);
       }
       return;
@@ -282,7 +304,8 @@ export default function Ask() {
     if (
       listMode === "archived" &&
       isCreatingNew &&
-      previousListMode !== "archived"
+      previousListMode !== "archived" &&
+      !newConversationRequested
     ) {
       setIsCreatingNew(false);
     }
@@ -292,6 +315,7 @@ export default function Ask() {
     activeId,
     isCreatingNew,
     navigateToConversation,
+    newConversationRequested,
   ]);
 
   useEffect(() => {
@@ -344,13 +368,6 @@ export default function Ask() {
     navigateToConversation,
   ]);
 
-  useEffect(() => {
-    if (!activeConversation || !activeConversation.archivedAt) return;
-    if (listMode !== "mine") return;
-    if (isCreatingNew) return;
-    navigateToConversation(activeConversation.id, "archived");
-  }, [activeConversation, listMode, isCreatingNew, navigateToConversation]);
-
   const filteredMine = useMemo(() => {
     const source = optimisticConversation
       ? [optimisticConversation, ...activeConversations]
@@ -391,12 +408,18 @@ export default function Ask() {
       ? "server"
       : activeVisibility;
   const isShared = activeVisibility !== "private";
+  const archiveModalTitle = archiveNextState
+    ? "Archive chat"
+    : "Unarchive chat";
+  const archiveModalDescription = archiveNextState
+    ? "Archived chats move to the Archived list and become read only. You can unarchive anytime."
+    : "This chat will move back to My chats and become editable.";
   const shareBadgeLabel =
     shareDisplayVisibility === "public" ? "Public" : "Shared";
   const shareActionDisabled =
     !selectedGuildId ||
     !activeConversation ||
-    listMode !== "mine" ||
+    listMode === "shared" ||
     isArchived ||
     !sharingEnabled ||
     !askAccessAllowed;
@@ -461,6 +484,7 @@ export default function Ask() {
   }, [displayMessages.length, highlightedMessageId]);
 
   const handleNewConversation = () => {
+    setNewConversationRequested(true);
     setIsCreatingNew(true);
     setDraft("");
     setErrorMessage(null);
@@ -468,6 +492,12 @@ export default function Ask() {
     setOptimisticConversation(null);
     navigateToConversation(null, "mine");
   };
+
+  useEffect(() => {
+    if (!newConversationRequested) return;
+    if (listMode !== "mine") return;
+    setNewConversationRequested(false);
+  }, [listMode, newConversationRequested]);
 
   useEffect(() => {
     if (!selectedGuildId || !isCreatingNew || listMode !== "mine") return;
@@ -641,7 +671,17 @@ export default function Ask() {
     });
     try {
       await navigator.clipboard.writeText(url);
+      notifications.show({
+        color: "green",
+        message: messageId
+          ? "Message link copied."
+          : "Conversation link copied.",
+      });
     } catch (err) {
+      notifications.show({
+        color: "red",
+        message: "Unable to copy the link. Please try again.",
+      });
       console.error("Failed to copy link", err);
     }
   };
@@ -649,7 +689,15 @@ export default function Ask() {
   const handleCopyResponse = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
+      notifications.show({
+        color: "green",
+        message: "Response copied to clipboard.",
+      });
     } catch (err) {
+      notifications.show({
+        color: "red",
+        message: "Unable to copy the response. Please try again.",
+      });
       console.error("Failed to copy response", err);
     }
   };
@@ -658,7 +706,15 @@ export default function Ask() {
     if (!shareUrl) return;
     try {
       await navigator.clipboard.writeText(shareUrl);
+      notifications.show({
+        color: "green",
+        message: "Share link copied to clipboard.",
+      });
     } catch (err) {
+      notifications.show({
+        color: "red",
+        message: "Unable to copy the share link. Please try again.",
+      });
       console.error("Failed to copy share link", err);
     }
   };
@@ -728,9 +784,9 @@ export default function Ask() {
     }
   };
 
-  const handleArchiveToggle = async (archived: boolean) => {
-    if (!selectedGuildId || !activeConversation) return;
-    if (listMode === "shared") return;
+  const handleArchiveToggle = async (archived: boolean): Promise<boolean> => {
+    if (!selectedGuildId || !activeConversation) return false;
+    if (listMode === "shared") return false;
     setArchiveError(null);
     try {
       const result = await archiveMutation.mutateAsync({
@@ -744,11 +800,21 @@ export default function Ask() {
         serverId: selectedGuildId,
       });
       maybeExitArchivedView(result.conversation.id, archived);
+      return true;
     } catch (err) {
       setArchiveError(
         err instanceof Error ? err.message : "Unable to update archive state.",
       );
+      return false;
     }
+  };
+
+  const handleArchiveConfirm = async () => {
+    if (archiveNextState === null) return;
+    const ok = await handleArchiveToggle(archiveNextState);
+    if (!ok) return;
+    setArchiveModalOpen(false);
+    setArchiveNextState(null);
   };
 
   return (
@@ -867,6 +933,41 @@ export default function Ask() {
               {shareError}
             </Text>
           ) : null}
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={archiveModalOpen}
+        onClose={() => {
+          setArchiveModalOpen(false);
+          setArchiveNextState(null);
+        }}
+        title={archiveModalTitle}
+        centered
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            {archiveModalDescription}
+          </Text>
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              onClick={() => {
+                setArchiveModalOpen(false);
+                setArchiveNextState(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              color={archiveNextState ? "red" : "brand"}
+              onClick={handleArchiveConfirm}
+              loading={archiveMutation.isPending}
+              data-testid="ask-archive-confirm"
+            >
+              {archiveModalTitle}
+            </Button>
+          </Group>
         </Stack>
       </Modal>
 
@@ -990,7 +1091,7 @@ export default function Ask() {
                     )}
                   </Group>
                   <Group gap="xs" align="center" wrap="wrap">
-                    {listMode === "mine" && activeConversation ? (
+                    {listMode !== "shared" && activeConversation ? (
                       <Button
                         size="xs"
                         variant="subtle"
@@ -1013,7 +1114,11 @@ export default function Ask() {
                             <IconArchive size={14} />
                           )
                         }
-                        onClick={() => handleArchiveToggle(!isArchived)}
+                        onClick={() => {
+                          setArchiveError(null);
+                          setArchiveNextState(!isArchived);
+                          setArchiveModalOpen(true);
+                        }}
                         loading={archiveMutation.isPending}
                         data-testid={
                           isArchived ? "ask-unarchive" : "ask-archive"

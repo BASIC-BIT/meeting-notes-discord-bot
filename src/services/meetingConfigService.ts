@@ -3,6 +3,7 @@ import { CONFIG_REGISTRY } from "../config/registry";
 import type { ConfigTier, MeetingRuntimeConfig } from "../config/types";
 import { resolveConfigSnapshot } from "./unifiedConfigService";
 import { resolveDictionaryBudgets } from "../utils/dictionary";
+import { resolveModelParamsByRole } from "./openaiModelParams";
 
 const requireValue = (
   snapshot: Awaited<ReturnType<typeof resolveConfigSnapshot>>,
@@ -32,6 +33,7 @@ export async function resolveMeetingRuntimeConfig(input: {
     valuesByKey[key] = entry.value;
   });
   const dictionaryBudgets = resolveDictionaryBudgets(valuesByKey, input.tier);
+  const modelParams = resolveModelParamsByRole(snapshot);
 
   return {
     transcription: {
@@ -75,6 +77,12 @@ export async function resolveMeetingRuntimeConfig(input: {
       ),
     },
     dictionary: dictionaryBudgets,
+    autoRecordCancellation: {
+      enabled: Boolean(
+        requireValue(snapshot, CONFIG_KEYS.autorecord.cancelEnabled),
+      ),
+    },
+    modelParams,
   };
 }
 

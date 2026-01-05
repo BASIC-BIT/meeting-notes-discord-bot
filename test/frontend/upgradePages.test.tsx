@@ -78,7 +78,7 @@ describe("upgrade pages", () => {
     setRouteSearch({ promo: "SAVE20" });
     renderWithMantine(<UpgradeServerSelect />);
 
-    const select = screen.getByRole("button", { name: /select server/i });
+    const select = screen.getByTestId("upgrade-server-open");
     fireEvent.click(select);
 
     expect(navigateSpy).toHaveBeenCalled();

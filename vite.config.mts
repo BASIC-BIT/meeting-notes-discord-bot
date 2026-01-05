@@ -4,6 +4,7 @@ import tsconfigPaths from "vite-tsconfig-paths";
 import path from "node:path";
 
 process.env.VITE_MOCK_FIXED_NOW ??= "";
+process.env.VITE_VISUAL_MODE ??= "";
 
 export default defineConfig({
   root: path.resolve(__dirname, "src", "frontend"),
