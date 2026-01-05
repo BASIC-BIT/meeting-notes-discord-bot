@@ -126,5 +126,8 @@ export type MeetingRuntimeConfig = {
     maxCharsTranscription: number;
     maxCharsContext: number;
   };
+  autoRecordCancellation: {
+    enabled: boolean;
+  };
   modelParams?: ModelParamsByRole;
 };

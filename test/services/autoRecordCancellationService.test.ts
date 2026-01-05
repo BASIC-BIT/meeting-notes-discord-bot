@@ -1,5 +1,6 @@
 import { describe, expect, test, jest } from "@jest/globals";
 import type { ChatEntry } from "../../src/types/chat";
+import type { MeetingRuntimeConfig } from "../../src/config/types";
 import type { MeetingData } from "../../src/types/meeting-data";
 
 type LoadOptions = {
@@ -57,6 +58,51 @@ const buildChatEntry = (content: string): ChatEntry =>
     timestamp: "2025-01-01T00:00:00.000Z",
   }) as ChatEntry;
 
+const buildRuntimeConfig = (
+  overrides: Partial<MeetingRuntimeConfig> = {},
+): MeetingRuntimeConfig => {
+  const base: MeetingRuntimeConfig = {
+    transcription: {
+      fastSilenceMs: 500,
+      slowSilenceMs: 1000,
+      minSnippetSeconds: 1,
+      maxSnippetMs: 15000,
+      fastFinalizationEnabled: false,
+      interjectionEnabled: false,
+      interjectionMinSpeakerSeconds: 1,
+    },
+    premiumTranscription: {
+      enabled: false,
+      cleanupEnabled: false,
+      coalesceModel: "gpt-5-mini",
+    },
+    dictionary: {
+      maxEntries: 0,
+      maxCharsTranscription: 0,
+      maxCharsContext: 0,
+    },
+    autoRecordCancellation: {
+      enabled: true,
+    },
+    modelParams: {},
+  };
+
+  return {
+    ...base,
+    ...overrides,
+    transcription: { ...base.transcription, ...overrides.transcription },
+    premiumTranscription: {
+      ...base.premiumTranscription,
+      ...overrides.premiumTranscription,
+    },
+    dictionary: { ...base.dictionary, ...overrides.dictionary },
+    autoRecordCancellation: {
+      ...base.autoRecordCancellation,
+      ...overrides.autoRecordCancellation,
+    },
+  };
+};
+
 const buildMeeting = (overrides: Partial<MeetingData> = {}): MeetingData =>
   ({
     meetingId: "meeting-1",
@@ -100,12 +146,14 @@ describe("autoRecordCancellationService", () => {
     expect(completionCreate).not.toHaveBeenCalled();
   });
 
-  test("returns false when auto-cancel is disabled in development", async () => {
+  test("returns false when auto-cancel is disabled in config", async () => {
     const { evaluateAutoRecordCancellation, completionCreate } =
-      await loadModule({
-        nodeEnv: "development",
-      });
-    const meeting = buildMeeting();
+      await loadModule();
+    const meeting = buildMeeting({
+      runtimeConfig: buildRuntimeConfig({
+        autoRecordCancellation: { enabled: false },
+      }),
+    });
     const result = await evaluateAutoRecordCancellation(meeting);
     expect(result).toEqual({ cancel: false });
     expect(completionCreate).not.toHaveBeenCalled();

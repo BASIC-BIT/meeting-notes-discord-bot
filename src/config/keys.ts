@@ -24,6 +24,7 @@ export const CONFIG_KEYS = {
   },
   autorecord: {
     enabled: "autorecord.enabled",
+    cancelEnabled: "autorecord.cancel.enabled",
   },
   liveVoice: {
     enabled: "liveVoice.enabled",

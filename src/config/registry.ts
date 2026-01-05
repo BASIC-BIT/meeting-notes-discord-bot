@@ -488,6 +488,19 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
     ui: { type: "toggle" },
   },
   {
+    key: "autorecord.cancel.enabled",
+    label: "Auto-record cancellation",
+    description: "Cancel short auto-recorded meetings with little content.",
+    category: "Auto-record",
+    group: "Advanced",
+    valueType: "boolean",
+    defaultValue: true,
+    scopes: {
+      server: scope(true, true, "admin", "toggle"),
+    },
+    ui: { type: "toggle" },
+  },
+  {
     key: "liveVoice.enabled",
     label: "Live voice responder",
     description: "Enable the live voice responder.",

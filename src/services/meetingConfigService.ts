@@ -77,6 +77,11 @@ export async function resolveMeetingRuntimeConfig(input: {
       ),
     },
     dictionary: dictionaryBudgets,
+    autoRecordCancellation: {
+      enabled: Boolean(
+        requireValue(snapshot, CONFIG_KEYS.autorecord.cancelEnabled),
+      ),
+    },
     modelParams,
   };
 }

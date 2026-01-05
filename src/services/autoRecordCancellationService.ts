@@ -16,8 +16,13 @@ const MAX_CHAT_MESSAGES = 1;
 const MAX_TRANSCRIPT_CHARS = 1200;
 const MAX_CHAT_LINES = 3;
 
-const isAutoCancelEnabled = () =>
-  config.server.nodeEnv !== "development" && !config.mock.enabled;
+const isAutoCancelEnabled = (meeting: MeetingData) => {
+  if (config.mock.enabled) return false;
+  if (meeting.runtimeConfig?.autoRecordCancellation?.enabled === false) {
+    return false;
+  }
+  return true;
+};
 
 const collectTranscriptText = (meeting: MeetingData) =>
   meeting.audioData.audioFiles
@@ -42,7 +47,7 @@ export async function evaluateAutoRecordCancellation(
   meeting: MeetingData,
 ): Promise<CancellationDecision> {
   if (!meeting.isAutoRecording) return { cancel: false };
-  if (!isAutoCancelEnabled()) return { cancel: false };
+  if (!isAutoCancelEnabled(meeting)) return { cancel: false };
 
   const durationSeconds = meeting.endTime
     ? Math.max(
