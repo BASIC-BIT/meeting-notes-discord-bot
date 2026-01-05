@@ -32,6 +32,7 @@ import { createOpenAIClient } from "../services/openaiClient";
 import { getModelChoice } from "../services/modelFactory";
 import { config } from "../services/configService";
 import { getLangfuseChatPrompt } from "../services/langfusePromptService";
+import { buildSummaryFeedbackButtonIds } from "./summaryFeedback";
 import {
   resolveChatParamsForRole,
   resolveModelParamsForContext,
@@ -88,6 +89,17 @@ function buildCorrectionRow(
   channelIdTimestamp: string,
 ): ActionRowBuilder<ButtonBuilder> {
   const encodedKey = encodeKey(channelIdTimestamp);
+  const feedbackIds = buildSummaryFeedbackButtonIds(channelIdTimestamp);
+  const feedbackUpButton = new ButtonBuilder()
+    .setCustomId(feedbackIds.up)
+    .setLabel("Helpful")
+    .setStyle(ButtonStyle.Secondary)
+    .setEmoji("👍");
+  const feedbackDownButton = new ButtonBuilder()
+    .setCustomId(feedbackIds.down)
+    .setLabel("Needs work")
+    .setStyle(ButtonStyle.Secondary)
+    .setEmoji("👎");
   const correctionButton = new ButtonBuilder()
     .setCustomId(`${CORRECTION_PREFIX}:${guildId}:${encodedKey}`)
     .setLabel("Suggest correction")
@@ -101,6 +113,8 @@ function buildCorrectionRow(
     .setLabel("Edit Tags")
     .setStyle(ButtonStyle.Secondary);
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    feedbackUpButton,
+    feedbackDownButton,
     correctionButton,
     renameButton,
     editTagsButton,

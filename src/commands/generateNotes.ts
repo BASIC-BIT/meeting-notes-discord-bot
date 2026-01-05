@@ -11,6 +11,7 @@ import { MeetingData } from "../types/meeting-data";
 import { formatNotesWithSummary } from "../utils/notesSummary";
 import { buildMeetingNotesEmbeds } from "../utils/meetingNotes";
 import { MEETING_RENAME_PREFIX } from "./meetingName";
+import { buildSummaryFeedbackButtonIds } from "./summaryFeedback";
 
 export async function generateAndSendNotes(meeting: MeetingData) {
   // const [notes, image] = await Promise.all([getNotes(meeting), getImage(meeting)]);
@@ -42,10 +43,23 @@ export async function generateAndSendNotes(meeting: MeetingData) {
     }
     const notesBody = formatNotesWithSummary(notes, summaries.summarySentence);
     const channelIdTimestamp = `${meeting.voiceChannel.id}#${meeting.startTime.toISOString()}`;
+    const feedbackIds = buildSummaryFeedbackButtonIds(channelIdTimestamp);
     const encodedKey =
       typeof Buffer !== "undefined"
         ? Buffer.from(channelIdTimestamp).toString("base64")
         : channelIdTimestamp;
+
+    const feedbackUpButton = new ButtonBuilder()
+      .setCustomId(feedbackIds.up)
+      .setLabel("Helpful")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("👍");
+
+    const feedbackDownButton = new ButtonBuilder()
+      .setCustomId(feedbackIds.down)
+      .setLabel("Needs work")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("👎");
 
     const correctionButton = new ButtonBuilder()
       .setCustomId(`notes_correction:${meeting.guildId}:${encodedKey}`)
@@ -63,6 +77,8 @@ export async function generateAndSendNotes(meeting: MeetingData) {
       .setStyle(ButtonStyle.Secondary);
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      feedbackUpButton,
+      feedbackDownButton,
       correctionButton,
       renameButton,
       editTagsHistoryButton,

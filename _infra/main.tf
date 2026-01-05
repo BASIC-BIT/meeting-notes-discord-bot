@@ -1022,6 +1022,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.user_speech_settings_table.arn,
           aws_dynamodb_table.config_overrides_table.arn,
           aws_dynamodb_table.ask_conversation_table.arn,
+          aws_dynamodb_table.feedback_table.arn,
           aws_dynamodb_table.meeting_history_table.arn,
           "${aws_dynamodb_table.meeting_history_table.arn}/index/*",
           aws_dynamodb_table.installer_table.arn,
@@ -1737,6 +1738,37 @@ resource "aws_dynamodb_table" "ask_conversation_table" {
 
   tags = {
     Name = "AskConversationTable"
+  }
+}
+
+# Feedback Table
+resource "aws_dynamodb_table" "feedback_table" {
+  name         = "${local.name_prefix}-FeedbackTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "FeedbackTable"
   }
 }
 

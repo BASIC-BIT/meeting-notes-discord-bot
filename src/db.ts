@@ -30,6 +30,7 @@ import {
   DictionaryEntry,
   ConfigOverrideRecord,
   AskConversationShareRecord,
+  FeedbackRecord,
 } from "./types/db";
 import type { MeetingStatus } from "./types/meetingLifecycle";
 
@@ -1221,6 +1222,31 @@ export async function deleteAskConversationShare(
   };
   const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+export async function writeFeedback(record: FeedbackRecord): Promise<void> {
+  const params = {
+    TableName: tableName("FeedbackTable"),
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getFeedback(
+  pk: string,
+  sk: string,
+): Promise<FeedbackRecord | undefined> {
+  const params = {
+    TableName: tableName("FeedbackTable"),
+    Key: marshall({ pk, sk }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as FeedbackRecord;
+  }
+  return undefined;
 }
 
 export async function updateMeetingTags(
