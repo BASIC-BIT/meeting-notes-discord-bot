@@ -33,6 +33,11 @@ import * as fs from "node:fs";
 import path from "node:path";
 import { maybeRespondLive } from "./liveVoice";
 import { nowIso } from "./utils/time";
+import {
+  ensureMeetingTempDir,
+  ensureMeetingTempDirSync,
+  getMeetingTempDir,
+} from "./services/tempFileService";
 
 const TRANSCRIPTION_HEADER =
   `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
@@ -123,10 +128,7 @@ function getSegmentDir(meeting: MeetingData): string {
   if (meeting.audioData.segmentDir) {
     return meeting.audioData.segmentDir;
   }
-  const dir = path.resolve(
-    process.cwd(),
-    `segments_${meeting.guildId}_${meeting.channelId}_${meeting.meetingId}`,
-  );
+  const dir = path.join(getMeetingTempDir(meeting), "segments");
   meeting.audioData.segmentDir = dir;
   return dir;
 }
@@ -669,7 +671,11 @@ export async function compileTranscriptions(
 }
 
 export function openOutputFile(meeting: MeetingData) {
-  const outputFileName = `./recording_${meeting.guildId}_${meeting.channelId}.mp3`;
+  const tempDir = ensureMeetingTempDirSync(meeting);
+  const outputFileName = path.join(
+    tempDir,
+    `recording_${meeting.guildId}_${meeting.channelId}.mp3`,
+  );
   meeting.audioData.outputFileName = outputFileName;
 
   meeting.audioData.audioPassThrough = new PassThrough();
@@ -721,6 +727,7 @@ export async function buildMixedAudio(
   const segments = meeting.audioData.audioSegments ?? [];
   if (segments.length < 2) return undefined;
 
+  await ensureMeetingTempDir(meeting);
   await waitForSegmentWrites(meeting);
 
   const usable = segments.filter(
@@ -728,7 +735,10 @@ export async function buildMixedAudio(
   );
   if (usable.length < 2) return undefined;
 
-  const outputFileName = `./recording_${meeting.guildId}_${meeting.channelId}_${meeting.meetingId}_mixed.mp3`;
+  const outputFileName = path.join(
+    getMeetingTempDir(meeting),
+    `recording_${meeting.guildId}_${meeting.channelId}_${meeting.meetingId}_mixed.mp3`,
+  );
 
   return await new Promise<string | undefined>((resolve) => {
     const command = ffmpeg();
@@ -793,9 +803,6 @@ export async function splitAudioIntoChunks(
   outputDir: string,
 ): Promise<ChunkInfo[]> {
   try {
-    // Ensure the output directory exists
-    await fs.promises.mkdir(outputDir, { recursive: true });
-
     const stats = await fs.promises.stat(inputFile);
     const totalFileSize = stats.size;
 
@@ -825,13 +832,10 @@ export async function splitAudioIntoChunks(
     const maxChunkDuration = (MAX_DISCORD_UPLOAD_SIZE * 8) / bitRate; // in seconds
     const numChunks = Math.ceil(duration / maxChunkDuration);
 
+    await fs.promises.mkdir(outputDir, { recursive: true });
+
     let startTime = 0;
     const chunkPromises: Promise<ChunkInfo>[] = [];
-
-    // Ensure output directory exists
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
 
     for (let i = 0; i < numChunks; i++) {
       const chunkFileName = path.join(outputDir, `chunk_${i}.mp3`);

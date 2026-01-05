@@ -17,12 +17,17 @@ import {
   updateMeetingNotesService,
 } from "../services/meetingHistoryService";
 import { stripCodeFences } from "../utils/text";
-import { buildPaginatedEmbeds } from "../utils/embedPagination";
 import { MeetingHistory, SuggestionHistoryEntry } from "../types/db";
 import { fetchJsonFromS3 } from "../services/storageService";
 import { formatParticipantLabel } from "../utils/participants";
 import { generateMeetingSummaries } from "../services/meetingSummaryService";
 import { formatNotesWithSummary } from "../utils/notesSummary";
+import {
+  isMeetingNameAutoSynced,
+  resolveMeetingNameFromSummary,
+} from "../services/meetingNameService";
+import { buildMeetingNotesEmbeds } from "../utils/meetingNotes";
+import { MEETING_RENAME_PREFIX } from "./meetingName";
 import { createOpenAIClient } from "../services/openaiClient";
 import { getModelChoice } from "../services/modelFactory";
 import { config } from "../services/configService";
@@ -36,12 +41,14 @@ import type { ModelParamConfig } from "../config/types";
 type PendingCorrection = {
   guildId: string;
   channelIdTimestamp: string;
+  meetingId?: string;
   channelId?: string;
   notesMessageIds?: string[];
   notesChannelId?: string;
   meetingCreatorId?: string;
   isAutoRecording?: boolean;
   tags?: string[];
+  meetingName?: string;
   summarySentence?: string;
   summaryLabel?: string;
   originalNotes: string;
@@ -53,7 +60,11 @@ type PendingCorrection = {
 
 type CorrectionSummariesResult = {
   notesBody: string;
-  summaries: { summarySentence?: string; summaryLabel?: string };
+  summaries: {
+    summarySentence?: string;
+    summaryLabel?: string;
+    meetingName?: string;
+  };
 };
 
 const pendingCorrections = new Map<string, PendingCorrection>();
@@ -62,6 +73,7 @@ const CORRECTION_PREFIX = "notes_correction";
 const CORRECTION_MODAL_PREFIX = "notes_correction_modal";
 const CORRECTION_ACCEPT_PREFIX = "notes_correction_accept";
 const CORRECTION_REJECT_PREFIX = "notes_correction_reject";
+const TAG_HISTORY_PREFIX = "edit_tags_history";
 
 function encodeKey(channelIdTimestamp: string): string {
   return Buffer.from(channelIdTimestamp).toString("base64");
@@ -80,7 +92,19 @@ function buildCorrectionRow(
     .setCustomId(`${CORRECTION_PREFIX}:${guildId}:${encodedKey}`)
     .setLabel("Suggest correction")
     .setStyle(ButtonStyle.Secondary);
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(correctionButton);
+  const renameButton = new ButtonBuilder()
+    .setCustomId(`${MEETING_RENAME_PREFIX}:${guildId}:${encodedKey}`)
+    .setLabel("Rename meeting")
+    .setStyle(ButtonStyle.Secondary);
+  const editTagsButton = new ButtonBuilder()
+    .setCustomId(`${TAG_HISTORY_PREFIX}:${guildId}:${encodedKey}`)
+    .setLabel("Edit Tags")
+    .setStyle(ButtonStyle.Secondary);
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    correctionButton,
+    renameButton,
+    editTagsButton,
+  );
 }
 
 function trimForDiscord(content: string, limit = 1800): string {
@@ -316,12 +340,14 @@ export async function handleNotesCorrectionModal(
   pendingCorrections.set(token, {
     guildId,
     channelIdTimestamp,
+    meetingId: history.meetingId,
     channelId: history.channelId,
     notesMessageIds: history.notesMessageIds,
     notesChannelId: history.notesChannelId,
     meetingCreatorId: history.meetingCreatorId,
     isAutoRecording: history.isAutoRecording,
     tags: history.tags,
+    meetingName: history.meetingName,
     summarySentence: history.summarySentence,
     summaryLabel: history.summaryLabel,
     originalNotes: history.notes,
@@ -371,6 +397,7 @@ async function applyCorrection(
     row,
     notesBody,
     newVersion,
+    summaries.meetingName,
   );
   const updateSucceeded = await persistCorrectionUpdate({
     pending,
@@ -428,18 +455,34 @@ async function buildCorrectionSummaries(
     channelId: pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
     userId: interaction.user.id,
   });
+  const [, timestamp] = pending.channelIdTimestamp.split("#");
+  const meetingDate = timestamp ? new Date(timestamp) : new Date();
   const summaries = await generateMeetingSummaries({
+    guildId: pending.guildId,
     notes: pending.newNotes,
     serverName,
     channelName,
     tags: pending.tags,
-    now: new Date(),
+    now: meetingDate,
+    meetingId: pending.meetingId,
     previousSummarySentence: pending.summarySentence,
     previousSummaryLabel: pending.summaryLabel,
     modelParams: modelParams.meetingSummary,
   });
   const summarySentence = summaries.summarySentence ?? pending.summarySentence;
   const summaryLabel = summaries.summaryLabel ?? pending.summaryLabel;
+  const shouldUpdateMeetingName = isMeetingNameAutoSynced(
+    pending.meetingName,
+    pending.summaryLabel,
+  );
+  const resolvedMeetingName = shouldUpdateMeetingName
+    ? await resolveMeetingNameFromSummary({
+        guildId: pending.guildId,
+        meetingId: pending.meetingId,
+        summaryLabel,
+      })
+    : pending.meetingName;
+  const meetingName = resolvedMeetingName ?? pending.meetingName;
   if (
     !summaries.summarySentence &&
     !summaries.summaryLabel &&
@@ -449,12 +492,11 @@ async function buildCorrectionSummaries(
       "Meeting summary generation returned empty, keeping previous summaries.",
     );
   }
-  const notesBody = formatNotesWithSummary(
-    pending.newNotes,
-    summarySentence,
-    summaryLabel,
-  );
-  return { notesBody, summaries: { summarySentence, summaryLabel } };
+  const notesBody = formatNotesWithSummary(pending.newNotes, summarySentence);
+  return {
+    notesBody,
+    summaries: { summarySentence, summaryLabel, meetingName },
+  };
 }
 
 async function updateNotesEmbedsForCorrection(
@@ -463,6 +505,7 @@ async function updateNotesEmbedsForCorrection(
   row: ActionRowBuilder<ButtonBuilder>,
   notesBody: string,
   newVersion: number,
+  meetingName?: string,
 ): Promise<{
   newMessageIds?: string[];
   channel: Awaited<ReturnType<typeof interactionChannelFetch>> | null;
@@ -481,6 +524,7 @@ async function updateNotesEmbedsForCorrection(
     newVersion,
     interaction.user.tag,
     color,
+    meetingName,
   );
   const newMessageIds = await sendUpdatedEmbeds(channel, embeds, row);
   return { newMessageIds, channel };
@@ -490,7 +534,11 @@ async function persistCorrectionUpdate(params: {
   pending: PendingCorrection;
   newVersion: number;
   editedBy: string;
-  summaries: { summarySentence?: string; summaryLabel?: string };
+  summaries: {
+    summarySentence?: string;
+    summaryLabel?: string;
+    meetingName?: string;
+  };
   newMessageIds?: string[];
 }): Promise<boolean> {
   const { pending, newVersion, editedBy, summaries, newMessageIds } = params;
@@ -502,6 +550,7 @@ async function persistCorrectionUpdate(params: {
     editedBy,
     summarySentence: summaries.summarySentence,
     summaryLabel: summaries.summaryLabel,
+    meetingName: summaries.meetingName,
     suggestion: pending.suggestion,
     expectedPreviousVersion: pending.notesVersion,
     metadata: {
@@ -543,21 +592,20 @@ async function getPendingOrNotify(
   return pending;
 }
 
-const NOTES_EMBED_TITLE = "Meeting Notes (AI Generated)";
-
 function buildUpdatedEmbeds(
   newNotes: string,
   version: number,
   editedByTag?: string,
   color?: number | null,
+  meetingName?: string,
 ) {
   const footerText = editedByTag
     ? `v${version} • Edited by ${editedByTag}`
     : `v${version}`;
 
-  return buildPaginatedEmbeds({
-    text: newNotes,
-    baseTitle: NOTES_EMBED_TITLE,
+  return buildMeetingNotesEmbeds({
+    notesBody: newNotes,
+    meetingName,
     footerText,
     color: color ?? undefined,
   });

@@ -6,7 +6,6 @@ export type MeetingCardData = {
   id: string;
   title: string;
   summary: string;
-  summaryLabel?: string;
   dateLabel: string;
   durationLabel: string;
   tags: string[];
@@ -38,11 +37,6 @@ export function MeetingCard({ meeting, onOpen }: MeetingCardProps) {
             View
           </Button>
         </Group>
-        {meeting.summaryLabel ? (
-          <Text size="xs" c="dimmed">
-            {meeting.summaryLabel}
-          </Text>
-        ) : null}
         <Text size="sm" c="dimmed">
           {meeting.summary}
         </Text>

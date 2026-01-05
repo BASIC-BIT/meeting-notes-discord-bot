@@ -92,6 +92,7 @@ export interface MeetingData {
   notesLastEditedBy?: string;
   notesLastEditedAt?: string;
   notesText?: string;
+  meetingName?: string;
   summarySentence?: string;
   summaryLabel?: string;
   participants: Map<string, Participant>;

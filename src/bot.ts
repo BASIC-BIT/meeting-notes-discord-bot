@@ -58,6 +58,12 @@ import {
   isEditTagsHistoryButton,
   isEditTagsHistoryModal,
 } from "./commands/tags";
+import {
+  handleRenameMeetingButton,
+  handleRenameMeetingModal,
+  isRenameMeetingButton,
+  isRenameMeetingModal,
+} from "./commands/meetingName";
 import { handleAskCommand } from "./commands/ask";
 import { handleDictionaryCommand } from "./commands/dictionary";
 import { billingCommand, handleBillingCommand } from "./commands/billing";
@@ -191,6 +197,10 @@ const modalHandlers: Array<{
     handle: handleEditTagsHistoryModal,
   },
   {
+    matches: isRenameMeetingModal,
+    handle: handleRenameMeetingModal,
+  },
+  {
     matches: isOnboardModal,
     handle: handleOnboardModalSubmit,
     onboarding: true,
@@ -233,6 +243,10 @@ const buttonHandlers: Array<{
   {
     matches: isEditTagsHistoryButton,
     handle: handleEditTagsHistoryButton,
+  },
+  {
+    matches: isRenameMeetingButton,
+    handle: handleRenameMeetingButton,
   },
   {
     matches: isOnboardButton,

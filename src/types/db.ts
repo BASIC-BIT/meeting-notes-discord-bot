@@ -181,6 +181,7 @@ export interface MeetingHistory {
   timestamp: string; // ISO timestamp (denormalized)
   tags?: string[]; // Freeform tags for filtering / search
   notes?: string; // AI-generated notes (comprehensive, includes everything)
+  meetingName?: string; // User-facing meeting name (editable)
   summarySentence?: string; // One-sentence summary for UI
   summaryLabel?: string; // Short label (5 words or fewer)
   context?: string; // Meeting-specific context if provided

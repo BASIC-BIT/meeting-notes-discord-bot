@@ -278,6 +278,10 @@ export const askArchiveMutation = buildMutationState<
 export const meetingsArchiveMutation = buildMutationState<[unknown], void>(
   undefined,
 );
+export const meetingsRenameMutation = buildMutationState<
+  [unknown],
+  { meetingName: string }
+>({ meetingName: "Renamed meeting" });
 export const autorecordAddMutation = buildMutationState<[unknown], void>(
   undefined,
 );
@@ -420,6 +424,9 @@ export const resetTrpcMocks = () => {
     conversation: defaultAskConversation,
   });
   resetMutationState(meetingsArchiveMutation, undefined);
+  resetMutationState(meetingsRenameMutation, {
+    meetingName: "Renamed meeting",
+  });
   resetMutationState(autorecordAddMutation, undefined);
   resetMutationState(autorecordRemoveMutation, undefined);
   resetMutationState(contextSetMutation, undefined);
@@ -611,6 +618,7 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
       list: { useQuery: () => meetingsListQuery },
       detail: { useQuery: () => meetingsDetailQuery },
       setArchived: { useMutation: () => meetingsArchiveMutation },
+      rename: { useMutation: () => meetingsRenameMutation },
     },
     autorecord: {
       list: { useQuery: () => autorecordListQuery },

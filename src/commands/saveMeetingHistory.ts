@@ -4,6 +4,7 @@ import { MEETING_STATUS } from "../types/meetingLifecycle";
 import { writeMeetingHistoryService } from "../services/meetingHistoryService";
 import { getNotes } from "../transcription";
 import { generateMeetingSummaries } from "../services/meetingSummaryService";
+import { resolveMeetingNameFromSummary } from "../services/meetingNameService";
 
 async function resolveMeetingNotes(
   meeting: MeetingData,
@@ -118,16 +119,25 @@ async function resolveMeetingSummaries(
     return {};
   }
   const summaries = await generateMeetingSummaries({
+    guildId: meeting.guildId,
     notes,
     serverName: meeting.guild.name,
     channelName: meeting.voiceChannel.name,
     tags: meeting.tags,
-    now: new Date(),
+    now: meeting.startTime ?? new Date(),
+    meetingId: meeting.meetingId,
     parentSpanContext: meeting.langfuseParentSpanContext,
     modelParams: meeting.runtimeConfig?.modelParams?.meetingSummary,
   });
   meeting.summarySentence = summaries.summarySentence;
   meeting.summaryLabel = summaries.summaryLabel;
+  if (!meeting.meetingName) {
+    meeting.meetingName = await resolveMeetingNameFromSummary({
+      guildId: meeting.guildId,
+      meetingId: meeting.meetingId,
+      summaryLabel: summaries.summaryLabel,
+    });
+  }
   return summaries;
 }
 
@@ -193,6 +203,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       timestamp,
       tags: meeting.tags,
       notes,
+      meetingName: meeting.meetingName,
       summarySentence: summaries.summarySentence,
       summaryLabel: summaries.summaryLabel,
       context: meeting.meetingContext,

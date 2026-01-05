@@ -6,9 +6,11 @@ import {
 } from "discord.js";
 import { getNotes } from "../transcription";
 import { generateMeetingSummaries } from "../services/meetingSummaryService";
+import { resolveMeetingNameFromSummary } from "../services/meetingNameService";
 import { MeetingData } from "../types/meeting-data";
-import { buildPaginatedEmbeds } from "../utils/embedPagination";
 import { formatNotesWithSummary } from "../utils/notesSummary";
+import { buildMeetingNotesEmbeds } from "../utils/meetingNotes";
+import { MEETING_RENAME_PREFIX } from "./meetingName";
 
 export async function generateAndSendNotes(meeting: MeetingData) {
   // const [notes, image] = await Promise.all([getNotes(meeting), getImage(meeting)]);
@@ -17,11 +19,13 @@ export async function generateAndSendNotes(meeting: MeetingData) {
 
   if (notes && notes.length) {
     const summaries = await generateMeetingSummaries({
+      guildId: meeting.guildId,
       notes,
       serverName: meeting.guild.name,
       channelName: meeting.voiceChannel.name,
       tags: meeting.tags,
-      now: new Date(),
+      now: meeting.startTime ?? new Date(),
+      meetingId: meeting.meetingId,
       previousSummarySentence: meeting.summarySentence,
       previousSummaryLabel: meeting.summaryLabel,
       parentSpanContext: meeting.langfuseParentSpanContext,
@@ -29,11 +33,14 @@ export async function generateAndSendNotes(meeting: MeetingData) {
     });
     meeting.summarySentence = summaries.summarySentence;
     meeting.summaryLabel = summaries.summaryLabel;
-    const notesBody = formatNotesWithSummary(
-      notes,
-      summaries.summarySentence,
-      summaries.summaryLabel,
-    );
+    if (!meeting.meetingName) {
+      meeting.meetingName = await resolveMeetingNameFromSummary({
+        guildId: meeting.guildId,
+        meetingId: meeting.meetingId,
+        summaryLabel: summaries.summaryLabel,
+      });
+    }
+    const notesBody = formatNotesWithSummary(notes, summaries.summarySentence);
     const channelIdTimestamp = `${meeting.voiceChannel.id}#${meeting.startTime.toISOString()}`;
     const encodedKey =
       typeof Buffer !== "undefined"
@@ -45,6 +52,11 @@ export async function generateAndSendNotes(meeting: MeetingData) {
       .setLabel("Suggest correction")
       .setStyle(ButtonStyle.Secondary);
 
+    const renameButton = new ButtonBuilder()
+      .setCustomId(`${MEETING_RENAME_PREFIX}:${meeting.guildId}:${encodedKey}`)
+      .setLabel("Rename meeting")
+      .setStyle(ButtonStyle.Secondary);
+
     const editTagsHistoryButton = new ButtonBuilder()
       .setCustomId(`edit_tags_history:${meeting.guildId}:${encodedKey}`)
       .setLabel("Edit Tags")
@@ -52,13 +64,14 @@ export async function generateAndSendNotes(meeting: MeetingData) {
 
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       correctionButton,
+      renameButton,
       editTagsHistoryButton,
     );
 
     const footerText = `v1 • Posted by ${meeting.creator.tag}`;
-    const embeds = buildPaginatedEmbeds({
-      text: notesBody,
-      baseTitle: "Meeting Notes (AI Generated)",
+    const embeds = buildMeetingNotesEmbeds({
+      notesBody,
+      meetingName: meeting.meetingName,
       footerText,
     });
 

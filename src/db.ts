@@ -797,6 +797,7 @@ export async function updateMeetingNotes(
   editedBy: string,
   summarySentence?: string,
   summaryLabel?: string,
+  meetingName?: string,
   suggestion?: SuggestionHistoryEntry,
   expectedPreviousVersion?: number,
   metadata?: {
@@ -878,6 +879,12 @@ export async function updateMeetingNotes(
     values[":summaryLabel"] = summaryLabel;
   }
 
+  if (meetingName !== undefined) {
+    updateParts.push("#meetingName = :meetingName");
+    expressionAttributeNames["#meetingName"] = "meetingName";
+    values[":meetingName"] = meetingName;
+  }
+
   if (suggestion) {
     values[":suggestionEntry"] = [suggestion];
   }
@@ -921,6 +928,47 @@ export async function updateMeetingNotes(
     }
 
     console.error("Failed to update meeting notes:", error);
+    return false;
+  }
+}
+
+export async function updateMeetingName(
+  guildId: string,
+  channelId_timestamp: string,
+  meetingName: string,
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const params: UpdateItemCommand["input"] = {
+    TableName: tableName("MeetingHistoryTable"),
+    Key: marshall({ guildId, channelId_timestamp }),
+    UpdateExpression:
+      "SET #meetingName = :meetingName, #updatedAt = :updatedAt",
+    ExpressionAttributeNames: {
+      "#meetingName": "meetingName",
+      "#updatedAt": "updatedAt",
+      "#channelIdTimestamp": "channelId_timestamp",
+    },
+    ExpressionAttributeValues: marshall(
+      {
+        ":meetingName": meetingName,
+        ":updatedAt": now,
+      },
+      { removeUndefinedValues: true },
+    ),
+    ConditionExpression: "attribute_exists(#channelIdTimestamp)",
+  };
+
+  const command = new UpdateItemCommand(params);
+  try {
+    await dynamoDbClient.send(command);
+    return true;
+  } catch (error) {
+    if (
+      (error as { name?: string }).name === "ConditionalCheckFailedException"
+    ) {
+      return false;
+    }
+    console.error("Failed to update meeting name:", error);
     return false;
   }
 }
