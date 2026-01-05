@@ -13,16 +13,83 @@ type DiscordTokenResponse = {
   scope: string;
 };
 
+type DiscordTokenErrorPayload = {
+  error?: string;
+  error_description?: string;
+};
+
+type DiscordTokenRefreshSuccess = {
+  ok: true;
+  token: DiscordTokenResponse;
+};
+
+type DiscordTokenRefreshFailure = {
+  ok: false;
+  status: number;
+  error?: string;
+  errorDescription?: string;
+};
+
+type DiscordTokenRefreshResult =
+  | DiscordTokenRefreshSuccess
+  | DiscordTokenRefreshFailure;
+
+type DiscordRefreshErrorSummary = {
+  status: number;
+  error?: string;
+  errorDescription?: string;
+};
+
+export type EnsureDiscordAccessTokenResult = {
+  user: AuthedProfile;
+  refreshed: boolean;
+  shouldLogout: boolean;
+  error?: DiscordRefreshErrorSummary;
+};
+
+const parseExpiresInSeconds = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const resolveTokenExpiresAt = (expiresIn?: unknown) => {
+  const nowMs = Date.now();
+  const seconds = parseExpiresInSeconds(expiresIn);
+  return nowMs + (seconds ? seconds * 1000 : DISCORD_DEFAULT_EXPIRES_MS);
+};
+
+const shouldLogoutForRefreshError = (error?: string) =>
+  error === "invalid_grant" || error === "invalid_client";
+
+const readDiscordErrorPayload = async (response: Response) => {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as DiscordTokenErrorPayload;
+  } catch {
+    return {};
+  }
+};
+
 export function buildDiscordAuthProfile(
   profile: AuthedProfile,
   accessToken: string,
   refreshToken: string,
+  expiresIn?: unknown,
 ): AuthedProfile {
   return {
     ...profile,
     accessToken,
     refreshToken,
-    tokenExpiresAt: Date.now() + DISCORD_DEFAULT_EXPIRES_MS,
+    tokenExpiresAt: resolveTokenExpiresAt(expiresIn),
   };
 }
 
@@ -33,13 +100,12 @@ export function isDiscordTokenFresh(user: AuthedProfile, nowMs = Date.now()) {
 
 export async function refreshDiscordAccessToken(
   refreshToken: string,
-): Promise<DiscordTokenResponse> {
+): Promise<DiscordTokenRefreshResult> {
   const body = new URLSearchParams({
     client_id: config.discord.clientId,
     client_secret: config.discord.clientSecret,
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    redirect_uri: config.discord.callbackUrl,
   });
 
   const response = await fetch(DISCORD_TOKEN_URL, {
@@ -49,28 +115,55 @@ export async function refreshDiscordAccessToken(
   });
 
   if (!response.ok) {
-    throw new Error(`Discord token refresh failed: ${response.status}`);
+    const payload = await readDiscordErrorPayload(response);
+    return {
+      ok: false,
+      status: response.status,
+      error: payload.error,
+      errorDescription: payload.error_description,
+    };
   }
 
-  return (await response.json()) as DiscordTokenResponse;
+  return {
+    ok: true,
+    token: (await response.json()) as DiscordTokenResponse,
+  };
 }
 
 export async function ensureDiscordAccessToken(
   user: AuthedProfile,
-): Promise<AuthedProfile> {
-  if (!user.refreshToken) return user;
-  if (isDiscordTokenFresh(user)) return user;
-
-  try {
-    const refreshed = await refreshDiscordAccessToken(user.refreshToken);
-    return {
-      ...user,
-      accessToken: refreshed.access_token,
-      refreshToken: refreshed.refresh_token ?? user.refreshToken,
-      tokenExpiresAt: Date.now() + refreshed.expires_in * 1000,
-    };
-  } catch (err) {
-    console.error("Failed to refresh Discord token", err);
-    return user;
+): Promise<EnsureDiscordAccessTokenResult> {
+  if (!user.refreshToken) {
+    return { user, refreshed: false, shouldLogout: false };
   }
+  if (isDiscordTokenFresh(user)) {
+    return { user, refreshed: false, shouldLogout: false };
+  }
+
+  const refreshed = await refreshDiscordAccessToken(user.refreshToken);
+  if (!refreshed.ok) {
+    const errorSummary: DiscordRefreshErrorSummary = {
+      status: refreshed.status,
+      error: refreshed.error,
+      errorDescription: refreshed.errorDescription,
+    };
+    console.error("Failed to refresh Discord token", errorSummary);
+    return {
+      user,
+      refreshed: false,
+      shouldLogout: shouldLogoutForRefreshError(refreshed.error),
+      error: errorSummary,
+    };
+  }
+
+  return {
+    user: {
+      ...user,
+      accessToken: refreshed.token.access_token,
+      refreshToken: refreshed.token.refresh_token ?? user.refreshToken,
+      tokenExpiresAt: resolveTokenExpiresAt(refreshed.token.expires_in),
+    },
+    refreshed: true,
+    shouldLogout: false,
+  };
 }

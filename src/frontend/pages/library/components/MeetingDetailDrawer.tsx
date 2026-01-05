@@ -1,0 +1,781 @@
+import { useEffect, useState } from "react";
+import {
+  ActionIcon,
+  Badge,
+  Box,
+  Button,
+  Center,
+  Divider,
+  Drawer,
+  Grid,
+  Group,
+  Loader,
+  Modal,
+  ScrollArea,
+  Stack,
+  Text,
+  TextInput,
+  ThemeIcon,
+  Title,
+  useComputedColorScheme,
+  useMantineTheme,
+} from "@mantine/core";
+import { notifications } from "@mantine/notifications";
+import {
+  IconArchive,
+  IconArchiveOff,
+  IconDownload,
+  IconFilter,
+  IconMicrophone,
+  IconNote,
+  IconPencil,
+  IconUsers,
+} from "@tabler/icons-react";
+import MeetingTimeline, {
+  MEETING_TIMELINE_FILTERS,
+} from "../../../components/MeetingTimeline";
+import MarkdownBody from "../../../components/MarkdownBody";
+import Surface from "../../../components/Surface";
+import { trpc } from "../../../services/trpc";
+import { uiOverlays } from "../../../uiTokens";
+import {
+  endLiveMeeting,
+  fetchLiveMeetingStatus,
+} from "../../../services/liveMeetingControl";
+import { formatDateTimeLabel } from "../../../utils/meetingLibrary";
+import {
+  MEETING_STATUS,
+  type MeetingStatus,
+} from "../../../../types/meetingLifecycle";
+import type {
+  MeetingEvent,
+  MeetingEventType,
+} from "../../../../types/meetingTimeline";
+import { useMeetingDetail } from "../hooks/useMeetingDetail";
+
+const resolveRenameDraft = (meeting: {
+  meetingName?: string;
+  summaryLabel?: string;
+}) => {
+  if (meeting.meetingName != null && meeting.meetingName !== "") {
+    return meeting.meetingName;
+  }
+  if (meeting.summaryLabel != null && meeting.summaryLabel !== "") {
+    return meeting.summaryLabel;
+  }
+  return "";
+};
+
+const normalizeOptionalString = (
+  value: string | null | undefined,
+): string | undefined => (value == null ? undefined : value);
+
+const renderDetailStatusBadge = (status?: MeetingStatus) => {
+  switch (status) {
+    case MEETING_STATUS.IN_PROGRESS:
+      return (
+        <Badge color="red" variant="light">
+          Live transcript
+        </Badge>
+      );
+    case MEETING_STATUS.PROCESSING:
+      return (
+        <Badge color="yellow" variant="light">
+          Processing
+        </Badge>
+      );
+    default:
+      return null;
+  }
+};
+
+type MeetingExport = {
+  meeting: {
+    id: string;
+    meetingId: string;
+    channelId: string;
+    timestamp: string;
+    duration: number;
+    tags: string[];
+    notes: string;
+    notesChannelId?: string;
+    notesMessageId?: string;
+    transcript: string;
+    audioUrl?: string;
+    archivedAt?: string;
+    attendees: string[];
+    events: MeetingEvent[];
+    title: string;
+    meetingName?: string;
+    summary: string;
+    summaryLabel?: string;
+    summarySentence?: string;
+    dateLabel: string;
+    durationLabel: string;
+    channel: string;
+  };
+};
+
+type MeetingDetailDrawerProps = {
+  opened: boolean;
+  selectedMeetingId: string | null;
+  selectedGuildId: string | null;
+  canManageSelectedGuild: boolean;
+  channelNameMap: Map<string, string>;
+  invalidateMeetingLists: () => Promise<void>;
+  onClose: () => void;
+};
+
+export default function MeetingDetailDrawer({
+  opened,
+  selectedMeetingId,
+  selectedGuildId,
+  canManageSelectedGuild,
+  channelNameMap,
+  invalidateMeetingLists,
+  onClose,
+}: MeetingDetailDrawerProps) {
+  const theme = useMantineTheme();
+  const scheme = useComputedColorScheme("dark");
+  const isDark = scheme === "dark";
+  const trpcUtils = trpc.useUtils();
+
+  const [activeFilters, setActiveFilters] = useState<MeetingEventType[]>(
+    MEETING_TIMELINE_FILTERS.map((filter) => filter.value),
+  );
+  const [fullScreen, setFullScreen] = useState(false);
+  const [endMeetingModalOpen, setEndMeetingModalOpen] = useState(false);
+  const [endMeetingLoading, setEndMeetingLoading] = useState(false);
+  const [endMeetingPreflightLoading, setEndMeetingPreflightLoading] =
+    useState(false);
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [archiveNextState, setArchiveNextState] = useState<boolean | null>(
+    null,
+  );
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const {
+    detail,
+    meeting,
+    detailLoading,
+    detailError,
+    liveStreamEnabled,
+    liveStream,
+    displayStatus,
+    displayAttendees,
+    displayEvents,
+    timelineEmptyLabel,
+  } = useMeetingDetail({
+    selectedGuildId,
+    selectedMeetingId,
+    channelNameMap,
+    invalidateMeetingLists,
+  });
+
+  const archiveMutation = trpc.meetings.setArchived.useMutation();
+  const renameMutation = trpc.meetings.rename.useMutation();
+
+  useEffect(() => {
+    if (!meeting) return;
+    setRenameDraft(resolveRenameDraft(meeting));
+    setRenameError(null);
+  }, [meeting]);
+
+  const resetDrawerState = () => {
+    setFullScreen(false);
+    setEndMeetingModalOpen(false);
+    setArchiveModalOpen(false);
+    setArchiveNextState(null);
+    setRenameModalOpen(false);
+  };
+
+  const handleCloseDrawer = () => {
+    resetDrawerState();
+    onClose();
+  };
+
+  const preflightEndMeeting = async () => {
+    if (!selectedGuildId || !meeting?.meetingId) return;
+    try {
+      setEndMeetingPreflightLoading(true);
+      const status = await fetchLiveMeetingStatus(
+        selectedGuildId,
+        meeting.meetingId,
+      );
+      if (status.status !== MEETING_STATUS.IN_PROGRESS) {
+        notifications.show({
+          color: "gray",
+          message: "Meeting is no longer live.",
+        });
+        return;
+      }
+      setEndMeetingModalOpen(true);
+    } catch {
+      notifications.show({
+        color: "red",
+        message: "Unable to refresh meeting status.",
+      });
+    } finally {
+      setEndMeetingPreflightLoading(false);
+    }
+  };
+
+  const handleConfirmEndMeeting = async () => {
+    if (!selectedGuildId || !meeting?.meetingId) return;
+    try {
+      setEndMeetingLoading(true);
+      await endLiveMeeting(selectedGuildId, meeting.meetingId);
+      notifications.show({
+        color: "green",
+        message: "Ending meeting. Notes will arrive shortly.",
+      });
+      setEndMeetingModalOpen(false);
+      if (liveStreamEnabled) {
+        liveStream.retry();
+      }
+    } catch {
+      notifications.show({
+        color: "red",
+        message: "Unable to end meeting. Please try again.",
+      });
+    } finally {
+      setEndMeetingLoading(false);
+    }
+  };
+
+  const handleArchiveToggle = async (archived: boolean): Promise<boolean> => {
+    if (!selectedGuildId || !meeting) return false;
+    try {
+      await archiveMutation.mutateAsync({
+        serverId: selectedGuildId,
+        meetingId: meeting.id,
+        archived,
+      });
+      notifications.show({
+        color: "green",
+        message: archived
+          ? "Meeting archived. You can find it in the Archived view."
+          : "Meeting unarchived.",
+      });
+      await Promise.all([
+        invalidateMeetingLists(),
+        trpcUtils.meetings.detail.invalidate(),
+      ]);
+      handleCloseDrawer();
+      return true;
+    } catch {
+      notifications.show({
+        color: "red",
+        message: "Unable to update archive state. Please try again.",
+      });
+      return false;
+    }
+  };
+
+  const handleArchiveConfirm = async () => {
+    if (archiveNextState === null) return;
+    const ok = await handleArchiveToggle(archiveNextState);
+    if (!ok) return;
+    setArchiveModalOpen(false);
+    setArchiveNextState(null);
+  };
+
+  const handleRenameSave = async () => {
+    if (!selectedGuildId || !meeting) return;
+    const trimmed = renameDraft.trim();
+    if (!trimmed) {
+      setRenameError("Meeting name cannot be empty.");
+      return;
+    }
+    setRenameError(null);
+    try {
+      const result = await renameMutation.mutateAsync({
+        serverId: selectedGuildId,
+        meetingId: meeting.id,
+        meetingName: trimmed,
+      });
+      notifications.show({
+        color: "green",
+        message: `Meeting renamed to ${result.meetingName}.`,
+      });
+      setRenameModalOpen(false);
+      setRenameDraft(result.meetingName);
+      await Promise.all([
+        invalidateMeetingLists(),
+        trpcUtils.meetings.detail.invalidate(),
+      ]);
+    } catch {
+      setRenameError(
+        renameMutation.error?.message ?? "Unable to rename meeting.",
+      );
+    }
+  };
+
+  const handleDownload = () => {
+    if (!detail || !meeting) return;
+    const payload: MeetingExport = {
+      meeting: {
+        id: detail.id,
+        meetingId: detail.meetingId,
+        channelId: detail.channelId,
+        timestamp: detail.timestamp,
+        duration: detail.duration,
+        tags: detail.tags ?? [],
+        notes: detail.notes ?? "",
+        notesChannelId: normalizeOptionalString(detail.notesChannelId),
+        notesMessageId: normalizeOptionalString(detail.notesMessageId),
+        transcript: detail.transcript ?? "",
+        audioUrl: normalizeOptionalString(detail.audioUrl),
+        archivedAt: normalizeOptionalString(detail.archivedAt),
+        attendees: detail.attendees ?? [],
+        events: detail.events ?? [],
+        title: meeting.title,
+        meetingName: meeting.meetingName,
+        summary: meeting.summary,
+        summarySentence: normalizeOptionalString(detail.summarySentence),
+        summaryLabel: normalizeOptionalString(detail.summaryLabel),
+        dateLabel: meeting.dateLabel,
+        durationLabel: meeting.durationLabel,
+        channel: meeting.channel,
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${meeting.title.replace(/[^\w-]+/g, "_") || "meeting"}-${meeting.dateLabel.replace(/\s+/g, "_")}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const audioSection = meeting ? (
+    <Surface p="md" tone="soft">
+      <Group gap="sm" align="center" wrap="wrap">
+        <ThemeIcon variant="light" color="cyan">
+          <IconMicrophone size={16} />
+        </ThemeIcon>
+        <Stack gap={0}>
+          <Text fw={600}>Audio</Text>
+          <Text size="sm" c="dimmed">
+            Playback for the full recording.
+          </Text>
+        </Stack>
+      </Group>
+      <Divider my="sm" />
+      {meeting.audioUrl ? (
+        <audio
+          controls
+          preload="none"
+          style={{ width: "100%" }}
+          src={meeting.audioUrl}
+        />
+      ) : (
+        <Text size="sm" c="dimmed">
+          Audio isn't available for this meeting yet.
+        </Text>
+      )}
+    </Surface>
+  ) : null;
+
+  const summaryBody = meeting ? (
+    <>
+      <MarkdownBody content={meeting.summary} compact dimmed />
+      <Divider my="sm" />
+      <MarkdownBody content={meeting.notes} />
+    </>
+  ) : null;
+
+  const summarySection = meeting ? (
+    <Surface
+      p="md"
+      style={
+        fullScreen
+          ? undefined
+          : {
+              display: "flex",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+            }
+      }
+    >
+      <Group gap="xs" mb="xs">
+        <ThemeIcon variant="light" color="brand">
+          <IconNote size={16} />
+        </ThemeIcon>
+        <Text fw={600}>Summary</Text>
+      </Group>
+      {fullScreen ? (
+        summaryBody
+      ) : (
+        <ScrollArea
+          style={{ flex: 1, minHeight: 0 }}
+          offsetScrollbars
+          data-visual-scroll
+          data-testid="meeting-summary-scroll"
+          viewportProps={{ "data-testid": "meeting-summary-scroll-viewport" }}
+        >
+          <Stack gap="sm">{summaryBody}</Stack>
+        </ScrollArea>
+      )}
+    </Surface>
+  ) : null;
+
+  const attendeesSection = meeting ? (
+    <Surface p="md">
+      <Group gap="xs" mb="xs">
+        <ThemeIcon variant="light" color="cyan">
+          <IconUsers size={16} />
+        </ThemeIcon>
+        <Text fw={600}>Attendees</Text>
+      </Group>
+      <Text size="sm" c="dimmed">
+        {displayAttendees.join(", ")}
+      </Text>
+    </Surface>
+  ) : null;
+
+  const fullScreenCallout = (
+    <Surface p="md" tone="soft">
+      <Stack gap="xs">
+        <Text fw={600}>Full transcript</Text>
+        <Text size="sm" c="dimmed">
+          View the speaker timeline and transcript events in fullscreen.
+        </Text>
+        <Button
+          size="xs"
+          variant="light"
+          leftSection={<IconFilter size={14} />}
+          onClick={() => setFullScreen(true)}
+        >
+          Open fullscreen
+        </Button>
+      </Stack>
+    </Surface>
+  );
+
+  return (
+    <Drawer
+      opened={opened}
+      onClose={handleCloseDrawer}
+      position="right"
+      size={fullScreen ? "100%" : "xl"}
+      overlayProps={uiOverlays.modal}
+      data-testid="meeting-drawer"
+      styles={{
+        content: {
+          backgroundColor: isDark ? theme.colors.dark[7] : theme.white,
+          height: "100%",
+        },
+        inner: {
+          height: "100%",
+        },
+        body: {
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          overflow: "hidden",
+        },
+      }}
+    >
+      {selectedMeetingId ? (
+        <Box
+          data-testid="meeting-drawer-content"
+          style={{
+            position: "relative",
+            display: "flex",
+            flexDirection: "column",
+            height: "100%",
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
+          {detailError ? (
+            <Center py="xl">
+              <Text c="dimmed">Unable to load meeting details.</Text>
+            </Center>
+          ) : detailLoading ? (
+            <Center py="xl">
+              <Loader color="brand" />
+            </Center>
+          ) : meeting ? (
+            <>
+              <Modal
+                opened={endMeetingModalOpen}
+                onClose={() => setEndMeetingModalOpen(false)}
+                title="End live meeting"
+                centered
+              >
+                <Stack gap="md">
+                  <Text size="sm" c="dimmed">
+                    This will stop recording and begin processing notes. Are you
+                    sure you want to end the meeting?
+                  </Text>
+                  <Group justify="flex-end">
+                    <Button
+                      variant="default"
+                      onClick={() => setEndMeetingModalOpen(false)}
+                      disabled={endMeetingLoading}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      color="red"
+                      onClick={handleConfirmEndMeeting}
+                      loading={endMeetingLoading}
+                    >
+                      End meeting
+                    </Button>
+                  </Group>
+                </Stack>
+              </Modal>
+              <Modal
+                opened={archiveModalOpen}
+                onClose={() => {
+                  setArchiveModalOpen(false);
+                  setArchiveNextState(null);
+                }}
+                title={
+                  archiveNextState ? "Archive meeting" : "Unarchive meeting"
+                }
+                centered
+              >
+                <Stack gap="md">
+                  <Text size="sm" c="dimmed">
+                    {archiveNextState
+                      ? "Archived meetings move to the Archived view. You can unarchive anytime."
+                      : "This meeting will move back to the active list."}
+                  </Text>
+                  <Group justify="flex-end">
+                    <Button
+                      variant="default"
+                      onClick={() => {
+                        setArchiveModalOpen(false);
+                        setArchiveNextState(null);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      color={archiveNextState ? "red" : "brand"}
+                      onClick={handleArchiveConfirm}
+                      loading={archiveMutation.isPending}
+                      data-testid="meeting-archive-confirm"
+                    >
+                      {archiveNextState
+                        ? "Archive meeting"
+                        : "Unarchive meeting"}
+                    </Button>
+                  </Group>
+                </Stack>
+              </Modal>
+              <Modal
+                opened={renameModalOpen}
+                onClose={() => setRenameModalOpen(false)}
+                title="Rename meeting"
+                centered
+              >
+                <Stack gap="md">
+                  <TextInput
+                    label="Meeting name"
+                    description="5 words or fewer, letters and numbers only."
+                    value={renameDraft}
+                    onChange={(event) =>
+                      setRenameDraft(event.currentTarget.value)
+                    }
+                    error={renameError ?? undefined}
+                    data-testid="meeting-rename-input"
+                  />
+                  <Group justify="flex-end">
+                    <Button
+                      variant="default"
+                      onClick={() => setRenameModalOpen(false)}
+                      disabled={renameMutation.isPending}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleRenameSave}
+                      loading={renameMutation.isPending}
+                    >
+                      Save name
+                    </Button>
+                  </Group>
+                </Stack>
+              </Modal>
+              <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
+                <Stack gap={4}>
+                  <Group justify="space-between" align="center" wrap="wrap">
+                    <Group gap="xs" align="center" wrap="wrap">
+                      <Title order={3}>{meeting.title}</Title>
+                      <ActionIcon
+                        variant="subtle"
+                        aria-label="Rename meeting"
+                        onClick={() => setRenameModalOpen(true)}
+                      >
+                        <IconPencil size={16} />
+                      </ActionIcon>
+                      {meeting.archivedAt ? (
+                        <Badge size="sm" variant="light" color="gray">
+                          Archived
+                        </Badge>
+                      ) : null}
+                      {renderDetailStatusBadge(displayStatus)}
+                    </Group>
+                    <Group gap="sm">
+                      {displayStatus === MEETING_STATUS.IN_PROGRESS &&
+                      canManageSelectedGuild ? (
+                        <Button
+                          color="red"
+                          variant="light"
+                          loading={endMeetingPreflightLoading}
+                          onClick={preflightEndMeeting}
+                        >
+                          End meeting
+                        </Button>
+                      ) : null}
+                      <Button
+                        variant="light"
+                        leftSection={<IconDownload size={16} />}
+                        onClick={handleDownload}
+                        data-testid="meeting-download"
+                      >
+                        Download
+                      </Button>
+                      <Button
+                        variant="subtle"
+                        leftSection={
+                          meeting.archivedAt ? (
+                            <IconArchiveOff size={16} />
+                          ) : (
+                            <IconArchive size={16} />
+                          )
+                        }
+                        onClick={() => {
+                          setArchiveNextState(!meeting.archivedAt);
+                          setArchiveModalOpen(true);
+                        }}
+                        loading={archiveMutation.isPending}
+                        data-testid={
+                          meeting.archivedAt
+                            ? "meeting-unarchive"
+                            : "meeting-archive"
+                        }
+                      >
+                        {meeting.archivedAt ? "Unarchive" : "Archive"}
+                      </Button>
+                      <Button
+                        variant={fullScreen ? "outline" : "light"}
+                        leftSection={<IconFilter size={16} />}
+                        onClick={() => setFullScreen((prev) => !prev)}
+                      >
+                        {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
+                      </Button>
+                    </Group>
+                  </Group>
+                  <Text size="sm" c="dimmed">
+                    {meeting.dateLabel} | {meeting.durationLabel} |{" "}
+                    {meeting.channel}
+                  </Text>
+                  {meeting.archivedAt ? (
+                    <Text size="xs" c="dimmed">
+                      Archived on {formatDateTimeLabel(meeting.archivedAt)}
+                    </Text>
+                  ) : null}
+                  <Group gap="xs" wrap="wrap">
+                    {meeting.tags.map((tag) => (
+                      <Badge key={tag} variant="light" color="gray">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </Group>
+                </Stack>
+
+                {fullScreen ? (
+                  <Grid gutter="lg" style={{ flex: 1, minHeight: 0 }}>
+                    <Grid.Col
+                      span={{ base: 12, lg: 5 }}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        minHeight: 0,
+                      }}
+                    >
+                      <ScrollArea
+                        style={{ flex: 1, minHeight: 0 }}
+                        offsetScrollbars
+                        data-visual-scroll
+                      >
+                        <Stack gap="md">
+                          {audioSection}
+                          {summarySection}
+                          {attendeesSection}
+                        </Stack>
+                      </ScrollArea>
+                    </Grid.Col>
+                    <Grid.Col
+                      span={{ base: 12, lg: 7 }}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        minHeight: 0,
+                      }}
+                    >
+                      <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>
+                        {liveStreamEnabled && liveStream.status === "error" ? (
+                          <Text size="sm" c="dimmed">
+                            Unable to connect to the live transcript. Try
+                            refreshing.
+                          </Text>
+                        ) : null}
+                        <Surface
+                          p="md"
+                          style={{
+                            flex: 1,
+                            minHeight: 0,
+                            display: "flex",
+                            flexDirection: "column",
+                          }}
+                        >
+                          <MeetingTimeline
+                            events={displayEvents}
+                            activeFilters={activeFilters}
+                            onToggleFilter={(value) =>
+                              setActiveFilters((current) =>
+                                current.includes(value)
+                                  ? current.filter((filter) => filter !== value)
+                                  : [...current, value],
+                              )
+                            }
+                            height="100%"
+                            title="Transcript"
+                            emptyLabel={timelineEmptyLabel}
+                          />
+                        </Surface>
+                      </Stack>
+                    </Grid.Col>
+                  </Grid>
+                ) : (
+                  <Stack
+                    gap="md"
+                    style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
+                  >
+                    {audioSection}
+                    {summarySection}
+                    {attendeesSection}
+                    {fullScreenCallout}
+                  </Stack>
+                )}
+              </Stack>
+            </>
+          ) : null}
+        </Box>
+      ) : null}
+    </Drawer>
+  );
+}

@@ -573,6 +573,12 @@ function buildDefaultStore(): MockStore {
       archivedByUserId: params.archived ? mockUser.id : undefined,
     };
   };
+  const LONG_NOTES_LINE_COUNT = 40;
+  const LONG_NOTES_BLOCK = Array.from(
+    { length: LONG_NOTES_LINE_COUNT },
+    (_, index) =>
+      `Detail ${index + 1}: Follow-up notes from the meeting timeline.`,
+  ).join("\n");
   meetingHistoryByGuild.set("1249723747896918109", [
     buildMeeting({
       guildId: "1249723747896918109",
@@ -581,8 +587,16 @@ function buildDefaultStore(): MockStore {
       meetingIdSuffix: "ddm-1",
       textChannelId: "text-1",
       tags: ["campaign", "heist", "npc"],
-      notes:
-        "Meeting Summary (Banana / Indigo)\nDecision: revisit the vault after securing allies.\nAction: Rin posts the map + loot sheet in #campaign-info.\nNext time: Sunday 7pm (voice).\nHighlights + attendance included.",
+      notes: [
+        "Meeting Summary (Banana / Indigo)",
+        "Decision: revisit the vault after securing allies.",
+        "Action: Rin posts the map + loot sheet in #campaign-info.",
+        "Next time: Sunday 7pm (voice).",
+        "Highlights + attendance included.",
+        "",
+        "Extended notes:",
+        LONG_NOTES_BLOCK,
+      ].join("\n"),
     }),
     buildMeeting({
       guildId: "1249723747896918109",
