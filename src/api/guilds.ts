@@ -4,6 +4,7 @@ import {
   clearConfigOverrideForScope,
   setConfigOverrideForScope,
 } from "../services/configOverridesService";
+import { config } from "../services/configService";
 import {
   listAutoRecordSettings,
   removeAutoRecordSetting,
@@ -21,6 +22,7 @@ import {
 } from "../services/discordCacheService";
 import type { DiscordGuild } from "../repositories/types";
 import { answerQuestionService } from "../services/askService";
+import { renderAskAnswer } from "../services/askCitations";
 import {
   getSnapshotString,
   resolveConfigSnapshot,
@@ -402,14 +404,21 @@ export function registerGuildRoutes(app: express.Express) {
         res.status(400).json({ error: "question is required" });
         return;
       }
-      const { answer } = await answerQuestionService({
+      const { answer, citations } = await answerQuestionService({
         guildId,
         channelId: channelId || "",
         question,
         tags,
         scope,
       });
-      res.json({ answer });
+      const portalBaseUrl = config.frontend.siteUrl?.trim();
+      const rendered = renderAskAnswer({
+        text: answer,
+        citations: citations ?? [],
+        guildId,
+        portalBaseUrl: portalBaseUrl?.replace(/\/$/, ""),
+      });
+      res.json({ answer: rendered });
     },
   );
 

@@ -45,6 +45,7 @@ const toMessage = (record: AskMessageRecord): AskMessage => ({
   text: record.text,
   createdAt: record.createdAt,
   sourceMeetingIds: record.sourceMeetingIds,
+  citations: record.citations,
 });
 
 const toSharedConversation = (
@@ -155,6 +156,7 @@ const realRepository: AskConversationRepository = {
       text: message.text,
       createdAt: message.createdAt,
       sourceMeetingIds: message.sourceMeetingIds,
+      citations: message.citations,
     };
     await writeAskMessage(record);
   },

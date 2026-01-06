@@ -18,6 +18,8 @@ import {
   buildDictionaryPromptLines,
   resolveDictionaryBudgets,
 } from "../utils/dictionary";
+import type { AskCitation } from "../types/ask";
+import { buildAskCitations, stripCitationTags } from "./askCitations";
 
 export type AskScope = "guild" | "channel";
 
@@ -40,6 +42,7 @@ export interface AskRequest {
 export interface AskResponse {
   answer: string;
   sourceMeetingIds?: string[];
+  citations?: AskCitation[];
 }
 
 function truncate(text: string, maxLen: number): string {
@@ -81,20 +84,25 @@ const buildDictionaryBlock = async (guildId: string): Promise<string> => {
   }
 };
 
-const buildContextBlocks = (meetings: MeetingSummary[], guildId: string) =>
-  meetings.map((m) => {
+export const buildAskContextBlocks = (meetings: MeetingSummary[]) =>
+  meetings.map((m, index) => {
+    const meetingIndex = index + 1;
     const date = new Date(m.timestamp).toLocaleDateString();
-    const tagText = m.tags?.length ? `Tags: ${m.tags.join(", ")}` : "";
-    const archivedLine = m.archivedAt ? "\n  Status: Archived" : "";
+    const tagLine = m.tags?.length
+      ? `Tags: ${m.tags.join(", ")}`
+      : "Tags: None";
+    const statusLine = `Status: ${m.archivedAt ? "Archived" : "Active"}`;
     const notes = m.notes
       ? truncate(scrubInternalIds(m.notes), 900)
       : "(no notes)";
-    const sourceLink =
-      m.notesChannelId && m.notesMessageIds?.length
-        ? `https://discord.com/channels/${guildId}/${m.notesChannelId}/${m.notesMessageIds[0]}`
-        : "";
-    const sourceLine = sourceLink ? `\n  Source: ${sourceLink}` : "";
-    return `- Meeting ${date} ${tagText}\n  Notes: ${notes}${archivedLine}${sourceLine}`;
+    return [
+      `<meeting index="${meetingIndex}">`,
+      `Date: ${date}`,
+      tagLine,
+      statusLine,
+      `Notes: ${notes}`,
+      `</meeting>`,
+    ].join("\n");
   });
 
 const filterMeetings = (
@@ -143,6 +151,7 @@ const buildNoMeetingsResponse = (
       answer:
         "I don't have any meetings yet. Start one with `/startmeeting` in Discord or enable auto-recording in Settings.",
       sourceMeetingIds: [],
+      citations: [],
     };
   }
   const note =
@@ -151,7 +160,7 @@ const buildNoMeetingsResponse = (
           "No relevant meetings found. Upgrade for deeper history.",
         )
       : "No relevant meetings found.";
-  return { answer: note, sourceMeetingIds: [] };
+  return { answer: note, sourceMeetingIds: [], citations: [] };
 };
 
 const buildMockResponse = (
@@ -164,6 +173,7 @@ const buildMockResponse = (
       answer:
         "Mock mode: no meetings found yet. Start one with `/startmeeting` in Discord or enable auto-recording in Settings.",
       sourceMeetingIds: [],
+      citations: [],
     };
   }
   const sample = meetings[0];
@@ -178,6 +188,7 @@ const buildMockResponse = (
   return {
     answer: `Mock answer for "${question}".${sourceLine}`,
     sourceMeetingIds,
+    citations: [],
   };
 };
 
@@ -218,7 +229,7 @@ export async function answerQuestionService(
   const sourceMeetingIds = meetings.map(
     (meeting) => meeting.channelId_timestamp,
   );
-  const contextBlocks = buildContextBlocks(meetings, guildId);
+  const contextBlocks = buildAskContextBlocks(meetings);
 
   const history = (req.history ?? []).slice(-10);
   const historyBlock =
@@ -226,7 +237,7 @@ export async function answerQuestionService(
       ? history
           .map((msg) => {
             const label = msg.role === "chronote" ? "Chronote" : "User";
-            return `${label}: ${msg.text}`;
+            return `${label}: ${stripCitationTags(msg.text)}`;
           })
           .join("\n")
       : "None.";
@@ -275,8 +286,12 @@ export async function answerQuestionService(
     ...chatParams,
   });
 
+  const answer = completion.choices[0].message.content ?? "No answer.";
+  const citations = buildAskCitations({ text: answer, meetings });
+
   return {
-    answer: completion.choices[0].message.content ?? "No answer.",
+    answer,
     sourceMeetingIds,
+    citations,
   };
 }

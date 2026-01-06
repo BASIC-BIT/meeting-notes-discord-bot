@@ -270,6 +270,16 @@ export interface AskMessageRecord {
   text: string;
   createdAt: string;
   sourceMeetingIds?: string[];
+  citations?: AskCitationRecord[];
+}
+
+export interface AskCitationRecord {
+  index: number;
+  target: "portal" | "discord_summary" | "transcript";
+  meetingId: string;
+  notesChannelId?: string;
+  notesMessageId?: string;
+  eventId?: string;
 }
 
 export interface AskConversationShareRecord {
