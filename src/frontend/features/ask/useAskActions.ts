@@ -8,6 +8,7 @@ import type {
 } from "../../../types/ask";
 import type { ListMode } from "../../utils/askLinks";
 import { buildAskUrl } from "../../utils/askLinks";
+import { resolveNowMs } from "../../utils/now";
 import { trpc } from "../../services/trpc";
 import {
   buildConversationDetailUpdate,
@@ -45,8 +46,8 @@ type AskActionsOptions = {
   conversationBusy: boolean;
   conversationError: unknown;
   highlightedMessageId: string | null;
-  chatViewportRef: RefObject<HTMLDivElement>;
-  inputRef: RefObject<HTMLTextAreaElement>;
+  chatViewportRef: RefObject<HTMLDivElement | null>;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
   setDraft: Dispatch<SetStateAction<string>>;
   errorMessage: string | null;
@@ -178,6 +179,9 @@ export const useAskActions = (options: AskActionsOptions): AskActionsResult => {
         isArchived,
       })
     ) {
+      return;
+    }
+    if (!selectedGuildId) {
       return;
     }
     setErrorMessage(null);

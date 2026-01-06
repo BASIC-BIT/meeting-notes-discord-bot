@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 import {
   AppShell,
   Box,
@@ -36,7 +36,7 @@ const buildHeaderStyles = (
   theme: MantineTheme,
   isDark: boolean,
   visualMode: boolean,
-) =>
+): CSSProperties =>
   visualMode
     ? {
         borderBottom: shellBorder(theme, isDark),
@@ -56,7 +56,7 @@ const buildMainStyles = (
   theme: MantineTheme,
   isDark: boolean,
   visualMode: boolean,
-) =>
+): CSSProperties =>
   visualMode
     ? {
         backgroundColor: appBackground(theme, isDark),

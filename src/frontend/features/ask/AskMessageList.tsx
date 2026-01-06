@@ -14,7 +14,7 @@ type AskMessageListProps = {
   highlightedMessageId: string | null;
   onCopyLink: (messageId?: string) => void;
   onCopyResponse: (text: string) => void;
-  viewportRef: RefObject<HTMLDivElement>;
+  viewportRef: RefObject<HTMLDivElement | null>;
 };
 
 export function AskMessageList({

@@ -42,11 +42,11 @@ type AskConversationPaneProps = {
   highlightedMessageId: string | null;
   onCopyLink: (messageId?: string) => void;
   onCopyResponse: (text: string) => void;
-  chatViewportRef: RefObject<HTMLDivElement>;
+  chatViewportRef: RefObject<HTMLDivElement | null>;
   draft: string;
   errorMessage: string | null;
   askPending: boolean;
-  inputRef: RefObject<HTMLTextAreaElement>;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
   onAsk: () => void;
   onDraftChange: (value: string) => void;
   onRenameDraftChange: (value: string) => void;

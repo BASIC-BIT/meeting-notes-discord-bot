@@ -13,7 +13,7 @@ type AskComposerProps = {
   onAsk: () => void;
   askPending: boolean;
   errorMessage: string | null;
-  inputRef: RefObject<HTMLTextAreaElement>;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
 };
 
 export function AskComposer({

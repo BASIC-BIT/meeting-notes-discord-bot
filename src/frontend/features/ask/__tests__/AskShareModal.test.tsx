@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import { AskShareModal } from "../AskShareModal";
+import { AskShareModal, type AskShareModalProps } from "../AskShareModal";
 import type { AskConversation } from "../../../../types/ask";
 
 const baseConversation: AskConversation = {
@@ -15,8 +15,8 @@ const renderWithProvider = (ui: React.ReactElement) =>
   render(<MantineProvider>{ui}</MantineProvider>);
 
 const buildProps = (
-  overrides?: Partial<React.ComponentProps<typeof AskShareModal>>,
-) => ({
+  overrides?: Partial<AskShareModalProps>,
+): AskShareModalProps => ({
   opened: true,
   onClose: jest.fn(),
   publicSharingEnabled: true,

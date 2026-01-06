@@ -26,8 +26,8 @@ type AskPageEffectsOptions = {
   askPending: boolean;
   highlightedMessageId: string | null;
   displayMessagesLength: number;
-  chatViewportRef: RefObject<HTMLDivElement>;
-  inputRef: RefObject<HTMLTextAreaElement>;
+  chatViewportRef: RefObject<HTMLDivElement | null>;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
   navigateToConversation: (
     conversationId: string | null,
     mode: ListMode,
@@ -214,7 +214,7 @@ const syncActiveConversation = ({
   }
 };
 
-const requestInputFocus = (inputRef: RefObject<HTMLTextAreaElement>) => {
+const requestInputFocus = (inputRef: RefObject<HTMLTextAreaElement | null>) => {
   const handle = window.requestAnimationFrame(() => {
     inputRef.current?.focus();
   });
