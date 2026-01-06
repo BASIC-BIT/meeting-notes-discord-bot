@@ -294,6 +294,8 @@ function getOrCreateSpeakerTrack(
     filePath: path.join(dir, `t_${userId}.pcm`),
     lastEndMs: 0,
     source: "voice",
+    writeFailed: false,
+    writeFailureCount: 0,
   };
   tracks.set(userId, track);
   return track;
@@ -362,11 +364,19 @@ async function persistSnippetSpeakerTrack(
         error,
       );
       outputStream.destroy();
+      track.writeFailed = true;
+      track.writeFailureCount = (track.writeFailureCount ?? 0) + 1;
     }
   };
 
   const chained = (track.writePromise ?? Promise.resolve())
-    .catch(() => undefined)
+    .catch((error) => {
+      console.error(
+        `Previous speaker track write failed for user ${snippet.userId}:`,
+        error,
+      );
+      return undefined;
+    })
     .then(writeTask);
   track.writePromise = chained;
 }
@@ -1025,6 +1035,7 @@ export async function buildMixedAudio(
   await waitForSpeakerTrackWrites(meeting);
 
   const usable = tracks.filter((track) => {
+    if (track.writeFailed) return false;
     if (!fs.existsSync(track.filePath)) return false;
     try {
       const stats = fs.statSync(track.filePath);
