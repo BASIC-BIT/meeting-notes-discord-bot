@@ -74,6 +74,14 @@ export class LibraryPage {
     return this.drawer().getByTestId(testIds.library.summaryViewport);
   }
 
+  drawerTimelineViewport(): Locator {
+    return this.drawer().getByTestId(testIds.library.timelineViewport);
+  }
+
+  drawerFullscreenToggle(): Locator {
+    return this.drawer().getByTestId(testIds.library.fullscreenToggle);
+  }
+
   drawerDownload(): Locator {
     return this.drawer().getByTestId(testIds.library.download);
   }

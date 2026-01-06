@@ -5,7 +5,7 @@ export const CONFIG_KEYS = {
   transcription: {
     premiumEnabled: "transcription.premium.enabled",
     premiumCleanupEnabled: "transcription.premium.cleanup.enabled",
-    premiumCoalesceModel: "transcription.premium.coalesce.model",
+    suppressionEnabled: "transcription.suppression.enabled",
     fastSilenceMs: "transcription.fastSilenceMs",
     slowSilenceMs: "transcription.slowSilenceMs",
     minSnippetSeconds: "transcription.minSnippetSeconds",
@@ -14,6 +14,21 @@ export const CONFIG_KEYS = {
     interjectionEnabled: "transcription.interjection.enabled",
     interjectionMinSpeakerSeconds:
       "transcription.interjection.minSpeakerSeconds",
+  },
+  models: {
+    notes: "models.notes",
+    meetingSummary: "models.meetingSummary",
+    notesCorrection: "models.notesCorrection",
+    transcription: "models.transcription",
+    transcriptionCleanup: "models.transcriptionCleanup",
+    transcriptionCoalesce: "models.transcriptionCoalesce",
+    image: "models.image",
+    imagePrompt: "models.imagePrompt",
+    ask: "models.ask",
+    liveVoiceGate: "models.liveVoiceGate",
+    liveVoiceResponder: "models.liveVoiceResponder",
+    liveVoiceTts: "models.liveVoiceTts",
+    autoRecordCancel: "models.autoRecordCancel",
   },
   context: {
     instructions: "context.instructions",

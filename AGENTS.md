@@ -71,6 +71,7 @@
 - Storybook lives in `.storybook/` for component development. Start it with `yarn storybook` (port 6006 by default).
 - To capture component screenshots, run `yarn test-storybook` while Storybook is running. Screenshots are written to `test/storybook/screenshots`.
 - When making UI changes, use the VLM to review the Storybook screenshots so you can verify the component changes without scanning the full page.
+- When making UI changes, review Playwright visual snapshots in `test/e2e/visual.spec.ts-snapshots` with the VLM to understand existing UI flows. It is OK to update snapshots with `yarn test:visual:update` or use the Playwright MCP during UI work.
 
 ## Infra (Terraform)
 
@@ -98,6 +99,7 @@
 - Writing style: do not use em dashes in copy/docs/comments; prefer commas, parentheses, or hyphens.
 - README should stay high signal for users, avoid listing research outcomes like query parameter details. Put rationale or research notes in planning documentation files instead.
 - Backwards compatibility: ask the user whether changes need to preserve compatibility for URLs, API contracts, stored data, or behavior. If unsure, ask before implementing and favor simplicity for early-stage tradeoffs.
+- Backwards compatibility update (January 6, 2026): prioritize DynamoDB data compatibility; URLs and UI flows can change without preserving prior behavior.
 - “Remember that …” shorthand: when the user says “remember that <rule>”, add it to AGENTS.md under the relevant section as a standing rule.
 - Do not suppress runtime warnings by monkey-patching globals (e.g., overriding console.error). Fix the underlying issue or accept the warning; never silence it via code hacks.
 - Stripe webhook parsing: keep a single `express.raw({ type: "application/json" })` at app-level in `webserver.ts`; do not add per-route raw parsers elsewhere.
@@ -123,6 +125,7 @@
 - Local full gate: `yarn run check` (lint --fix, prettier --write, then in parallel test, build:all, code:stats, prompts:check).
 - CI-parity local gate: `yarn run check:ci` (lint:check, prettier:check, test, build:all, test:e2e, checkov, code:stats, prompts:check, docker:build). Avoid `yarn check` (built-in Yarn integrity command).
 - CI runs the same set as `check:ci` (see `.github/workflows/ci.yml`).
+- When running checks locally, avoid docker builds unless explicitly requested.
 - Visual regression baselines: update with `yarn test:visual:update`.
 
 Why each check exists:

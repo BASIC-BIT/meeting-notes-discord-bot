@@ -1,7 +1,7 @@
 import { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
 import { createOpenAIClient } from "./services/openaiClient";
-import { getModelChoice } from "./services/modelFactory";
+import { buildModelOverrides, getModelChoice } from "./services/modelFactory";
 import { resolveChatParamsForRole } from "./services/openaiModelParams";
 import { getLangfuseChatPrompt } from "./services/langfusePromptService";
 import {
@@ -102,7 +102,10 @@ async function shouldAct(
   });
 
   try {
-    const modelChoice = getModelChoice("liveVoiceGate");
+    const modelChoice = getModelChoice(
+      "liveVoiceGate",
+      buildModelOverrides(meeting.runtimeConfig?.modelChoices),
+    );
     const modelParams = resolveChatParamsForRole({
       role: "liveVoiceGate",
       model: modelChoice.model,
@@ -177,7 +180,10 @@ async function generateReply(
   });
 
   try {
-    const modelChoice = getModelChoice("liveVoiceResponder");
+    const modelChoice = getModelChoice(
+      "liveVoiceResponder",
+      buildModelOverrides(meeting.runtimeConfig?.modelChoices),
+    );
     const modelParams = resolveChatParamsForRole({
       role: "liveVoiceResponder",
       model: modelChoice.model,
@@ -278,7 +284,10 @@ async function classifyConfirmation(
   });
 
   try {
-    const modelChoice = getModelChoice("liveVoiceGate");
+    const modelChoice = getModelChoice(
+      "liveVoiceGate",
+      buildModelOverrides(meeting.runtimeConfig?.modelChoices),
+    );
     const modelParams = resolveChatParamsForRole({
       role: "liveVoiceGate",
       model: modelChoice.model,

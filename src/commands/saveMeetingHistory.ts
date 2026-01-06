@@ -128,6 +128,7 @@ async function resolveMeetingSummaries(
     meetingId: meeting.meetingId,
     parentSpanContext: meeting.langfuseParentSpanContext,
     modelParams: meeting.runtimeConfig?.modelParams?.meetingSummary,
+    modelOverride: meeting.runtimeConfig?.modelChoices?.meetingSummary,
   });
   meeting.summarySentence = summaries.summarySentence;
   meeting.summaryLabel = summaries.summaryLabel;

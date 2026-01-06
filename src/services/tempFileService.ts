@@ -15,10 +15,7 @@ export async function ensureTempBaseDir(): Promise<string> {
 }
 
 export function getMeetingTempDir(meeting: MeetingData): string {
-  return path.join(
-    BASE_TEMP_DIR,
-    `${meeting.guildId}_${meeting.channelId}_${meeting.meetingId}`,
-  );
+  return path.join(BASE_TEMP_DIR, "m", meeting.meetingId);
 }
 
 export async function ensureMeetingTempDir(

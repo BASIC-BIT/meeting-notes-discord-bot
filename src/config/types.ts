@@ -108,6 +108,7 @@ export type ResolvedConfigSnapshot = {
 
 export type MeetingRuntimeConfig = {
   transcription: {
+    suppressionEnabled: boolean;
     fastSilenceMs: number;
     slowSilenceMs: number;
     minSnippetSeconds: number;
@@ -119,7 +120,6 @@ export type MeetingRuntimeConfig = {
   premiumTranscription: {
     enabled: boolean;
     cleanupEnabled: boolean;
-    coalesceModel: string;
   };
   dictionary: {
     maxEntries: number;
@@ -130,4 +130,5 @@ export type MeetingRuntimeConfig = {
     enabled: boolean;
   };
   modelParams?: ModelParamsByRole;
+  modelChoices?: Partial<Record<ModelRole, string>>;
 };

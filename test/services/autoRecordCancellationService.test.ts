@@ -22,6 +22,12 @@ const loadModule = async (options: LoadOptions = {}) => {
     discord: {
       clientId: "mock-client",
     },
+    notes: { model: "gpt-5.2" },
+    liveVoice: {
+      gateModel: "gpt-5-mini",
+      responderModel: "gpt-4o-mini",
+      ttsModel: "gpt-4o-mini-tts",
+    },
   };
   const waitForFinishProcessing = jest.fn().mockResolvedValue(undefined);
   const completionCreate = jest.fn().mockResolvedValue({
@@ -31,13 +37,17 @@ const loadModule = async (options: LoadOptions = {}) => {
     chat: { completions: { create: completionCreate } },
   }));
   const getModelChoice = jest.fn(() => ({ model: "gpt-4o-mini" }));
+  const buildModelOverrides = jest.fn(() => undefined);
 
   jest.doMock("../../src/services/configService", () => ({ config }));
   jest.doMock("../../src/audio", () => ({ waitForFinishProcessing }));
   jest.doMock("../../src/services/openaiClient", () => ({
     createOpenAIClient,
   }));
-  jest.doMock("../../src/services/modelFactory", () => ({ getModelChoice }));
+  jest.doMock("../../src/services/modelFactory", () => ({
+    buildModelOverrides,
+    getModelChoice,
+  }));
 
   const module =
     await import("../../src/services/autoRecordCancellationService");
@@ -63,6 +73,7 @@ const buildRuntimeConfig = (
 ): MeetingRuntimeConfig => {
   const base: MeetingRuntimeConfig = {
     transcription: {
+      suppressionEnabled: true,
       fastSilenceMs: 500,
       slowSilenceMs: 1000,
       minSnippetSeconds: 1,
@@ -74,7 +85,6 @@ const buildRuntimeConfig = (
     premiumTranscription: {
       enabled: false,
       cleanupEnabled: false,
-      coalesceModel: "gpt-5-mini",
     },
     dictionary: {
       maxEntries: 0,

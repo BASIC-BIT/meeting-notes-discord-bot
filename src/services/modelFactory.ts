@@ -10,6 +10,21 @@ export type ModelChoice = {
 
 export type ModelOverrides = Partial<Record<ModelRole, ModelChoice>>;
 
+export const buildModelOverrides = (
+  choices?: Partial<Record<ModelRole, string>>,
+): ModelOverrides | undefined => {
+  if (!choices) return undefined;
+  const overrides: ModelOverrides = {};
+  (Object.entries(choices) as [ModelRole, string][]).forEach(
+    ([role, model]) => {
+      const trimmed = model?.trim();
+      if (!trimmed) return;
+      overrides[role] = { provider: "openai", model: trimmed };
+    },
+  );
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+};
+
 const defaultModels: Record<ModelRole, ModelChoice> = {
   notes: { provider: "openai", model: config.notes.model },
   meetingSummary: { provider: "openai", model: config.notes.model },

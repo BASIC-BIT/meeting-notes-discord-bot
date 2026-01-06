@@ -5,8 +5,9 @@ import { normalizeTags, parseTags } from "../utils/tags";
 import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
 import { ensureUserCanViewChannel } from "./discordPermissionsService";
 import { createOpenAIClient } from "./openaiClient";
-import { getModelChoice } from "./modelFactory";
+import { buildModelOverrides, getModelChoice } from "./modelFactory";
 import { getLangfuseChatPrompt } from "./langfusePromptService";
+import { resolveModelChoicesForContext } from "./modelChoiceService";
 import {
   resolveChatParamsForRole,
   resolveModelParamsForContext,
@@ -240,7 +241,12 @@ export async function answerQuestionService(
     },
   });
 
-  const modelChoice = getModelChoice("ask");
+  const modelChoices = await resolveModelChoicesForContext({
+    guildId,
+    channelId,
+    userId: req.viewerUserId,
+  });
+  const modelChoice = getModelChoice("ask", buildModelOverrides(modelChoices));
   const modelParams = await resolveModelParamsForContext({
     guildId,
     channelId,

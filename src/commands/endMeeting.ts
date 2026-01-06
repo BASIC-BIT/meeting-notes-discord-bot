@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ChunkInfo } from "../types/audio";
 import {
   buildMixedAudio,
-  cleanupAudioSegments,
+  cleanupSpeakerTracks,
   closeOutputFile,
   compileTranscriptions,
   splitAudioIntoChunks,
@@ -33,7 +33,11 @@ import {
   getRollingUsageForGuild,
   getRollingWindowMs,
 } from "../services/meetingUsageService";
-import { withMeetingEndTrace } from "../observability/meetingTrace";
+import {
+  withMeetingEndTrace,
+  withMeetingEndStep,
+  type MeetingEndStepOptions,
+} from "../observability/meetingTrace";
 import { evaluateAutoRecordCancellation } from "../services/autoRecordCancellationService";
 import { meetingsCancelled } from "../metrics";
 import { describeAutoRecordRule } from "../utils/meetingLifecycle";
@@ -53,6 +57,19 @@ type EndMeetingFlowOptions = {
   ) => Promise<void>;
   acknowledge?: () => Promise<void>;
 };
+
+async function runMeetingEndStep<T>(
+  meeting: MeetingData,
+  name: string,
+  run: () => Promise<T>,
+  options: MeetingEndStepOptions = {},
+): Promise<T> {
+  const startedAt = Date.now();
+  const result = await withMeetingEndStep(meeting, name, run, options);
+  const durationMs = Date.now() - startedAt;
+  console.log(`Meeting end step completed: ${name} durationMs=${durationMs}`);
+  return result;
+}
 
 export async function handleEndMeetingButton(
   client: Client,
@@ -191,10 +208,7 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
 
   const meetingTempDir = await ensureMeetingTempDir(meeting);
   try {
-    const chatLogFilePath = path.join(
-      meetingTempDir,
-      `chatlog-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`,
-    );
+    const chatLogFilePath = path.join(meetingTempDir, "chat.txt");
     writeFileSync(
       chatLogFilePath,
       meeting.chatLog.map((e) => renderChatEntryLine(e)).join("\n"),
@@ -210,31 +224,65 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
       meeting.connection.destroy();
     }
 
-    await waitForAudioOnlyFinishProcessing(meeting);
+    await runMeetingEndStep(meeting, "wait-audio-only", () =>
+      waitForAudioOnlyFinishProcessing(meeting),
+    );
 
-    await closeOutputFile(meeting);
+    await runMeetingEndStep(meeting, "close-output-file", () =>
+      closeOutputFile(meeting),
+    );
 
-    const cancellationDecision = await evaluateAutoRecordCancellation(meeting);
+    const cancellationDecision = await runMeetingEndStep(
+      meeting,
+      "auto-record-cancellation",
+      () => evaluateAutoRecordCancellation(meeting),
+      {
+        metadata: {
+          audioFiles: meeting.audioData.audioFiles.length,
+        },
+      },
+    );
     if (cancellationDecision.cancel) {
       meeting.cancelled = true;
       meeting.cancellationReason = cancellationDecision.reason;
       meeting.endReason = MEETING_END_REASONS.AUTO_CANCELLED;
-      await handleAutoRecordCancellation(meeting, chatLogFilePath);
-      await cleanupAudioSegments(meeting);
+      await runMeetingEndStep(meeting, "auto-record-cancel-flow", () =>
+        handleAutoRecordCancellation(meeting, chatLogFilePath),
+      );
+      await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>
+        cleanupSpeakerTracks(meeting),
+      );
       return;
     }
 
     const combinedAudioFile = meeting.audioData.outputFileName!;
-    const mixedAudioFile = await buildMixedAudio(meeting);
+    const mixedAudioFile = await runMeetingEndStep(
+      meeting,
+      "build-mixed-audio",
+      () => buildMixedAudio(meeting),
+      {
+        metadata: {
+          speakerTrackCount: meeting.audioData.speakerTracks?.size ?? 0,
+        },
+      },
+    );
     const outputAudioFile = mixedAudioFile ?? combinedAudioFile;
 
-    const splitAudioDir = path.join(meetingTempDir, "split");
-    const splitFiles = await splitAudioIntoChunks(
-      outputAudioFile,
-      splitAudioDir,
+    const splitAudioDir = path.join(meetingTempDir, "c");
+    const splitFiles = await runMeetingEndStep(
+      meeting,
+      "split-audio",
+      () => splitAudioIntoChunks(outputAudioFile, splitAudioDir),
+      {
+        input: {
+          outputAudioFile,
+        },
+      },
     );
 
-    await sendEndEmbed(chatLogFilePath, splitFiles);
+    await runMeetingEndStep(meeting, "send-end-embed", () =>
+      sendEndEmbed(chatLogFilePath, splitFiles),
+    );
 
     let transcriptForUpload: string | undefined;
     const transcriptionsReady = meeting.audioData.audioFiles.every(
@@ -249,19 +297,40 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
         waitingForTranscriptionsMessage = await meeting.textChannel.send(
           "Processing transcription... please wait...",
         );
-        await waitForFinishProcessing(meeting);
+        const pending = meeting.audioData.audioFiles.filter(
+          (file) => file.processing,
+        ).length;
+        console.log(
+          `Waiting for transcriptions to finish: pending=${pending} meetingId=${meeting.meetingId}`,
+        );
+        await runMeetingEndStep(
+          meeting,
+          "wait-transcriptions",
+          () => waitForFinishProcessing(meeting),
+          {
+            metadata: {
+              pending,
+            },
+          },
+        );
       }
 
-      const transcriptions = await compileTranscriptions(client, meeting);
+      const transcriptions = await runMeetingEndStep(
+        meeting,
+        "compile-transcriptions",
+        () => compileTranscriptions(client, meeting),
+      );
       meeting.finalTranscript = transcriptions;
 
       const transcriptionFilePath = path.join(
         meetingTempDir,
-        `transcription-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`,
+        "transcription.txt",
       );
       writeFileSync(transcriptionFilePath, transcriptions);
 
-      await sendTranscriptionFiles(meeting, transcriptionFilePath);
+      await runMeetingEndStep(meeting, "send-transcriptions", () =>
+        sendTranscriptionFiles(meeting, transcriptionFilePath),
+      );
 
       deleteIfExists(transcriptionFilePath);
 
@@ -273,32 +342,48 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
         const waitingForMeetingNotesMessage = await meeting.textChannel.send(
           "Generating meeting notes... please wait...",
         );
-        await generateAndSendNotes(meeting);
+        await runMeetingEndStep(meeting, "generate-notes", () =>
+          generateAndSendNotes(meeting),
+        );
         await waitingForMeetingNotesMessage.delete();
       }
 
-      transcriptForUpload = await compileTranscriptions(client, meeting, {
-        includeCues: true,
-      });
+      transcriptForUpload = await runMeetingEndStep(
+        meeting,
+        "compile-transcriptions-upload",
+        () =>
+          compileTranscriptions(client, meeting, {
+            includeCues: true,
+          }),
+      );
     }
 
     // Upload artifacts after transcript generation (or audio/chat only)
-    await uploadMeetingArtifacts(meeting, {
-      audioFilePath: outputAudioFile,
-      chatFilePath: chatLogFilePath,
-      transcriptText: transcriptForUpload,
-    });
+    await runMeetingEndStep(meeting, "upload-artifacts", () =>
+      uploadMeetingArtifacts(meeting, {
+        audioFilePath: outputAudioFile,
+        chatFilePath: chatLogFilePath,
+        transcriptText: transcriptForUpload,
+      }),
+    );
 
     deleteIfExists(chatLogFilePath);
     deleteIfExists(outputAudioFile);
-    if (mixedAudioFile && mixedAudioFile !== combinedAudioFile) {
+    if (outputAudioFile !== combinedAudioFile) {
+      // Only delete the combined file when a separate mixed file was used.
       deleteIfExists(combinedAudioFile);
     }
-    await cleanupAudioSegments(meeting);
+    await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>
+      cleanupSpeakerTracks(meeting),
+    );
 
     // Save meeting history to database before cleanup
-    await saveMeetingHistoryToDatabase(meeting);
-    await maybeSendMinutesLimitNotice(meeting);
+    await runMeetingEndStep(meeting, "save-meeting-history", () =>
+      saveMeetingHistoryToDatabase(meeting),
+    );
+    await runMeetingEndStep(meeting, "minutes-limit-notice", () =>
+      maybeSendMinutesLimitNotice(meeting),
+    );
 
     meeting.setFinished();
     meeting.finished = true;

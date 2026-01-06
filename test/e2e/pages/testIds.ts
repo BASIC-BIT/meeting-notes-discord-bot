@@ -25,6 +25,8 @@ export const testIds = {
     drawerContent: "meeting-drawer-content",
     summaryScroll: "meeting-summary-scroll",
     summaryViewport: "meeting-summary-scroll-viewport",
+    timelineViewport: "meeting-timeline-scroll-viewport",
+    fullscreenToggle: "meeting-fullscreen-toggle",
     download: "meeting-download",
     archive: "meeting-archive",
     unarchive: "meeting-unarchive",

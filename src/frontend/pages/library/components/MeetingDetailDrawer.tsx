@@ -26,6 +26,7 @@ import { notifications } from "@mantine/notifications";
 import {
   IconArchive,
   IconArchiveOff,
+  IconCopy,
   IconDownload,
   IconFilter,
   IconMicrophone,
@@ -130,6 +131,18 @@ type MeetingDetailDrawerProps = {
   onClose: () => void;
 };
 
+type ViewportTestIdProps = HTMLAttributes<HTMLDivElement> & {
+  "data-testid": string;
+};
+
+const summaryViewportProps: ViewportTestIdProps = {
+  "data-testid": "meeting-summary-scroll-viewport",
+};
+
+const timelineViewportProps: ViewportTestIdProps = {
+  "data-testid": "meeting-timeline-scroll-viewport",
+};
+
 export default function MeetingDetailDrawer({
   opened,
   selectedMeetingId,
@@ -142,6 +155,7 @@ export default function MeetingDetailDrawer({
   const theme = useMantineTheme();
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
+  const drawerOffset = theme.spacing.sm;
   const trpcUtils = trpc.useUtils();
 
   const [activeFilters, setActiveFilters] = useState<MeetingEventType[]>(
@@ -186,6 +200,9 @@ export default function MeetingDetailDrawer({
   const archiveMutation = trpc.meetings.setArchived.useMutation();
   const renameMutation = trpc.meetings.rename.useMutation();
   const feedbackMutation = trpc.feedback.submitSummary.useMutation();
+
+  const summaryCopyText = detail?.notes ?? "";
+  const canCopySummary = summaryCopyText.trim().length > 0;
 
   useEffect(() => {
     if (!meeting) return;
@@ -370,6 +387,23 @@ export default function MeetingDetailDrawer({
     setFeedbackDraft("");
   };
 
+  const handleCopySummary = async () => {
+    if (!canCopySummary) return;
+    try {
+      await navigator.clipboard.writeText(summaryCopyText);
+      notifications.show({
+        color: "green",
+        message: "Summary copied to clipboard.",
+      });
+    } catch (err) {
+      notifications.show({
+        color: "red",
+        message: "Unable to copy the summary. Please try again.",
+      });
+      console.error("Failed to copy summary", err);
+    }
+  };
+
   const handleDownload = () => {
     if (!detail || !meeting) return;
     const payload: MeetingExport = {
@@ -426,7 +460,7 @@ export default function MeetingDetailDrawer({
       {meeting.audioUrl ? (
         <audio
           controls
-          preload="none"
+          preload="metadata"
           style={{ width: "100%" }}
           src={meeting.audioUrl}
         />
@@ -495,6 +529,15 @@ export default function MeetingDetailDrawer({
           >
             <IconThumbDown size={14} />
           </ActionIcon>
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            onClick={handleCopySummary}
+            disabled={!canCopySummary}
+            aria-label="Copy summary as Markdown"
+          >
+            <IconCopy size={14} />
+          </ActionIcon>
         </Group>
       </Group>
       {fullScreen ? (
@@ -505,11 +548,7 @@ export default function MeetingDetailDrawer({
           offsetScrollbars
           data-visual-scroll
           data-testid="meeting-summary-scroll"
-          viewportProps={
-            {
-              "data-testid": "meeting-summary-scroll-viewport",
-            } as HTMLAttributes<HTMLDivElement>
-          }
+          viewportProps={summaryViewportProps}
         >
           <Stack gap="sm">{summaryBody}</Stack>
         </ScrollArea>
@@ -556,12 +595,14 @@ export default function MeetingDetailDrawer({
       onClose={handleCloseDrawer}
       position="right"
       size={fullScreen ? "100%" : "xl"}
+      offset={drawerOffset}
       overlayProps={uiOverlays.modal}
       data-testid="meeting-drawer"
       styles={{
         content: {
           backgroundColor: isDark ? theme.colors.dark[7] : theme.white,
           height: "100%",
+          overflow: "hidden",
         },
         inner: {
           height: "100%",
@@ -800,6 +841,7 @@ export default function MeetingDetailDrawer({
                         variant={fullScreen ? "outline" : "light"}
                         leftSection={<IconFilter size={16} />}
                         onClick={() => setFullScreen((prev) => !prev)}
+                        data-testid="meeting-fullscreen-toggle"
                       >
                         {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
                       </Button>
@@ -824,17 +866,23 @@ export default function MeetingDetailDrawer({
                 </Stack>
 
                 {fullScreen ? (
-                  <Grid gutter="lg" style={{ flex: 1, minHeight: 0 }}>
+                  <Grid
+                    gutter="lg"
+                    style={{ flex: 1, minHeight: 0, height: "100%" }}
+                    align="stretch"
+                    styles={{ inner: { height: "100%" } }}
+                  >
                     <Grid.Col
                       span={{ base: 12, lg: 5 }}
                       style={{
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,
+                        height: "100%",
                       }}
                     >
                       <ScrollArea
-                        style={{ flex: 1, minHeight: 0 }}
+                        style={{ flex: 1, minHeight: 0, height: "100%" }}
                         offsetScrollbars
                         data-visual-scroll
                       >
@@ -851,9 +899,13 @@ export default function MeetingDetailDrawer({
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,
+                        height: "100%",
                       }}
                     >
-                      <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>
+                      <Stack
+                        gap="sm"
+                        style={{ flex: 1, minHeight: 0, height: "100%" }}
+                      >
                         {liveStreamEnabled && liveStream.status === "error" ? (
                           <Text size="sm" c="dimmed">
                             Unable to connect to the live transcript. Try
@@ -867,6 +919,8 @@ export default function MeetingDetailDrawer({
                             minHeight: 0,
                             display: "flex",
                             flexDirection: "column",
+                            overflow: "hidden",
+                            height: "100%",
                           }}
                         >
                           <MeetingTimeline
@@ -882,6 +936,7 @@ export default function MeetingDetailDrawer({
                             height="100%"
                             title="Transcript"
                             emptyLabel={timelineEmptyLabel}
+                            viewportProps={timelineViewportProps}
                           />
                         </Surface>
                       </Stack>

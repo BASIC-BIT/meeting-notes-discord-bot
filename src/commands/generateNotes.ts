@@ -31,6 +31,7 @@ export async function generateAndSendNotes(meeting: MeetingData) {
       previousSummaryLabel: meeting.summaryLabel,
       parentSpanContext: meeting.langfuseParentSpanContext,
       modelParams: meeting.runtimeConfig?.modelParams?.meetingSummary,
+      modelOverride: meeting.runtimeConfig?.modelChoices?.meetingSummary,
     });
     meeting.summarySentence = summaries.summarySentence;
     meeting.summaryLabel = summaries.summaryLabel;
