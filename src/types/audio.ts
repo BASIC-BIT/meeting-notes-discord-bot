@@ -56,12 +56,12 @@ export interface AudioFileData {
   audioOnlyProcessingPromise?: Promise<void>;
 }
 
-export interface AudioSegmentFile {
+export interface SpeakerTrackFile {
   filePath: string;
-  offsetMs: number;
-  durationMs: number;
   userId: string;
+  lastEndMs: number;
   source?: AudioSegmentSource;
+  writePromise?: Promise<void>;
 }
 
 export interface AudioData {
@@ -73,10 +73,9 @@ export interface AudioData {
   audioPassThrough?: PassThrough;
   outputFileName?: string;
   ffmpegProcess?: FfmpegCommand;
-  audioSegments?: AudioSegmentFile[];
-  segmentWritePromises?: Promise<void>[];
-  segmentDir?: string;
-  segmentSequence?: number;
+  speakerTracks?: Map<string, SpeakerTrackFile>;
+  speakerTrackDir?: string;
+  missingStartWarnings?: Set<string>;
 }
 
 export interface ChunkInfo {

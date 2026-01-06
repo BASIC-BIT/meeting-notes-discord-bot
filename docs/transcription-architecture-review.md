@@ -11,6 +11,7 @@ See `docs/audio-pipeline.md` for the audio file inventory and fallback behavior.
 ## Current pipeline summary
 
 - Voice is captured per speaker, chunked into snippets, and transcribed as fast and slow variants.
+- Speaker tracks are assembled from snippet audio, then mixed at meeting end with a single amix pass.
 - Transcription calls are rate limited and serialized by a Bottleneck limiter, then retried by Cockatiel policies.
 - End meeting waits for pending transcriptions, generates notes, uploads artifacts, and cleans up audio.
 
@@ -27,6 +28,7 @@ See `docs/audio-pipeline.md` for the audio file inventory and fallback behavior.
 - Background Langfuse audio attachments to remove ffmpeg from the hot transcription path.
 - Better end meeting tracing, with step durations recorded in Langfuse and logs.
 - Modest concurrency increase for transcription to reduce backlog.
+- Replace per-snippet mixing with per-speaker tracks to keep ffmpeg work bounded.
 
 ## Observability additions
 
@@ -40,9 +42,10 @@ See `docs/audio-pipeline.md` for the audio file inventory and fallback behavior.
 - Queue transcription jobs with a bounded worker pool and persist work state for recovery.
 - Add a dedicated attachment queue for Langfuse media with a hard concurrency cap.
 - Consider moving artifact uploads and summary generation to a background job if latency is more important than immediacy.
+- Follow up with a storage offload plan for long meetings, for example persisting speaker tracks or mixed chunks to S3 as they are produced.
 
 ## Open questions
 
 - Where should heavy ffmpeg work live long term, ECS task or worker queue.
-- Should we store audio segments in S3 as we go to support reprocessing.
+- Should we store speaker tracks in S3 as we go to support reprocessing.
 - What response time is acceptable between end meeting and summary delivery.

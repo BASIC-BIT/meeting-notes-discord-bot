@@ -4,11 +4,10 @@ import path from "node:path";
 import type { ChunkInfo } from "../types/audio";
 import {
   buildMixedAudio,
-  cleanupAudioSegments,
+  cleanupSpeakerTracks,
   closeOutputFile,
   compileTranscriptions,
   splitAudioIntoChunks,
-  stitchAudioSegments,
   startProcessingSnippet,
   waitForAudioOnlyFinishProcessing,
   waitForFinishProcessing,
@@ -250,8 +249,8 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
       await runMeetingEndStep(meeting, "auto-record-cancel-flow", () =>
         handleAutoRecordCancellation(meeting, chatLogFilePath),
       );
-      await runMeetingEndStep(meeting, "cleanup-audio-segments", () =>
-        cleanupAudioSegments(meeting),
+      await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>
+        cleanupSpeakerTracks(meeting),
       );
       return;
     }
@@ -263,17 +262,11 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
       () => buildMixedAudio(meeting),
       {
         metadata: {
-          segmentCount: meeting.audioData.audioSegments?.length ?? 0,
+          speakerTrackCount: meeting.audioData.speakerTracks?.size ?? 0,
         },
       },
     );
-    const stitchedAudioFile =
-      mixedAudioFile ??
-      (await runMeetingEndStep(meeting, "stitch-audio", () =>
-        stitchAudioSegments(meeting),
-      ));
-    const outputAudioFile =
-      mixedAudioFile ?? stitchedAudioFile ?? combinedAudioFile;
+    const outputAudioFile = mixedAudioFile ?? combinedAudioFile;
 
     const splitAudioDir = path.join(meetingTempDir, "c");
     const splitFiles = await runMeetingEndStep(
@@ -379,8 +372,8 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
     if (outputAudioFile !== combinedAudioFile) {
       deleteIfExists(combinedAudioFile);
     }
-    await runMeetingEndStep(meeting, "cleanup-audio-segments", () =>
-      cleanupAudioSegments(meeting),
+    await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>
+      cleanupSpeakerTracks(meeting),
     );
 
     // Save meeting history to database before cleanup

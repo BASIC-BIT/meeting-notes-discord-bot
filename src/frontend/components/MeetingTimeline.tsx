@@ -1,4 +1,9 @@
-import type { ComponentType, ReactNode, RefObject } from "react";
+import type {
+  ComponentType,
+  HTMLAttributes,
+  ReactNode,
+  RefObject,
+} from "react";
 import {
   Box,
   Button,
@@ -60,6 +65,7 @@ type MeetingTimelineProps = {
   headerActions?: ReactNode;
   showFilters?: boolean;
   viewportRef?: RefObject<HTMLDivElement | null>;
+  viewportProps?: HTMLAttributes<HTMLDivElement>;
 };
 
 export default function MeetingTimeline({
@@ -72,6 +78,7 @@ export default function MeetingTimeline({
   headerActions,
   showFilters = true,
   viewportRef,
+  viewportProps,
 }: MeetingTimelineProps) {
   const theme = useMantineTheme();
   const scheme = useComputedColorScheme("dark");
@@ -124,6 +131,7 @@ export default function MeetingTimeline({
         {...scrollAreaProps}
         offsetScrollbars
         viewportRef={viewportRef}
+        viewportProps={viewportProps}
         data-visual-scroll
       >
         {visibleEvents.length === 0 ? (

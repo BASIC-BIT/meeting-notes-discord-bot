@@ -12,10 +12,10 @@ import {
 } from "./constants";
 import {
   AudioFileData,
-  AudioSegmentFile,
   AudioSnippet,
   ChunkInfo,
   SpeakerState,
+  SpeakerTrackFile,
 } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType, VoiceConnectionStatus } from "@discordjs/voice";
@@ -110,6 +110,20 @@ function getSpeakerState(
   userId: string,
 ): SpeakerState | undefined {
   return getSpeakerStates(meeting).get(userId);
+}
+
+function warnMissingSnippetStart(meeting: MeetingData, userId: string) {
+  if (!meeting.audioData.missingStartWarnings) {
+    meeting.audioData.missingStartWarnings = new Set();
+  }
+  if (meeting.audioData.missingStartWarnings.has(userId)) {
+    return;
+  }
+  meeting.audioData.missingStartWarnings.add(userId);
+  const speakerLabel = resolveSpeakerLabel(meeting, userId);
+  console.warn(
+    `Missing speaking start timestamp, using receipt time for snippet: guildId=${meeting.guildId} channelId=${meeting.channelId} meetingId=${meeting.meetingId} userId=${userId} speaker=${speakerLabel}`,
+  );
 }
 
 function getVoiceSubscriptions(
@@ -249,26 +263,40 @@ function getTranscriptionTiming(meeting: MeetingData) {
   };
 }
 
-function getSegmentDir(meeting: MeetingData): string {
-  if (meeting.audioData.segmentDir) {
-    return meeting.audioData.segmentDir;
+const SPEAKER_TRACK_SILENCE_CHUNK_MS = 250;
+
+function getSpeakerTrackDir(meeting: MeetingData): string {
+  if (meeting.audioData.speakerTrackDir) {
+    return meeting.audioData.speakerTrackDir;
   }
-  const dir = path.join(getMeetingTempDir(meeting), "s");
-  meeting.audioData.segmentDir = dir;
+  const dir = path.join(getMeetingTempDir(meeting), "t");
+  meeting.audioData.speakerTrackDir = dir;
   return dir;
 }
 
-function getNextSegmentSequence(meeting: MeetingData): number {
-  const next = (meeting.audioData.segmentSequence ?? 0) + 1;
-  meeting.audioData.segmentSequence = next;
-  return next;
+function getSpeakerTracks(meeting: MeetingData): Map<string, SpeakerTrackFile> {
+  if (!meeting.audioData.speakerTracks) {
+    meeting.audioData.speakerTracks = new Map();
+  }
+  return meeting.audioData.speakerTracks;
 }
 
-function trackSegmentWrite(meeting: MeetingData, promise: Promise<void>) {
-  if (!meeting.audioData.segmentWritePromises) {
-    meeting.audioData.segmentWritePromises = [];
-  }
-  meeting.audioData.segmentWritePromises.push(promise);
+function getOrCreateSpeakerTrack(
+  meeting: MeetingData,
+  userId: string,
+): SpeakerTrackFile {
+  const tracks = getSpeakerTracks(meeting);
+  const existing = tracks.get(userId);
+  if (existing) return existing;
+  const dir = getSpeakerTrackDir(meeting);
+  const track: SpeakerTrackFile = {
+    userId,
+    filePath: path.join(dir, `t_${userId}.pcm`),
+    lastEndMs: 0,
+    source: "voice",
+  };
+  tracks.set(userId, track);
+  return track;
 }
 
 async function appendBufferToStream(
@@ -287,34 +315,20 @@ async function appendBufferToStream(
   });
 }
 
-async function appendFileToStream(
+async function appendSilenceToStream(
   outputStream: fs.WriteStream,
-  filePath: string,
+  durationMs: number,
 ): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const input = fs.createReadStream(filePath);
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onEnd = () => {
-      cleanup();
-      resolve();
-    };
-    const cleanup = () => {
-      input.removeListener("error", onError);
-      outputStream.removeListener("error", onError);
-      input.removeListener("end", onEnd);
-    };
-
-    input.on("error", onError);
-    outputStream.on("error", onError);
-    input.on("end", onEnd);
-    input.pipe(outputStream, { end: false });
-  });
+  let remainingMs = durationMs;
+  while (remainingMs > 0) {
+    const chunkMs = Math.min(remainingMs, SPEAKER_TRACK_SILENCE_CHUNK_MS);
+    const silence = generateSilentBuffer(chunkMs, RECORD_SAMPLE_RATE, CHANNELS);
+    await appendBufferToStream(outputStream, silence);
+    remainingMs -= chunkMs;
+  }
 }
 
-async function persistSnippetAudioSegment(
+async function persistSnippetSpeakerTrack(
   meeting: MeetingData,
   snippet: AudioSnippet,
 ) {
@@ -327,34 +341,34 @@ async function persistSnippetAudioSegment(
   if (durationMs <= 0) return;
 
   const offsetMs = Math.max(0, snippet.timestamp - meeting.startTime.getTime());
-  const dir = getSegmentDir(meeting);
-  await fs.promises.mkdir(dir, { recursive: true });
-
-  const sequence = getNextSegmentSequence(meeting);
-  const filePath = path.join(dir, `s_${sequence}.pcm`);
-
-  const writePromise = fs.promises
-    .writeFile(filePath, buffer)
-    .catch((error) => {
+  const track = getOrCreateSpeakerTrack(meeting, snippet.userId);
+  const writeTask = async () => {
+    await fs.promises.mkdir(getSpeakerTrackDir(meeting), { recursive: true });
+    const outputStream = fs.createWriteStream(track.filePath, { flags: "a" });
+    try {
+      const gapMs = Math.max(0, offsetMs - track.lastEndMs);
+      if (gapMs > 0) {
+        await appendSilenceToStream(outputStream, gapMs);
+      }
+      await appendBufferToStream(outputStream, buffer);
+      await new Promise<void>((resolve, reject) => {
+        outputStream.end(() => resolve());
+        outputStream.on("error", (error) => reject(error));
+      });
+      track.lastEndMs = Math.max(track.lastEndMs, offsetMs + durationMs);
+    } catch (error) {
       console.error(
-        `Failed to persist audio segment for user ${snippet.userId}:`,
+        `Failed to persist speaker track for user ${snippet.userId}:`,
         error,
       );
-    }) as Promise<void>;
-
-  trackSegmentWrite(meeting, writePromise);
-
-  const segment: AudioSegmentFile = {
-    filePath,
-    offsetMs,
-    durationMs,
-    userId: snippet.userId,
-    source: "voice",
+      outputStream.destroy();
+    }
   };
-  if (!meeting.audioData.audioSegments) {
-    meeting.audioData.audioSegments = [];
-  }
-  meeting.audioData.audioSegments.push(segment);
+
+  const chained = (track.writePromise ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(writeTask);
+  track.writePromise = chained;
 }
 
 function getOrCreateAudioFileData(
@@ -439,6 +453,9 @@ export function updateSnippetsIfNecessary(
   let snippet = meeting.audioData.currentSnippets.get(userId);
 
   if (!snippet) {
+    if (options.startTimestamp === undefined) {
+      warnMissingSnippetStart(meeting, userId);
+    }
     snippet = generateNewSnippet(userId, options.startTimestamp);
     meeting.audioData.currentSnippets.set(userId, snippet);
   } else {
@@ -461,7 +478,7 @@ export function startProcessingSnippet(
   const snippet = meeting.audioData.currentSnippets.get(userId);
   if (!snippet) return;
 
-  void persistSnippetAudioSegment(meeting, snippet);
+  void persistSnippetSpeakerTrack(meeting, snippet);
   snippet.fastRevision = (snippet.fastRevision ?? 0) + 1;
 
   const audioFileData = getOrCreateAudioFileData(meeting, snippet);
@@ -988,37 +1005,73 @@ export function closeOutputFile(meeting: MeetingData): Promise<void> {
   });
 }
 
-async function waitForSegmentWrites(meeting: MeetingData) {
-  const writes = meeting.audioData.segmentWritePromises;
-  if (!writes || writes.length === 0) return;
+async function waitForSpeakerTrackWrites(meeting: MeetingData) {
+  const tracks = meeting.audioData.speakerTracks;
+  if (!tracks || tracks.size === 0) return;
+  const writes = Array.from(tracks.values())
+    .map((track) => track.writePromise)
+    .filter((promise): promise is Promise<void> => Boolean(promise));
+  if (writes.length === 0) return;
   await Promise.all(writes);
 }
 
 export async function buildMixedAudio(
   meeting: MeetingData,
 ): Promise<string | undefined> {
-  const segments = meeting.audioData.audioSegments ?? [];
-  if (segments.length < 2) return undefined;
+  const tracks = Array.from(meeting.audioData.speakerTracks?.values() ?? []);
+  if (tracks.length === 0) return undefined;
 
   await ensureMeetingTempDir(meeting);
-  await waitForSegmentWrites(meeting);
+  await waitForSpeakerTrackWrites(meeting);
 
-  const usable = segments.filter(
-    (segment) => segment.durationMs > 0 && fs.existsSync(segment.filePath),
-  );
-  if (usable.length < 2) return undefined;
+  const usable = tracks.filter((track) => {
+    if (!fs.existsSync(track.filePath)) return false;
+    try {
+      const stats = fs.statSync(track.filePath);
+      return stats.size > 0;
+    } catch {
+      return false;
+    }
+  });
+  if (usable.length === 0) return undefined;
 
   const outputFileName = path.join(
     getMeetingTempDir(meeting),
     "recording_mixed.mp3",
   );
 
+  if (usable.length === 1) {
+    return await new Promise<string | undefined>((resolve) => {
+      ffmpeg(usable[0].filePath)
+        .inputOptions([
+          "-f s16le",
+          `-ar ${RECORD_SAMPLE_RATE}`,
+          `-ac ${CHANNELS}`,
+        ])
+        .audioCodec("libmp3lame")
+        .outputOptions([
+          `-b:a 128k`,
+          `-ac ${CHANNELS}`,
+          `-ar ${RECORD_SAMPLE_RATE}`,
+        ])
+        .toFormat("mp3")
+        .on("error", (err) => {
+          console.error("Failed to render single-speaker audio:", err);
+          resolve(undefined);
+        })
+        .on("end", () => {
+          resolve(outputFileName);
+        })
+        .save(outputFileName);
+    });
+  }
+
   return await new Promise<string | undefined>((resolve) => {
     const command = ffmpeg();
 
-    usable.forEach((segment) => {
+    usable.forEach((track) => {
       command
-        .input(segment.filePath)
+        .input(track.filePath)
         .inputOptions([
           "-f s16le",
           `-ar ${RECORD_SAMPLE_RATE}`,
@@ -1026,12 +1079,8 @@ export async function buildMixedAudio(
         ]);
     });
 
-    const filterParts = usable.map((segment, index) => {
-      const delay = Math.max(0, Math.round(segment.offsetMs));
-      return `[${index}:a]adelay=${delay}|${delay}[a${index}]`;
-    });
-    const mixInputs = usable.map((_segment, index) => `[a${index}]`).join("");
-    const filter = `${filterParts.join(";")};${mixInputs}amix=inputs=${usable.length}:dropout_transition=0:normalize=0[mixed]`;
+    const mixInputs = usable.map((_track, index) => `[${index}:a]`).join("");
+    const filter = `${mixInputs}amix=inputs=${usable.length}:dropout_transition=0:normalize=0[mixed]`;
 
     command
       .complexFilter(filter)
@@ -1053,111 +1102,15 @@ export async function buildMixedAudio(
   });
 }
 
-export async function stitchAudioSegments(
-  meeting: MeetingData,
-): Promise<string | undefined> {
-  const segments = meeting.audioData.audioSegments ?? [];
-  if (segments.length === 0) return undefined;
-
-  await ensureMeetingTempDir(meeting);
-  await waitForSegmentWrites(meeting);
-
-  const usable = segments
-    .filter(
-      (segment) => segment.durationMs > 0 && fs.existsSync(segment.filePath),
-    )
-    .sort((a, b) => a.offsetMs - b.offsetMs);
-
-  if (usable.length === 0) return undefined;
-
-  const pcmPath = path.join(
-    getMeetingTempDir(meeting),
-    "recording_stitched.pcm",
-  );
-  const outputFileName = path.join(
-    getMeetingTempDir(meeting),
-    "recording_stitched.mp3",
-  );
-
-  const outputStream = fs.createWriteStream(pcmPath);
-  let previousEndMs = 0;
-
-  try {
-    for (const segment of usable) {
-      const gapMs = segment.offsetMs - previousEndMs;
-      if (gapMs > 0) {
-        const silence = generateSilentBuffer(
-          gapMs,
-          RECORD_SAMPLE_RATE,
-          CHANNELS,
-        );
-        await appendBufferToStream(outputStream, silence);
-      }
-
-      await appendFileToStream(outputStream, segment.filePath);
-      previousEndMs = Math.max(
-        previousEndMs,
-        segment.offsetMs + segment.durationMs,
-      );
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      outputStream.end(() => resolve());
-      outputStream.on("error", (error) => reject(error));
-    });
-  } catch (error) {
-    console.error("Failed to stitch audio segments:", error);
-    outputStream.destroy();
-    try {
-      await fs.promises.rm(pcmPath, { force: true });
-    } catch (cleanupError) {
-      console.warn("Failed to cleanup stitched PCM file:", cleanupError);
-    }
-    return undefined;
-  }
-
-  const stitched = await new Promise<string | undefined>((resolve) => {
-    ffmpeg(pcmPath)
-      .inputOptions([
-        "-f s16le",
-        `-ar ${RECORD_SAMPLE_RATE}`,
-        `-ac ${CHANNELS}`,
-      ])
-      .audioCodec("libmp3lame")
-      .outputOptions([
-        `-b:a 128k`,
-        `-ac ${CHANNELS}`,
-        `-ar ${RECORD_SAMPLE_RATE}`,
-      ])
-      .toFormat("mp3")
-      .on("error", (err) => {
-        console.error("Failed to encode stitched audio:", err);
-        resolve(undefined);
-      })
-      .on("end", () => {
-        resolve(outputFileName);
-      })
-      .save(outputFileName);
-  });
-
-  try {
-    await fs.promises.rm(pcmPath, { force: true });
-  } catch (cleanupError) {
-    console.warn("Failed to cleanup stitched PCM file:", cleanupError);
-  }
-
-  return stitched;
-}
-
-export async function cleanupAudioSegments(
+export async function cleanupSpeakerTracks(
   meeting: MeetingData,
 ): Promise<void> {
-  const dir = meeting.audioData.segmentDir;
+  const dir = meeting.audioData.speakerTrackDir;
   if (!dir) return;
   try {
     await fs.promises.rm(dir, { recursive: true, force: true });
   } catch (error) {
-    console.error("Failed to clean up audio segment files:", error);
+    console.error("Failed to clean up speaker track files:", error);
   }
 }
 
@@ -1204,34 +1157,34 @@ export async function splitAudioIntoChunks(
     await fs.promises.mkdir(outputDir, { recursive: true });
 
     let startTime = 0;
-    const chunkPromises: Promise<ChunkInfo>[] = [];
+    const chunks: ChunkInfo[] = [];
 
     for (let i = 0; i < numChunks; i++) {
       const chunkFileName = path.join(outputDir, `c_${i}.mp3`);
       const endTime = Math.min(startTime + maxChunkDuration, duration);
 
-      chunkPromises.push(
-        new Promise<ChunkInfo>((resolve, reject) => {
-          ffmpeg(inputFile)
-            .setStartTime(startTime)
-            .setDuration(endTime - startTime)
-            .output(chunkFileName)
-            .on("end", () => {
-              console.log(`Chunk ${i} saved: ${chunkFileName}`);
-              resolve({ start: startTime, end: endTime, file: chunkFileName });
-            })
-            .on("error", (err: Error) => {
-              console.error(`Error splitting chunk ${i}: ${err.message}`);
-              reject(err);
-            })
-            .run();
-        }),
-      );
+      // Run sequentially to avoid CPU spikes from multiple concurrent ffmpeg processes.
+      const chunkInfo = await new Promise<ChunkInfo>((resolve, reject) => {
+        ffmpeg(inputFile)
+          .setStartTime(startTime)
+          .setDuration(endTime - startTime)
+          .output(chunkFileName)
+          .on("end", () => {
+            console.log(`Chunk ${i} saved: ${chunkFileName}`);
+            resolve({ start: startTime, end: endTime, file: chunkFileName });
+          })
+          .on("error", (err: Error) => {
+            console.error(`Error splitting chunk ${i}: ${err.message}`);
+            reject(err);
+          })
+          .run();
+      });
 
+      chunks.push(chunkInfo);
       startTime += maxChunkDuration;
     }
 
-    return Promise.all(chunkPromises);
+    return chunks;
   } catch (err) {
     console.error(`Error splitting audio: ${err}`);
     throw err;

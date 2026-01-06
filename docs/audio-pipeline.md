@@ -8,9 +8,9 @@ and how we recover when mixing fails.
 1. Discord voice receiver yields Opus packets for each user.
 2. We decode Opus to PCM and write it to:
    - The live combined MP3 stream.
-   - Per-snippet PCM files for transcription and post processing.
-3. At meeting end we attempt to produce a mixed MP3 from per-snippet segments.
-4. If mixing fails, we fall back to a stitched MP3, then to the combined MP3.
+   - Per-speaker PCM tracks built at snippet boundaries.
+3. At meeting end we attempt to produce a mixed MP3 from the speaker tracks.
+4. If mixing fails or no usable speaker tracks exist, we fall back to the combined MP3.
 
 ## File types and naming
 
@@ -20,27 +20,19 @@ All files live under `tmp/meetings/m/<meetingId>/`.
 
 - Path: `recording.mp3`
 - Produced continuously during the meeting by piping decoded PCM into ffmpeg.
-- Used when mixing and stitching are unavailable.
+- Used when mixing is unavailable.
 
-### Per-snippet PCM segments
+### Per-speaker PCM tracks
 
-- Path: `s/s_<sequence>.pcm`
-- Each segment corresponds to a single speaker snippet.
-- Used for transcription, mixing, and stitching.
+- Path: `t/t_<userId>.pcm`
+- Each track is a time aligned PCM stream for a single speaker.
+- Used for meeting end mixing.
 
-### Mixed MP3
+### Mixed MP3 (preferred)
 
 - Path: `recording_mixed.mp3`
-- Built at meeting end with a single ffmpeg command that applies per-segment
-  delay and `amix` to align speakers on the timeline.
-- Preferred output if it succeeds.
-
-### Stitched MP3
-
-- Path: `recording_stitched.mp3`
-- Built by ordering segment PCM files by timestamp, inserting silence for gaps,
-  then encoding the resulting PCM to MP3.
-- Used only if mixing fails.
+- Built at meeting end with a single ffmpeg `amix` across speaker tracks.
+- Preferred output when at least one speaker track is present.
 
 ### Split chunks for uploads
 

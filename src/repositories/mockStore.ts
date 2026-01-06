@@ -511,11 +511,17 @@ function buildDefaultStore(): MockStore {
     ).toISOString();
     const channelId_timestamp = `${params.channelId}#${timestamp}`;
     const transcriptKey = `mock/transcripts/${params.guildId}/${params.channelId}-${params.meetingIdSuffix}.json`;
+    const transcriptSpeakers = ["GM", "Rin", "Ada", "Chronote"];
     const transcriptLines = [
       { speaker: "GM", text: "The party returns to the vault entrance." },
       { speaker: "Rin", text: "We should secure allies before midnight." },
       { speaker: "Ada", text: "I want a favor in return." },
+      ...Array.from({ length: 36 }, (_, index) => ({
+        speaker: transcriptSpeakers[index % transcriptSpeakers.length],
+        text: `Extended transcript detail ${index + 1} for timeline overflow.`,
+      })),
     ];
+    const transcriptLineIntervalMs = 60 * 1000;
     const segments = transcriptLines.map((line, index) => ({
       userId: `mock-${line.speaker.toLowerCase()}`,
       username: line.speaker.toLowerCase(),
@@ -523,7 +529,7 @@ function buildDefaultStore(): MockStore {
       serverNickname: line.speaker,
       tag: line.speaker,
       startedAt: new Date(
-        Date.parse(timestamp) + index * 90 * 1000,
+        Date.parse(timestamp) + index * transcriptLineIntervalMs,
       ).toISOString(),
       text: line.text,
     }));
