@@ -25,6 +25,7 @@ type MeetingSummaryInput = {
   previousSummaryLabel?: string;
   parentSpanContext?: SpanContext;
   modelParams?: ModelParamConfig;
+  modelOverride?: string;
 };
 
 function normalizeSummarySentence(value?: string): string | undefined {
@@ -109,7 +110,15 @@ export async function generateMeetingSummaries(
   });
 
   try {
-    const modelChoice = getModelChoice("meetingSummary");
+    const overrides = input.modelOverride
+      ? {
+          meetingSummary: {
+            provider: "openai" as const,
+            model: input.modelOverride,
+          },
+        }
+      : undefined;
+    const modelChoice = getModelChoice("meetingSummary", overrides);
     const chatParams = resolveChatParamsForRole({
       role: "meetingSummary",
       model: modelChoice.model,

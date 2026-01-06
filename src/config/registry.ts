@@ -15,6 +15,13 @@ import {
   MODEL_VERBOSITY_OPTIONS,
   buildModelParamKey,
 } from "./modelParams";
+import {
+  MODEL_SELECTION_DEFAULTS,
+  MODEL_SELECTION_OPTIONS,
+  MODEL_SELECTION_ROLE_LABELS,
+  MODEL_SELECTION_ROLES,
+  buildModelSelectionKey,
+} from "./modelChoices";
 
 const scope = (
   enabled: boolean,
@@ -96,6 +103,27 @@ const buildModelParamEntries = (): ConfigEntry[] =>
     ];
   });
 
+const buildModelSelectionEntries = (): ConfigEntry[] =>
+  MODEL_SELECTION_ROLES.map((role) => {
+    const labelBase = MODEL_SELECTION_ROLE_LABELS[role];
+    const category = "Models";
+    const group: ConfigEntry["group"] = "Advanced";
+    return {
+      key: buildModelSelectionKey(role),
+      label: `${labelBase} model`,
+      description: `Model used for ${labelBase.toLowerCase()}.`,
+      category,
+      group,
+      valueType: "select",
+      defaultValue: MODEL_SELECTION_DEFAULTS[role],
+      scopes: {
+        global: scope(true, true, "superadmin", "select"),
+        server: scope(true, false, "admin", "select"),
+      },
+      ui: { type: "select", options: MODEL_SELECTION_OPTIONS[role] },
+    };
+  });
+
 export const CONFIG_REGISTRY: ConfigEntry[] = [
   {
     key: "features.experimental",
@@ -145,23 +173,19 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
     ui: { type: "toggle" },
   },
   {
-    key: "transcription.premium.coalesce.model",
-    label: "Premium coalesce model",
-    description: "Model used to coalesce premium transcription outputs.",
-    notes:
-      "Product note: marketed as pro, currently enabled for all tiers to improve default transcription quality.",
+    key: "transcription.suppression.enabled",
+    label: "Transcription suppression",
+    description:
+      "Enable guardrails that suppress prompt-like or glossary-only transcription output.",
     category: "Transcription",
-    group: "Experimental",
-    valueType: "select",
-    defaultValue: "gpt-5-mini",
+    group: "Advanced",
+    valueType: "boolean",
+    defaultValue: true,
     scopes: {
-      global: scope(true, true, "superadmin", "select"),
-      server: scope(true, false, "admin", "select"),
+      global: scope(true, true, "superadmin", "toggle"),
+      server: scope(true, false, "admin", "tri-state"),
     },
-    ui: {
-      type: "select",
-      options: ["gpt-5-nano", "gpt-5-mini", "gpt-5.2", "gpt-5.2-pro"],
-    },
+    ui: { type: "toggle" },
   },
   {
     key: "transcription.fastSilenceMs",
@@ -605,6 +629,7 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
     },
     ui: { type: "segmented", options: ["off", "server", "public"] },
   },
+  ...buildModelSelectionEntries(),
   ...buildModelParamEntries(),
 ];
 

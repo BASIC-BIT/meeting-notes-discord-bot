@@ -1,7 +1,7 @@
 import { waitForFinishProcessing } from "../audio";
 import type { MeetingData } from "../types/meeting-data";
 import { createOpenAIClient } from "./openaiClient";
-import { getModelChoice } from "./modelFactory";
+import { buildModelOverrides, getModelChoice } from "./modelFactory";
 import { config } from "./configService";
 import { resolveChatParamsForRole } from "./openaiModelParams";
 
@@ -103,7 +103,10 @@ export async function evaluateAutoRecordCancellation(
   ].join("\n");
 
   try {
-    const modelChoice = getModelChoice("autoRecordCancel");
+    const modelChoice = getModelChoice(
+      "autoRecordCancel",
+      buildModelOverrides(meeting.runtimeConfig?.modelChoices),
+    );
     const modelParams = resolveChatParamsForRole({
       role: "autoRecordCancel",
       model: modelChoice.model,

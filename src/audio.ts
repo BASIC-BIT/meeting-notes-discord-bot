@@ -18,14 +18,15 @@ import {
   SpeakerState,
 } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
-import { EndBehaviorType } from "@discordjs/voice";
+import { EndBehaviorType, VoiceConnectionStatus } from "@discordjs/voice";
 import prism from "prism-media";
-import { PassThrough } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import {
   cleanupTranscription,
   coalesceTranscription,
   transcribeSnippet,
 } from "./transcription";
+import { buildModelOverrides, getModelChoice } from "./services/modelFactory";
 import { formatParticipantLabel } from "./utils/participants";
 import ffmpeg from "fluent-ffmpeg";
 import { Client } from "discord.js";
@@ -43,11 +44,20 @@ const TRANSCRIPTION_HEADER =
   `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
   `-----------------------------------------------------------------------------------\n`;
 
-function generateNewSnippet(userId: string): AudioSnippet {
+function generateSilentBuffer(
+  durationMs: number,
+  sampleRate: number,
+  channels: number,
+): Buffer {
+  const numSamples = Math.floor((durationMs / 1000) * sampleRate) * channels;
+  return Buffer.alloc(numSamples * BYTES_PER_SAMPLE);
+}
+
+function generateNewSnippet(userId: string, timestamp?: number): AudioSnippet {
   return {
     chunks: [],
     audioBytes: 0,
-    timestamp: Date.now(),
+    timestamp: timestamp ?? Date.now(),
     userId,
     fastRevision: 0,
     fastTranscribed: false,
@@ -64,6 +74,30 @@ type SnippetTimers = {
   slow?: NodeJS.Timeout;
 };
 
+type OpusDecoder = InstanceType<typeof prism.opus.Decoder>;
+
+type VoiceSubscriptionState = {
+  opusStream: Readable;
+  decoder: OpusDecoder;
+  decodedStream: Readable;
+  lastPcmAt?: number;
+  decoderErrorCount: number;
+  consecutiveNoPcmEvents: number;
+  lastNoPcmAt?: number;
+  resubscribeTimer?: ReturnType<typeof setTimeout>;
+  suppressResubscribe?: boolean;
+};
+
+const RESUBSCRIBE_DELAY_MS = 250;
+const NO_PCM_MIN_DURATION_MS = 800;
+const NO_PCM_RESUBSCRIBE_THRESHOLD = 2;
+const NO_PCM_RESUBSCRIBE_WINDOW_MS = 60_000;
+
+const voiceSubscriptions = new WeakMap<
+  MeetingData,
+  Map<string, VoiceSubscriptionState>
+>();
+
 function getSpeakerStates(meeting: MeetingData): Map<string, SpeakerState> {
   if (!meeting.audioData.speakerStates) {
     meeting.audioData.speakerStates = new Map();
@@ -76,6 +110,97 @@ function getSpeakerState(
   userId: string,
 ): SpeakerState | undefined {
   return getSpeakerStates(meeting).get(userId);
+}
+
+function getVoiceSubscriptions(
+  meeting: MeetingData,
+): Map<string, VoiceSubscriptionState> {
+  const existing = voiceSubscriptions.get(meeting);
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, VoiceSubscriptionState>();
+  voiceSubscriptions.set(meeting, created);
+  return created;
+}
+
+function resolveSpeakerLabel(meeting: MeetingData, userId: string): string {
+  const participant = meeting.participants?.get(userId);
+  if (!participant) return userId;
+  return formatParticipantLabel(participant, {
+    includeUsername: true,
+    fallbackName: participant.username ?? userId,
+  });
+}
+
+function clearVoiceSubscription(meeting: MeetingData, userId: string) {
+  const subscriptions = getVoiceSubscriptions(meeting);
+  const existing = subscriptions.get(userId);
+  if (existing?.resubscribeTimer) {
+    clearTimeout(existing.resubscribeTimer);
+  }
+  if (existing) {
+    existing.suppressResubscribe = true;
+  }
+  if (existing?.decodedStream) {
+    existing.decodedStream.removeAllListeners();
+  }
+  if (existing?.decoder) {
+    existing.decoder.removeAllListeners();
+    existing.decoder.destroy();
+  }
+  if (existing?.opusStream) {
+    existing.opusStream.removeAllListeners();
+    existing.opusStream.destroy();
+  }
+  subscriptions.delete(userId);
+
+  const receiverStream = meeting.connection.receiver.subscriptions.get(userId);
+  if (receiverStream) {
+    receiverStream.removeAllListeners();
+    receiverStream.destroy();
+    meeting.connection.receiver.subscriptions.delete(userId);
+  }
+}
+
+function scheduleResubscribe(
+  meeting: MeetingData,
+  userId: string,
+  reason: string,
+) {
+  if (meeting.finishing) return;
+  if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
+    return;
+  }
+  if (!meeting.voiceChannel.members.has(userId)) {
+    return;
+  }
+  const subscriptions = getVoiceSubscriptions(meeting);
+  const existing = subscriptions.get(userId);
+  if (existing?.resubscribeTimer) {
+    return;
+  }
+
+  const speakerLabel = resolveSpeakerLabel(meeting, userId);
+  console.log(
+    `Scheduling voice resubscribe: guildId=${meeting.guildId} channelId=${meeting.channelId} meetingId=${meeting.meetingId} userId=${userId} speaker=${speakerLabel} reason=${reason}`,
+  );
+
+  const timer = setTimeout(() => {
+    const updated = getVoiceSubscriptions(meeting).get(userId);
+    if (updated) {
+      updated.resubscribeTimer = undefined;
+    }
+    if (meeting.finishing) return;
+    if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
+      return;
+    }
+    void subscribeToUserVoice(meeting, userId);
+  }, RESUBSCRIBE_DELAY_MS);
+
+  if (existing) {
+    existing.resubscribeTimer = timer;
+  }
 }
 
 function markSpeakerStart(meeting: MeetingData, userId: string) {
@@ -128,9 +253,15 @@ function getSegmentDir(meeting: MeetingData): string {
   if (meeting.audioData.segmentDir) {
     return meeting.audioData.segmentDir;
   }
-  const dir = path.join(getMeetingTempDir(meeting), "segments");
+  const dir = path.join(getMeetingTempDir(meeting), "s");
   meeting.audioData.segmentDir = dir;
   return dir;
+}
+
+function getNextSegmentSequence(meeting: MeetingData): number {
+  const next = (meeting.audioData.segmentSequence ?? 0) + 1;
+  meeting.audioData.segmentSequence = next;
+  return next;
 }
 
 function trackSegmentWrite(meeting: MeetingData, promise: Promise<void>) {
@@ -138,6 +269,49 @@ function trackSegmentWrite(meeting: MeetingData, promise: Promise<void>) {
     meeting.audioData.segmentWritePromises = [];
   }
   meeting.audioData.segmentWritePromises.push(promise);
+}
+
+async function appendBufferToStream(
+  outputStream: fs.WriteStream,
+  buffer: Buffer,
+): Promise<void> {
+  if (buffer.length === 0) return;
+  await new Promise<void>((resolve, reject) => {
+    outputStream.write(buffer, (err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+async function appendFileToStream(
+  outputStream: fs.WriteStream,
+  filePath: string,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const input = fs.createReadStream(filePath);
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onEnd = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      input.removeListener("error", onError);
+      outputStream.removeListener("error", onError);
+      input.removeListener("end", onEnd);
+    };
+
+    input.on("error", onError);
+    outputStream.on("error", onError);
+    input.on("end", onEnd);
+    input.pipe(outputStream, { end: false });
+  });
 }
 
 async function persistSnippetAudioSegment(
@@ -156,10 +330,8 @@ async function persistSnippetAudioSegment(
   const dir = getSegmentDir(meeting);
   await fs.promises.mkdir(dir, { recursive: true });
 
-  const filePath = path.join(
-    dir,
-    `segment_${snippet.userId}_${snippet.timestamp}.pcm`,
-  );
+  const sequence = getNextSegmentSequence(meeting);
+  const filePath = path.join(dir, `s_${sequence}.pcm`);
 
   const writePromise = fs.promises
     .writeFile(filePath, buffer)
@@ -262,11 +434,12 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
 export function updateSnippetsIfNecessary(
   meeting: MeetingData,
   userId: string,
+  options: { startTimestamp?: number } = {},
 ): void {
   let snippet = meeting.audioData.currentSnippets.get(userId);
 
   if (!snippet) {
-    snippet = generateNewSnippet(userId);
+    snippet = generateNewSnippet(userId, options.startTimestamp);
     meeting.audioData.currentSnippets.set(userId, snippet);
   } else {
     const elapsedTime = Date.now() - snippet.timestamp;
@@ -314,6 +487,16 @@ export function startProcessingSnippet(
     snippet.lastFastTranscriptBytes !== undefined &&
     getAudioBytes(snippet) === snippet.lastFastTranscriptBytes;
   if (fastCoversSnippet && latestFastText) {
+    const participant = meeting.participants?.get(snippet.userId);
+    const speakerLabel = participant
+      ? formatParticipantLabel(participant, {
+          includeUsername: true,
+          fallbackName: participant.username ?? snippet.userId,
+        })
+      : snippet.userId;
+    console.log(
+      `Fast transcript covers snippet, skipping slow transcription: guildId=${meeting.guildId} channelId=${meeting.channelId} meetingId=${meeting.meetingId} userId=${snippet.userId} speaker=${speakerLabel} duration=${duration.toFixed(2)}s bytes=${getAudioBytes(snippet)}`,
+    );
     audioFileData.transcript = latestFastText;
   } else if (
     hasAudio &&
@@ -343,12 +526,14 @@ export function startProcessingSnippet(
               const coalesced = await coalesceTranscription(meeting, {
                 slowTranscript: transcription,
                 fastTranscripts: audioFileData.fastTranscripts,
-                modelOverride: premium.coalesceModel,
               });
               if (coalesced && coalesced.trim().length > 0) {
                 audioFileData.coalescedTranscript = coalesced;
                 audioFileData.coalesceMeta = {
-                  model: premium.coalesceModel,
+                  model: getModelChoice(
+                    "transcriptionCoalesce",
+                    buildModelOverrides(meeting.runtimeConfig?.modelChoices),
+                  ).model,
                   usedFastRevisions: audioFileData.fastTranscripts.map(
                     (entry) => entry.revision,
                   ),
@@ -372,8 +557,16 @@ export function startProcessingSnippet(
         }),
     );
   } else {
+    const participant = meeting.participants?.get(snippet.userId);
+    const speakerLabel = participant
+      ? formatParticipantLabel(participant, {
+          includeUsername: true,
+          fallbackName: participant.username ?? snippet.userId,
+        })
+      : snippet.userId;
+    const audioBytes = getAudioBytes(snippet);
     console.log(
-      `Snippet less than minimum transcription length, not transcribing: ${snippet.userId} ${snippet.timestamp}`,
+      `Snippet less than minimum transcription length, not transcribing: guildId=${meeting.guildId} channelId=${meeting.channelId} meetingId=${meeting.meetingId} userId=${snippet.userId} speaker=${speakerLabel} duration=${duration.toFixed(2)}s bytes=${audioBytes} timestamp=${snippet.timestamp}`,
     );
   }
 
@@ -481,6 +674,13 @@ export async function subscribeToUserVoice(
   meeting: MeetingData,
   userId: string,
 ) {
+  if (meeting.finishing) return;
+  if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
+    return;
+  }
+
+  clearVoiceSubscription(meeting, userId);
+
   const opusStream = meeting.connection.receiver.subscribe(userId, {
     end: {
       behavior: EndBehaviorType.Manual,
@@ -493,23 +693,61 @@ export async function subscribeToUserVoice(
     frameSize: FRAME_SIZE,
   });
 
-  // Prevent decoder errors (often caused by malformed/partial packets) from crashing the process.
+  const subscriptions = getVoiceSubscriptions(meeting);
+  const subscriptionState: VoiceSubscriptionState = {
+    opusStream,
+    decoder: opusDecoder,
+    decodedStream: opusStream,
+    decoderErrorCount: 0,
+    consecutiveNoPcmEvents: 0,
+  };
+
+  subscriptions.set(userId, subscriptionState);
+
+  const speakerLabel = resolveSpeakerLabel(meeting, userId);
+  const logPrefix = `guildId=${meeting.guildId} channelId=${meeting.channelId} meetingId=${meeting.meetingId} userId=${userId} speaker=${speakerLabel}`;
+
+  // Prevent decoder errors (often caused by malformed or partial packets) from crashing the process.
   opusDecoder.on("error", (err: Error) => {
+    if (subscriptionState.suppressResubscribe) return;
+    subscriptionState.decoderErrorCount += 1;
     console.warn(
-      `Opus decoder error for user ${userId}: ${err.message}. Dropping corrupted frame.`,
+      `Opus decoder error: ${logPrefix} message=${err.message} errors=${subscriptionState.decoderErrorCount}`,
     );
+    scheduleResubscribe(meeting, userId, "decoder-error");
   });
 
   // Prism's Opus stream can also emit errors; guard those too.
   opusStream.on("error", (err: Error) => {
-    console.warn(
-      `Opus stream error for user ${userId}: ${err.message}. Continuing.`,
-    );
+    if (subscriptionState.suppressResubscribe) return;
+    console.warn(`Opus stream error: ${logPrefix} message=${err.message}`);
+    scheduleResubscribe(meeting, userId, "opus-stream-error");
   });
 
   const decodedStream = opusStream.pipe(opusDecoder);
+  subscriptionState.decodedStream = decodedStream;
+
+  decodedStream.on("error", (err: Error) => {
+    if (subscriptionState.suppressResubscribe) return;
+    console.warn(`Decoded stream error: ${logPrefix} message=${err.message}`);
+    scheduleResubscribe(meeting, userId, "decoded-stream-error");
+  });
+
+  opusStream.on("close", () => {
+    if (subscriptionState.suppressResubscribe) return;
+    scheduleResubscribe(meeting, userId, "opus-stream-close");
+  });
+
+  opusStream.on("end", () => {
+    if (subscriptionState.suppressResubscribe) return;
+    scheduleResubscribe(meeting, userId, "opus-stream-end");
+  });
 
   decodedStream.on("data", (chunk) => {
+    subscriptionState.lastPcmAt = Date.now();
+    subscriptionState.consecutiveNoPcmEvents = 0;
+    subscriptionState.lastNoPcmAt = undefined;
+
     // Immediately write audio to the output stream to prevent memory buildup
     // This ensures audio is saved even for very long recordings
     if (meeting.audioData.audioPassThrough) {
@@ -522,7 +760,10 @@ export async function subscribeToUserVoice(
 
     // Still maintain snippets for transcription purposes
     // These will be processed and cleared when user stops speaking or after 60 seconds
-    updateSnippetsIfNecessary(meeting, userId);
+    const state = getSpeakerState(meeting, userId);
+    updateSnippetsIfNecessary(meeting, userId, {
+      startTimestamp: state?.lastStartMs,
+    });
 
     const snippet = meeting.audioData.currentSnippets.get(userId);
     if (snippet) {
@@ -536,7 +777,6 @@ export async function subscribeToUserVoice(
 export function userStartTalking(meeting: MeetingData, userId: string) {
   markSpeakerStart(meeting, userId);
   clearSnippetTimer(meeting, userId);
-  updateSnippetsIfNecessary(meeting, userId);
 }
 
 export function userStopTalking(meeting: MeetingData, userId: string) {
@@ -545,6 +785,42 @@ export function userStopTalking(meeting: MeetingData, userId: string) {
   if (pending && pending.expiresAt > Date.now() && pending.userId === userId) {
     clearSnippetTimer(meeting, userId);
     startProcessingSnippet(meeting, userId, { forceTranscribe: true });
+    return;
+  }
+  const snippet = meeting.audioData.currentSnippets.get(userId);
+  if (!snippet) {
+    const state = getSpeakerState(meeting, userId);
+    const speakerLabel = resolveSpeakerLabel(meeting, userId);
+    const durationMs =
+      state?.lastStartMs && state.lastEndMs
+        ? Math.max(0, state.lastEndMs - state.lastStartMs)
+        : 0;
+    const subscription = getVoiceSubscriptions(meeting).get(userId);
+    const now = Date.now();
+    const lastPcmAgoMs = subscription?.lastPcmAt
+      ? Math.max(0, now - subscription.lastPcmAt)
+      : undefined;
+    if (subscription) {
+      if (
+        subscription.lastNoPcmAt &&
+        now - subscription.lastNoPcmAt > NO_PCM_RESUBSCRIBE_WINDOW_MS
+      ) {
+        subscription.consecutiveNoPcmEvents = 0;
+      }
+      subscription.lastNoPcmAt = now;
+      subscription.consecutiveNoPcmEvents += 1;
+      if (
+        durationMs >= NO_PCM_MIN_DURATION_MS &&
+        subscription.consecutiveNoPcmEvents >= NO_PCM_RESUBSCRIBE_THRESHOLD
+      ) {
+        scheduleResubscribe(meeting, userId, "no-pcm");
+        subscription.consecutiveNoPcmEvents = 0;
+        subscription.lastNoPcmAt = undefined;
+      }
+    }
+    console.log(
+      `Speaking event ended with no PCM frames: guildId=${meeting.guildId} channelId=${meeting.channelId} meetingId=${meeting.meetingId} userId=${userId} speaker=${speakerLabel} durationMs=${durationMs} lastPcmAgoMs=${lastPcmAgoMs ?? "unknown"}`,
+    );
     return;
   }
   setSnippetTimer(meeting, userId);
@@ -672,10 +948,7 @@ export async function compileTranscriptions(
 
 export function openOutputFile(meeting: MeetingData) {
   const tempDir = ensureMeetingTempDirSync(meeting);
-  const outputFileName = path.join(
-    tempDir,
-    `recording_${meeting.guildId}_${meeting.channelId}.mp3`,
-  );
+  const outputFileName = path.join(tempDir, "recording.mp3");
   meeting.audioData.outputFileName = outputFileName;
 
   meeting.audioData.audioPassThrough = new PassThrough();
@@ -737,7 +1010,7 @@ export async function buildMixedAudio(
 
   const outputFileName = path.join(
     getMeetingTempDir(meeting),
-    `recording_${meeting.guildId}_${meeting.channelId}_${meeting.meetingId}_mixed.mp3`,
+    "recording_mixed.mp3",
   );
 
   return await new Promise<string | undefined>((resolve) => {
@@ -778,6 +1051,102 @@ export async function buildMixedAudio(
       })
       .save(outputFileName);
   });
+}
+
+export async function stitchAudioSegments(
+  meeting: MeetingData,
+): Promise<string | undefined> {
+  const segments = meeting.audioData.audioSegments ?? [];
+  if (segments.length === 0) return undefined;
+
+  await ensureMeetingTempDir(meeting);
+  await waitForSegmentWrites(meeting);
+
+  const usable = segments
+    .filter(
+      (segment) => segment.durationMs > 0 && fs.existsSync(segment.filePath),
+    )
+    .sort((a, b) => a.offsetMs - b.offsetMs);
+
+  if (usable.length === 0) return undefined;
+
+  const pcmPath = path.join(
+    getMeetingTempDir(meeting),
+    "recording_stitched.pcm",
+  );
+  const outputFileName = path.join(
+    getMeetingTempDir(meeting),
+    "recording_stitched.mp3",
+  );
+
+  const outputStream = fs.createWriteStream(pcmPath);
+  let previousEndMs = 0;
+
+  try {
+    for (const segment of usable) {
+      const gapMs = segment.offsetMs - previousEndMs;
+      if (gapMs > 0) {
+        const silence = generateSilentBuffer(
+          gapMs,
+          RECORD_SAMPLE_RATE,
+          CHANNELS,
+        );
+        await appendBufferToStream(outputStream, silence);
+      }
+
+      await appendFileToStream(outputStream, segment.filePath);
+      previousEndMs = Math.max(
+        previousEndMs,
+        segment.offsetMs + segment.durationMs,
+      );
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      outputStream.end(() => resolve());
+      outputStream.on("error", (error) => reject(error));
+    });
+  } catch (error) {
+    console.error("Failed to stitch audio segments:", error);
+    outputStream.destroy();
+    try {
+      await fs.promises.rm(pcmPath, { force: true });
+    } catch (cleanupError) {
+      console.warn("Failed to cleanup stitched PCM file:", cleanupError);
+    }
+    return undefined;
+  }
+
+  const stitched = await new Promise<string | undefined>((resolve) => {
+    ffmpeg(pcmPath)
+      .inputOptions([
+        "-f s16le",
+        `-ar ${RECORD_SAMPLE_RATE}`,
+        `-ac ${CHANNELS}`,
+      ])
+      .audioCodec("libmp3lame")
+      .outputOptions([
+        `-b:a 128k`,
+        `-ac ${CHANNELS}`,
+        `-ar ${RECORD_SAMPLE_RATE}`,
+      ])
+      .toFormat("mp3")
+      .on("error", (err) => {
+        console.error("Failed to encode stitched audio:", err);
+        resolve(undefined);
+      })
+      .on("end", () => {
+        resolve(outputFileName);
+      })
+      .save(outputFileName);
+  });
+
+  try {
+    await fs.promises.rm(pcmPath, { force: true });
+  } catch (cleanupError) {
+    console.warn("Failed to cleanup stitched PCM file:", cleanupError);
+  }
+
+  return stitched;
 }
 
 export async function cleanupAudioSegments(
@@ -838,7 +1207,7 @@ export async function splitAudioIntoChunks(
     const chunkPromises: Promise<ChunkInfo>[] = [];
 
     for (let i = 0; i < numChunks; i++) {
-      const chunkFileName = path.join(outputDir, `chunk_${i}.mp3`);
+      const chunkFileName = path.join(outputDir, `c_${i}.mp3`);
       const endTime = Math.min(startTime + maxChunkDuration, duration);
 
       chunkPromises.push(
@@ -873,9 +1242,5 @@ export function unsubscribeToVoiceUponLeaving(
   meeting: MeetingData,
   userId: string,
 ) {
-  const opusStream = meeting.connection.receiver.subscriptions.get(userId);
-  if (opusStream) {
-    opusStream.destroy();
-  }
-  meeting.connection.receiver.subscriptions.delete(userId);
+  clearVoiceSubscription(meeting, userId);
 }

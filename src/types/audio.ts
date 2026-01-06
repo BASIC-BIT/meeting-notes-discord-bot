@@ -76,6 +76,7 @@ export interface AudioData {
   audioSegments?: AudioSegmentFile[];
   segmentWritePromises?: Promise<void>[];
   segmentDir?: string;
+  segmentSequence?: number;
 }
 
 export interface ChunkInfo {

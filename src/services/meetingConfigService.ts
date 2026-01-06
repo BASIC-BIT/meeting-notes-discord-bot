@@ -4,6 +4,7 @@ import type { ConfigTier, MeetingRuntimeConfig } from "../config/types";
 import { resolveConfigSnapshot } from "./unifiedConfigService";
 import { resolveDictionaryBudgets } from "../utils/dictionary";
 import { resolveModelParamsByRole } from "./openaiModelParams";
+import { resolveModelChoicesByRole } from "./modelChoiceService";
 
 const requireValue = (
   snapshot: Awaited<ReturnType<typeof resolveConfigSnapshot>>,
@@ -34,9 +35,13 @@ export async function resolveMeetingRuntimeConfig(input: {
   });
   const dictionaryBudgets = resolveDictionaryBudgets(valuesByKey, input.tier);
   const modelParams = resolveModelParamsByRole(snapshot);
+  const modelChoices = resolveModelChoicesByRole(snapshot);
 
   return {
     transcription: {
+      suppressionEnabled: Boolean(
+        requireValue(snapshot, CONFIG_KEYS.transcription.suppressionEnabled),
+      ),
       fastSilenceMs: Number(
         requireValue(snapshot, CONFIG_KEYS.transcription.fastSilenceMs),
       ),
@@ -72,9 +77,6 @@ export async function resolveMeetingRuntimeConfig(input: {
       cleanupEnabled: Boolean(
         requireValue(snapshot, CONFIG_KEYS.transcription.premiumCleanupEnabled),
       ),
-      coalesceModel: String(
-        requireValue(snapshot, CONFIG_KEYS.transcription.premiumCoalesceModel),
-      ),
     },
     dictionary: dictionaryBudgets,
     autoRecordCancellation: {
@@ -83,6 +85,7 @@ export async function resolveMeetingRuntimeConfig(input: {
       ),
     },
     modelParams,
+    modelChoices,
   };
 }
 

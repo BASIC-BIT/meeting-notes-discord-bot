@@ -26,6 +26,7 @@ import { notifications } from "@mantine/notifications";
 import {
   IconArchive,
   IconArchiveOff,
+  IconCopy,
   IconDownload,
   IconFilter,
   IconMicrophone,
@@ -186,6 +187,9 @@ export default function MeetingDetailDrawer({
   const archiveMutation = trpc.meetings.setArchived.useMutation();
   const renameMutation = trpc.meetings.rename.useMutation();
   const feedbackMutation = trpc.feedback.submitSummary.useMutation();
+
+  const summaryCopyText = detail?.notes ?? "";
+  const canCopySummary = summaryCopyText.trim().length > 0;
 
   useEffect(() => {
     if (!meeting) return;
@@ -370,6 +374,23 @@ export default function MeetingDetailDrawer({
     setFeedbackDraft("");
   };
 
+  const handleCopySummary = async () => {
+    if (!canCopySummary) return;
+    try {
+      await navigator.clipboard.writeText(summaryCopyText);
+      notifications.show({
+        color: "green",
+        message: "Summary copied to clipboard.",
+      });
+    } catch (err) {
+      notifications.show({
+        color: "red",
+        message: "Unable to copy the summary. Please try again.",
+      });
+      console.error("Failed to copy summary", err);
+    }
+  };
+
   const handleDownload = () => {
     if (!detail || !meeting) return;
     const payload: MeetingExport = {
@@ -494,6 +515,15 @@ export default function MeetingDetailDrawer({
             aria-label="Mark summary needs work"
           >
             <IconThumbDown size={14} />
+          </ActionIcon>
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            onClick={handleCopySummary}
+            disabled={!canCopySummary}
+            aria-label="Copy summary as Markdown"
+          >
+            <IconCopy size={14} />
           </ActionIcon>
         </Group>
       </Group>

@@ -11,7 +11,7 @@ import { ReadableStream as WebReadableStream } from "node:stream/web";
 import type { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
 import { createOpenAIClient } from "./services/openaiClient";
-import { getModelChoice } from "./services/modelFactory";
+import { buildModelOverrides, getModelChoice } from "./services/modelFactory";
 import type {
   AudioCueEvent,
   AudioFileData,
@@ -118,7 +118,10 @@ async function playTtsItem(
   onPlaybackStart: () => void,
   onPlaybackEnd: () => void,
 ): Promise<void> {
-  const modelChoice = getModelChoice("liveVoiceTts");
+  const modelChoice = getModelChoice(
+    "liveVoiceTts",
+    buildModelOverrides(meeting.runtimeConfig?.modelChoices),
+  );
   const openAIClient = createOpenAIClient({
     traceName: "tts",
     generationName: "tts",

@@ -29,7 +29,7 @@ import {
 import { buildMeetingNotesEmbeds } from "../utils/meetingNotes";
 import { MEETING_RENAME_PREFIX } from "./meetingName";
 import { createOpenAIClient } from "../services/openaiClient";
-import { getModelChoice } from "../services/modelFactory";
+import { buildModelOverrides, getModelChoice } from "../services/modelFactory";
 import { config } from "../services/configService";
 import { getLangfuseChatPrompt } from "../services/langfusePromptService";
 import { buildSummaryFeedbackButtonIds } from "./summaryFeedback";
@@ -37,6 +37,7 @@ import {
   resolveChatParamsForRole,
   resolveModelParamsForContext,
 } from "../services/openaiModelParams";
+import { resolveModelChoicesForContext } from "../services/modelChoiceService";
 import type { ModelParamConfig } from "../config/types";
 
 type PendingCorrection = {
@@ -151,6 +152,7 @@ interface CorrectionInput {
   requesterTag: string;
   previousSuggestions?: SuggestionHistoryEntry[];
   modelParams?: ModelParamConfig;
+  modelOverride?: string;
 }
 
 function formatSuggestionsForPrompt(
@@ -175,6 +177,7 @@ async function generateCorrectedNotes({
   requesterTag,
   previousSuggestions,
   modelParams,
+  modelOverride,
 }: CorrectionInput): Promise<string> {
   const priorSuggestions = formatSuggestionsForPrompt(previousSuggestions);
   const { messages, langfusePrompt } = await getLangfuseChatPrompt({
@@ -189,7 +192,12 @@ async function generateCorrectedNotes({
   });
 
   try {
-    const modelChoice = getModelChoice("notesCorrection");
+    const modelChoice = getModelChoice(
+      "notesCorrection",
+      buildModelOverrides(
+        modelOverride ? { notesCorrection: modelOverride } : undefined,
+      ),
+    );
     const chatParams = resolveChatParamsForRole({
       role: "notesCorrection",
       model: modelChoice.model,
@@ -338,6 +346,11 @@ export async function handleNotesCorrectionModal(
     channelId: history.channelId ?? channelIdTimestamp.split("#")[0],
     userId: interaction.user.id,
   });
+  const modelChoices = await resolveModelChoicesForContext({
+    guildId,
+    channelId: history.channelId ?? channelIdTimestamp.split("#")[0],
+    userId: interaction.user.id,
+  });
 
   const newNotes = await generateCorrectedNotes({
     currentNotes: history.notes,
@@ -346,6 +359,7 @@ export async function handleNotesCorrectionModal(
     requesterTag: interaction.user.tag,
     previousSuggestions: history.suggestionsHistory,
     modelParams: modelParams.notesCorrection,
+    modelOverride: modelChoices.notesCorrection,
   });
 
   const diff = buildUnifiedDiff(history.notes, newNotes);
@@ -469,6 +483,11 @@ async function buildCorrectionSummaries(
     channelId: pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
     userId: interaction.user.id,
   });
+  const modelChoices = await resolveModelChoicesForContext({
+    guildId: pending.guildId,
+    channelId: pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
+    userId: interaction.user.id,
+  });
   const [, timestamp] = pending.channelIdTimestamp.split("#");
   const meetingDate = timestamp ? new Date(timestamp) : new Date();
   const summaries = await generateMeetingSummaries({
@@ -482,6 +501,7 @@ async function buildCorrectionSummaries(
     previousSummarySentence: pending.summarySentence,
     previousSummaryLabel: pending.summaryLabel,
     modelParams: modelParams.meetingSummary,
+    modelOverride: modelChoices.meetingSummary,
   });
   const summarySentence = summaries.summarySentence ?? pending.summarySentence;
   const summaryLabel = summaries.summaryLabel ?? pending.summaryLabel;

@@ -12,6 +12,7 @@ import {
   buildMixedAudio,
   closeOutputFile,
   splitAudioIntoChunks,
+  stitchAudioSegments,
   waitForAudioOnlyFinishProcessing,
 } from "../../src/audio";
 import { uploadMeetingArtifacts } from "../../src/services/uploadService";
@@ -27,6 +28,7 @@ jest.mock("../../src/audio", () => ({
   closeOutputFile: jest.fn(),
   compileTranscriptions: jest.fn(),
   splitAudioIntoChunks: jest.fn(),
+  stitchAudioSegments: jest.fn(),
   startProcessingSnippet: jest.fn(),
   waitForAudioOnlyFinishProcessing: jest.fn(),
   waitForFinishProcessing: jest.fn(),
@@ -63,6 +65,9 @@ jest.mock("../../src/audio/soundCues", () => ({
 }));
 jest.mock("../../src/observability/meetingTrace", () => ({
   withMeetingEndTrace: jest.fn(),
+  withMeetingEndStep: jest.fn(
+    (_meeting: unknown, _name: string, run: () => unknown) => run(),
+  ),
 }));
 jest.mock("../../src/services/autoRecordCancellationService", () => ({
   evaluateAutoRecordCancellation: jest.fn(),
@@ -111,6 +116,9 @@ const mockedEvaluateAutoRecordCancellation =
 const mockedBuildMixedAudio = buildMixedAudio as jest.MockedFunction<
   typeof buildMixedAudio
 >;
+const mockedStitchAudioSegments = stitchAudioSegments as jest.MockedFunction<
+  typeof stitchAudioSegments
+>;
 const mockedCloseOutputFile = closeOutputFile as jest.MockedFunction<
   typeof closeOutputFile
 >;
@@ -141,6 +149,7 @@ const mockedDescribeAutoRecordRule =
 describe("handleEndMeetingOther", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedStitchAudioSegments.mockResolvedValue(undefined);
   });
 
   it("flushes active snippets before disconnecting the voice connection", async () => {
