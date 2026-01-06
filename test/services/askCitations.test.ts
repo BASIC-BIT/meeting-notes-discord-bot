@@ -3,6 +3,7 @@ import type { MeetingHistory } from "../../src/types/db";
 import {
   buildAskCitations,
   renderAskAnswer,
+  stripCitationTags,
 } from "../../src/services/askCitations";
 
 const buildMeeting = (
@@ -76,5 +77,33 @@ describe("askCitations", () => {
     expect(rendered).toContain(
       "https://app.example.com/portal/server/guild-1/library?meetingId=voice-1%232025-01-01T00%3A00%3A00.000Z",
     );
+  });
+
+  test("captures transcript event IDs and can omit sources", () => {
+    const meetings = [
+      buildMeeting({
+        channelId_timestamp: "voice-1#2025-01-01T00:00:00.000Z",
+      }),
+    ];
+    const text =
+      'Line <chronote:cite index="1" target="transcript" eventId="line-42" />';
+    const citations = buildAskCitations({ text, meetings });
+    const rendered = renderAskAnswer({
+      text,
+      citations,
+      guildId: "guild-1",
+      portalBaseUrl: "https://app.example.com",
+      includeSources: false,
+    });
+
+    expect(citations[0]?.eventId).toBe("line-42");
+    expect(rendered).toBe("Line [1]");
+  });
+
+  test("strips citation tags from text", () => {
+    const cleaned = stripCitationTags(
+      'Answer <chronote:cite index="1" target="portal" />',
+    );
+    expect(cleaned).toBe("Answer");
   });
 });
