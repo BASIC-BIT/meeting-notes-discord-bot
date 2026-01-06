@@ -15,6 +15,7 @@ import {
   ScrollArea,
   Stack,
   Text,
+  Textarea,
   TextInput,
   ThemeIcon,
   Title,
@@ -30,6 +31,8 @@ import {
   IconMicrophone,
   IconNote,
   IconPencil,
+  IconThumbDown,
+  IconThumbUp,
   IconUsers,
 } from "@tabler/icons-react";
 import MeetingTimeline, {
@@ -156,6 +159,11 @@ export default function MeetingDetailDrawer({
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [summaryFeedback, setSummaryFeedback] = useState<"up" | "down" | null>(
+    null,
+  );
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+  const [feedbackDraft, setFeedbackDraft] = useState("");
 
   const {
     detail,
@@ -177,11 +185,15 @@ export default function MeetingDetailDrawer({
 
   const archiveMutation = trpc.meetings.setArchived.useMutation();
   const renameMutation = trpc.meetings.rename.useMutation();
+  const feedbackMutation = trpc.feedback.submitSummary.useMutation();
 
   useEffect(() => {
     if (!meeting) return;
     setRenameDraft(resolveRenameDraft(meeting));
     setRenameError(null);
+    setSummaryFeedback(meeting.summaryFeedback ?? null);
+    setFeedbackDraft("");
+    setFeedbackModalOpen(false);
   }, [meeting]);
 
   const resetDrawerState = () => {
@@ -190,6 +202,8 @@ export default function MeetingDetailDrawer({
     setArchiveModalOpen(false);
     setArchiveNextState(null);
     setRenameModalOpen(false);
+    setFeedbackModalOpen(false);
+    setFeedbackDraft("");
   };
 
   const handleCloseDrawer = () => {
@@ -314,6 +328,48 @@ export default function MeetingDetailDrawer({
     }
   };
 
+  const submitSummaryFeedback = async (
+    rating: "up" | "down",
+    comment?: string,
+  ) => {
+    if (!selectedGuildId || !meeting) return;
+    try {
+      await feedbackMutation.mutateAsync({
+        serverId: selectedGuildId,
+        meetingId: meeting.id,
+        rating,
+        comment: comment?.trim() || undefined,
+      });
+      setSummaryFeedback(rating);
+      await trpcUtils.meetings.detail.invalidate();
+      notifications.show({
+        color: "green",
+        message: "Thanks for the feedback.",
+      });
+    } catch {
+      notifications.show({
+        color: "red",
+        message: "Unable to submit feedback right now.",
+      });
+    }
+  };
+
+  const handleSummaryFeedbackUp = () => {
+    if (feedbackMutation.isPending) return;
+    void submitSummaryFeedback("up");
+  };
+
+  const handleSummaryFeedbackDown = () => {
+    if (feedbackMutation.isPending) return;
+    setFeedbackModalOpen(true);
+  };
+
+  const handleSummaryFeedbackSubmit = () => {
+    void submitSummaryFeedback("down", feedbackDraft);
+    setFeedbackModalOpen(false);
+    setFeedbackDraft("");
+  };
+
   const handleDownload = () => {
     if (!detail || !meeting) return;
     const payload: MeetingExport = {
@@ -404,11 +460,42 @@ export default function MeetingDetailDrawer({
             }
       }
     >
-      <Group gap="xs" mb="xs">
-        <ThemeIcon variant="light" color="brand">
-          <IconNote size={16} />
-        </ThemeIcon>
-        <Text fw={600}>Summary</Text>
+      <Group
+        gap="sm"
+        mb="xs"
+        justify="space-between"
+        align="center"
+        wrap="wrap"
+      >
+        <Group gap="xs">
+          <ThemeIcon variant="light" color="brand">
+            <IconNote size={16} />
+          </ThemeIcon>
+          <Text fw={600}>Summary</Text>
+        </Group>
+        <Group gap="xs" align="center" wrap="wrap">
+          <Text size="xs" c="dimmed">
+            Was this summary helpful?
+          </Text>
+          <ActionIcon
+            variant={summaryFeedback === "up" ? "light" : "subtle"}
+            color={summaryFeedback === "up" ? "teal" : "gray"}
+            onClick={handleSummaryFeedbackUp}
+            disabled={feedbackMutation.isPending}
+            aria-label="Mark summary helpful"
+          >
+            <IconThumbUp size={14} />
+          </ActionIcon>
+          <ActionIcon
+            variant={summaryFeedback === "down" ? "light" : "subtle"}
+            color={summaryFeedback === "down" ? "red" : "gray"}
+            onClick={handleSummaryFeedbackDown}
+            disabled={feedbackMutation.isPending}
+            aria-label="Mark summary needs work"
+          >
+            <IconThumbDown size={14} />
+          </ActionIcon>
+        </Group>
       </Group>
       {fullScreen ? (
         summaryBody
@@ -510,6 +597,41 @@ export default function MeetingDetailDrawer({
             </Center>
           ) : meeting ? (
             <>
+              <Modal
+                opened={feedbackModalOpen}
+                onClose={() => setFeedbackModalOpen(false)}
+                title="Summary feedback"
+                centered
+              >
+                <Stack gap="md">
+                  <Textarea
+                    label="What could be better? (optional)"
+                    placeholder="Add detail that helps improve the summary."
+                    value={feedbackDraft}
+                    onChange={(event) =>
+                      setFeedbackDraft(event.currentTarget.value)
+                    }
+                    minRows={4}
+                    maxLength={1000}
+                  />
+                  <Group justify="flex-end">
+                    <Button
+                      variant="default"
+                      onClick={() => setFeedbackModalOpen(false)}
+                      disabled={feedbackMutation.isPending}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      color="red"
+                      onClick={handleSummaryFeedbackSubmit}
+                      loading={feedbackMutation.isPending}
+                    >
+                      Send feedback
+                    </Button>
+                  </Group>
+                </Stack>
+              </Modal>
               <Modal
                 opened={endMeetingModalOpen}
                 onClose={() => setEndMeetingModalOpen(false)}

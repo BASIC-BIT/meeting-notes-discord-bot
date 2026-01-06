@@ -15,6 +15,7 @@ export type MeetingDetails = {
   meetingName?: string;
   summary: string;
   summaryLabel?: string;
+  summaryFeedback?: "up" | "down" | null;
   notes: string;
   dateLabel: string;
   durationLabel: string;
@@ -43,6 +44,7 @@ export type MeetingDetailInput = {
   meetingName?: string | null;
   summarySentence?: string | null;
   summaryLabel?: string | null;
+  summaryFeedback?: "up" | "down" | null;
   audioUrl?: string | null;
   archivedAt?: string | null;
   attendees?: string[];
@@ -242,6 +244,7 @@ export const buildMeetingDetails = (
     meetingName: detail.meetingName ?? undefined,
     summary: deriveSummary(rawNotes, detail.summarySentence),
     summaryLabel: resolveSummaryLabel(detail.summaryLabel),
+    summaryFeedback: detail.summaryFeedback ?? null,
     notes: resolveNotes(detail.notes),
     dateLabel: formatDateLabel(detail.timestamp),
     durationLabel: formatDurationLabel(detail.duration),

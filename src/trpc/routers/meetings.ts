@@ -13,6 +13,7 @@ import {
   fetchJsonFromS3,
   getSignedObjectUrl,
 } from "../../services/storageService";
+import { getMeetingSummaryFeedback } from "../../services/summaryFeedbackService";
 import { isDiscordApiError } from "../../services/discordService";
 import { listGuildChannelsCached } from "../../services/discordCacheService";
 import {
@@ -128,7 +129,7 @@ const detail = manageGuildProcedure
       meetingId: z.string(),
     }),
   )
-  .query(async ({ input }) => {
+  .query(async ({ ctx, input }) => {
     const history = await getMeetingHistoryService(
       input.serverId,
       input.meetingId,
@@ -154,6 +155,13 @@ const detail = manageGuildProcedure
 
     const audioUrl = history.audioS3Key
       ? await getSignedObjectUrl(history.audioS3Key)
+      : undefined;
+
+    const summaryFeedback = ctx.user
+      ? await getMeetingSummaryFeedback({
+          channelIdTimestamp: history.channelId_timestamp,
+          userId: ctx.user.id,
+        })
       : undefined;
 
     return {
@@ -184,6 +192,7 @@ const detail = manageGuildProcedure
         audioUrl,
         archivedAt: history.archivedAt,
         archivedByUserId: history.archivedByUserId,
+        summaryFeedback: summaryFeedback?.rating,
         attendees:
           history.participants?.map((participant) =>
             resolveParticipantLabel(participant),

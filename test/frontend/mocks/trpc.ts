@@ -321,6 +321,10 @@ export const configPublishGlobalMutation = buildMutationState<[unknown], void>(
 export const configClearGlobalMutation = buildMutationState<[unknown], void>(
   undefined,
 );
+export const feedbackSubmitSummaryMutation = buildMutationState<
+  [unknown],
+  void
+>(undefined);
 
 export const trpcUtils = {
   ask: {
@@ -439,6 +443,7 @@ export const resetTrpcMocks = () => {
   resetMutationState(configClearServerMutation, undefined);
   resetMutationState(configPublishGlobalMutation, undefined);
   resetMutationState(configClearGlobalMutation, undefined);
+  resetMutationState(feedbackSubmitSummaryMutation, undefined);
 
   trpcUtils.ask.listConversations.invalidate.mockReset();
   trpcUtils.ask.listConversations.invalidate.mockResolvedValue(undefined);
@@ -647,6 +652,9 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
       clearServerOverride: { useMutation: () => configClearServerMutation },
       publishGlobal: { useMutation: () => configPublishGlobalMutation },
       clearGlobal: { useMutation: () => configClearGlobalMutation },
+    },
+    feedback: {
+      submitSummary: { useMutation: () => feedbackSubmitSummaryMutation },
     },
   },
 }));

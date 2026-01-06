@@ -105,6 +105,9 @@ export async function handleEndMeetingButton(
         },
       });
     });
+    if (meeting.cancelled) {
+      await clearEndMeetingInteractionReply(interaction);
+    }
   } catch (error) {
     console.error("Error during meeting end:", error);
     if (meeting && hasMeeting(meeting.guildId)) {
@@ -405,6 +408,15 @@ async function clearStartMessageComponents(meeting: MeetingData) {
     await message.edit({ components: [] });
   } catch (e) {
     console.warn("Could not clear start message buttons", e);
+  }
+}
+
+async function clearEndMeetingInteractionReply(interaction: ButtonInteraction) {
+  if (!interaction.deferred && !interaction.replied) return;
+  try {
+    await interaction.deleteReply();
+  } catch (error) {
+    console.warn("Failed to clear end meeting reply", error);
   }
 }
 

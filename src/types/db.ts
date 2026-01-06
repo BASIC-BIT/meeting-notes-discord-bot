@@ -77,6 +77,32 @@ export interface NotesHistoryEntry {
   editedAt: string; // ISO timestamp
 }
 
+export type FeedbackRating = "up" | "down";
+export type FeedbackTargetType = "meeting_summary";
+export type FeedbackSource = "discord" | "web";
+
+export interface FeedbackRecord {
+  pk: string; // TARGET#<targetType>#<targetId>
+  sk: string; // USER#<userId>
+  type: "feedback";
+  targetType: FeedbackTargetType;
+  targetId: string;
+  guildId: string;
+  channelId?: string;
+  meetingId?: string;
+  notesVersion?: number;
+  summarySentence?: string;
+  summaryLabel?: string;
+  rating: FeedbackRating;
+  comment?: string;
+  source: FeedbackSource;
+  createdAt: string; // ISO timestamp
+  updatedAt: string; // ISO timestamp
+  userId: string;
+  userTag?: string;
+  displayName?: string;
+}
+
 // Auto Record Settings Type
 export interface AutoRecordSettings {
   guildId: string; // Partition key

@@ -47,6 +47,14 @@ import {
   handleNotesCorrectionReject,
   isNotesCorrectionModal,
 } from "./commands/notesCorrections";
+import {
+  handleSummaryFeedbackDown,
+  handleSummaryFeedbackModal,
+  handleSummaryFeedbackUp,
+  isSummaryFeedbackDown,
+  isSummaryFeedbackModal,
+  isSummaryFeedbackUp,
+} from "./commands/summaryFeedback";
 import { config } from "./services/configService";
 import {
   handleEditTagsButton,
@@ -185,6 +193,10 @@ const modalHandlers: Array<{
   onboarding?: boolean;
 }> = [
   {
+    matches: isSummaryFeedbackModal,
+    handle: handleSummaryFeedbackModal,
+  },
+  {
     matches: isNotesCorrectionModal,
     handle: handleNotesCorrectionModal,
   },
@@ -224,6 +236,14 @@ const buttonHandlers: Array<{
   handle: (interaction: ButtonInteraction) => Promise<void>;
   onboarding?: boolean;
 }> = [
+  {
+    matches: isSummaryFeedbackUp,
+    handle: handleSummaryFeedbackUp,
+  },
+  {
+    matches: isSummaryFeedbackDown,
+    handle: handleSummaryFeedbackDown,
+  },
   {
     matches: isNotesCorrectionAccept,
     handle: handleNotesCorrectionAccept,

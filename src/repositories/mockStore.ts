@@ -12,6 +12,7 @@ import type {
   UserSpeechSettings,
   ConfigOverrideRecord,
   DictionaryEntry,
+  FeedbackRecord,
 } from "../types/db";
 import type {
   AskConversation,
@@ -47,6 +48,7 @@ type MockStore = {
   askConversationsByKey: Map<string, AskConversation[]>;
   askMessagesByConversation: Map<string, AskMessage[]>;
   askSharesByGuild: Map<string, AskSharedConversation[]>;
+  feedbackByTarget: Map<string, FeedbackRecord[]>;
   userSpeechSettings: Map<string, UserSpeechSettings>;
   configOverrides: Map<string, ConfigOverrideRecord>;
   dictionaryEntriesByGuild: Map<string, DictionaryEntry[]>;
@@ -209,6 +211,7 @@ function buildDefaultStore(): MockStore {
   const userSpeechSettings = new Map<string, UserSpeechSettings>();
   const configOverrides = new Map<string, ConfigOverrideRecord>();
   const dictionaryEntriesByGuild = new Map<string, DictionaryEntry[]>();
+  const feedbackByTarget = new Map<string, FeedbackRecord[]>();
 
   const addOverride = (record: ConfigOverrideRecord) => {
     configOverrides.set(`${record.scopeId}#${record.configKey}`, record);
@@ -633,6 +636,35 @@ function buildDefaultStore(): MockStore {
     }),
   ]);
 
+  const feedbackTimestamp = mockNowIso();
+  const firstMeeting = meetingHistoryByGuild.get("1249723747896918109")?.[0];
+  if (firstMeeting) {
+    const pk = `TARGET#meeting_summary#${firstMeeting.channelId_timestamp}`;
+    feedbackByTarget.set(pk, [
+      {
+        pk,
+        sk: `USER#${mockUser.id}`,
+        type: "feedback",
+        targetType: "meeting_summary",
+        targetId: firstMeeting.channelId_timestamp,
+        guildId: firstMeeting.guildId,
+        channelId: firstMeeting.channelId,
+        meetingId: firstMeeting.meetingId,
+        notesVersion: firstMeeting.notesVersion,
+        summarySentence: firstMeeting.summarySentence,
+        summaryLabel: firstMeeting.summaryLabel,
+        rating: "up",
+        comment: "Clear summary and next steps.",
+        source: "web",
+        createdAt: feedbackTimestamp,
+        updatedAt: feedbackTimestamp,
+        userId: mockUser.id,
+        userTag: `${mockUser.username}#${mockUser.discriminator}`,
+        displayName: mockUser.username,
+      },
+    ]);
+  }
+
   const askConversationsByKey = new Map<string, AskConversation[]>();
   const askMessagesByConversation = new Map<string, AskMessage[]>();
   const askSharesByGuild = new Map<string, AskSharedConversation[]>();
@@ -797,6 +829,7 @@ function buildDefaultStore(): MockStore {
     askConversationsByKey,
     askMessagesByConversation,
     askSharesByGuild,
+    feedbackByTarget,
     userSpeechSettings,
     configOverrides,
     dictionaryEntriesByGuild,
