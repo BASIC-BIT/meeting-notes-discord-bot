@@ -70,6 +70,23 @@ const loadModule = async (options: LoadOptions = {}) => {
 };
 
 describe("askService (mock mode)", () => {
+  test("builds context blocks with status and indices", async () => {
+    const meeting = buildMeeting({
+      notes: "Notes",
+      tags: ["priority"],
+    });
+    const { buildAskContextBlocks } = await loadModule({
+      mockEnabled: true,
+      meetings: [meeting],
+    });
+
+    const blocks = buildAskContextBlocks([meeting]);
+    expect(blocks[0]).toContain('<meeting index="1">');
+    expect(blocks[0]).toContain("Status: Active");
+    expect(blocks[0]).toContain("Tags: priority");
+    expect(blocks[0]).toContain("</meeting>");
+  });
+
   test("returns mock answer with source link when meetings exist", async () => {
     const meeting = buildMeeting({
       notes: "Notes",

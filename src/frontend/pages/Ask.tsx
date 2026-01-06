@@ -10,6 +10,7 @@ import {
   LoadingOverlay,
   Loader,
   Modal,
+  Menu,
   ScrollArea,
   Stack,
   Text,
@@ -30,6 +31,7 @@ import {
   IconCopy,
   IconArchive,
   IconArchiveOff,
+  IconDownload,
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -57,6 +59,7 @@ import {
   truncate,
   type ListMode,
 } from "../utils/askLinks";
+import { buildAskThreadExport, formatAskThreadText } from "../utils/askExport";
 import { resolveNowMs } from "../utils/now";
 
 const buildConversationListUpdate =
@@ -442,6 +445,7 @@ export default function Ask() {
       : "";
   const shareUrl =
     shareDisplayVisibility === "public" ? publicShareUrl : serverShareUrl;
+  const canExport = Boolean(activeConversation && listMode !== "shared");
   const allowOptimistic = listMode === "mine" && !isArchived;
   const displayMessages = useMemo(() => {
     const pending = allowOptimistic ? askMutation.isPending : false;
@@ -464,6 +468,52 @@ export default function Ask() {
     listMode === "mine" &&
     Boolean(activeConversation && displayMessages.length > 0) &&
     !isArchived;
+
+  const buildExportFileName = (extension: "json" | "txt") => {
+    const title = (activeConversation?.title ?? "ask-thread").trim();
+    const safeTitle = title.replace(/[^\w-]+/g, "_");
+    const date = new Date(resolveNowMs()).toISOString().slice(0, 10);
+    return `${safeTitle || "ask-thread"}-${date}.${extension}`;
+  };
+
+  const downloadExport = (contents: string, filename: string, type: string) => {
+    const blob = new Blob([contents], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExport = (format: "json" | "text") => {
+    if (!selectedGuildId || !activeConversation || !canExport) return;
+    const nowIso = new Date(resolveNowMs()).toISOString();
+    const exportMessages = displayMessages
+      .filter((message) => message.id !== "thinking")
+      .map((message) => ({
+        ...message,
+        rawText: message.rawText ?? message.text,
+      }));
+    const payload = buildAskThreadExport({
+      serverId: selectedGuildId,
+      conversation: activeConversation,
+      messages: exportMessages,
+      exportedAt: nowIso,
+    });
+
+    if (format === "json") {
+      const json = JSON.stringify(payload, null, 2);
+      downloadExport(json, buildExportFileName("json"), "application/json");
+      return;
+    }
+    const text = formatAskThreadText({
+      conversation: activeConversation,
+      messages: exportMessages,
+      exportedAt: nowIso,
+    });
+    downloadExport(text, buildExportFileName("txt"), "text/plain");
+  };
 
   useEffect(() => {
     const viewport = chatViewportRef.current;
@@ -1126,6 +1176,29 @@ export default function Ask() {
                       >
                         {isArchived ? "Unarchive" : "Archive"}
                       </Button>
+                    ) : null}
+                    {listMode !== "shared" && activeConversation ? (
+                      <Menu withinPortal={false}>
+                        <Menu.Target>
+                          <Button
+                            size="xs"
+                            variant="subtle"
+                            leftSection={<IconDownload size={14} />}
+                            disabled={!canExport}
+                            data-testid="ask-export"
+                          >
+                            Export
+                          </Button>
+                        </Menu.Target>
+                        <Menu.Dropdown>
+                          <Menu.Item onClick={() => handleExport("json")}>
+                            Export JSON
+                          </Menu.Item>
+                          <Menu.Item onClick={() => handleExport("text")}>
+                            Export text
+                          </Menu.Item>
+                        </Menu.Dropdown>
+                      </Menu>
                     ) : null}
                     {showRename && selectedGuildId ? (
                       renaming ? (

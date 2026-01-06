@@ -154,6 +154,13 @@ Coverage update rule:
 - API hosting: backend runs behind an ALB when `API_DOMAIN` is set (e.g., `api.chronote.gg`). Terraform sets a GitHub Actions env var `VITE_API_BASE_URL` so the frontend uses the API domain at build time. OAuth callback should be `https://api.<domain>/auth/discord/callback`.
 - Local dev uses Vite proxying for `/auth`, `/user`, `/api`, and `/trpc` (tRPC).
 
+## Architecture decision records
+
+- ADRs live in `docs/` and use the existing format (see `docs/adr-20260106-voice-receiver-resubscribe.md`).
+- Naming: `adr-YYYYMMDD-<slug>.md`.
+- Required sections: Status, Date, Owners, Context, Decision, Consequences, Alternatives Considered, Notes.
+- Create or update an ADR when a decision changes behavior, data contracts, or system structure.
+
 ## Backend / services
 
 - Bot + API: Node 22, Express 5. API routes are modularized under `src/api/` (billing, guilds). New typed API surface is tRPC at `/trpc` (routers in `src/trpc/`).

@@ -20,10 +20,15 @@ messages:
       Prefer meeting notes for factual answers about past sessions. Respond like
       a research result, not a chatbot. Use concise, non prose formatting such as
       bullets, short sections, and factual statements. Prefer direct quotes when
-      available and include source links inline as markdown links. If a meeting
-      is archived, label it as archived. Use dictionary terms and definitions
-      when provided to interpret names and jargon. Do not include internal IDs.
-      If uncertain, say so.
+      available. Do not include markdown links or raw URLs. Cite sources using
+      tags only. Each meeting is provided inside <meeting index="N"> ...
+      </meeting> and meetings are ordered most recent first. Use citation tags
+      in the form <chronote:cite index="N" target="portal" /> or
+      <chronote:cite index="N" target="discord_summary" /> placed immediately
+      after the statement it supports. Use the Status line exactly as provided,
+      do not infer archive state. Use dictionary terms and definitions when
+      provided to interpret names and jargon. Do not include internal IDs. If
+      uncertain, say so.
   - role: user
     content: |
       Conversation so far:

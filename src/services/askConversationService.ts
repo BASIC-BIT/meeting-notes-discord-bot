@@ -7,6 +7,8 @@ import type {
   AskMessage,
 } from "../types/ask";
 import { nowIso } from "../utils/time";
+import { config } from "./configService";
+import { renderAskAnswer, stripCitationTags } from "./askCitations";
 
 const DEFAULT_TITLE = "New question";
 
@@ -15,6 +17,37 @@ const truncate = (text: string, maxLen: number) =>
 
 const summarize = (text: string) =>
   truncate(text.replace(/\s+/g, " ").trim(), 160);
+
+const resolvePortalBaseUrl = () => {
+  const siteUrl = config.frontend.siteUrl?.trim();
+  if (siteUrl) return siteUrl.replace(/\/$/, "");
+  const fallback = config.frontend.allowedOrigins?.[0];
+  return fallback?.replace(/\/$/, "");
+};
+
+const renderMessageForDisplay = (options: {
+  message: AskMessage;
+  guildId: string;
+  portalBaseUrl?: string;
+}): AskMessage => {
+  const rawText = options.message.text;
+  if (options.message.role !== "chronote") {
+    return { ...options.message, rawText };
+  }
+  const citations = options.message.citations ?? [];
+  const rendered = renderAskAnswer({
+    text: rawText,
+    citations,
+    guildId: options.guildId,
+    portalBaseUrl: options.portalBaseUrl,
+  });
+  return {
+    ...options.message,
+    text: rendered,
+    rawText,
+    citations,
+  };
+};
 
 const buildConversation = (
   userId: string,
@@ -106,9 +139,12 @@ export async function getAskConversationWithMessages(
     return undefined;
   }
   const messages = await repo.listMessages(userId, guildId, conversationId);
+  const portalBaseUrl = resolvePortalBaseUrl();
   return {
     conversation,
-    messages,
+    messages: messages.map((message) =>
+      renderMessageForDisplay({ message, guildId, portalBaseUrl }),
+    ),
   };
 }
 
@@ -134,9 +170,12 @@ export async function getSharedConversationWithMessages(
     guildId,
     conversationId,
   );
+  const portalBaseUrl = resolvePortalBaseUrl();
   return {
     conversation,
-    messages,
+    messages: messages.map((message) =>
+      renderMessageForDisplay({ message, guildId, portalBaseUrl }),
+    ),
     shared,
   };
 }
@@ -298,7 +337,11 @@ export async function askWithConversation(params: {
     text: message.text,
   }));
 
-  const { answer, sourceMeetingIds } = await answerQuestionService({
+  const {
+    answer: rawAnswer,
+    sourceMeetingIds,
+    citations,
+  } = await answerQuestionService({
     guildId,
     channelId: channelId ?? "",
     question,
@@ -307,13 +350,22 @@ export async function askWithConversation(params: {
     history,
     viewerUserId,
   });
+  const resolvedCitations = citations ?? [];
+  const portalBaseUrl = resolvePortalBaseUrl();
+  const renderedAnswer = renderAskAnswer({
+    text: rawAnswer,
+    citations: resolvedCitations,
+    guildId,
+    portalBaseUrl,
+  });
 
   const replyMessage: AskMessage = {
     id: uuid(),
     role: "chronote",
-    text: answer,
+    text: rawAnswer,
     createdAt: nowIso(),
     sourceMeetingIds,
+    citations: resolvedCitations,
   };
   await repo.writeMessage(userId, guildId, conversation.id, replyMessage);
 
@@ -323,7 +375,7 @@ export async function askWithConversation(params: {
   const updatedConversation: AskConversation = {
     ...conversation,
     title: shouldUpdateTitle ? truncate(question, 80) : conversation.title,
-    summary: summarize(answer) || conversation.summary,
+    summary: summarize(stripCitationTags(rawAnswer)) || conversation.summary,
     updatedAt: nowIso(),
   };
   await repo.writeConversation(userId, guildId, updatedConversation);
@@ -344,9 +396,20 @@ export async function askWithConversation(params: {
 
   return {
     conversationId: conversation.id,
-    answer,
+    answer: renderedAnswer,
     sourceMeetingIds,
     conversation: updatedConversation,
-    messages: [userMessage, replyMessage],
+    messages: [
+      renderMessageForDisplay({
+        message: userMessage,
+        guildId,
+        portalBaseUrl,
+      }),
+      renderMessageForDisplay({
+        message: replyMessage,
+        guildId,
+        portalBaseUrl,
+      }),
+    ],
   };
 }
