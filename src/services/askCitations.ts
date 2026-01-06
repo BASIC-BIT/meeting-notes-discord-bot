@@ -8,16 +8,100 @@ type CitationTag = {
 };
 
 const CITATION_TAG_REGEX = /<chronote:cite\b[^>]*?\/>/gi;
-const ATTRIBUTE_REGEX = /(\w+)="([^"]+)"/g;
+const MAX_CITATION_TAG_LENGTH = 512;
+const ATTRIBUTE_KEYS = new Set([
+  "index",
+  "target",
+  "eventId",
+  "event",
+  "lineId",
+]);
 
 const isCitationTarget = (value?: string): value is AskCitationTarget =>
   value === "portal" || value === "discord_summary" || value === "transcript";
 
-const parseCitationTag = (raw: string): CitationTag | null => {
-  const attrs: Record<string, string> = {};
-  for (const match of raw.matchAll(ATTRIBUTE_REGEX)) {
-    attrs[match[1]] = match[2];
+const isWhitespace = (code: number) =>
+  code === 9 || code === 10 || code === 13 || code === 32;
+
+const isAttrKeyChar = (code: number) =>
+  (code >= 48 && code <= 57) ||
+  (code >= 65 && code <= 90) ||
+  (code >= 97 && code <= 122) ||
+  code === 95;
+
+const isTagClose = (raw: string, index: number) =>
+  raw[index] === "/" && raw[index + 1] === ">";
+
+const skipWhitespace = (raw: string, start: number) => {
+  let i = start;
+  while (i < raw.length && isWhitespace(raw.charCodeAt(i))) i += 1;
+  return i;
+};
+
+const readAttrKey = (raw: string, start: number) => {
+  let i = start;
+  while (i < raw.length && isAttrKeyChar(raw.charCodeAt(i))) i += 1;
+  if (i === start) return { key: undefined, next: start + 1 };
+  return { key: raw.slice(start, i), next: i };
+};
+
+const skipToSeparator = (raw: string, start: number) => {
+  let i = start;
+  while (i < raw.length && !isWhitespace(raw.charCodeAt(i))) {
+    if (isTagClose(raw, i)) break;
+    i += 1;
   }
+  return i;
+};
+
+const readQuotedValue = (raw: string, start: number) => {
+  if (raw[start] !== '"') {
+    return { value: undefined, next: skipToSeparator(raw, start) };
+  }
+  let i = start + 1;
+  const valueStart = i;
+  while (i < raw.length && raw[i] !== '"') i += 1;
+  if (i >= raw.length) return { value: undefined, next: raw.length };
+  return { value: raw.slice(valueStart, i), next: i + 1 };
+};
+
+const parseCitationAttributes = (raw: string) => {
+  const attrs: Record<string, string> = {};
+  if (raw.length > MAX_CITATION_TAG_LENGTH) return attrs;
+
+  const len = raw.length;
+  let i = raw.indexOf(" ");
+  if (i === -1) return attrs;
+
+  while (i < len) {
+    i = skipWhitespace(raw, i);
+    if (i >= len || isTagClose(raw, i)) break;
+
+    const { key, next } = readAttrKey(raw, i);
+    i = next;
+    if (!key) continue;
+
+    i = skipWhitespace(raw, i);
+    if (raw[i] !== "=") {
+      i = skipToSeparator(raw, i);
+      continue;
+    }
+
+    i = skipWhitespace(raw, i + 1);
+    const { value, next: valueNext } = readQuotedValue(raw, i);
+    i = valueNext;
+    if (!value) continue;
+
+    if (ATTRIBUTE_KEYS.has(key)) {
+      attrs[key] = value;
+    }
+  }
+
+  return attrs;
+};
+
+const parseCitationTag = (raw: string): CitationTag | null => {
+  const attrs = parseCitationAttributes(raw);
 
   const indexRaw = attrs.index;
   const targetRaw = attrs.target;

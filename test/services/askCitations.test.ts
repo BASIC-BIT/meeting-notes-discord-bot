@@ -100,6 +100,26 @@ describe("askCitations", () => {
     expect(rendered).toBe("Line [1]");
   });
 
+  test("ignores tags that exceed the length cap", () => {
+    const meetings = [
+      buildMeeting({
+        channelId_timestamp: "voice-1#2025-01-01T00:00:00.000Z",
+      }),
+    ];
+    const longEventId = "a".repeat(600);
+    const text = `Answer <chronote:cite index="1" target="portal" eventId="${longEventId}" />`;
+    const citations = buildAskCitations({ text, meetings });
+    const rendered = renderAskAnswer({
+      text,
+      citations,
+      guildId: "guild-1",
+      portalBaseUrl: "https://app.example.com",
+    });
+
+    expect(citations).toHaveLength(0);
+    expect(rendered).toBe("Answer");
+  });
+
   test("strips citation tags from text", () => {
     const cleaned = stripCitationTags(
       'Answer <chronote:cite index="1" target="portal" />',
