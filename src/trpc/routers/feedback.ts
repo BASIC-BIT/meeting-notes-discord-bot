@@ -21,13 +21,14 @@ const submitSummary = manageGuildProcedure
       discriminator && discriminator !== "0"
         ? `${username}#${discriminator}`
         : username;
+    const displayName = user.global_name ?? username;
 
     await submitMeetingSummaryFeedback({
       guildId: input.serverId,
       channelIdTimestamp: input.meetingId,
       userId: user.id,
       userTag,
-      displayName: username,
+      displayName,
       rating: input.rating,
       comment: input.comment,
       source: "web",

@@ -341,6 +341,7 @@ export default function MeetingDetailDrawer({
         comment: comment?.trim() || undefined,
       });
       setSummaryFeedback(rating);
+      await trpcUtils.meetings.detail.invalidate();
       notifications.show({
         color: "green",
         message: "Thanks for the feedback.",

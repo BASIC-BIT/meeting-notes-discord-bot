@@ -1,6 +1,9 @@
-import type { Client } from "discord.js";
+import type { ButtonInteraction, Client } from "discord.js";
 import type { MeetingData } from "../../src/types/meeting-data";
-import { handleEndMeetingOther } from "../../src/commands/endMeeting";
+import {
+  handleEndMeetingButton,
+  handleEndMeetingOther,
+} from "../../src/commands/endMeeting";
 import { startProcessingSnippet } from "../../src/audio";
 import { withMeetingEndTrace } from "../../src/observability/meetingTrace";
 import { sendMeetingEndEmbedToChannel } from "../../src/embed";
@@ -15,6 +18,8 @@ import { uploadMeetingArtifacts } from "../../src/services/uploadService";
 import { saveMeetingHistoryToDatabase } from "../../src/commands/saveMeetingHistory";
 import { getGuildLimits } from "../../src/services/subscriptionService";
 import { updateMeetingStatusService } from "../../src/services/meetingHistoryService";
+import { getMeeting } from "../../src/meetings";
+import { describeAutoRecordRule } from "../../src/utils/meetingLifecycle";
 
 jest.mock("../../src/audio", () => ({
   buildMixedAudio: jest.fn(),
@@ -129,6 +134,9 @@ const mockedUpdateMeetingStatusService =
   updateMeetingStatusService as jest.MockedFunction<
     typeof updateMeetingStatusService
   >;
+const mockedGetMeeting = getMeeting as jest.MockedFunction<typeof getMeeting>;
+const mockedDescribeAutoRecordRule =
+  describeAutoRecordRule as jest.MockedFunction<typeof describeAutoRecordRule>;
 
 describe("handleEndMeetingOther", () => {
   beforeEach(() => {
@@ -210,5 +218,72 @@ describe("handleEndMeetingOther", () => {
     expect(events.indexOf("disconnect")).toBeLessThan(
       events.indexOf("destroy"),
     );
+  });
+});
+
+describe("handleEndMeetingButton", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("clears the deferred reply when auto-recording is cancelled", async () => {
+    mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
+    mockedEvaluateAutoRecordCancellation.mockResolvedValue({
+      cancel: true,
+      reason: "No meaningful content detected.",
+    });
+    mockedWaitForAudioOnlyFinishProcessing.mockResolvedValue(undefined);
+    mockedCloseOutputFile.mockResolvedValue(undefined);
+    mockedDescribeAutoRecordRule.mockReturnValue(
+      "Auto-record rule: test-channel",
+    );
+
+    const meeting = {
+      guildId: "guild-1",
+      channelId: "text-1",
+      meetingId: "meeting-1",
+      voiceChannel: { id: "voice-1", name: "Voice" },
+      textChannel: {
+        send: jest.fn().mockResolvedValue(undefined),
+        messages: { fetch: jest.fn() },
+      },
+      connection: {
+        disconnect: jest.fn(),
+        destroy: jest.fn(),
+      },
+      chatLog: [],
+      audioData: {
+        audioFiles: [],
+        currentSnippets: new Map(),
+        outputFileName: "recording.mp3",
+      },
+      startTime: new Date("2025-01-01T00:00:00.000Z"),
+      endTime: undefined,
+      finishing: false,
+      finished: false,
+      transcribeMeeting: false,
+      generateNotes: false,
+      isAutoRecording: true,
+      creator: { id: "user-1" },
+      guild: { id: "guild-1", members: { cache: new Map() } },
+      ttsQueue: { stopAndClear: jest.fn() },
+      setFinished: jest.fn(),
+    } as unknown as MeetingData;
+
+    mockedGetMeeting.mockReturnValue(meeting);
+
+    const interaction = {
+      guildId: "guild-1",
+      user: { id: "user-1" },
+      deferred: true,
+      replied: false,
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      deleteReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ButtonInteraction;
+
+    await handleEndMeetingButton({} as Client, interaction);
+
+    expect(interaction.deleteReply).toHaveBeenCalled();
   });
 });
