@@ -80,7 +80,7 @@ type TranscriptionGuardResult = {
   glossaryTermOnly: boolean;
 };
 
-function applyTranscriptionGuards(
+export function applyTranscriptionGuards(
   meeting: MeetingData,
   transcription: string,
   prompt: string,
@@ -124,9 +124,14 @@ function applyTranscriptionGuards(
     flags.push("glossary_term_only");
   }
 
-  const text = shouldSuppressGlossaryTerm ? "" : trimmed;
+  const shouldSuppressPromptLike = promptSimilarity.isPromptLike;
+  const text =
+    shouldSuppressGlossaryTerm || shouldSuppressPromptLike ? "" : trimmed;
   if (shouldSuppressGlossaryTerm) {
     flags.push("glossary_term_suppressed");
+  }
+  if (shouldSuppressPromptLike) {
+    flags.push("prompt_suppressed");
   }
 
   return { text, flags, promptSimilarity, glossaryTermOnly };
@@ -623,7 +628,7 @@ export function getTranscriptionKeywords(meeting: MeetingData): string {
   }
 
   content +=
-    "\nTranscript instruction: Do not include any glossary text in the transcript. If audio is silent, return an empty string.";
+    "\nTranscript instruction: Do not include any glossary text in the transcript.";
 
   return `<glossary>(do not include in transcript):
 ${content}

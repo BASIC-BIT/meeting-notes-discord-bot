@@ -62,6 +62,8 @@ export interface SpeakerTrackFile {
   lastEndMs: number;
   source?: AudioSegmentSource;
   writePromise?: Promise<void>;
+  writeFailed?: boolean;
+  writeFailureCount?: number;
 }
 
 export interface AudioData {

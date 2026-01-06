@@ -370,6 +370,7 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
     deleteIfExists(chatLogFilePath);
     deleteIfExists(outputAudioFile);
     if (outputAudioFile !== combinedAudioFile) {
+      // Only delete the combined file when a separate mixed file was used.
       deleteIfExists(combinedAudioFile);
     }
     await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>

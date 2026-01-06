@@ -53,6 +53,7 @@ export function getPromptSimilarityMetrics(
     firstLineOfGlossary.length,
   );
 
+  // These are normalized edit distance ratios, lower means more similar.
   const similarityFull = maxLengthFull > 0 ? distanceFull / maxLengthFull : 0;
   const similarityContent =
     maxLengthContent > 0 ? distanceContent / maxLengthContent : 0;
