@@ -4,6 +4,7 @@ import {
   Outlet,
   useNavigate,
   useParams,
+  useRouterState,
   useSearch,
 } from "@tanstack/react-router";
 import { useGuildContext } from "../contexts/GuildContext";
@@ -14,7 +15,14 @@ import MeetingDetailDrawer from "../pages/library/components/MeetingDetailDrawer
 
 export default function PortalServerLayout() {
   const { serverId } = useParams({ strict: false }) as { serverId?: string };
-  const navigate = useNavigate();
+  const navigateAsk = useNavigate({ from: "/portal/server/$serverId/ask" });
+  const navigateLibrary = useNavigate({
+    from: "/portal/server/$serverId/library",
+  });
+  const activeRouteId = useRouterState({
+    select: (state) => state.matches[state.matches.length - 1]?.routeId,
+  });
+  const isAskRoute = activeRouteId === "/portal/server/$serverId/ask";
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const { selectedGuildId, setSelectedGuildId, guilds, loading } =
     useGuildContext();
@@ -68,12 +76,12 @@ export default function PortalServerLayout() {
         channelNameMap={channelNameMap}
         invalidateMeetingLists={invalidateMeetingLists}
         onClose={() =>
-          navigate({
-            to: ".",
+          (isAskRoute ? navigateAsk : navigateLibrary)({
             search: (prev) => ({
               ...prev,
               meetingId: undefined,
               eventId: undefined,
+              fullScreen: undefined,
             }),
           })
         }

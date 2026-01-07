@@ -9,6 +9,20 @@ import {
 } from "../../../utils/meetingLibrary";
 import { MEETING_STATUS } from "../../../../types/meetingLifecycle";
 
+jest.mock("@tanstack/react-router", () => ({
+  ...jest.requireActual("@tanstack/react-router"),
+  useNavigate: () => jest.fn(),
+  useSearch: () => ({ fullScreen: false }),
+  useRouterState: (options?: {
+    select?: (state: { matches: Array<{ routeId: string }> }) => unknown;
+  }) => {
+    const state = {
+      matches: [{ routeId: "/portal/server/$serverId/library" }],
+    };
+    return options?.select ? options.select(state) : state;
+  },
+}));
+
 jest.mock("../../../services/trpc", () => ({
   trpc: {
     useUtils: () => ({

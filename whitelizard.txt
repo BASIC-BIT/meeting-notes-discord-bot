@@ -30,3 +30,5 @@ src/audio.ts:getAudioBytes
 src\audio.ts:getAudioBytes
 src/commands/notesCorrections.ts:resolveChannelName
 src\commands\notesCorrections.ts:resolveChannelName
+src/embed.ts:resolveMeetingTitle
+src\embed.ts:resolveMeetingTitle

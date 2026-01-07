@@ -54,9 +54,24 @@ const optionalStringParam = z
   }, z.string())
   .optional();
 
+const booleanParamValues = new Map<string, boolean>([
+  ["true", true],
+  ["1", true],
+  ["false", false],
+  ["0", false],
+]);
+
+const optionalBooleanParam = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (value === true || value === false) return value;
+  const parsed = booleanParamValues.get(String(value).toLowerCase());
+  return parsed;
+}, z.boolean().optional());
+
 const portalMeetingSearchSchema = z.object({
   meetingId: optionalStringParam,
   eventId: optionalStringParam,
+  fullScreen: optionalBooleanParam,
 }).parse;
 
 const homeRoute = new Route({
@@ -182,6 +197,7 @@ const portalLibraryRoute = new Route({
   validateSearch: z.object({
     meetingId: optionalStringParam,
     eventId: optionalStringParam,
+    fullScreen: optionalBooleanParam,
   }).parse,
 });
 
@@ -191,6 +207,7 @@ const askSearchSchema = z.object({
   messageId: z.string().optional(),
   meetingId: optionalStringParam,
   eventId: optionalStringParam,
+  fullScreen: optionalBooleanParam,
 }).parse;
 
 const portalAskRoute = new Route({

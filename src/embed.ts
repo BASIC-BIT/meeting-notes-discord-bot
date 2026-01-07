@@ -15,10 +15,14 @@ const PROCESSING_COLOR = 0x3498db;
 const SUMMARY_COLOR = 0x00ae86;
 const DEFAULT_TITLE = "Meeting Summary";
 const MAX_FIELD_VALUE = 1024;
+const MAX_EMBED_DESCRIPTION = 4000;
+const MAX_EMBEDS_PER_MESSAGE = 10;
+// Prefer newline breaks only when a meaningful portion of the chunk is filled.
+const NEWLINE_CUT_FRACTION = 0.6;
 
 type MeetingMessagePayload = {
   embeds: EmbedBuilder[];
-  components?: Array<ActionRowBuilder<ButtonBuilder>>;
+  components?: ActionRowBuilder<ButtonBuilder>[];
 };
 
 function buildMeetingHistoryKey(meeting: MeetingData): string {
@@ -94,7 +98,8 @@ function buildProcessingEmbed(meeting: MeetingData): EmbedBuilder {
 }
 
 function buildSummaryEmbed(meeting: MeetingData): EmbedBuilder {
-  const summary = meeting.summarySentence?.trim();
+  const summary =
+    meeting.summarySentence?.trim() ?? meeting.summaryLabel?.trim();
   return new EmbedBuilder()
     .setTitle(resolveMeetingTitle(meeting))
     .setColor(SUMMARY_COLOR)
@@ -105,30 +110,84 @@ function buildSummaryEmbed(meeting: MeetingData): EmbedBuilder {
     .setTimestamp();
 }
 
+function chunkText(text: string, maxLength: number): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  const chunks: string[] = [];
+  let remaining = trimmed;
+  while (remaining.length > maxLength) {
+    const slice = remaining.slice(0, maxLength);
+    const lastNewline = slice.lastIndexOf("\n");
+    const minPreferred = Math.floor(maxLength * NEWLINE_CUT_FRACTION);
+    const cutIndex =
+      lastNewline >= minPreferred && lastNewline !== -1
+        ? lastNewline
+        : maxLength;
+    const chunk = remaining.slice(0, cutIndex).trimEnd();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    remaining = remaining.slice(cutIndex).trimStart();
+  }
+  if (remaining.length) {
+    chunks.push(remaining);
+  }
+  return chunks;
+}
+
+function buildNotesEmbeds(meeting: MeetingData): EmbedBuilder[] {
+  if (!meeting.generateNotes) return [];
+  const notes = meeting.notesText?.trim();
+  if (!notes) {
+    return [
+      new EmbedBuilder()
+        .setTitle("Meeting Notes")
+        .setColor(SUMMARY_COLOR)
+        .setDescription("Notes unavailable.")
+        .setTimestamp(),
+    ];
+  }
+  const chunks = chunkText(notes, MAX_EMBED_DESCRIPTION);
+  return chunks.map((chunk, index) =>
+    new EmbedBuilder()
+      .setTitle(
+        chunks.length > 1
+          ? `Meeting Notes (${index + 1}/${chunks.length})`
+          : "Meeting Notes",
+      )
+      .setColor(SUMMARY_COLOR)
+      .setDescription(chunk)
+      .setTimestamp(),
+  );
+}
+
 function buildMeetingPortalUrl(meeting: MeetingData): string {
   const base = config.frontend.siteUrl.replace(/\/$/, "");
   return buildPortalMeetingUrl({
     baseUrl: base,
     guildId: meeting.guildId,
     meetingId: buildMeetingHistoryKey(meeting),
+    fullScreen: true,
   });
 }
 
 function buildSummaryComponents(
   meeting: MeetingData,
   portalUrl: string,
-): Array<ActionRowBuilder<ButtonBuilder>> {
+): ActionRowBuilder<ButtonBuilder>[] {
   const channelIdTimestamp = buildMeetingHistoryKey(meeting);
   const encodedKey = Buffer.from(channelIdTimestamp).toString("base64");
   const feedbackIds = buildSummaryFeedbackButtonIds(channelIdTimestamp);
-  const buttons: ButtonBuilder[] = [
+  const actionButtons: ButtonBuilder[] = [
     new ButtonBuilder()
       .setCustomId(feedbackIds.up)
       .setLabel("Helpful")
+      .setEmoji("\u{1F44D}")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(feedbackIds.down)
       .setLabel("Needs work")
+      .setEmoji("\u{1F914}")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`notes_correction:${meeting.guildId}:${encodedKey}`)
@@ -143,20 +202,28 @@ function buildSummaryComponents(
       .setLabel("Edit tags")
       .setStyle(ButtonStyle.Secondary),
   ];
-  const rows: Array<ActionRowBuilder<ButtonBuilder>> = [
-    new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons),
-  ];
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   rows.push(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setLabel("Open in Chronote")
+        .setEmoji("\u{1F680}")
         .setStyle(ButtonStyle.Link)
         .setURL(portalUrl),
     ),
   );
+  if (actionButtons.length > 0) {
+    const firstRow = actionButtons.slice(0, 3);
+    const secondRow = actionButtons.slice(3);
+    rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...firstRow));
+    if (secondRow.length) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(...secondRow),
+      );
+    }
+  }
   return rows;
 }
-
 async function updateMeetingMessage(
   meeting: MeetingData,
   payload: MeetingMessagePayload,
@@ -195,13 +262,38 @@ export async function updateMeetingSummaryMessage(
   meeting: MeetingData,
 ): Promise<void> {
   const portalUrl = buildMeetingPortalUrl(meeting);
-  const { message } = await updateMeetingMessage(meeting, {
+  const summaryPayload: MeetingMessagePayload = {
     embeds: [buildSummaryEmbed(meeting)],
     components: buildSummaryComponents(meeting, portalUrl),
-  });
+  };
+  const { message: summaryMessage } = await updateMeetingMessage(
+    meeting,
+    summaryPayload,
+  );
+  if (summaryMessage) {
+    meeting.summaryMessageId = summaryMessage.id;
+  }
 
-  if (message) {
-    meeting.notesMessageIds = [message.id];
+  const noteEmbeds = buildNotesEmbeds(meeting);
+  const noteMessages: Message[] = [];
+  for (let i = 0; i < noteEmbeds.length; i += MAX_EMBEDS_PER_MESSAGE) {
+    const payload: MeetingMessagePayload = {
+      embeds: noteEmbeds.slice(i, i + MAX_EMBEDS_PER_MESSAGE),
+      components: [],
+    };
+    try {
+      const message = await meeting.textChannel.send(payload);
+      noteMessages.push(message);
+    } catch (error) {
+      console.warn("Failed to send meeting notes embed", error);
+    }
+  }
+
+  if (noteMessages.length) {
+    meeting.notesMessageIds = noteMessages.map((note) => note.id);
     meeting.notesChannelId = meeting.textChannel.id;
+  } else {
+    meeting.notesMessageIds = undefined;
+    meeting.notesChannelId = undefined;
   }
 }

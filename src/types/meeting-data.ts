@@ -101,6 +101,7 @@ export interface MeetingData {
   tags?: string[];
   dictionaryEntries?: DictionaryEntry[];
   startMessageId?: string;
+  summaryMessageId?: string;
   messagesToDelete?: string[];
 }
 

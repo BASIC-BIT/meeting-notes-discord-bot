@@ -30,7 +30,47 @@ test("parseMeetingSummaryResponse drops invalid summaries", async () => {
   const parsed = parseMeetingSummaryResponse(
     '{"summarySentence":"First sentence. Second sentence.","summaryLabel":"Too many words in this label"}',
   );
-  expect(parsed).toBeUndefined();
+  expect(parsed).toEqual({
+    summarySentence: "First sentence. Second sentence.",
+    summaryLabel: undefined,
+  });
+});
+
+test("parseMeetingSummaryResponse keeps full text when multiple sentences are returned", async () => {
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
+  const parsed = parseMeetingSummaryResponse(
+    '{"summarySentence":"First sentence. Second sentence! Third?","summaryLabel":"Weekly sync"}',
+  );
+  expect(parsed).toEqual({
+    summarySentence: "First sentence. Second sentence! Third?",
+    summaryLabel: "Weekly sync",
+  });
+});
+
+test("parseMeetingSummaryResponse avoids splitting on abbreviations", async () => {
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
+  const parsed = parseMeetingSummaryResponse(
+    '{"summarySentence":"Dr. Smith reviewed version 3.14 changes. Next steps soon.","summaryLabel":"Weekly sync"}',
+  );
+  expect(parsed).toEqual({
+    summarySentence:
+      "Dr. Smith reviewed version 3.14 changes. Next steps soon.",
+    summaryLabel: "Weekly sync",
+  });
+});
+
+test("parseMeetingSummaryResponse keeps decimals intact", async () => {
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
+  const parsed = parseMeetingSummaryResponse(
+    '{"summarySentence":"Version 3.14 was released. Next steps soon.","summaryLabel":"Weekly sync"}',
+  );
+  expect(parsed).toEqual({
+    summarySentence: "Version 3.14 was released. Next steps soon.",
+    summaryLabel: "Weekly sync",
+  });
 });
 
 test("parseMeetingSummaryResponse keeps valid sentence when label is invalid", async () => {

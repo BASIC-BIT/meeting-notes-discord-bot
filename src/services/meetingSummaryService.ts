@@ -32,11 +32,12 @@ function normalizeSummarySentence(value?: string): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  const sentenceMarkers = trimmed.match(/[.!?]/g);
-  if (sentenceMarkers && sentenceMarkers.length > 1) {
-    return undefined;
-  }
-  return trimmed;
+  const normalizedSentence = trimmed;
+  if (!normalizedSentence) return undefined;
+  const MAX_LENGTH = 320;
+  return normalizedSentence.length > MAX_LENGTH
+    ? `${normalizedSentence.slice(0, MAX_LENGTH - 3).trimEnd()}...`
+    : normalizedSentence;
 }
 
 function normalizeSummaryLabel(value?: string): string | undefined {
