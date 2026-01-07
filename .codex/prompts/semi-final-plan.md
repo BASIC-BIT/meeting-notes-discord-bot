@@ -1,5 +1,5 @@
 ---
-description: Integrate suggestions or research into an updated plan for final review before implementaiton.
+description: Integrate suggestions or research into an updated plan for final review before implementation.
 argument-hint:
 ---
 

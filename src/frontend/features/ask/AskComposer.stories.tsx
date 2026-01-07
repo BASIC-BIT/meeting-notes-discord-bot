@@ -1,12 +1,14 @@
-import { createRef } from "react";
+import { useRef } from "react";
 import type { Meta, StoryObj } from "@storybook/react";
 import { AskComposer } from "./AskComposer";
-
-const inputRef = createRef<HTMLTextAreaElement>();
 
 const meta: Meta<typeof AskComposer> = {
   title: "Ask/Composer",
   component: AskComposer,
+  render: (args) => {
+    const inputRef = useRef<HTMLTextAreaElement>(null);
+    return <AskComposer {...args} inputRef={inputRef} />;
+  },
   args: {
     listMode: "mine",
     isArchived: false,
@@ -17,7 +19,6 @@ const meta: Meta<typeof AskComposer> = {
     onAsk: () => undefined,
     askPending: false,
     errorMessage: null,
-    inputRef,
   },
 };
 

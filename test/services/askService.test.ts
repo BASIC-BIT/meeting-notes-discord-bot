@@ -112,8 +112,6 @@ describe("askService (mock mode)", () => {
       channelId_timestamp: "voice-1#2025-01-01T00:00:00.000Z",
       channelId: "voice-1",
       tags: ["priority"],
-      notesChannelId: "text-1",
-      notesMessageIds: ["note-1"],
     });
     const meetingB = buildMeeting({
       channelId_timestamp: "voice-2#2025-01-02T00:00:00.000Z",

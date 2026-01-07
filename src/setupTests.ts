@@ -21,6 +21,7 @@ const requiredTestEnv = {
   STRIPE_WEBHOOK_SECRET: "test-stripe-webhook-secret",
   STRIPE_SUCCESS_URL: "http://localhost:3001/stripe/success",
   STRIPE_CANCEL_URL: "http://localhost:3001/stripe/cancel",
+  FRONTEND_SITE_URL: "http://localhost:5173",
 };
 
 Object.entries(requiredTestEnv).forEach(([key, value]) => {
