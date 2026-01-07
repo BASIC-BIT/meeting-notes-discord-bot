@@ -1,12 +1,8 @@
 export type AskMessageRole = "user" | "chronote";
 export type AskConversationVisibility = "private" | "server" | "public";
-export type AskCitationTarget = "portal" | "discord_summary" | "transcript";
 export type AskCitation = {
   index: number;
-  target: AskCitationTarget;
   meetingId: string;
-  notesChannelId?: string;
-  notesMessageId?: string;
   eventId?: string;
 };
 
@@ -28,7 +24,6 @@ export interface AskMessage {
   id: string;
   role: AskMessageRole;
   text: string;
-  rawText?: string;
   createdAt: string;
   sourceMeetingIds?: string[];
   citations?: AskCitation[];

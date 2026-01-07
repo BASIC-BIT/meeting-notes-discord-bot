@@ -9,6 +9,7 @@ import {
   setMeetingsListQuery,
   setServersChannelsQuery,
 } from "./mocks/trpc";
+import PortalServerLayout from "../../src/frontend/layouts/PortalServerLayout";
 import Library from "../../src/frontend/pages/Library";
 
 describe("Library page", () => {
@@ -30,7 +31,12 @@ describe("Library page", () => {
       isLoading: false,
       error: null,
     });
-    renderWithMantine(<Library />);
+    renderWithMantine(
+      <>
+        <PortalServerLayout />
+        <Library />
+      </>,
+    );
     expect(screen.getByTestId("library-refresh-top")).toBeInTheDocument();
     expect(
       screen.getByText(/No meetings match these filters yet/i),
@@ -77,7 +83,12 @@ describe("Library page", () => {
         },
       },
     });
-    renderWithMantine(<Library />);
+    renderWithMantine(
+      <>
+        <PortalServerLayout />
+        <Library />
+      </>,
+    );
 
     fireEvent.click(screen.getByTestId("library-meeting-row"));
 
@@ -132,7 +143,12 @@ describe("Library page", () => {
         },
       },
     });
-    renderWithMantine(<Library />);
+    renderWithMantine(
+      <>
+        <PortalServerLayout />
+        <Library />
+      </>,
+    );
 
     fireEvent.click(screen.getByTestId("library-meeting-row"));
 

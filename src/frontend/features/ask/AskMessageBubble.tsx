@@ -1,17 +1,10 @@
-import {
-  ActionIcon,
-  Group,
-  Loader,
-  Stack,
-  Text,
-  TypographyStylesProvider,
-} from "@mantine/core";
+import { ActionIcon, Group, Loader, Stack, Text } from "@mantine/core";
 import { IconCopy, IconLink } from "@tabler/icons-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import Surface from "../../components/Surface";
+import MarkdownBody, {
+  type MarkdownLinkHandler,
+} from "../../components/MarkdownBody";
 import type { AskMessage } from "../../../types/ask";
-import { getDiscordOpenUrl } from "../../utils/discordLinks";
 import { formatTime } from "../../utils/askLinks";
 import { uiColors, uiEffects, uiRadii } from "../../uiTokens";
 
@@ -20,6 +13,7 @@ type AskMessageBubbleProps = {
   roleLabels: { user: string; chronote: string };
   highlighted: boolean;
   showActions?: boolean;
+  linkHandler?: MarkdownLinkHandler;
   onCopyLink?: (messageId: string) => void;
   onCopyResponse?: (text: string) => void;
 };
@@ -29,6 +23,7 @@ export function AskMessageBubble({
   roleLabels,
   highlighted,
   showActions = false,
+  linkHandler,
   onCopyLink,
   onCopyResponse,
 }: AskMessageBubbleProps) {
@@ -92,32 +87,11 @@ export function AskMessageBubble({
             </Text>
           </Group>
         ) : message.role === "chronote" ? (
-          <TypographyStylesProvider>
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                a: (props) => {
-                  const resolvedHref = props.href
-                    ? getDiscordOpenUrl(props.href)
-                    : undefined;
-                  return (
-                    <a
-                      {...props}
-                      href={resolvedHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        color: uiColors.linkAccent,
-                      }}
-                    />
-                  );
-                },
-                p: (props) => <p {...props} style={{ margin: 0 }} />,
-              }}
-            >
-              {message.text}
-            </ReactMarkdown>
-          </TypographyStylesProvider>
+          <MarkdownBody
+            content={message.text}
+            compact
+            linkHandler={linkHandler}
+          />
         ) : (
           <Text size="sm">{message.text}</Text>
         )}

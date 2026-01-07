@@ -6,13 +6,11 @@ import {
 } from "../../src/commands/endMeeting";
 import { startProcessingSnippet } from "../../src/audio";
 import { withMeetingEndTrace } from "../../src/observability/meetingTrace";
-import { sendMeetingEndEmbedToChannel } from "../../src/embed";
 import { evaluateAutoRecordCancellation } from "../../src/services/autoRecordCancellationService";
 import {
   buildMixedAudio,
   cleanupSpeakerTracks,
   closeOutputFile,
-  splitAudioIntoChunks,
   waitForAudioOnlyFinishProcessing,
 } from "../../src/audio";
 import { uploadMeetingArtifacts } from "../../src/services/uploadService";
@@ -27,22 +25,21 @@ jest.mock("../../src/audio", () => ({
   cleanupSpeakerTracks: jest.fn(),
   closeOutputFile: jest.fn(),
   compileTranscriptions: jest.fn(),
-  splitAudioIntoChunks: jest.fn(),
   startProcessingSnippet: jest.fn(),
   waitForAudioOnlyFinishProcessing: jest.fn(),
   waitForFinishProcessing: jest.fn(),
 }));
 jest.mock("../../src/embed", () => ({
-  sendMeetingEndEmbed: jest.fn(),
-  sendMeetingEndEmbedToChannel: jest.fn(),
-  sendTranscriptionFiles: jest.fn(),
+  updateMeetingProcessingMessage: jest.fn(),
+  updateMeetingSummaryMessage: jest.fn(),
 }));
 jest.mock("../../src/util", () => ({
   deleteDirectoryRecursively: jest.fn(),
   deleteIfExists: jest.fn(),
 }));
-jest.mock("../../src/commands/generateNotes", () => ({
-  generateAndSendNotes: jest.fn(),
+jest.mock("../../src/services/meetingNotesService", () => ({
+  ensureMeetingNotes: jest.fn(),
+  ensureMeetingSummaries: jest.fn(),
 }));
 jest.mock("../../src/commands/saveMeetingHistory", () => ({
   saveMeetingHistoryToDatabase: jest.fn(),
@@ -104,10 +101,6 @@ const mockedStartProcessingSnippet =
 const mockedWithMeetingEndTrace = withMeetingEndTrace as jest.MockedFunction<
   typeof withMeetingEndTrace
 >;
-const mockedSendMeetingEndEmbedToChannel =
-  sendMeetingEndEmbedToChannel as jest.MockedFunction<
-    typeof sendMeetingEndEmbedToChannel
-  >;
 const mockedEvaluateAutoRecordCancellation =
   evaluateAutoRecordCancellation as jest.MockedFunction<
     typeof evaluateAutoRecordCancellation
@@ -120,9 +113,6 @@ const mockedCleanupSpeakerTracks = cleanupSpeakerTracks as jest.MockedFunction<
 >;
 const mockedCloseOutputFile = closeOutputFile as jest.MockedFunction<
   typeof closeOutputFile
->;
-const mockedSplitAudioIntoChunks = splitAudioIntoChunks as jest.MockedFunction<
-  typeof splitAudioIntoChunks
 >;
 const mockedWaitForAudioOnlyFinishProcessing =
   waitForAudioOnlyFinishProcessing as jest.MockedFunction<
@@ -157,13 +147,9 @@ describe("handleEndMeetingOther", () => {
       events.push("flush");
     });
     mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
-    mockedSendMeetingEndEmbedToChannel.mockResolvedValue(undefined);
     mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
     mockedBuildMixedAudio.mockResolvedValue(undefined);
     mockedCloseOutputFile.mockResolvedValue(undefined);
-    mockedSplitAudioIntoChunks.mockResolvedValue([
-      { file: "chunk.mp3", start: 0, end: 0 },
-    ]);
     mockedWaitForAudioOnlyFinishProcessing.mockResolvedValue(undefined);
     mockedUploadMeetingArtifacts.mockResolvedValue(undefined);
     mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
@@ -234,7 +220,7 @@ describe("handleEndMeetingButton", () => {
     jest.clearAllMocks();
   });
 
-  it("clears the deferred reply when auto-recording is cancelled", async () => {
+  it("acknowledges the end meeting button when auto-recording is cancelled", async () => {
     mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
     mockedEvaluateAutoRecordCancellation.mockResolvedValue({
       cancel: true,
@@ -283,15 +269,14 @@ describe("handleEndMeetingButton", () => {
     const interaction = {
       guildId: "guild-1",
       user: { id: "user-1" },
-      deferred: true,
+      deferred: false,
       replied: false,
-      deferReply: jest.fn().mockResolvedValue(undefined),
-      deleteReply: jest.fn().mockResolvedValue(undefined),
+      deferUpdate: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ButtonInteraction;
 
     await handleEndMeetingButton({} as Client, interaction);
 
-    expect(interaction.deleteReply).toHaveBeenCalled();
+    expect(interaction.deferUpdate).toHaveBeenCalled();
   });
 });

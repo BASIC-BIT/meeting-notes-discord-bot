@@ -18,34 +18,26 @@ const truncate = (text: string, maxLen: number) =>
 const summarize = (text: string) =>
   truncate(text.replace(/\s+/g, " ").trim(), 160);
 
-const resolvePortalBaseUrl = () => {
-  const siteUrl = config.frontend.siteUrl?.trim();
-  if (siteUrl) return siteUrl.replace(/\/$/, "");
-  const fallback = config.frontend.allowedOrigins?.[0];
-  return fallback?.replace(/\/$/, "");
-};
+const resolvePortalBaseUrl = () =>
+  config.frontend.siteUrl.trim().replace(/\/$/, "");
 
 const renderMessageForDisplay = (options: {
   message: AskMessage;
   guildId: string;
-  portalBaseUrl?: string;
+  portalBaseUrl: string;
 }): AskMessage => {
-  const rawText = options.message.text;
   if (options.message.role !== "chronote") {
-    return { ...options.message, rawText };
+    return { ...options.message };
   }
-  const citations = options.message.citations ?? [];
   const rendered = renderAskAnswer({
-    text: rawText,
-    citations,
+    text: options.message.text,
+    citations: options.message.citations ?? [],
     guildId: options.guildId,
     portalBaseUrl: options.portalBaseUrl,
   });
   return {
     ...options.message,
     text: rendered,
-    rawText,
-    citations,
   };
 };
 

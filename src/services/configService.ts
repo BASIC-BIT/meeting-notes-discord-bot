@@ -302,10 +302,7 @@ class ConfigService {
       .map((origin) => origin.trim())
       .filter((origin) => origin.length > 0)
       .map((origin) => origin.replace(/\/$/, "")),
-    siteUrl:
-      process.env.FRONTEND_SITE_URL ||
-      (process.env.FRONTEND_ALLOWED_ORIGINS || "").split(",")[0]?.trim() ||
-      "",
+    siteUrl: process.env.FRONTEND_SITE_URL || "",
   };
 
   constructor() {
@@ -321,6 +318,10 @@ class ConfigService {
           { name: "DISCORD_CLIENT_ID", value: this.discord.clientId },
           { name: "OPENAI_API_KEY", value: this.openai.apiKey },
         ];
+    required.push({
+      name: "FRONTEND_SITE_URL",
+      value: this.frontend.siteUrl,
+    });
 
     const hasLangfuseConfig =
       this.langfuse.publicKey.length > 0 || this.langfuse.secretKey.length > 0;

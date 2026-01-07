@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { trpc } from "../../../services/trpc";
+import { useInvalidateMeetingLists } from "../../../hooks/useInvalidateMeetingLists";
 import {
   deriveSummary,
   filterMeetingItems,
@@ -139,23 +140,9 @@ export const useLibraryMeetings = (
   const listLoading = meetingsQuery.isLoading || channelsQuery.isLoading;
   const listError = Boolean(meetingsQuery.error ?? channelsQuery.error);
 
-  const invalidateMeetingLists = useCallback(async () => {
-    if (!params.selectedGuildId) return;
-    await Promise.all([
-      trpcUtils.meetings.list.invalidate({
-        serverId: params.selectedGuildId,
-        archivedOnly: false,
-      }),
-      trpcUtils.meetings.list.invalidate({
-        serverId: params.selectedGuildId,
-        archivedOnly: true,
-      }),
-      trpcUtils.meetings.list.invalidate({
-        serverId: params.selectedGuildId,
-        includeArchived: true,
-      }),
-    ]);
-  }, [params.selectedGuildId, trpcUtils.meetings.list]);
+  const invalidateMeetingLists = useInvalidateMeetingLists(
+    params.selectedGuildId,
+  );
 
   const handleRefresh = useCallback(async () => {
     if (!params.selectedGuildId) return;

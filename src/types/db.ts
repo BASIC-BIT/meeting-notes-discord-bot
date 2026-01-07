@@ -275,10 +275,7 @@ export interface AskMessageRecord {
 
 export interface AskCitationRecord {
   index: number;
-  target: "portal" | "discord_summary" | "transcript";
   meetingId: string;
-  notesChannelId?: string;
-  notesMessageId?: string;
   eventId?: string;
 }
 

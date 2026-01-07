@@ -35,6 +35,8 @@ export default function Ask() {
     list?: "mine" | "shared" | "archived";
     conversationId?: string;
     messageId?: string;
+    meetingId?: string;
+    eventId?: string;
   };
   const listMode = resolveListMode(search.list ?? null);
   const highlightedMessageId = search.messageId ?? null;

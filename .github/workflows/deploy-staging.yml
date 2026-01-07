@@ -171,6 +171,8 @@ jobs:
   e2e-tests:
     name: E2E Tests (Playwright)
     runs-on: ubuntu-latest
+    env:
+      FRONTEND_SITE_URL: http://127.0.0.1:5173
     steps:
       - name: Checkout
         uses: actions/checkout@v6

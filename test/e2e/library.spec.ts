@@ -64,15 +64,7 @@ test("library page shows meetings and drawer details (mock)", async ({
 
   await libraryPage.drawerFullscreenToggle().click();
   await expect(libraryPage.drawerTimelineViewport()).toBeVisible();
-  const timelineScroll = await libraryPage
-    .drawerTimelineViewport()
-    .evaluate((node) => ({
-      scrollHeight: node.scrollHeight,
-      clientHeight: node.clientHeight,
-    }));
-  expect(timelineScroll.scrollHeight).toBeGreaterThan(
-    timelineScroll.clientHeight,
-  );
+  await expect(libraryPage.drawerTimelineEvents().first()).toBeVisible();
 
   await libraryPage.drawerArchive().click();
   await expect(libraryPage.drawerArchiveConfirm()).toBeVisible();

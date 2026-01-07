@@ -60,6 +60,9 @@ const scrubInternalIds = (text: string) =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
+const ASK_MAX_COMPLETION_TOKENS = 800;
+const ASK_MEETING_DELIMITER = "---";
+
 const buildDictionaryBlock = async (guildId: string): Promise<string> => {
   try {
     const [entries, subscription] = await Promise.all([
@@ -165,7 +168,6 @@ const buildNoMeetingsResponse = (
 
 const buildMockResponse = (
   question: string,
-  guildId: string,
   meetings: MeetingSummary[],
 ): AskResponse => {
   if (!meetings.length) {
@@ -176,17 +178,11 @@ const buildMockResponse = (
       citations: [],
     };
   }
-  const sample = meetings[0];
   const sourceMeetingIds = meetings.map(
     (meeting) => meeting.channelId_timestamp,
   );
-  const mockSourceLink =
-    sample.notesChannelId && sample.notesMessageIds?.length
-      ? `https://discord.com/channels/${guildId}/${sample.notesChannelId}/${sample.notesMessageIds[0]}`
-      : "";
-  const sourceLine = mockSourceLink ? `\n\nSource: ${mockSourceLink}` : "";
   return {
-    answer: `Mock answer for "${question}".${sourceLine}`,
+    answer: `Mock answer for "${question}".`,
     sourceMeetingIds,
     citations: [],
   };
@@ -217,7 +213,7 @@ export async function answerQuestionService(
     : scopedMeetings;
 
   if (config.mock.enabled) {
-    return buildMockResponse(question, guildId, meetings);
+    return buildMockResponse(question, meetings);
   }
 
   if (!meetings.length) {
@@ -246,9 +242,10 @@ export async function answerQuestionService(
     name: config.langfuse.askPromptName,
     variables: {
       question,
-      contextBlocks: contextBlocks.join("\n"),
+      contextBlocks: contextBlocks.join(`\n\n${ASK_MEETING_DELIMITER}\n\n`),
       historyBlock,
       dictionaryBlock,
+      maxAnswerTokens: String(ASK_MAX_COMPLETION_TOKENS),
     },
   });
 
@@ -282,7 +279,7 @@ export async function answerQuestionService(
   const completion = await openAIClient.chat.completions.create({
     model: modelChoice.model,
     messages,
-    max_completion_tokens: 300,
+    max_completion_tokens: ASK_MAX_COMPLETION_TOKENS,
     ...chatParams,
   });
 

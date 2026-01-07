@@ -36,12 +36,12 @@ export async function handleAskCommand(
       scope,
       maxMeetings,
     });
-    const portalBaseUrl = config.frontend.siteUrl?.trim();
+    const portalBaseUrl = config.frontend.siteUrl.trim().replace(/\/$/, "");
     const rendered = renderAskAnswer({
       text: answer,
       citations: citations ?? [],
       guildId: interaction.guildId!,
-      portalBaseUrl: portalBaseUrl?.replace(/\/$/, ""),
+      portalBaseUrl,
     });
 
     await interaction.editReply(rendered);

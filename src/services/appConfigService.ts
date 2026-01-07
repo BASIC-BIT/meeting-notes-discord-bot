@@ -12,8 +12,11 @@ type AppConfigCache = {
 };
 
 let cache: AppConfigCache | null = null;
+const isTestEnv =
+  process.env.NODE_ENV === "test" || Boolean(process.env.JEST_WORKER_ID);
 
 function isAppConfigEnabled() {
+  if (isTestEnv) return false;
   return (
     config.appConfig.enabled &&
     config.appConfig.applicationId.length > 0 &&

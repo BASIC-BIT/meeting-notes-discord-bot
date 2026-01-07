@@ -15,20 +15,20 @@ meetings.
 
 ## Decision
 
-1. Always include explicit Status and an index in each meeting context block.
+1. Always include explicit Status and an index in each meeting context block,
+   and separate meetings with a clear delimiter in the prompt context.
 2. Require the model to cite sources using structured tags
-   (`<chronote:cite index="N" target="portal|discord_summary" />`) and forbid
-   raw URLs or markdown links in the model output.
+   (`<chronote:cite index="N" />`) and forbid raw URLs or markdown links in the
+   model output.
 3. Store raw model output with tags plus structured citation metadata in Dynamo.
-4. Render citations into links at read time based on the current URL scheme,
-   and keep the stored raw output stable for future rendering changes.
+4. Render citations inline at read time based on the current URL scheme, and
+   keep the stored raw output stable for future rendering changes.
 
 ## Consequences
 
 Positive:
 
-- Answers present as search-style results with numbered citations and a sources
-  list.
+- Answers present as search-style results with inline numbered citations.
 - URLs can evolve without migrating stored ask data.
 - Citation metadata is available for exports and future UI features.
 

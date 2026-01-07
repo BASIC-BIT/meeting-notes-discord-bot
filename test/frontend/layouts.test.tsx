@@ -1,8 +1,9 @@
 import "./mocks/mockFrontendContexts";
 import "./mocks/mockRouter";
+import "./mocks/trpc";
 import React from "react";
 import { beforeEach, describe, expect, test } from "@jest/globals";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import PortalLayout from "../../src/frontend/layouts/PortalLayout";
 import PortalServerLayout from "../../src/frontend/layouts/PortalServerLayout";
 import { usePortalStore } from "../../src/frontend/stores/portalStore";
@@ -64,7 +65,7 @@ describe("portal layouts", () => {
     authState.state = "authenticated";
     guildState.loading = true;
     setRouteParams({ serverId: "g1" });
-    render(<PortalServerLayout />);
+    renderWithMantine(<PortalServerLayout />);
     expect(screen.queryByTestId("router-outlet")).toBeNull();
     expect(screen.queryByTestId("navigate")).toBeNull();
   });
@@ -74,7 +75,7 @@ describe("portal layouts", () => {
     guildState.loading = false;
     guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     setRouteParams({ serverId: "g2" });
-    render(<PortalServerLayout />);
+    renderWithMantine(<PortalServerLayout />);
     await waitFor(() => {
       const nav = screen.getByTestId("navigate");
       expect(nav).toHaveAttribute("data-to", "/portal/select-server");
@@ -88,7 +89,7 @@ describe("portal layouts", () => {
     guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     setRouteParams({ serverId: "g1" });
 
-    render(<PortalServerLayout />);
+    renderWithMantine(<PortalServerLayout />);
     await waitFor(() => {
       expect(guildState.setSelectedGuildId).toHaveBeenCalledWith("g1");
     });
