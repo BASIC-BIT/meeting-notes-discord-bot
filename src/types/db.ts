@@ -225,6 +225,7 @@ export interface MeetingHistory {
   endReason?: MeetingEndReason;
   endTriggeredByUserId?: string;
   cancellationReason?: string;
+  summaryMessageId?: string; // Message id for the summary embed
   notesMessageIds?: string[]; // All message ids when notes span multiple messages
   notesChannelId?: string; // Channel id where notes were posted
   notesVersion?: number; // Incremented on corrections

@@ -17,10 +17,12 @@ const DEFAULT_TITLE = "Meeting Summary";
 const MAX_FIELD_VALUE = 1024;
 const MAX_EMBED_DESCRIPTION = 4000;
 const MAX_EMBEDS_PER_MESSAGE = 10;
+// Prefer newline breaks only when a meaningful portion of the chunk is filled.
+const NEWLINE_CUT_FRACTION = 0.6;
 
 type MeetingMessagePayload = {
   embeds: EmbedBuilder[];
-  components?: Array<ActionRowBuilder<ButtonBuilder>>;
+  components?: ActionRowBuilder<ButtonBuilder>[];
 };
 
 function buildMeetingHistoryKey(meeting: MeetingData): string {
@@ -116,7 +118,11 @@ function chunkText(text: string, maxLength: number): string[] {
   while (remaining.length > maxLength) {
     const slice = remaining.slice(0, maxLength);
     const lastNewline = slice.lastIndexOf("\n");
-    const cutIndex = lastNewline > maxLength * 0.6 ? lastNewline : maxLength;
+    const minPreferred = Math.floor(maxLength * NEWLINE_CUT_FRACTION);
+    const cutIndex =
+      lastNewline >= minPreferred && lastNewline !== -1
+        ? lastNewline
+        : maxLength;
     const chunk = remaining.slice(0, cutIndex).trimEnd();
     if (chunk) {
       chunks.push(chunk);
@@ -168,7 +174,7 @@ function buildMeetingPortalUrl(meeting: MeetingData): string {
 function buildSummaryComponents(
   meeting: MeetingData,
   portalUrl: string,
-): Array<ActionRowBuilder<ButtonBuilder>> {
+): ActionRowBuilder<ButtonBuilder>[] {
   const channelIdTimestamp = buildMeetingHistoryKey(meeting);
   const encodedKey = Buffer.from(channelIdTimestamp).toString("base64");
   const feedbackIds = buildSummaryFeedbackButtonIds(channelIdTimestamp);
@@ -196,7 +202,7 @@ function buildSummaryComponents(
       .setLabel("Edit tags")
       .setStyle(ButtonStyle.Secondary),
   ];
-  const rows: Array<ActionRowBuilder<ButtonBuilder>> = [];
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   rows.push(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
@@ -207,9 +213,14 @@ function buildSummaryComponents(
     ),
   );
   if (actionButtons.length > 0) {
-    rows.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(...actionButtons),
-    );
+    const firstRow = actionButtons.slice(0, 3);
+    const secondRow = actionButtons.slice(3);
+    rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...firstRow));
+    if (secondRow.length) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(...secondRow),
+      );
+    }
   }
   return rows;
 }
@@ -251,31 +262,25 @@ export async function updateMeetingSummaryMessage(
   meeting: MeetingData,
 ): Promise<void> {
   const portalUrl = buildMeetingPortalUrl(meeting);
-  const allEmbeds = [buildSummaryEmbed(meeting), ...buildNotesEmbeds(meeting)];
-  const payloads: MeetingMessagePayload[] = [];
-  for (let i = 0; i < allEmbeds.length; i += MAX_EMBEDS_PER_MESSAGE) {
-    payloads.push({
-      embeds: allEmbeds.slice(i, i + MAX_EMBEDS_PER_MESSAGE),
-      components: i === 0 ? buildSummaryComponents(meeting, portalUrl) : [],
-    });
-  }
-  const [firstPayload, ...extraPayloads] = payloads.length
-    ? payloads
-    : [
-        {
-          embeds: [buildSummaryEmbed(meeting)],
-          components: buildSummaryComponents(meeting, portalUrl),
-        },
-      ];
-  const { message: firstMessage } = await updateMeetingMessage(
+  const summaryPayload: MeetingMessagePayload = {
+    embeds: [buildSummaryEmbed(meeting)],
+    components: buildSummaryComponents(meeting, portalUrl),
+  };
+  const { message: summaryMessage } = await updateMeetingMessage(
     meeting,
-    firstPayload,
+    summaryPayload,
   );
-  const noteMessages: Message[] = [];
-  if (firstMessage) {
-    noteMessages.push(firstMessage);
+  if (summaryMessage) {
+    meeting.summaryMessageId = summaryMessage.id;
   }
-  for (const payload of extraPayloads) {
+
+  const noteEmbeds = buildNotesEmbeds(meeting);
+  const noteMessages: Message[] = [];
+  for (let i = 0; i < noteEmbeds.length; i += MAX_EMBEDS_PER_MESSAGE) {
+    const payload: MeetingMessagePayload = {
+      embeds: noteEmbeds.slice(i, i + MAX_EMBEDS_PER_MESSAGE),
+      components: [],
+    };
     try {
       const message = await meeting.textChannel.send(payload);
       noteMessages.push(message);
@@ -287,5 +292,8 @@ export async function updateMeetingSummaryMessage(
   if (noteMessages.length) {
     meeting.notesMessageIds = noteMessages.map((note) => note.id);
     meeting.notesChannelId = meeting.textChannel.id;
+  } else {
+    meeting.notesMessageIds = undefined;
+    meeting.notesChannelId = undefined;
   }
 }

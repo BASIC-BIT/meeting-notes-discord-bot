@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import type { HTMLAttributes } from "react";
 import {
   ActionIcon,
@@ -156,7 +156,14 @@ export default function MeetingDetailDrawer({
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
   const drawerOffset = theme.spacing.sm;
-  const navigate = useNavigate({ from: "/portal/server/$serverId" });
+  const navigateAsk = useNavigate({ from: "/portal/server/$serverId/ask" });
+  const navigateLibrary = useNavigate({
+    from: "/portal/server/$serverId/library",
+  });
+  const activeRouteId = useRouterState({
+    select: (state) => state.matches[state.matches.length - 1]?.routeId,
+  });
+  const isAskRoute = activeRouteId === "/portal/server/$serverId/ask";
   const search = useSearch({ from: "/portal/server/$serverId" });
   const fullScreenFromSearch = search.fullScreen === true;
   const trpcUtils = trpc.useUtils();
@@ -267,8 +274,7 @@ export default function MeetingDetailDrawer({
   const handleToggleFullScreen = () => {
     const next = !fullScreen;
     setFullScreen(next);
-    navigate({
-      to: ".",
+    (isAskRoute ? navigateAsk : navigateLibrary)({
       search: (prev) => ({
         ...prev,
         fullScreen: next ? true : undefined,

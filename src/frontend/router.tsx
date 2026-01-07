@@ -61,14 +61,12 @@ const booleanParamValues = new Map<string, boolean>([
   ["0", false],
 ]);
 
-const optionalBooleanParam = z
-  .preprocess((value) => {
-    if (value === undefined || value === null) return undefined;
-    if (value === true || value === false) return value;
-    const parsed = booleanParamValues.get(String(value));
-    return parsed === undefined ? value : parsed;
-  }, z.boolean())
-  .optional();
+const optionalBooleanParam = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (value === true || value === false) return value;
+  const parsed = booleanParamValues.get(String(value).toLowerCase());
+  return parsed;
+}, z.boolean().optional());
 
 const portalMeetingSearchSchema = z.object({
   meetingId: optionalStringParam,

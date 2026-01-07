@@ -245,6 +245,18 @@ Look for an appropriate spread of testing across our various different layers to
 
 ## Code Quality Guidelines
 
+### Prefer Existing Solutions
+
+- Avoid reinventing common solutions for parsing, formatting, routing, auth, or data handling. Do quick research for a well supported library or platform feature first.
+- If an AI output behavior needs to change, prefer prompt guidance or model constraints before adding post-processing logic.
+- Introduce custom logic only when there is a clear gap, document the reason, and keep it small and configurable.
+
+### LLM Output and Text Parsing
+
+- Prefer prompt changes, response format constraints, or model guidance over new parsing heuristics in code.
+- Avoid custom NLP rules such as hard-coded abbreviation lists. If parsing is required, research and use a well supported library or standards based approach.
+- If custom parsing is unavoidable, keep it minimal, configurable, and documented with tests that cover known edge cases.
+
 ### Verify Information
 
 Always verify information before presenting it. Do not make assumptions or speculate without clear evidence.
