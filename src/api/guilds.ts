@@ -411,12 +411,12 @@ export function registerGuildRoutes(app: express.Express) {
         tags,
         scope,
       });
-      const portalBaseUrl = config.frontend.siteUrl?.trim();
+      const portalBaseUrl = config.frontend.siteUrl.trim().replace(/\/$/, "");
       const rendered = renderAskAnswer({
         text: answer,
         citations: citations ?? [],
         guildId,
-        portalBaseUrl: portalBaseUrl?.replace(/\/$/, ""),
+        portalBaseUrl,
       });
       res.json({ answer: rendered });
     },

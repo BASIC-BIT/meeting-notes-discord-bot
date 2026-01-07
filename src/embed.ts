@@ -105,14 +105,8 @@ function buildSummaryEmbed(meeting: MeetingData): EmbedBuilder {
     .setTimestamp();
 }
 
-function buildMeetingPortalUrl(meeting: MeetingData): string | undefined {
-  const base = config.frontend.siteUrl?.replace(/\/$/, "");
-  if (!base) {
-    console.warn(
-      `Cannot build portal meeting URL for guild ${meeting.guildId} and meeting ${meeting.meetingId}: config.frontend.siteUrl is not configured.`,
-    );
-    return undefined;
-  }
+function buildMeetingPortalUrl(meeting: MeetingData): string {
+  const base = config.frontend.siteUrl.replace(/\/$/, "");
   return buildPortalMeetingUrl({
     baseUrl: base,
     guildId: meeting.guildId,
@@ -122,7 +116,7 @@ function buildMeetingPortalUrl(meeting: MeetingData): string | undefined {
 
 function buildSummaryComponents(
   meeting: MeetingData,
-  portalUrl?: string,
+  portalUrl: string,
 ): Array<ActionRowBuilder<ButtonBuilder>> {
   const channelIdTimestamp = buildMeetingHistoryKey(meeting);
   const encodedKey = Buffer.from(channelIdTimestamp).toString("base64");
@@ -137,6 +131,10 @@ function buildSummaryComponents(
       .setLabel("Needs work")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
+      .setCustomId(`notes_correction:${meeting.guildId}:${encodedKey}`)
+      .setLabel("Suggest correction")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId(`${MEETING_RENAME_PREFIX}:${meeting.guildId}:${encodedKey}`)
       .setLabel("Rename meeting")
       .setStyle(ButtonStyle.Secondary),
@@ -145,18 +143,18 @@ function buildSummaryComponents(
       .setLabel("Edit tags")
       .setStyle(ButtonStyle.Secondary),
   ];
-
-  if (portalUrl) {
-    buttons.push(
+  const rows: Array<ActionRowBuilder<ButtonBuilder>> = [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons),
+  ];
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setLabel("Open in Chronote")
         .setStyle(ButtonStyle.Link)
         .setURL(portalUrl),
-    );
-  }
-
-  if (buttons.length === 0) return [];
-  return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+    ),
+  );
+  return rows;
 }
 
 async function updateMeetingMessage(

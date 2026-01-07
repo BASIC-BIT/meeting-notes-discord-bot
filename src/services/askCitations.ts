@@ -158,7 +158,7 @@ export const renderAskAnswer = (options: {
   text: string;
   citations: AskCitation[];
   guildId: string;
-  portalBaseUrl?: string;
+  portalBaseUrl: string;
 }) => {
   const citationMap = new Map(
     options.citations.map((citation) => [

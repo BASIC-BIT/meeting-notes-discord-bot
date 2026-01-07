@@ -78,6 +78,10 @@ export class LibraryPage {
     return this.drawer().getByTestId(testIds.library.timelineViewport);
   }
 
+  drawerTimelineEvents(): Locator {
+    return this.drawer().locator("[data-event-id]");
+  }
+
   drawerFullscreenToggle(): Locator {
     return this.drawer().getByTestId(testIds.library.fullscreenToggle);
   }

@@ -1,5 +1,5 @@
 export function buildPortalMeetingUrl(options: {
-  baseUrl?: string;
+  baseUrl: string;
   guildId: string;
   meetingId: string;
   eventId?: string;
@@ -8,7 +8,6 @@ export function buildPortalMeetingUrl(options: {
   const path = `/portal/server/${guildId}/library?meetingId=${encodeURIComponent(
     meetingId,
   )}${eventId ? `&eventId=${encodeURIComponent(eventId)}` : ""}`;
-  if (!baseUrl) return path;
   const trimmed = baseUrl.replace(/\/$/, "");
   return `${trimmed}${path}`;
 }
