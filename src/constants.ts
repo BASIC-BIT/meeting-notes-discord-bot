@@ -23,8 +23,6 @@ export const TRANSCRIPTION_RATE_MIN_TIME = 800; // Rate limit in minimum millise
 export const LANGFUSE_AUDIO_ATTACHMENT_MAX_CONCURRENT = 1;
 export const LANGFUSE_AUDIO_ATTACHMENT_MIN_TIME = 0;
 
-export const MAX_DISCORD_UPLOAD_SIZE = 24_000_000; //24MB, to give safety margin from Discord's 25MB upload limit
-
 export const GPT_MODEL_MAX_TOKENS = 128000;
 
 export const TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE = 0.75; // If over 25% of lines were lost in cleanup, assume something went wrong and return original transcription

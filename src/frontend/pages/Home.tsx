@@ -159,7 +159,7 @@ export default function Home() {
               >
                 Add to Discord
               </Button>
-              <Button
+              {/* <Button
                 size="md"
                 variant="outline"
                 component="a"
@@ -167,7 +167,7 @@ export default function Home() {
                 href="https://chronote.gg"
               >
                 View Docs
-              </Button>
+              </Button> */}
             </Group>
             <Group gap="lg" wrap="wrap">
               <Group gap={8} wrap="nowrap">
@@ -234,13 +234,15 @@ export default function Home() {
                     <Text fw={600}>D&D session recap</Text>
                     <List spacing="xs" size="sm">
                       <List.Item>
-                        Decision: take the mountain pass instead of the swamp
+                        Decision: Revisit the tavern tomorrow night to
+                        investigate the mysterious patron
                       </List.Item>
                       <List.Item>
-                        Action: Rin posts the map + loot sheet in #campaign-info
+                        Action: BASIC posts the map + loot sheet in
+                        #campaign-info
                       </List.Item>
                       <List.Item>Next time: Sunday 7pm (voice)</List.Item>
-                      <List.Item>Highlights + attendance included</List.Item>
+                      {/* <List.Item>Highlights + attendance included</List.Item> */}
                     </List>
                   </Stack>
                 </Surface>
@@ -261,15 +263,15 @@ export default function Home() {
                   <Text size="xs" c="dimmed" fw={600}>
                     Tags:
                   </Text>
-                  {["campaign", "heist", "npc"].map((tag) => (
+                  {["campaign", "shadowrun"].map((tag) => (
                     <Badge key={tag} variant="light" color="gray">
                       {tag}
                     </Badge>
                   ))}
                 </Group>
                 <EvidenceCard
-                  quote="If we hit the vault before midnight, the ward doesn't reset."
-                  speaker="Rin"
+                  quote="We should approach the warehouse from the east side, there's a blind spot near the loading dock."
+                  speaker="BASIC"
                   time="01:12:44"
                   channel="#tabletop-voice"
                 />

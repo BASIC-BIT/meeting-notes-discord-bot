@@ -14,6 +14,8 @@ variables:
   - channelNames
   - longStoryTargetChars
   - transcript
+extends:
+  - _fragments/markdown-output-guidance
 name: chronote-notes-system-chat
 type: chat
 version: 1

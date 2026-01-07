@@ -6,17 +6,13 @@ import { RefreshButton } from "../../components/RefreshButton";
 import { useGuildContext } from "../../contexts/GuildContext";
 import { FiltersBar } from "../../features/library/FiltersBar";
 import { MeetingList } from "../../features/library/MeetingList";
-import MeetingDetailDrawer from "./components/MeetingDetailDrawer";
 import { useLibraryMeetings } from "./hooks/useLibraryMeetings";
 import type { ArchiveFilter } from "./types";
 
 export default function LibraryPage() {
   const navigate = useNavigate({ from: "/portal/server/$serverId/library" });
   const search = useSearch({ from: "/portal/server/$serverId/library" });
-  const { guilds, selectedGuildId } = useGuildContext();
-  const canManageSelectedGuild =
-    selectedGuildId != null &&
-    guilds.find((guild) => guild.id === selectedGuildId)?.canManage === true;
+  const { selectedGuildId } = useGuildContext();
 
   const [query, setQuery] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -30,10 +26,8 @@ export default function LibraryPage() {
     filteredMeetings,
     tagOptions,
     channelOptions,
-    channelNameMap,
     listLoading,
     listError,
-    invalidateMeetingLists,
     handleRefresh,
   } = useLibraryMeetings({
     selectedGuildId: selectedGuildId ?? null,
@@ -110,23 +104,6 @@ export default function LibraryPage() {
           data-testid="library-refresh"
         />
       </Group>
-
-      <MeetingDetailDrawer
-        opened={Boolean(selectedMeetingId)}
-        selectedMeetingId={selectedMeetingId}
-        selectedGuildId={selectedGuildId ?? null}
-        canManageSelectedGuild={canManageSelectedGuild}
-        channelNameMap={channelNameMap}
-        invalidateMeetingLists={invalidateMeetingLists}
-        onClose={() =>
-          navigate({
-            search: (prev) => ({
-              ...prev,
-              meetingId: undefined,
-            }),
-          })
-        }
-      />
     </Stack>
   );
 }

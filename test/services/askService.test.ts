@@ -87,11 +87,9 @@ describe("askService (mock mode)", () => {
     expect(blocks[0]).toContain("</meeting>");
   });
 
-  test("returns mock answer with source link when meetings exist", async () => {
+  test("returns mock answer when meetings exist", async () => {
     const meeting = buildMeeting({
       notes: "Notes",
-      notesChannelId: "text-1",
-      notesMessageIds: ["note-1"],
     });
     const { answerQuestionService } = await loadModule({
       mockEnabled: true,
@@ -105,9 +103,7 @@ describe("askService (mock mode)", () => {
     });
 
     expect(result.answer).toContain('Mock answer for "What did we decide?"');
-    expect(result.answer).toContain(
-      "https://discord.com/channels/guild-1/text-1/note-1",
-    );
+    expect(result.answer).not.toContain("discord.com/channels");
     expect(result.sourceMeetingIds).toEqual([meeting.channelId_timestamp]);
   });
 

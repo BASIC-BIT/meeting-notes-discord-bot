@@ -30,22 +30,18 @@ const renderMessageForDisplay = (options: {
   guildId: string;
   portalBaseUrl?: string;
 }): AskMessage => {
-  const rawText = options.message.text;
   if (options.message.role !== "chronote") {
-    return { ...options.message, rawText };
+    return { ...options.message };
   }
-  const citations = options.message.citations ?? [];
   const rendered = renderAskAnswer({
-    text: rawText,
-    citations,
+    text: options.message.text,
+    citations: options.message.citations ?? [],
     guildId: options.guildId,
     portalBaseUrl: options.portalBaseUrl,
   });
   return {
     ...options.message,
     text: rendered,
-    rawText,
-    citations,
   };
 };
 

@@ -1,145 +1,209 @@
-import { MeetingData } from "./types/meeting-data";
 import {
-  EmbedBuilder,
-  AttachmentBuilder,
-  ButtonInteraction,
-  TextChannel,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  EmbedBuilder,
+  Message,
 } from "discord.js";
-import { doesFileHaveContent } from "./util";
-import { format } from "date-fns";
-import { BaseMessageOptions } from "discord.js/typings";
-import { ChunkInfo } from "./types/audio";
+import { MeetingData } from "./types/meeting-data";
+import { config } from "./services/configService";
+import { buildPortalMeetingUrl } from "./utils/portalLinks";
+import { buildSummaryFeedbackButtonIds } from "./commands/summaryFeedback";
+import { MEETING_RENAME_PREFIX } from "./commands/meetingName";
 
-export async function sendMeetingEndEmbedToChannel(
-  meeting: MeetingData,
-  channel: TextChannel,
-  chatLogFilePath: string,
-  audioChunks: ChunkInfo[],
-): Promise<void> {
-  await channel.send({
-    ...getEmbed(meeting),
-    ...getTagsRow(meeting),
-  });
-  await sendAudioFiles(channel, chatLogFilePath, audioChunks);
+const PROCESSING_COLOR = 0x3498db;
+const SUMMARY_COLOR = 0x00ae86;
+const DEFAULT_TITLE = "Meeting Summary";
+const MAX_FIELD_VALUE = 1024;
+
+type MeetingMessagePayload = {
+  embeds: EmbedBuilder[];
+  components?: Array<ActionRowBuilder<ButtonBuilder>>;
+};
+
+function buildMeetingHistoryKey(meeting: MeetingData): string {
+  return `${meeting.voiceChannel.id}#${meeting.startTime.toISOString()}`;
 }
 
-export async function sendMeetingEndEmbed(
-  meeting: MeetingData,
-  interaction: ButtonInteraction,
-  chatLogFilePath: string,
-  audioChunks: ChunkInfo[],
-): Promise<void> {
-  await interaction.editReply({
-    ...getEmbed(meeting),
-    ...getTagsRow(meeting),
-  });
-  await sendAudioFiles(meeting.textChannel, chatLogFilePath, audioChunks);
+function formatTimestamp(date: Date): string {
+  return `<t:${Math.floor(date.getTime() / 1000)}:F>`;
 }
 
-async function sendAudioFiles(
-  channel: TextChannel,
-  chatLogFilePath: string,
-  audioChunks: ChunkInfo[],
-) {
-  const files: AttachmentBuilder[] = [];
-  if (doesFileHaveContent(chatLogFilePath)) {
-    files.push(new AttachmentBuilder(chatLogFilePath).setName("ChatLog.txt"));
-  }
-  audioChunks.forEach((chunk, index) => {
-    files.push(
-      new AttachmentBuilder(chunk.file).setName(`audio_${index + 1}.mp3`),
-    );
-  });
-
-  await channel.send({
-    files,
-  });
+function formatDurationMinutes(start: Date, end: Date): string {
+  const minutes = Math.max(
+    0,
+    Math.floor((end.getTime() - start.getTime()) / 60000),
+  );
+  return `${minutes} minutes`;
 }
 
-function getEmbed(meeting: MeetingData): BaseMessageOptions {
+function truncateFieldValue(value: string, max = MAX_FIELD_VALUE): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function buildMeetingFields(meeting: MeetingData) {
   const attendanceList = Array.from(meeting.attendance).join("\n");
-  const meetingStart = format(meeting.startTime, "PPpp"); // Format the meeting start time
-  const meetingEnd = format(meeting.endTime!, "PPpp"); // Current time as the meeting end time
-  const meetingDuration = Math.floor(
-    (Date.now() - meeting.startTime.getTime()) / 60000,
-  ); // Duration in minutes
+  const startLabel = formatTimestamp(meeting.startTime);
+  const endLabel = meeting.endTime
+    ? formatTimestamp(meeting.endTime)
+    : "Unknown";
+  const durationLabel = meeting.endTime
+    ? formatDurationMinutes(meeting.startTime, meeting.endTime)
+    : formatDurationMinutes(meeting.startTime, new Date());
 
-  const embed = new EmbedBuilder()
-    .setTitle("📋 Meeting Summary")
-    .setColor("#3498db")
-    .setDescription("Here are the details of the recent meeting:")
-    .addFields(
-      { name: "🕒 Meeting Start", value: meetingStart, inline: true },
-      { name: "🕒 Meeting End", value: meetingEnd, inline: true },
-      {
-        name: "⏱️ Duration",
-        value: `${meetingDuration} minutes`,
-        inline: true,
-      },
-      {
-        name: "👥 Members in Attendance",
-        value: attendanceList || "No members recorded.",
-      },
-      { name: "🔊 Voice Channel", value: `**${meeting.voiceChannel.name}**` },
-      ...(meeting.tags && meeting.tags.length
-        ? [
-            {
-              name: "🏷 Tags",
-              value: meeting.tags.join(", "),
-              inline: true,
-            },
-          ]
-        : []),
-      {
-        name: "🔗 GitHub Repository",
-        value:
-          "[View Bot on GitHub](https://github.com/BASIC-BIT/meeting-notes-discord-bot)",
-        inline: true,
-      },
-      {
-        name: "☕ Donate",
-        value: "[Support Me On Kofi](https://ko-fi.com/basicbit)",
-        inline: true,
-      },
-    )
-    .setTimestamp();
+  const fields = [
+    { name: "Start Time", value: startLabel, inline: true },
+    { name: "End Time", value: endLabel, inline: true },
+    { name: "Duration", value: durationLabel, inline: true },
+    {
+      name: "Attendees",
+      value: truncateFieldValue(attendanceList || "No members recorded."),
+    },
+    { name: "Voice Channel", value: meeting.voiceChannel.name },
+  ];
 
-  return {
-    embeds: [embed],
-  };
-}
-
-function getTagsRow(meeting: MeetingData) {
-  const channelIdTimestamp = `${meeting.voiceChannel.id}#${meeting.startTime.toISOString()}`;
-  const encodedKey =
-    typeof Buffer !== "undefined"
-      ? Buffer.from(channelIdTimestamp).toString("base64")
-      : channelIdTimestamp;
-
-  const editTagsHistoryButton = new ButtonBuilder()
-    .setCustomId(`edit_tags_history:${meeting.guildId}:${encodedKey}`)
-    .setLabel("Edit Tags")
-    .setStyle(ButtonStyle.Secondary);
-
-  return {
-    components: [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        editTagsHistoryButton,
-      ),
-    ],
-  };
-}
-
-export async function sendTranscriptionFiles(
-  meeting: MeetingData,
-  transcriptionFilePath: string,
-): Promise<void> {
-  if (doesFileHaveContent(transcriptionFilePath)) {
-    await meeting.textChannel.send({
-      files: [new AttachmentBuilder(transcriptionFilePath)],
+  if (meeting.tags && meeting.tags.length) {
+    fields.push({
+      name: "Tags",
+      value: truncateFieldValue(meeting.tags.join(", ")),
+      inline: true,
     });
+  }
+
+  return fields;
+}
+
+function resolveMeetingTitle(meeting: MeetingData): string {
+  const name = meeting.meetingName?.trim();
+  if (name) return name;
+  const label = meeting.summaryLabel?.trim();
+  if (label) return label;
+  return DEFAULT_TITLE;
+}
+
+function buildProcessingEmbed(meeting: MeetingData): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle(`${resolveMeetingTitle(meeting)} (processing)`)
+    .setColor(PROCESSING_COLOR)
+    .setDescription(
+      "Processing transcript and meeting notes. This can take a few minutes.",
+    )
+    .addFields(buildMeetingFields(meeting))
+    .setTimestamp();
+}
+
+function buildSummaryEmbed(meeting: MeetingData): EmbedBuilder {
+  const summary = meeting.summarySentence?.trim();
+  return new EmbedBuilder()
+    .setTitle(resolveMeetingTitle(meeting))
+    .setColor(SUMMARY_COLOR)
+    .setDescription(
+      summary && summary.length > 0 ? summary : "Summary unavailable.",
+    )
+    .addFields(buildMeetingFields(meeting))
+    .setTimestamp();
+}
+
+function buildMeetingPortalUrl(meeting: MeetingData): string | undefined {
+  const base = config.frontend.siteUrl?.replace(/\/$/, "");
+  if (!base) {
+    console.warn(
+      `Cannot build portal meeting URL for guild ${meeting.guildId} and meeting ${meeting.meetingId}: config.frontend.siteUrl is not configured.`,
+    );
+    return undefined;
+  }
+  return buildPortalMeetingUrl({
+    baseUrl: base,
+    guildId: meeting.guildId,
+    meetingId: buildMeetingHistoryKey(meeting),
+  });
+}
+
+function buildSummaryComponents(
+  meeting: MeetingData,
+  portalUrl?: string,
+): Array<ActionRowBuilder<ButtonBuilder>> {
+  const channelIdTimestamp = buildMeetingHistoryKey(meeting);
+  const encodedKey = Buffer.from(channelIdTimestamp).toString("base64");
+  const feedbackIds = buildSummaryFeedbackButtonIds(channelIdTimestamp);
+  const buttons: ButtonBuilder[] = [
+    new ButtonBuilder()
+      .setCustomId(feedbackIds.up)
+      .setLabel("Helpful")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(feedbackIds.down)
+      .setLabel("Needs work")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`${MEETING_RENAME_PREFIX}:${meeting.guildId}:${encodedKey}`)
+      .setLabel("Rename meeting")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`edit_tags_history:${meeting.guildId}:${encodedKey}`)
+      .setLabel("Edit tags")
+      .setStyle(ButtonStyle.Secondary),
+  ];
+
+  if (portalUrl) {
+    buttons.push(
+      new ButtonBuilder()
+        .setLabel("Open in Chronote")
+        .setStyle(ButtonStyle.Link)
+        .setURL(portalUrl),
+    );
+  }
+
+  if (buttons.length === 0) return [];
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+}
+
+async function updateMeetingMessage(
+  meeting: MeetingData,
+  payload: MeetingMessagePayload,
+): Promise<{ message?: Message; source: "edited" | "sent" | "none" }> {
+  const channel = meeting.textChannel;
+  if (meeting.startMessageId) {
+    try {
+      const message = await channel.messages.fetch(meeting.startMessageId);
+      await message.edit(payload);
+      return { message, source: "edited" };
+    } catch (error) {
+      console.warn("Failed to update meeting start message", error);
+    }
+  }
+
+  try {
+    const message = await channel.send(payload);
+    meeting.startMessageId = message.id;
+    return { message, source: "sent" };
+  } catch (error) {
+    console.warn("Failed to send meeting status message", error);
+    return { source: "none" };
+  }
+}
+
+export async function updateMeetingProcessingMessage(
+  meeting: MeetingData,
+): Promise<void> {
+  await updateMeetingMessage(meeting, {
+    embeds: [buildProcessingEmbed(meeting)],
+    components: [],
+  });
+}
+
+export async function updateMeetingSummaryMessage(
+  meeting: MeetingData,
+): Promise<void> {
+  const portalUrl = buildMeetingPortalUrl(meeting);
+  const { message } = await updateMeetingMessage(meeting, {
+    embeds: [buildSummaryEmbed(meeting)],
+    components: buildSummaryComponents(meeting, portalUrl),
+  });
+
+  if (message) {
+    meeting.notesMessageIds = [message.id];
+    meeting.notesChannelId = meeting.textChannel.id;
   }
 }

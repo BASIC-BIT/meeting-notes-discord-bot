@@ -79,9 +79,3 @@ export interface AudioData {
   speakerTrackDir?: string;
   missingStartWarnings?: Set<string>;
 }
-
-export interface ChunkInfo {
-  start: number;
-  end: number;
-  file: string;
-}

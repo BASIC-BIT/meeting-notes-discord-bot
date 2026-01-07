@@ -18,7 +18,6 @@ import {
   Textarea,
   TextInput,
   ThemeIcon,
-  Title,
   useComputedColorScheme,
   useMantineTheme,
 } from "@mantine/core";
@@ -203,6 +202,31 @@ export default function MeetingDetailDrawer({
 
   const summaryCopyText = detail?.notes ?? "";
   const canCopySummary = summaryCopyText.trim().length > 0;
+
+  const drawerTitle = meeting ? (
+    <Group gap="xs" align="center" wrap="wrap">
+      <Text fw={600} size="lg">
+        {meeting.title}
+      </Text>
+      <ActionIcon
+        variant="subtle"
+        aria-label="Rename meeting"
+        onClick={() => setRenameModalOpen(true)}
+      >
+        <IconPencil size={16} />
+      </ActionIcon>
+      {meeting.archivedAt ? (
+        <Badge size="sm" variant="light" color="gray">
+          Archived
+        </Badge>
+      ) : null}
+      {renderDetailStatusBadge(displayStatus)}
+    </Group>
+  ) : (
+    <Text fw={600} size="lg">
+      Meeting details
+    </Text>
+  );
 
   useEffect(() => {
     if (!meeting) return;
@@ -597,18 +621,20 @@ export default function MeetingDetailDrawer({
       size={fullScreen ? "100%" : "xl"}
       offset={drawerOffset}
       overlayProps={uiOverlays.modal}
+      title={drawerTitle}
       data-testid="meeting-drawer"
       styles={{
         content: {
           backgroundColor: isDark ? theme.colors.dark[7] : theme.white,
-          height: "100%",
           overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
         },
-        inner: {
-          height: "100%",
+        header: {
+          backgroundColor: isDark ? theme.colors.dark[7] : theme.white,
         },
         body: {
-          height: "100%",
+          flex: 1,
           display: "flex",
           flexDirection: "column",
           minHeight: 0,
@@ -623,7 +649,7 @@ export default function MeetingDetailDrawer({
             position: "relative",
             display: "flex",
             flexDirection: "column",
-            height: "100%",
+            flex: 1,
             minHeight: 0,
             overflow: "hidden",
           }}
@@ -778,74 +804,56 @@ export default function MeetingDetailDrawer({
               </Modal>
               <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
                 <Stack gap={4}>
-                  <Group justify="space-between" align="center" wrap="wrap">
-                    <Group gap="xs" align="center" wrap="wrap">
-                      <Title order={3}>{meeting.title}</Title>
-                      <ActionIcon
-                        variant="subtle"
-                        aria-label="Rename meeting"
-                        onClick={() => setRenameModalOpen(true)}
-                      >
-                        <IconPencil size={16} />
-                      </ActionIcon>
-                      {meeting.archivedAt ? (
-                        <Badge size="sm" variant="light" color="gray">
-                          Archived
-                        </Badge>
-                      ) : null}
-                      {renderDetailStatusBadge(displayStatus)}
-                    </Group>
-                    <Group gap="sm">
-                      {displayStatus === MEETING_STATUS.IN_PROGRESS &&
-                      canManageSelectedGuild ? (
-                        <Button
-                          color="red"
-                          variant="light"
-                          loading={endMeetingPreflightLoading}
-                          onClick={preflightEndMeeting}
-                        >
-                          End meeting
-                        </Button>
-                      ) : null}
+                  <Group justify="flex-end" align="center" wrap="wrap">
+                    {displayStatus === MEETING_STATUS.IN_PROGRESS &&
+                    canManageSelectedGuild ? (
                       <Button
+                        color="red"
                         variant="light"
-                        leftSection={<IconDownload size={16} />}
-                        onClick={handleDownload}
-                        data-testid="meeting-download"
+                        loading={endMeetingPreflightLoading}
+                        onClick={preflightEndMeeting}
                       >
-                        Download
+                        End meeting
                       </Button>
-                      <Button
-                        variant="subtle"
-                        leftSection={
-                          meeting.archivedAt ? (
-                            <IconArchiveOff size={16} />
-                          ) : (
-                            <IconArchive size={16} />
-                          )
-                        }
-                        onClick={() => {
-                          setArchiveNextState(!meeting.archivedAt);
-                          setArchiveModalOpen(true);
-                        }}
-                        loading={archiveMutation.isPending}
-                        data-testid={
-                          meeting.archivedAt
-                            ? "meeting-unarchive"
-                            : "meeting-archive"
-                        }
-                      >
-                        {meeting.archivedAt ? "Unarchive" : "Archive"}
-                      </Button>
-                      <Button
-                        variant={fullScreen ? "outline" : "light"}
-                        leftSection={<IconFilter size={16} />}
-                        onClick={() => setFullScreen((prev) => !prev)}
-                        data-testid="meeting-fullscreen-toggle"
-                      >
-                        {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
-                      </Button>
-                    </Group>
+                    ) : null}
+                    <Button
+                      variant="light"
+                      leftSection={<IconDownload size={16} />}
+                      onClick={handleDownload}
+                      data-testid="meeting-download"
+                    >
+                      Download
+                    </Button>
+                    <Button
+                      variant="subtle"
+                      leftSection={
+                        meeting.archivedAt ? (
+                          <IconArchiveOff size={16} />
+                        ) : (
+                          <IconArchive size={16} />
+                        )
+                      }
+                      onClick={() => {
+                        setArchiveNextState(!meeting.archivedAt);
+                        setArchiveModalOpen(true);
+                      }}
+                      loading={archiveMutation.isPending}
+                      data-testid={
+                        meeting.archivedAt
+                          ? "meeting-unarchive"
+                          : "meeting-archive"
+                      }
+                    >
+                      {meeting.archivedAt ? "Unarchive" : "Archive"}
+                    </Button>
+                    <Button
+                      variant={fullScreen ? "outline" : "light"}
+                      leftSection={<IconFilter size={16} />}
+                      onClick={() => setFullScreen((prev) => !prev)}
+                      data-testid="meeting-fullscreen-toggle"
+                    >
+                      {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
+                    </Button>
                   </Group>
                   <Text size="sm" c="dimmed">
                     {meeting.dateLabel} | {meeting.durationLabel} |{" "}
@@ -868,9 +876,8 @@ export default function MeetingDetailDrawer({
                 {fullScreen ? (
                   <Grid
                     gutter="lg"
-                    style={{ flex: 1, minHeight: 0, height: "100%" }}
+                    style={{ flex: 1, minHeight: 0 }}
                     align="stretch"
-                    styles={{ inner: { height: "100%" } }}
                   >
                     <Grid.Col
                       span={{ base: 12, lg: 5 }}
@@ -878,11 +885,10 @@ export default function MeetingDetailDrawer({
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,
-                        height: "100%",
                       }}
                     >
                       <ScrollArea
-                        style={{ flex: 1, minHeight: 0, height: "100%" }}
+                        style={{ flex: 1, minHeight: 0 }}
                         offsetScrollbars
                         data-visual-scroll
                       >
@@ -899,13 +905,9 @@ export default function MeetingDetailDrawer({
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,
-                        height: "100%",
                       }}
                     >
-                      <Stack
-                        gap="sm"
-                        style={{ flex: 1, minHeight: 0, height: "100%" }}
-                      >
+                      <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>
                         {liveStreamEnabled && liveStream.status === "error" ? (
                           <Text size="sm" c="dimmed">
                             Unable to connect to the live transcript. Try
@@ -920,7 +922,6 @@ export default function MeetingDetailDrawer({
                             display: "flex",
                             flexDirection: "column",
                             overflow: "hidden",
-                            height: "100%",
                           }}
                         >
                           <MeetingTimeline

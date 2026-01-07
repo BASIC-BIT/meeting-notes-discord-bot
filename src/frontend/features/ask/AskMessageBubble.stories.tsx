@@ -42,3 +42,12 @@ export const Highlighted: Story = {
     highlighted: true,
   },
 };
+
+export const WithCitations: Story = {
+  args: {
+    message: {
+      ...baseMessage,
+      text: "Decision recap with citations. [1](https://chronote.test/portal/server/server-1/library?meetingId=meeting-1)",
+    },
+  },
+};

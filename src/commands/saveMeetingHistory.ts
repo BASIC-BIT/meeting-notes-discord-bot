@@ -2,31 +2,10 @@ import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
 import { MEETING_STATUS } from "../types/meetingLifecycle";
 import { writeMeetingHistoryService } from "../services/meetingHistoryService";
-import { getNotes } from "../transcription";
-import { generateMeetingSummaries } from "../services/meetingSummaryService";
-import { resolveMeetingNameFromSummary } from "../services/meetingNameService";
-
-async function resolveMeetingNotes(
-  meeting: MeetingData,
-): Promise<string | undefined> {
-  if (!meeting.generateNotes) return meeting.notesText;
-  if (meeting.notesText) return meeting.notesText;
-  if (!meeting.finalTranscript) {
-    console.warn(
-      "Skipping notes generation for meeting history because final transcript is missing.",
-    );
-    return meeting.notesText;
-  }
-
-  try {
-    const notes = await getNotes(meeting);
-    meeting.notesText = notes;
-    return notes;
-  } catch (error) {
-    console.error("Error generating notes for meeting history:", error);
-    return meeting.notesText;
-  }
-}
+import {
+  ensureMeetingNotes,
+  ensureMeetingSummaries,
+} from "../services/meetingNotesService";
 
 function buildNotesMetadata(
   meeting: MeetingData,
@@ -105,43 +84,6 @@ function buildNotesHistory(options: {
   ];
 }
 
-async function resolveMeetingSummaries(
-  meeting: MeetingData,
-  notes: string | undefined,
-): Promise<{ summarySentence?: string; summaryLabel?: string }> {
-  if (meeting.summarySentence || meeting.summaryLabel) {
-    return {
-      summarySentence: meeting.summarySentence,
-      summaryLabel: meeting.summaryLabel,
-    };
-  }
-  if (!notes || !notes.trim()) {
-    return {};
-  }
-  const summaries = await generateMeetingSummaries({
-    guildId: meeting.guildId,
-    notes,
-    serverName: meeting.guild.name,
-    channelName: meeting.voiceChannel.name,
-    tags: meeting.tags,
-    now: meeting.startTime ?? new Date(),
-    meetingId: meeting.meetingId,
-    parentSpanContext: meeting.langfuseParentSpanContext,
-    modelParams: meeting.runtimeConfig?.modelParams?.meetingSummary,
-    modelOverride: meeting.runtimeConfig?.modelChoices?.meetingSummary,
-  });
-  meeting.summarySentence = summaries.summarySentence;
-  meeting.summaryLabel = summaries.summaryLabel;
-  if (!meeting.meetingName) {
-    meeting.meetingName = await resolveMeetingNameFromSummary({
-      guildId: meeting.guildId,
-      meetingId: meeting.meetingId,
-      summaryLabel: summaries.summaryLabel,
-    });
-  }
-  return summaries;
-}
-
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   if (!meeting.transcribeMeeting) {
     return;
@@ -190,8 +132,8 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       return;
     }
 
-    const notes = await resolveMeetingNotes(meeting);
-    const summaries = await resolveMeetingSummaries(meeting, notes);
+    const notes = await ensureMeetingNotes(meeting);
+    const summaries = await ensureMeetingSummaries(meeting, notes);
     const transcriptS3Key = meeting.transcriptS3Key;
     const { notesVersion, notesLastEditedBy, notesLastEditedAt, notesHistory } =
       buildNotesMetadata(meeting, notes, timestamp);

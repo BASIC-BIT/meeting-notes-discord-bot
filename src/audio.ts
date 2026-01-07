@@ -3,7 +3,6 @@ import {
   CHANNELS,
   FAST_SILENCE_THRESHOLD,
   FRAME_SIZE,
-  MAX_DISCORD_UPLOAD_SIZE,
   MAX_SNIPPET_LENGTH,
   MINIMUM_TRANSCRIPTION_LENGTH,
   RECORD_SAMPLE_RATE,
@@ -13,7 +12,6 @@ import {
 import {
   AudioFileData,
   AudioSnippet,
-  ChunkInfo,
   SpeakerState,
   SpeakerTrackFile,
 } from "./types/audio";
@@ -1122,83 +1120,6 @@ export async function cleanupSpeakerTracks(
     await fs.promises.rm(dir, { recursive: true, force: true });
   } catch (error) {
     console.error("Failed to clean up speaker track files:", error);
-  }
-}
-
-/**
- * Split audio into chunks that are under 25MB
- * @param {string} inputFile - The path to the input MP3 file
- * @param {string} outputDir - The directory to store the output chunks
- * @returns {Promise<ChunkInfo[]>} - An array of chunk info (start, end, file)
- */
-export async function splitAudioIntoChunks(
-  inputFile: string,
-  outputDir: string,
-): Promise<ChunkInfo[]> {
-  try {
-    const stats = await fs.promises.stat(inputFile);
-    const totalFileSize = stats.size;
-
-    if (totalFileSize <= MAX_DISCORD_UPLOAD_SIZE) {
-      return [
-        {
-          file: inputFile,
-          start: 0,
-          end: 0, // TODO: Put real data here
-        },
-      ];
-    }
-
-    const metadata = await new Promise<ffmpeg.FfprobeData>(
-      (resolve, reject) => {
-        ffmpeg.ffprobe(inputFile, (err, data) => {
-          if (err) return reject(err);
-          resolve(data);
-        });
-      },
-    );
-
-    const duration = metadata.format.duration || 0; // Total duration in seconds
-    const bitRate = (totalFileSize * 8) / duration; // Calculate the bitrate in bits per second
-
-    // Calculate the maximum chunk duration based on the 25MB limit
-    const maxChunkDuration = (MAX_DISCORD_UPLOAD_SIZE * 8) / bitRate; // in seconds
-    const numChunks = Math.ceil(duration / maxChunkDuration);
-
-    await fs.promises.mkdir(outputDir, { recursive: true });
-
-    let startTime = 0;
-    const chunks: ChunkInfo[] = [];
-
-    for (let i = 0; i < numChunks; i++) {
-      const chunkFileName = path.join(outputDir, `c_${i}.mp3`);
-      const endTime = Math.min(startTime + maxChunkDuration, duration);
-
-      // Run sequentially to avoid CPU spikes from multiple concurrent ffmpeg processes.
-      const chunkInfo = await new Promise<ChunkInfo>((resolve, reject) => {
-        ffmpeg(inputFile)
-          .setStartTime(startTime)
-          .setDuration(endTime - startTime)
-          .output(chunkFileName)
-          .on("end", () => {
-            console.log(`Chunk ${i} saved: ${chunkFileName}`);
-            resolve({ start: startTime, end: endTime, file: chunkFileName });
-          })
-          .on("error", (err: Error) => {
-            console.error(`Error splitting chunk ${i}: ${err.message}`);
-            reject(err);
-          })
-          .run();
-      });
-
-      chunks.push(chunkInfo);
-      startTime += maxChunkDuration;
-    }
-
-    return chunks;
-  } catch (err) {
-    console.error(`Error splitting audio: ${err}`);
-    throw err;
   }
 }
 

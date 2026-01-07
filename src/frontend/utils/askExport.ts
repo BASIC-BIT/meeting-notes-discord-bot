@@ -22,10 +22,7 @@ export const buildAskThreadExport = (options: {
 export const normalizeAskExportMessages = (messages: AskMessage[]) =>
   messages
     .filter((message) => message.id !== "thinking")
-    .map((message) => ({
-      ...message,
-      rawText: message.rawText ?? message.text,
-    }));
+    .map((message) => ({ ...message }));
 
 export const buildAskExportFileName = (options: {
   title: string;

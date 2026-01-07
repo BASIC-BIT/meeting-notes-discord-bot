@@ -54,6 +54,11 @@ const optionalStringParam = z
   }, z.string())
   .optional();
 
+const portalMeetingSearchSchema = z.object({
+  meetingId: optionalStringParam,
+  eventId: optionalStringParam,
+}).parse;
+
 const homeRoute = new Route({
   getParentRoute: () => marketingRoute,
   path: "/",
@@ -167,19 +172,25 @@ const portalServerRoute = new Route({
   getParentRoute: () => portalRoute,
   path: "server/$serverId",
   component: PortalServerLayout,
+  validateSearch: portalMeetingSearchSchema,
 });
 
 const portalLibraryRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "library",
   component: Library,
-  validateSearch: z.object({ meetingId: z.string().optional() }).parse,
+  validateSearch: z.object({
+    meetingId: optionalStringParam,
+    eventId: optionalStringParam,
+  }).parse,
 });
 
 const askSearchSchema = z.object({
   list: z.enum(["mine", "shared", "archived"]).optional(),
   conversationId: z.string().optional(),
   messageId: z.string().optional(),
+  meetingId: optionalStringParam,
+  eventId: optionalStringParam,
 }).parse;
 
 const portalAskRoute = new Route({
