@@ -80,7 +80,7 @@ const handlePortalLinkClick = (options: {
     search: (prev) => ({
       ...prev,
       meetingId: link.meetingId,
-      eventId: link.eventId ?? undefined,
+      eventId: link.eventId,
     }),
   });
 };
