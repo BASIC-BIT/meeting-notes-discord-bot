@@ -9,6 +9,12 @@ import {
 } from "../../../utils/meetingLibrary";
 import { MEETING_STATUS } from "../../../../types/meetingLifecycle";
 
+jest.mock("@tanstack/react-router", () => ({
+  ...jest.requireActual("@tanstack/react-router"),
+  useNavigate: () => jest.fn(),
+  useSearch: () => ({ fullScreen: false }),
+}));
+
 jest.mock("../../../services/trpc", () => ({
   trpc: {
     useUtils: () => ({

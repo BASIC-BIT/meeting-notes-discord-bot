@@ -74,6 +74,7 @@ export default function PortalServerLayout() {
               ...prev,
               meetingId: undefined,
               eventId: undefined,
+              fullScreen: undefined,
             }),
           })
         }

@@ -34,6 +34,8 @@ describe("updateMeetingSummaryMessage", () => {
       attendance: new Set(["User One"]),
       voiceChannel: { id: "voice-1", name: "Voice" },
       textChannel,
+      generateNotes: true,
+      notesText: "Notes content.",
       summarySentence: "Summary text.",
       tags: ["tag-1"],
     } as unknown as MeetingData;
@@ -42,6 +44,11 @@ describe("updateMeetingSummaryMessage", () => {
 
     expect(textChannel.messages.fetch).toHaveBeenCalledWith("start-message");
     expect(message.edit).toHaveBeenCalled();
+    const editPayload = message.edit.mock.calls[0][0];
+    expect(editPayload.embeds).toHaveLength(2);
+    const notesEmbed =
+      editPayload.embeds[1].toJSON?.() ?? editPayload.embeds[1].data;
+    expect(notesEmbed?.description).toContain("Notes content.");
     expect(textChannel.send).not.toHaveBeenCalled();
     expect(meeting.notesMessageIds).toEqual(["start-message"]);
     expect(meeting.notesChannelId).toBe("text-1");
@@ -66,12 +73,16 @@ describe("updateMeetingSummaryMessage", () => {
       attendance: new Set(["User Two"]),
       voiceChannel: { id: "voice-2", name: "Voice" },
       textChannel,
+      generateNotes: true,
+      notesText: "Notes content.",
       summarySentence: "Summary text.",
     } as unknown as MeetingData;
 
     await updateMeetingSummaryMessage(meeting);
 
     expect(textChannel.send).toHaveBeenCalled();
+    const sendPayload = textChannel.send.mock.calls[0][0];
+    expect(sendPayload.embeds).toHaveLength(2);
     expect(meeting.startMessageId).toBe("new-message");
     expect(meeting.notesMessageIds).toEqual(["new-message"]);
     expect(meeting.notesChannelId).toBe("text-2");

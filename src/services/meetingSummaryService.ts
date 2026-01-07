@@ -32,11 +32,14 @@ function normalizeSummarySentence(value?: string): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  const sentenceMarkers = trimmed.match(/[.!?]/g);
-  if (sentenceMarkers && sentenceMarkers.length > 1) {
-    return undefined;
-  }
-  return trimmed;
+  // Keep only the first sentence to avoid overlong or multi-sentence outputs.
+  const firstSentenceMatch = trimmed.match(/^[\s\S]*?[.!?](?=\s|$)/);
+  const firstSentence = (firstSentenceMatch?.[0] ?? trimmed).trim();
+  if (!firstSentence) return undefined;
+  const MAX_LENGTH = 320;
+  return firstSentence.length > MAX_LENGTH
+    ? `${firstSentence.slice(0, MAX_LENGTH - 3).trimEnd()}...`
+    : firstSentence;
 }
 
 function normalizeSummaryLabel(value?: string): string | undefined {

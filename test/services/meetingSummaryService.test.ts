@@ -30,7 +30,22 @@ test("parseMeetingSummaryResponse drops invalid summaries", async () => {
   const parsed = parseMeetingSummaryResponse(
     '{"summarySentence":"First sentence. Second sentence.","summaryLabel":"Too many words in this label"}',
   );
-  expect(parsed).toBeUndefined();
+  expect(parsed).toEqual({
+    summarySentence: "First sentence.",
+    summaryLabel: undefined,
+  });
+});
+
+test("parseMeetingSummaryResponse keeps first sentence when multiple are returned", async () => {
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
+  const parsed = parseMeetingSummaryResponse(
+    '{"summarySentence":"First sentence. Second sentence! Third?","summaryLabel":"Weekly sync"}',
+  );
+  expect(parsed).toEqual({
+    summarySentence: "First sentence.",
+    summaryLabel: "Weekly sync",
+  });
 });
 
 test("parseMeetingSummaryResponse keeps valid sentence when label is invalid", async () => {

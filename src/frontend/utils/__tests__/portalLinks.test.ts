@@ -7,7 +7,7 @@ import {
 describe("portalLinks", () => {
   test("parses portal meeting links", () => {
     const result = parsePortalMeetingLink(
-      "https://chronote.test/portal/server/guild-1/library?meetingId=meet-1&eventId=line-9",
+      "https://chronote.test/portal/server/guild-1/library?meetingId=meet-1&eventId=line-9&fullScreen=true",
       "https://chronote.test",
     );
 
@@ -15,6 +15,7 @@ describe("portalLinks", () => {
       serverId: "guild-1",
       meetingId: "meet-1",
       eventId: "line-9",
+      fullScreen: true,
     });
   });
 
@@ -33,10 +34,11 @@ describe("portalLinks", () => {
       search: "?conversationId=c1&list=mine",
       meetingId: "meet-5",
       eventId: "line-22",
+      fullScreen: true,
     });
 
     expect(href).toBe(
-      "/portal/server/guild-1/ask?conversationId=c1&list=mine&meetingId=meet-5&eventId=line-22",
+      "/portal/server/guild-1/ask?conversationId=c1&list=mine&meetingId=meet-5&eventId=line-22&fullScreen=true",
     );
   });
 });

@@ -2,6 +2,7 @@ export type PortalMeetingLink = {
   serverId: string;
   meetingId: string;
   eventId?: string;
+  fullScreen?: boolean;
 };
 
 const portalServerPath = /^\/portal\/server\/([^/]+)\//;
@@ -22,7 +23,10 @@ export const parsePortalMeetingLink = (
   if (!match) return null;
   const serverId = match[1];
   const eventId = url.searchParams.get("eventId") ?? undefined;
-  return { serverId, meetingId, eventId };
+  const fullScreenParam = url.searchParams.get("fullScreen");
+  const fullScreen =
+    fullScreenParam === "true" || fullScreenParam === "1" ? true : undefined;
+  return { serverId, meetingId, eventId, fullScreen };
 };
 
 export const buildMeetingLinkForLocation = (options: {
@@ -30,6 +34,7 @@ export const buildMeetingLinkForLocation = (options: {
   search: string;
   meetingId: string;
   eventId?: string;
+  fullScreen?: boolean;
 }) => {
   const params = new URLSearchParams(options.search);
   params.set("meetingId", options.meetingId);
@@ -37,6 +42,11 @@ export const buildMeetingLinkForLocation = (options: {
     params.set("eventId", options.eventId);
   } else {
     params.delete("eventId");
+  }
+  if (options.fullScreen) {
+    params.set("fullScreen", "true");
+  } else {
+    params.delete("fullScreen");
   }
   const query = params.toString();
   return `${options.pathname}${query ? `?${query}` : ""}`;

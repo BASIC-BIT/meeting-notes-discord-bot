@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { HTMLAttributes } from "react";
 import {
   ActionIcon,
@@ -155,6 +156,9 @@ export default function MeetingDetailDrawer({
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
   const drawerOffset = theme.spacing.sm;
+  const navigate = useNavigate({ from: "/portal/server/$serverId" });
+  const search = useSearch({ from: "/portal/server/$serverId" });
+  const fullScreenFromSearch = search.fullScreen === true;
   const trpcUtils = trpc.useUtils();
 
   const [activeFilters, setActiveFilters] = useState<MeetingEventType[]>(
@@ -237,6 +241,14 @@ export default function MeetingDetailDrawer({
     setFeedbackModalOpen(false);
   }, [meeting]);
 
+  useEffect(() => {
+    if (!selectedMeetingId) {
+      setFullScreen(false);
+      return;
+    }
+    setFullScreen(fullScreenFromSearch);
+  }, [selectedMeetingId, fullScreenFromSearch]);
+
   const resetDrawerState = () => {
     setFullScreen(false);
     setEndMeetingModalOpen(false);
@@ -250,6 +262,18 @@ export default function MeetingDetailDrawer({
   const handleCloseDrawer = () => {
     resetDrawerState();
     onClose();
+  };
+
+  const handleToggleFullScreen = () => {
+    const next = !fullScreen;
+    setFullScreen(next);
+    navigate({
+      to: ".",
+      search: (prev) => ({
+        ...prev,
+        fullScreen: next ? true : undefined,
+      }),
+    });
   };
 
   const preflightEndMeeting = async () => {
@@ -849,7 +873,7 @@ export default function MeetingDetailDrawer({
                     <Button
                       variant={fullScreen ? "outline" : "light"}
                       leftSection={<IconFilter size={16} />}
-                      onClick={() => setFullScreen((prev) => !prev)}
+                      onClick={handleToggleFullScreen}
                       data-testid="meeting-fullscreen-toggle"
                     >
                       {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
