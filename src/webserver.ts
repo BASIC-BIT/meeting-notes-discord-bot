@@ -30,11 +30,15 @@ export function setupWebServer() {
   const resolveRedirectParam = (req: express.Request) =>
     resolveRedirectTarget(req.query.redirect, config.frontend.siteUrl);
 
-  const storeRedirectInSession = (req: express.Request, redirect?: string) => {
-    if (!redirect) return;
+  const storeRedirectInSession = (
+    req: express.Request,
+    redirect?: string,
+  ): SessionWithRedirect | undefined => {
+    if (!redirect) return undefined;
     const sessionWithRedirect = req.session as SessionWithRedirect | undefined;
-    if (!sessionWithRedirect) return;
+    if (!sessionWithRedirect) return undefined;
     sessionWithRedirect.oauthRedirect = redirect;
+    return sessionWithRedirect;
   };
 
   const consumeRedirectFromSession = (req: express.Request) => {
@@ -237,8 +241,18 @@ export function setupWebServer() {
       "/auth/discord",
       (req, _res, next) => {
         const redirectParam = resolveRedirectParam(req);
-        storeRedirectInSession(req, redirectParam);
-        next();
+        const sessionWithRedirect = storeRedirectInSession(req, redirectParam);
+        if (!sessionWithRedirect) {
+          next();
+          return;
+        }
+        sessionWithRedirect.save((err) => {
+          if (err) {
+            next(err);
+            return;
+          }
+          next();
+        });
       },
       passport.authenticate("discord"),
     );
