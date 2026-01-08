@@ -18,6 +18,10 @@ import { AuthedProfile, createContext } from "./trpc/context";
 import { getMockUser } from "./repositories/mockStore";
 import { resolveRedirectTarget } from "./services/oauthRedirectService";
 import {
+  readOauthRedirectFromRequest,
+  stashOauthRedirectFromSession,
+} from "./services/oauthRedirectSession";
+import {
   buildDiscordAuthProfile,
   ensureDiscordAccessToken,
 } from "./services/discordAuthService";
@@ -39,15 +43,6 @@ export function setupWebServer() {
     if (!sessionWithRedirect) return undefined;
     sessionWithRedirect.oauthRedirect = redirect;
     return sessionWithRedirect;
-  };
-
-  const consumeRedirectFromSession = (req: express.Request) => {
-    const sessionWithRedirect = req.session as SessionWithRedirect | undefined;
-    const stored = sessionWithRedirect?.oauthRedirect;
-    if (stored && sessionWithRedirect) {
-      delete sessionWithRedirect.oauthRedirect;
-    }
-    return stored;
   };
 
   // Trust first proxy (needed for secure cookies behind ALB/CloudFront)
@@ -259,13 +254,17 @@ export function setupWebServer() {
 
     app.get(
       "/auth/discord/callback",
+      (req, _res, next) => {
+        stashOauthRedirectFromSession(req);
+        next();
+      },
       passport.authenticate("discord", {
         failureRedirect: "/",
       }),
       (req, res) => {
         const guildId = req.query.guild_id as string | undefined;
         const profile = req.user as Profile;
-        const sessionRedirect = consumeRedirectFromSession(req);
+        const sessionRedirect = readOauthRedirectFromRequest(req);
         if (guildId) {
           saveGuildInstaller({
             guildId,
