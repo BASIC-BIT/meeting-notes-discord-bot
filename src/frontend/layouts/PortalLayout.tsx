@@ -1,5 +1,6 @@
 import {
   AppShell,
+  Button,
   Center,
   Container,
   Loader,
@@ -10,7 +11,7 @@ import {
   useMantineTheme,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { Outlet, Navigate, useRouterState } from "@tanstack/react-router";
+import { Outlet, useRouterState } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
 import SiteFooter from "../components/SiteFooter";
 import SiteHeader from "../components/SiteHeader";
@@ -34,7 +35,7 @@ import {
 
 export default function PortalLayout() {
   const [navbarOpened, navbarHandlers] = useDisclosure(false);
-  const { state: authState, loading: authLoading } = useAuth();
+  const { state: authState, loading: authLoading, loginUrl } = useAuth();
   const { loading: guildLoading } = useGuildContext();
   const theme = useMantineTheme();
   const colorScheme = useComputedColorScheme("dark");
@@ -44,12 +45,20 @@ export default function PortalLayout() {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  const showNavbar = !pathname.startsWith("/portal/select-server");
+  const showNavbar =
+    authState !== "unauthenticated" &&
+    !pathname.startsWith("/portal/select-server");
   const navbarWidth = 300;
   const useInnerScroll =
     !visualMode &&
     pathname.startsWith("/portal/server/") &&
     pathname.includes("/ask");
+  const headerContext =
+    authState === "unauthenticated"
+      ? "portal-select"
+      : showNavbar
+        ? "portal"
+        : "portal-select";
 
   const gridTemplateAreas = showNavbar
     ? `"header header" "navbar main" "footer footer"`
@@ -124,7 +133,57 @@ export default function PortalLayout() {
   };
 
   if (authState === "unauthenticated") {
-    return <Navigate to="/" />;
+    return (
+      <AppShell
+        padding={0}
+        header={{ height: shellHeights.header }}
+        footer={{ height: shellHeights.footer }}
+        style={appShellStyle}
+        styles={appShellStyles}
+      >
+        <AppShell.Header p="md">
+          <SiteHeader
+            showNavbarToggle={false}
+            navbarOpened={false}
+            onNavbarToggle={() => {}}
+            context={headerContext}
+          />
+        </AppShell.Header>
+        <AppShell.Main>
+          <Container
+            size="xl"
+            px={pagePaddingX}
+            pt={pagePaddingY}
+            pb={pagePaddingY}
+            style={{
+              display: "block",
+              minHeight: 0,
+            }}
+          >
+            <Center py="xl">
+              <Stack gap="sm" align="center">
+                <Text fw={600}>Connect Discord to open your portal.</Text>
+                <Text size="sm" c="dimmed" ta="center">
+                  Sign in to select a server and view meeting history.
+                </Text>
+                <Button
+                  component="a"
+                  href={loginUrl}
+                  loading={authLoading}
+                  variant="filled"
+                  color="brand"
+                >
+                  Connect Discord
+                </Button>
+              </Stack>
+            </Center>
+          </Container>
+        </AppShell.Main>
+        <AppShell.Footer>
+          <SiteFooter variant="compact" />
+        </AppShell.Footer>
+      </AppShell>
+    );
   }
 
   if (authState === "unknown" || authLoading || guildLoading) {
@@ -141,7 +200,7 @@ export default function PortalLayout() {
             showNavbarToggle={false}
             navbarOpened={false}
             onNavbarToggle={() => {}}
-            context={showNavbar ? "portal" : "portal-select"}
+            context={headerContext}
           />
         </AppShell.Header>
         <AppShell.Main>
@@ -199,7 +258,7 @@ export default function PortalLayout() {
           showNavbarToggle={showNavbar}
           navbarOpened={navbarOpened}
           onNavbarToggle={navbarHandlers.toggle}
-          context={showNavbar ? "portal" : "portal-select"}
+          context={headerContext}
         />
       </AppShell.Header>
       {showNavbar ? (

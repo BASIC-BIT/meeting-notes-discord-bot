@@ -23,12 +23,13 @@ describe("portal layouts", () => {
     resetFrontendMocks();
   });
 
-  test("PortalLayout redirects unauthenticated users", () => {
+  test("PortalLayout shows sign-in prompt for unauthenticated users", () => {
     authState.state = "unauthenticated";
     setRouterPathname("/portal/server/g1/library");
     renderWithMantine(<PortalLayout />);
-    const nav = screen.getByTestId("navigate");
-    expect(nav).toHaveAttribute("data-to", "/");
+    expect(screen.queryByTestId("navigate")).toBeNull();
+    const cta = screen.getByRole("link", { name: /connect discord/i });
+    expect(cta).toHaveAttribute("href", authState.loginUrl);
   });
 
   test("PortalLayout shows loading state while auth is loading", () => {

@@ -16,14 +16,38 @@ import { metricsMiddleware, metricsRegistry } from "./metrics";
 import { appRouter } from "./trpc/router";
 import { AuthedProfile, createContext } from "./trpc/context";
 import { getMockUser } from "./repositories/mockStore";
+import { resolveRedirectTarget } from "./services/oauthRedirectService";
+import {
+  readOauthRedirectFromRequest,
+  stashOauthRedirectFromSession,
+} from "./services/oauthRedirectSession";
+import { createAuthRateLimiter } from "./services/authRateLimitService";
 import {
   buildDiscordAuthProfile,
   ensureDiscordAccessToken,
 } from "./services/discordAuthService";
 
+const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
+const AUTH_RATE_LIMIT_MAX = 20;
+
 export function setupWebServer() {
   const app = express();
   const PORT = config.server.port;
+  type SessionWithRedirect = session.Session & { oauthRedirect?: string };
+
+  const resolveRedirectParam = (req: express.Request) =>
+    resolveRedirectTarget(req.query.redirect, config.frontend.siteUrl);
+
+  const storeRedirectInSession = (
+    req: express.Request,
+    redirect?: string,
+  ): SessionWithRedirect | undefined => {
+    if (!redirect) return undefined;
+    const sessionWithRedirect = req.session as SessionWithRedirect | undefined;
+    if (!sessionWithRedirect) return undefined;
+    sessionWithRedirect.oauthRedirect = redirect;
+    return sessionWithRedirect;
+  };
 
   // Trust first proxy (needed for secure cookies behind ALB/CloudFront)
   app.set("trust proxy", 1);
@@ -103,6 +127,12 @@ export function setupWebServer() {
     }),
   );
 
+  const authRateLimiter = createAuthRateLimiter({
+    enabled: !config.mock.enabled,
+    windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
+    limit: AUTH_RATE_LIMIT_MAX,
+  });
+
   if (config.server.oauthEnabled) {
     // Initialize Passport
     app.use(passport.initialize());
@@ -116,6 +146,7 @@ export function setupWebServer() {
           clientSecret: config.discord.clientSecret,
           callbackURL: config.discord.callbackUrl,
           scope: ["identify", "email", "guilds"],
+          state: true,
         },
         (
           accessToken: string,
@@ -211,20 +242,41 @@ export function setupWebServer() {
     });
 
     // Discord OAuth routes
-    app.get("/auth/discord", passport.authenticate("discord"));
+    app.get(
+      "/auth/discord",
+      authRateLimiter,
+      (req, _res, next) => {
+        const redirectParam = resolveRedirectParam(req);
+        const sessionWithRedirect = storeRedirectInSession(req, redirectParam);
+        if (!sessionWithRedirect) {
+          next();
+          return;
+        }
+        sessionWithRedirect.save((err) => {
+          if (err) {
+            next(err);
+            return;
+          }
+          next();
+        });
+      },
+      passport.authenticate("discord"),
+    );
 
     app.get(
       "/auth/discord/callback",
+      authRateLimiter,
+      (req, _res, next) => {
+        stashOauthRedirectFromSession(req);
+        next();
+      },
       passport.authenticate("discord", {
         failureRedirect: "/",
       }),
       (req, res) => {
         const guildId = req.query.guild_id as string | undefined;
         const profile = req.user as Profile;
-        const redirectParam =
-          typeof req.query.redirect === "string"
-            ? req.query.redirect
-            : undefined;
+        const sessionRedirect = readOauthRedirectFromRequest(req);
         if (guildId) {
           saveGuildInstaller({
             guildId,
@@ -238,22 +290,20 @@ export function setupWebServer() {
           config.frontend.siteUrl && config.frontend.siteUrl.length > 0
             ? config.frontend.siteUrl
             : "/";
-        res.redirect(redirectParam || fallback);
+        res.redirect(sessionRedirect || fallback);
       },
     );
   } else {
-    app.get("/auth/discord", (req, res) => {
-      const redirectParam =
-        typeof req.query.redirect === "string" ? req.query.redirect : undefined;
+    app.get("/auth/discord", authRateLimiter, (req, res) => {
+      const redirectParam = resolveRedirectParam(req);
       const fallback =
         config.frontend.siteUrl && config.frontend.siteUrl.length > 0
           ? config.frontend.siteUrl
           : "/";
       res.redirect(redirectParam || fallback);
     });
-    app.get("/auth/discord/callback", (req, res) => {
-      const redirectParam =
-        typeof req.query.redirect === "string" ? req.query.redirect : undefined;
+    app.get("/auth/discord/callback", authRateLimiter, (req, res) => {
+      const redirectParam = resolveRedirectParam(req);
       const fallback =
         config.frontend.siteUrl && config.frontend.siteUrl.length > 0
           ? config.frontend.siteUrl
