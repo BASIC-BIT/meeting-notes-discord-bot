@@ -21,10 +21,14 @@ import {
   readOauthRedirectFromRequest,
   stashOauthRedirectFromSession,
 } from "./services/oauthRedirectSession";
+import { createAuthRateLimiter } from "./services/authRateLimitService";
 import {
   buildDiscordAuthProfile,
   ensureDiscordAccessToken,
 } from "./services/discordAuthService";
+
+const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
+const AUTH_RATE_LIMIT_MAX = 20;
 
 export function setupWebServer() {
   const app = express();
@@ -122,6 +126,12 @@ export function setupWebServer() {
       },
     }),
   );
+
+  const authRateLimiter = createAuthRateLimiter({
+    enabled: !config.mock.enabled,
+    windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
+    limit: AUTH_RATE_LIMIT_MAX,
+  });
 
   if (config.server.oauthEnabled) {
     // Initialize Passport
@@ -234,6 +244,7 @@ export function setupWebServer() {
     // Discord OAuth routes
     app.get(
       "/auth/discord",
+      authRateLimiter,
       (req, _res, next) => {
         const redirectParam = resolveRedirectParam(req);
         const sessionWithRedirect = storeRedirectInSession(req, redirectParam);
@@ -254,6 +265,7 @@ export function setupWebServer() {
 
     app.get(
       "/auth/discord/callback",
+      authRateLimiter,
       (req, _res, next) => {
         stashOauthRedirectFromSession(req);
         next();
@@ -282,7 +294,7 @@ export function setupWebServer() {
       },
     );
   } else {
-    app.get("/auth/discord", (req, res) => {
+    app.get("/auth/discord", authRateLimiter, (req, res) => {
       const redirectParam = resolveRedirectParam(req);
       const fallback =
         config.frontend.siteUrl && config.frontend.siteUrl.length > 0
@@ -290,7 +302,7 @@ export function setupWebServer() {
           : "/";
       res.redirect(redirectParam || fallback);
     });
-    app.get("/auth/discord/callback", (req, res) => {
+    app.get("/auth/discord/callback", authRateLimiter, (req, res) => {
       const redirectParam = resolveRedirectParam(req);
       const fallback =
         config.frontend.siteUrl && config.frontend.siteUrl.length > 0

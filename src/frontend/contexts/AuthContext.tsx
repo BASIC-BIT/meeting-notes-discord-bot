@@ -75,8 +75,8 @@ export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   const loginUrl = buildLoginUrl(getBrowserLocation());
-  if (loginUrl === ctx.loginUrl) {
-    return ctx;
-  }
-  return { ...ctx, loginUrl };
+  return useMemo(
+    () => (loginUrl === ctx.loginUrl ? ctx : { ...ctx, loginUrl }),
+    [ctx, loginUrl],
+  );
 }
