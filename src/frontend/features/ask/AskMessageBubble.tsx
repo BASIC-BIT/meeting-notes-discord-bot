@@ -1,5 +1,10 @@
 import { ActionIcon, Group, Loader, Stack, Text } from "@mantine/core";
-import { IconCopy, IconLink } from "@tabler/icons-react";
+import {
+  IconCopy,
+  IconLink,
+  IconThumbDown,
+  IconThumbUp,
+} from "@tabler/icons-react";
 import Surface from "../../components/Surface";
 import MarkdownBody, {
   type MarkdownLinkHandler,
@@ -13,6 +18,11 @@ type AskMessageBubbleProps = {
   roleLabels: { user: string; chronote: string };
   highlighted: boolean;
   showActions?: boolean;
+  showFeedback?: boolean;
+  feedbackState?: "up" | "down" | null;
+  feedbackPending?: boolean;
+  onFeedbackUp?: (messageId: string) => void;
+  onFeedbackDown?: (messageId: string) => void;
   linkHandler?: MarkdownLinkHandler;
   onCopyLink?: (messageId: string) => void;
   onCopyResponse?: (text: string) => void;
@@ -23,10 +33,18 @@ export function AskMessageBubble({
   roleLabels,
   highlighted,
   showActions = false,
+  showFeedback = false,
+  feedbackState = null,
+  feedbackPending = false,
+  onFeedbackUp,
+  onFeedbackDown,
   linkHandler,
   onCopyLink,
   onCopyResponse,
 }: AskMessageBubbleProps) {
+  const feedbackEnabled =
+    showFeedback && message.role === "chronote" && message.id !== "thinking";
+
   return (
     <Surface
       p="sm"
@@ -35,6 +53,7 @@ export function AskMessageBubble({
       data-testid="ask-message"
       data-role={message.role}
       data-message-id={message.id}
+      className="ask-message-bubble"
       style={{
         alignSelf: message.role === "user" ? "flex-end" : "flex-start",
         maxWidth: "88%",
@@ -75,6 +94,30 @@ export function AskMessageBubble({
                 >
                   <IconCopy size={14} />
                 </ActionIcon>
+              ) : null}
+              {feedbackEnabled ? (
+                <Group gap="xs" className="ask-feedback-actions">
+                  <ActionIcon
+                    size="sm"
+                    variant={feedbackState === "up" ? "light" : "subtle"}
+                    color={feedbackState === "up" ? "teal" : "gray"}
+                    onClick={() => onFeedbackUp?.(message.id)}
+                    disabled={feedbackPending}
+                    aria-label="Mark answer helpful"
+                  >
+                    <IconThumbUp size={14} />
+                  </ActionIcon>
+                  <ActionIcon
+                    size="sm"
+                    variant={feedbackState === "down" ? "light" : "subtle"}
+                    color={feedbackState === "down" ? "red" : "gray"}
+                    onClick={() => onFeedbackDown?.(message.id)}
+                    disabled={feedbackPending}
+                    aria-label="Mark answer needs work"
+                  >
+                    <IconThumbDown size={14} />
+                  </ActionIcon>
+                </Group>
               ) : null}
             </Group>
           ) : null}

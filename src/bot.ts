@@ -55,6 +55,14 @@ import {
   isSummaryFeedbackModal,
   isSummaryFeedbackUp,
 } from "./commands/summaryFeedback";
+import {
+  handleAskFeedbackDown,
+  handleAskFeedbackModal,
+  handleAskFeedbackUp,
+  isAskFeedbackDown,
+  isAskFeedbackModal,
+  isAskFeedbackUp,
+} from "./commands/askFeedback";
 import { config } from "./services/configService";
 import {
   handleEditTagsButton,
@@ -193,6 +201,10 @@ const modalHandlers: Array<{
   onboarding?: boolean;
 }> = [
   {
+    matches: isAskFeedbackModal,
+    handle: handleAskFeedbackModal,
+  },
+  {
     matches: isSummaryFeedbackModal,
     handle: handleSummaryFeedbackModal,
   },
@@ -236,6 +248,14 @@ const buttonHandlers: Array<{
   handle: (interaction: ButtonInteraction) => Promise<void>;
   onboarding?: boolean;
 }> = [
+  {
+    matches: isAskFeedbackUp,
+    handle: handleAskFeedbackUp,
+  },
+  {
+    matches: isAskFeedbackDown,
+    handle: handleAskFeedbackDown,
+  },
   {
     matches: isSummaryFeedbackUp,
     handle: handleSummaryFeedbackUp,

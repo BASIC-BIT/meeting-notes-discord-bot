@@ -4,6 +4,7 @@ import { getGuildLimits } from "../services/subscriptionService";
 import { answerQuestionService } from "../services/askService";
 import { config } from "../services/configService";
 import { renderAskAnswer } from "../services/askCitations";
+import { buildAskFeedbackRow } from "./askFeedback";
 
 export async function handleAskCommand(
   interaction: ChatInputCommandInteraction,
@@ -44,7 +45,10 @@ export async function handleAskCommand(
       portalBaseUrl,
     });
 
-    await interaction.editReply(rendered);
+    await interaction.editReply({
+      content: rendered,
+      components: [buildAskFeedbackRow()],
+    });
   } catch (error) {
     console.error("Error handling /ask:", error);
     await interaction.editReply("Error answering that question.");

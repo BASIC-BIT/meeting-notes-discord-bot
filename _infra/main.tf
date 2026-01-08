@@ -1758,6 +1758,23 @@ resource "aws_dynamodb_table" "feedback_table" {
     type = "S"
   }
 
+  attribute {
+    name = "targetType"
+    type = "S"
+  }
+
+  attribute {
+    name = "createdAt"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "TargetTypeCreatedAtIndex"
+    hash_key        = "targetType"
+    range_key       = "createdAt"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = true
   }

@@ -8,6 +8,7 @@ import { configRouter } from "./routers/config";
 import { contextRouter } from "./routers/context";
 import { dictionaryRouter } from "./routers/dictionary";
 import { feedbackRouter } from "./routers/feedback";
+import { adminFeedbackRouter } from "./routers/adminFeedback";
 import { meetingsRouter } from "./routers/meetings";
 import { pricingRouter } from "./routers/pricing";
 import { serversRouter } from "./routers/servers";
@@ -22,6 +23,7 @@ export const appRouter = router({
   context: contextRouter,
   dictionary: dictionaryRouter,
   feedback: feedbackRouter,
+  adminFeedback: adminFeedbackRouter,
   meetings: meetingsRouter,
   pricing: pricingRouter,
   servers: serversRouter,

@@ -5,7 +5,11 @@ import type {
   AskSharedConversation,
 } from "../../../src/types/ask";
 import type { DictionaryItem } from "../../../src/utils/dictionary";
-import type { AutoRecordSettings, ChannelContext } from "../../../src/types/db";
+import type {
+  AutoRecordSettings,
+  ChannelContext,
+  FeedbackRecord,
+} from "../../../src/types/db";
 import type { MeetingStatus } from "../../../src/types/meetingLifecycle";
 import type { PaidPlan } from "../../../src/types/pricing";
 
@@ -21,6 +25,13 @@ type MutationState<TArgs extends unknown[], TResult> = {
   mutateAsync: jest.Mock<Promise<TResult>, TArgs>;
   isPending: boolean;
   reset: jest.Mock<void, []>;
+};
+
+type AuthUser = {
+  id: string;
+  username?: string;
+  avatar?: string | null;
+  isSuperAdmin?: boolean;
 };
 
 type ChannelSummary = {
@@ -151,6 +162,7 @@ type ConfigGlobalData = {
   appconfigEnabled: boolean;
   validation?: { missingRequired: string[] };
 };
+type AdminFeedbackData = { items: FeedbackRecord[] };
 
 const buildQueryState = <T>(data: T | null): QueryState<T> => ({
   data,
@@ -187,7 +199,7 @@ const resetMutationState = <TArgs extends unknown[], TResult>(
   state.reset.mockReset();
 };
 
-export const authQuery = buildQueryState<{ id: string } | null>(null);
+export const authQuery = buildQueryState<AuthUser | null>(null);
 export const guildQuery = buildQueryState<{
   guilds: { id: string; name: string; canManage?: boolean }[];
 } | null>(null);
@@ -246,6 +258,9 @@ export const configGlobalQuery = buildQueryState<ConfigGlobalData>({
   appconfigValues: {},
   overrides: [],
   appconfigEnabled: false,
+});
+export const adminFeedbackQuery = buildQueryState<AdminFeedbackData>({
+  items: [],
 });
 
 export const billingCheckoutMutation = buildMutationState<
@@ -325,6 +340,9 @@ export const feedbackSubmitSummaryMutation = buildMutationState<
   [unknown],
   void
 >(undefined);
+export const feedbackSubmitAskMutation = buildMutationState<[unknown], void>(
+  undefined,
+);
 
 export const trpcUtils = {
   ask: {
@@ -414,6 +432,7 @@ export const resetTrpcMocks = () => {
     overrides: [],
     appconfigEnabled: false,
   });
+  resetQueryState(adminFeedbackQuery, { items: [] });
 
   resetMutationState(billingCheckoutMutation, {
     url: "https://example.com/checkout",
@@ -444,6 +463,7 @@ export const resetTrpcMocks = () => {
   resetMutationState(configPublishGlobalMutation, undefined);
   resetMutationState(configClearGlobalMutation, undefined);
   resetMutationState(feedbackSubmitSummaryMutation, undefined);
+  resetMutationState(feedbackSubmitAskMutation, undefined);
 
   trpcUtils.ask.listConversations.invalidate.mockReset();
   trpcUtils.ask.listConversations.invalidate.mockResolvedValue(undefined);
@@ -577,6 +597,12 @@ export const setConfigGlobalQuery = (
   Object.assign(configGlobalQuery, next);
 };
 
+export const setAdminFeedbackQuery = (
+  next: Partial<QueryState<AdminFeedbackData>>,
+) => {
+  Object.assign(adminFeedbackQuery, next);
+};
+
 export const setAuthQuery = (
   next: Partial<QueryState<{ id: string } | null>>,
 ) => {
@@ -653,8 +679,12 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
       publishGlobal: { useMutation: () => configPublishGlobalMutation },
       clearGlobal: { useMutation: () => configClearGlobalMutation },
     },
+    adminFeedback: {
+      list: { useQuery: () => adminFeedbackQuery },
+    },
     feedback: {
       submitSummary: { useMutation: () => feedbackSubmitSummaryMutation },
+      submitAsk: { useMutation: () => feedbackSubmitAskMutation },
     },
   },
 }));

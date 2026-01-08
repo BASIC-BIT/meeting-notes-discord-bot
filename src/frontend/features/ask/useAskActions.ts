@@ -48,6 +48,11 @@ type AskActionsOptions = {
   highlightedMessageId: string | null;
   chatViewportRef: RefObject<HTMLDivElement | null>;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  showFeedback: boolean;
+  feedbackState: (messageId: string) => "up" | "down" | null;
+  feedbackPending: boolean;
+  onFeedbackUp: (messageId: string) => void;
+  onFeedbackDown: (messageId: string) => void;
   draft: string;
   setDraft: Dispatch<SetStateAction<string>>;
   errorMessage: string | null;
@@ -116,6 +121,11 @@ export const useAskActions = (options: AskActionsOptions): AskActionsResult => {
     highlightedMessageId,
     chatViewportRef,
     inputRef,
+    showFeedback,
+    feedbackState,
+    feedbackPending,
+    onFeedbackUp,
+    onFeedbackDown,
     draft,
     setDraft,
     errorMessage,
@@ -475,6 +485,11 @@ export const useAskActions = (options: AskActionsOptions): AskActionsResult => {
     highlightedMessageId,
     onCopyLink: handleCopyLink,
     onCopyResponse: handleCopyResponse,
+    showFeedback,
+    feedbackState,
+    feedbackPending,
+    onFeedbackUp,
+    onFeedbackDown,
     chatViewportRef,
     draft,
     errorMessage,

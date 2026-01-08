@@ -9,6 +9,7 @@ import {
   setAskSettingsQuery,
   setAskSharedConversationQuery,
   setAskSharedListQuery,
+  feedbackSubmitAskMutation,
 } from "./mocks/trpc";
 import { setRouteSearch } from "./mocks/routerState";
 import Ask from "../../src/frontend/pages/Ask";
@@ -77,6 +78,76 @@ describe("Ask page", () => {
     });
     expect(screen.getByTestId("ask-rename")).toBeInTheDocument();
     expect(screen.getByText(/ship next week/i)).toBeInTheDocument();
+  });
+
+  test("submits feedback for an Ask answer", async () => {
+    guildState.selectedGuildId = "g1";
+    setRouteSearch({ conversationId: "c1" });
+    setAskListQuery({
+      data: {
+        conversations: [
+          {
+            id: "c1",
+            title: "Weekly sync",
+            summary: "Team updates",
+            createdAt: "2025-12-01T00:00:00.000Z",
+            updatedAt: "2025-12-02T00:00:00.000Z",
+          },
+        ],
+      },
+    });
+    setAskConversationQuery({
+      data: {
+        conversation: {
+          id: "c1",
+          title: "Weekly sync",
+          summary: "Team updates",
+          createdAt: "2025-12-01T00:00:00.000Z",
+          updatedAt: "2025-12-02T00:00:00.000Z",
+        },
+        messages: [
+          {
+            id: "m1",
+            role: "user",
+            text: "What did we decide?",
+            createdAt: "2025-12-02T12:00:00.000Z",
+          },
+          {
+            id: "m2",
+            role: "chronote",
+            text: "You decided to ship next week.",
+            createdAt: "2025-12-02T12:01:00.000Z",
+          },
+        ],
+      },
+    });
+
+    renderWithMantine(<Ask />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/ship next week/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(/Mark answer needs work/i));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Ask feedback/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/What could be better/i), {
+      target: { value: "Add decision details." },
+    });
+    fireEvent.click(screen.getByText(/Send feedback/i));
+
+    await waitFor(() => {
+      expect(feedbackSubmitAskMutation.mutateAsync).toHaveBeenCalledWith({
+        serverId: "g1",
+        conversationId: "c1",
+        messageId: "m2",
+        rating: "down",
+        comment: "Add decision details.",
+      });
+    });
   });
 
   test("shows public share link when public sharing is enabled", async () => {

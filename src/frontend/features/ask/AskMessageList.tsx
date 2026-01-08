@@ -21,6 +21,11 @@ type AskMessageListProps = {
   highlightedMessageId: string | null;
   onCopyLink: (messageId?: string) => void;
   onCopyResponse: (text: string) => void;
+  showFeedback?: boolean;
+  feedbackState?: (messageId: string) => "up" | "down" | null;
+  feedbackPending?: boolean;
+  onFeedbackUp?: (messageId: string) => void;
+  onFeedbackDown?: (messageId: string) => void;
   viewportRef: RefObject<HTMLDivElement | null>;
 };
 
@@ -115,6 +120,11 @@ export function AskMessageList({
   highlightedMessageId,
   onCopyLink,
   onCopyResponse,
+  showFeedback = false,
+  feedbackState,
+  feedbackPending = false,
+  onFeedbackUp,
+  onFeedbackDown,
   viewportRef,
 }: AskMessageListProps) {
   const { serverId } = useParams({ from: "/portal/server/$serverId/ask" });
@@ -180,6 +190,11 @@ export function AskMessageList({
               roleLabels={{ user: "You", chronote: "Chronote" }}
               highlighted={highlightedMessageId === message.id}
               showActions
+              showFeedback={showFeedback}
+              feedbackState={feedbackState ? feedbackState(message.id) : null}
+              feedbackPending={feedbackPending}
+              onFeedbackUp={onFeedbackUp}
+              onFeedbackDown={onFeedbackDown}
               linkHandler={linkHandler}
               onCopyLink={onCopyLink}
               onCopyResponse={onCopyResponse}

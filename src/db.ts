@@ -31,6 +31,7 @@ import {
   ConfigOverrideRecord,
   AskConversationShareRecord,
   FeedbackRecord,
+  FeedbackTargetType,
 } from "./types/db";
 import type { MeetingStatus } from "./types/meetingLifecycle";
 
@@ -1247,6 +1248,53 @@ export async function getFeedback(
     return unmarshall(result.Item) as FeedbackRecord;
   }
   return undefined;
+}
+
+export async function listFeedbackByTargetType(params: {
+  targetType: FeedbackTargetType;
+  limit?: number;
+  startAt?: string;
+  endAt?: string;
+}): Promise<FeedbackRecord[]> {
+  const expressionNames: Record<string, string> = {
+    "#targetType": "targetType",
+  };
+  const expressionValues: Record<string, string> = {
+    ":targetType": params.targetType,
+  };
+  let keyCondition = "#targetType = :targetType";
+
+  if (params.startAt && params.endAt) {
+    expressionNames["#createdAt"] = "createdAt";
+    expressionValues[":startAt"] = params.startAt;
+    expressionValues[":endAt"] = params.endAt;
+    keyCondition += " AND #createdAt BETWEEN :startAt AND :endAt";
+  } else if (params.startAt) {
+    expressionNames["#createdAt"] = "createdAt";
+    expressionValues[":startAt"] = params.startAt;
+    keyCondition += " AND #createdAt >= :startAt";
+  } else if (params.endAt) {
+    expressionNames["#createdAt"] = "createdAt";
+    expressionValues[":endAt"] = params.endAt;
+    keyCondition += " AND #createdAt <= :endAt";
+  }
+
+  const query = new QueryCommand({
+    TableName: tableName("FeedbackTable"),
+    IndexName: "TargetTypeCreatedAtIndex",
+    KeyConditionExpression: keyCondition,
+    ExpressionAttributeNames: expressionNames,
+    ExpressionAttributeValues: marshall(expressionValues, {
+      removeUndefinedValues: true,
+    }),
+    ScanIndexForward: false,
+    Limit: params.limit ?? 100,
+  });
+  const result = await dynamoDbClient.send(query);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as FeedbackRecord);
+  }
+  return [];
 }
 
 export async function updateMeetingTags(
