@@ -30,10 +30,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ? "authenticated"
       : "unauthenticated";
 
-  const portalRedirect =
-    typeof window !== "undefined"
-      ? `${window.location.origin}/portal/select-server`
-      : "/portal/select-server";
+  const resolvePortalRedirect = () => {
+    if (typeof window === "undefined") {
+      return "/portal/select-server";
+    }
+    const pathname = window.location.pathname;
+    const useCurrentLocation =
+      pathname.startsWith("/portal") ||
+      pathname.startsWith("/live") ||
+      pathname.startsWith("/share");
+    if (useCurrentLocation) {
+      return window.location.href;
+    }
+    return `${window.location.origin}/portal/select-server`;
+  };
+
+  const portalRedirect = resolvePortalRedirect();
   const loginUrl = `${buildApiUrl("/auth/discord")}?redirect=${encodeURIComponent(
     portalRedirect,
   )}`;

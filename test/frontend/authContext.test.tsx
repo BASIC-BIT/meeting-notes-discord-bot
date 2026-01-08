@@ -33,6 +33,7 @@ function AuthProbe({
 describe("AuthContext", () => {
   beforeEach(() => {
     resetTrpcMocks();
+    window.history.pushState({}, "", "/");
   });
 
   test("reports unauthenticated state and builds login url", async () => {
@@ -51,8 +52,14 @@ describe("AuthContext", () => {
     expect(node).toHaveAttribute("data-state", "unauthenticated");
     expect(node).toHaveAttribute("data-loading", "false");
     const loginUrl = node.getAttribute("data-login");
-    expect(loginUrl).toContain("/auth/discord");
-    expect(loginUrl).toContain("redirect=");
+    if (!loginUrl) {
+      throw new Error("Missing login url");
+    }
+    const resolved = new URL(loginUrl, window.location.origin);
+    expect(resolved.pathname).toBe("/auth/discord");
+    expect(resolved.searchParams.get("redirect")).toBe(
+      `${window.location.origin}/portal/select-server`,
+    );
     if (!captured) {
       throw new Error("Missing auth snapshot");
     }
@@ -60,6 +67,27 @@ describe("AuthContext", () => {
       await captured.refresh();
     });
     expect(authQuery.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses current location for portal redirect targets", () => {
+    setAuthQuery({ data: null, isLoading: false });
+    window.history.pushState(
+      {},
+      "",
+      "/portal/server/g1/library?meetingId=meeting-1",
+    );
+    render(
+      <AuthProvider>
+        <AuthProbe onCapture={() => {}} />
+      </AuthProvider>,
+    );
+    const node = screen.getByTestId("auth-state");
+    const loginUrl = node.getAttribute("data-login");
+    if (!loginUrl) {
+      throw new Error("Missing login url");
+    }
+    const resolved = new URL(loginUrl, window.location.origin);
+    expect(resolved.searchParams.get("redirect")).toBe(window.location.href);
   });
 
   test("reports authenticated when data is present", () => {

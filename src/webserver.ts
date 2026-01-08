@@ -17,6 +17,10 @@ import { appRouter } from "./trpc/router";
 import { AuthedProfile, createContext } from "./trpc/context";
 import { getMockUser } from "./repositories/mockStore";
 import {
+  buildAllowedRedirectOrigins,
+  resolveSafeRedirect,
+} from "./services/oauthRedirectService";
+import {
   buildDiscordAuthProfile,
   ensureDiscordAccessToken,
 } from "./services/discordAuthService";
@@ -24,6 +28,33 @@ import {
 export function setupWebServer() {
   const app = express();
   const PORT = config.server.port;
+  const allowedRedirectOrigins = buildAllowedRedirectOrigins(
+    config.frontend.siteUrl,
+    config.frontend.allowedOrigins,
+  );
+
+  const resolveRedirectParam = (req: express.Request) =>
+    resolveSafeRedirect(req.query.redirect, allowedRedirectOrigins);
+
+  const storeRedirectInSession = (req: express.Request, redirect?: string) => {
+    if (!redirect) return;
+    const sessionWithRedirect = req.session as
+      | (typeof req.session & { oauthRedirect?: string })
+      | undefined;
+    if (!sessionWithRedirect) return;
+    sessionWithRedirect.oauthRedirect = redirect;
+  };
+
+  const consumeRedirectFromSession = (req: express.Request) => {
+    const sessionWithRedirect = req.session as
+      | (typeof req.session & { oauthRedirect?: string })
+      | undefined;
+    const stored = sessionWithRedirect?.oauthRedirect;
+    if (stored && sessionWithRedirect) {
+      delete sessionWithRedirect.oauthRedirect;
+    }
+    return resolveSafeRedirect(stored, allowedRedirectOrigins);
+  };
 
   // Trust first proxy (needed for secure cookies behind ALB/CloudFront)
   app.set("trust proxy", 1);
@@ -116,6 +147,7 @@ export function setupWebServer() {
           clientSecret: config.discord.clientSecret,
           callbackURL: config.discord.callbackUrl,
           scope: ["identify", "email", "guilds"],
+          state: true,
         },
         (
           accessToken: string,
@@ -211,7 +243,15 @@ export function setupWebServer() {
     });
 
     // Discord OAuth routes
-    app.get("/auth/discord", passport.authenticate("discord"));
+    app.get(
+      "/auth/discord",
+      (req, _res, next) => {
+        const redirectParam = resolveRedirectParam(req);
+        storeRedirectInSession(req, redirectParam);
+        next();
+      },
+      passport.authenticate("discord"),
+    );
 
     app.get(
       "/auth/discord/callback",
@@ -221,10 +261,8 @@ export function setupWebServer() {
       (req, res) => {
         const guildId = req.query.guild_id as string | undefined;
         const profile = req.user as Profile;
-        const redirectParam =
-          typeof req.query.redirect === "string"
-            ? req.query.redirect
-            : undefined;
+        const redirectParam = resolveRedirectParam(req);
+        const sessionRedirect = consumeRedirectFromSession(req);
         if (guildId) {
           saveGuildInstaller({
             guildId,
@@ -238,13 +276,12 @@ export function setupWebServer() {
           config.frontend.siteUrl && config.frontend.siteUrl.length > 0
             ? config.frontend.siteUrl
             : "/";
-        res.redirect(redirectParam || fallback);
+        res.redirect(sessionRedirect || redirectParam || fallback);
       },
     );
   } else {
     app.get("/auth/discord", (req, res) => {
-      const redirectParam =
-        typeof req.query.redirect === "string" ? req.query.redirect : undefined;
+      const redirectParam = resolveRedirectParam(req);
       const fallback =
         config.frontend.siteUrl && config.frontend.siteUrl.length > 0
           ? config.frontend.siteUrl
@@ -252,8 +289,7 @@ export function setupWebServer() {
       res.redirect(redirectParam || fallback);
     });
     app.get("/auth/discord/callback", (req, res) => {
-      const redirectParam =
-        typeof req.query.redirect === "string" ? req.query.redirect : undefined;
+      const redirectParam = resolveRedirectParam(req);
       const fallback =
         config.frontend.siteUrl && config.frontend.siteUrl.length > 0
           ? config.frontend.siteUrl
