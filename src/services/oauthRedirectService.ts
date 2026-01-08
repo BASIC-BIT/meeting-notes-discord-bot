@@ -1,43 +1,39 @@
-export const buildAllowedRedirectOrigins = (
-  siteUrl: string,
-  allowedOrigins: string[],
-): Set<string> => {
-  const origins = new Set<string>();
-  const candidates = [siteUrl, ...allowedOrigins]
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-
-  for (const candidate of candidates) {
-    try {
-      origins.add(new URL(candidate).origin);
-    } catch {
-      // Ignore invalid origin values.
-    }
+const resolveFrontendOrigin = (siteUrl: string): string | undefined => {
+  const trimmed = siteUrl.trim();
+  if (!trimmed) return undefined;
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return undefined;
   }
-
-  return origins;
 };
 
-export const resolveSafeRedirect = (
+const isSafeRedirectPath = (value: string) =>
+  value.startsWith("/") && !value.startsWith("//");
+
+export const resolveRedirectTarget = (
   rawRedirect: unknown,
-  allowedOrigins: Set<string>,
+  siteUrl: string,
 ): string | undefined => {
   if (typeof rawRedirect !== "string") return undefined;
   const trimmed = rawRedirect.trim();
   if (!trimmed) return undefined;
 
-  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
-    return trimmed;
+  const origin = resolveFrontendOrigin(siteUrl);
+  if (!origin) return undefined;
+
+  if (isSafeRedirectPath(trimmed)) {
+    return new URL(trimmed, origin).toString();
   }
 
   try {
-    const url = new URL(trimmed);
-    if (allowedOrigins.has(url.origin)) {
-      return url.toString();
-    }
+    const parsed = new URL(trimmed);
+    if (parsed.origin !== origin) return undefined;
+    return new URL(
+      `${parsed.pathname}${parsed.search}${parsed.hash}`,
+      origin,
+    ).toString();
   } catch {
     return undefined;
   }
-
-  return undefined;
 };

@@ -74,7 +74,7 @@ describe("AuthContext", () => {
     window.history.pushState(
       {},
       "",
-      "/portal/server/g1/library?meetingId=meeting-1",
+      "/portal/server/g1/library?meetingId=meeting-1#section-1",
     );
     render(
       <AuthProvider>

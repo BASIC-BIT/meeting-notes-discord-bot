@@ -16,10 +16,7 @@ import { metricsMiddleware, metricsRegistry } from "./metrics";
 import { appRouter } from "./trpc/router";
 import { AuthedProfile, createContext } from "./trpc/context";
 import { getMockUser } from "./repositories/mockStore";
-import {
-  buildAllowedRedirectOrigins,
-  resolveSafeRedirect,
-} from "./services/oauthRedirectService";
+import { resolveRedirectTarget } from "./services/oauthRedirectService";
 import {
   buildDiscordAuthProfile,
   ensureDiscordAccessToken,
@@ -28,32 +25,25 @@ import {
 export function setupWebServer() {
   const app = express();
   const PORT = config.server.port;
-  const allowedRedirectOrigins = buildAllowedRedirectOrigins(
-    config.frontend.siteUrl,
-    config.frontend.allowedOrigins,
-  );
+  type SessionWithRedirect = session.Session & { oauthRedirect?: string };
 
   const resolveRedirectParam = (req: express.Request) =>
-    resolveSafeRedirect(req.query.redirect, allowedRedirectOrigins);
+    resolveRedirectTarget(req.query.redirect, config.frontend.siteUrl);
 
   const storeRedirectInSession = (req: express.Request, redirect?: string) => {
     if (!redirect) return;
-    const sessionWithRedirect = req.session as
-      | (typeof req.session & { oauthRedirect?: string })
-      | undefined;
+    const sessionWithRedirect = req.session as SessionWithRedirect | undefined;
     if (!sessionWithRedirect) return;
     sessionWithRedirect.oauthRedirect = redirect;
   };
 
   const consumeRedirectFromSession = (req: express.Request) => {
-    const sessionWithRedirect = req.session as
-      | (typeof req.session & { oauthRedirect?: string })
-      | undefined;
+    const sessionWithRedirect = req.session as SessionWithRedirect | undefined;
     const stored = sessionWithRedirect?.oauthRedirect;
     if (stored && sessionWithRedirect) {
       delete sessionWithRedirect.oauthRedirect;
     }
-    return resolveSafeRedirect(stored, allowedRedirectOrigins);
+    return stored;
   };
 
   // Trust first proxy (needed for secure cookies behind ALB/CloudFront)
@@ -261,7 +251,6 @@ export function setupWebServer() {
       (req, res) => {
         const guildId = req.query.guild_id as string | undefined;
         const profile = req.user as Profile;
-        const redirectParam = resolveRedirectParam(req);
         const sessionRedirect = consumeRedirectFromSession(req);
         if (guildId) {
           saveGuildInstaller({
@@ -276,7 +265,7 @@ export function setupWebServer() {
           config.frontend.siteUrl && config.frontend.siteUrl.length > 0
             ? config.frontend.siteUrl
             : "/";
-        res.redirect(sessionRedirect || redirectParam || fallback);
+        res.redirect(sessionRedirect || fallback);
       },
     );
   } else {
