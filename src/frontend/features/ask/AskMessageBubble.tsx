@@ -54,6 +54,7 @@ export function AskMessageBubble({
       data-role={message.role}
       data-message-id={message.id}
       className="ask-message-bubble"
+      tabIndex={feedbackEnabled ? 0 : undefined}
       style={{
         alignSelf: message.role === "user" ? "flex-end" : "flex-start",
         maxWidth: "88%",

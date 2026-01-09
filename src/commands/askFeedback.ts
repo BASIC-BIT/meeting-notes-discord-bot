@@ -9,12 +9,12 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { submitAskFeedback } from "../services/askFeedbackService";
+import { MAX_FEEDBACK_COMMENT_LENGTH } from "../services/feedbackHelpers";
 
 const ASK_FEEDBACK_UP = "ask_feedback_up";
 const ASK_FEEDBACK_DOWN = "ask_feedback_down";
 const ASK_FEEDBACK_MODAL_PREFIX = "ask_feedback_modal";
 const ASK_FEEDBACK_FIELD_ID = "ask_feedback_comment";
-const MAX_FEEDBACK_COMMENT_LENGTH = 1000;
 
 const extractMessageId = (customId: string): string | undefined => {
   const parts = customId.split(":");
@@ -63,7 +63,8 @@ export function isAskFeedbackModal(customId: string): boolean {
 
 export async function handleAskFeedbackUp(interaction: ButtonInteraction) {
   const messageId = interaction.message?.id;
-  if (!messageId || !interaction.guildId) {
+  const channelId = interaction.channelId ?? undefined;
+  if (!messageId || !interaction.guildId || !channelId) {
     await interaction.reply({
       content: "Unable to record feedback for this response.",
       ephemeral: true,
@@ -74,7 +75,7 @@ export async function handleAskFeedbackUp(interaction: ButtonInteraction) {
   await interaction.deferReply({ ephemeral: true });
   await submitAskFeedback({
     guildId: interaction.guildId,
-    channelId: interaction.channelId ?? undefined,
+    channelId,
     messageId,
     userId: interaction.user.id,
     userTag: interaction.user.tag,
@@ -88,7 +89,7 @@ export async function handleAskFeedbackUp(interaction: ButtonInteraction) {
 
 export async function handleAskFeedbackDown(interaction: ButtonInteraction) {
   const messageId = interaction.message?.id;
-  if (!messageId) {
+  if (!messageId || !interaction.guildId || !interaction.channelId) {
     await interaction.reply({
       content: "Unable to open feedback form.",
       ephemeral: true,
@@ -120,7 +121,8 @@ export async function handleAskFeedbackModal(
   interaction: ModalSubmitInteraction,
 ) {
   const messageId = extractMessageId(interaction.customId);
-  if (!messageId || !interaction.guildId) {
+  const channelId = interaction.channelId ?? undefined;
+  if (!messageId || !interaction.guildId || !channelId) {
     await interaction.reply({
       content: "Unable to record feedback for this response.",
       ephemeral: true,
@@ -133,7 +135,7 @@ export async function handleAskFeedbackModal(
   await interaction.deferReply({ ephemeral: true });
   await submitAskFeedback({
     guildId: interaction.guildId,
-    channelId: interaction.channelId ?? undefined,
+    channelId,
     messageId,
     userId: interaction.user.id,
     userTag: interaction.user.tag,

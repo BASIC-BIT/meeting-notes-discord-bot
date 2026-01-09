@@ -47,7 +47,18 @@ const mockRepository: FeedbackRepository = {
       if (!pk.startsWith(prefix)) continue;
       items.push(...values);
     }
-    const sorted = items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    let filtered = items;
+    const startAt = params.startAt;
+    const endAt = params.endAt;
+    if (startAt) {
+      filtered = filtered.filter((item) => item.createdAt >= startAt);
+    }
+    if (endAt) {
+      filtered = filtered.filter((item) => item.createdAt <= endAt);
+    }
+    const sorted = filtered.sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
     return sorted.slice(0, params.limit ?? 100);
   },
 };

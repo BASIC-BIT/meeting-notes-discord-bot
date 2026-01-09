@@ -1,10 +1,13 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { guildMemberProcedure, manageGuildProcedure, router } from "../trpc";
+import { getAskConversationRepository } from "../../repositories/askConversationRepository";
 import { submitAskFeedback } from "../../services/askFeedbackService";
 import { submitMeetingSummaryFeedback } from "../../services/summaryFeedbackService";
 
 const ratingSchema = z.enum(["up", "down"]);
 
+// Meeting summaries are posted to shared channels, so feedback is admin-only.
 const submitSummary = manageGuildProcedure
   .input(
     z.object({
@@ -38,6 +41,7 @@ const submitSummary = manageGuildProcedure
     return { ok: true };
   });
 
+// Ask feedback is scoped to the requesting member, so member access is enough.
 const submitAsk = guildMemberProcedure
   .input(
     z.object({
@@ -57,6 +61,34 @@ const submitAsk = guildMemberProcedure
         ? `${username}#${discriminator}`
         : username;
     const displayName = user.global_name ?? username;
+
+    const repo = getAskConversationRepository();
+    const conversation = await repo.getConversation(
+      user.id,
+      input.serverId,
+      input.conversationId,
+    );
+    if (!conversation) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Ask conversation not found.",
+      });
+    }
+
+    const messages = await repo.listMessages(
+      user.id,
+      input.serverId,
+      input.conversationId,
+    );
+    const targetMessage = messages.find(
+      (message) => message.id === input.messageId,
+    );
+    if (!targetMessage || targetMessage.role !== "chronote") {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Ask response not found.",
+      });
+    }
 
     await submitAskFeedback({
       guildId: input.serverId,

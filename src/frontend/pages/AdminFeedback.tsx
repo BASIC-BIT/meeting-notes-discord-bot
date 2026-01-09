@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -15,6 +15,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { trpc } from "../services/trpc";
 import Surface from "../components/Surface";
 import { uiOverlays } from "../uiTokens";
+import type { FeedbackRecord } from "../../types/db";
 
 type FilterValue = "all" | "meeting_summary" | "ask_answer";
 type RatingValue = "all" | "up" | "down";
@@ -22,6 +23,20 @@ type SourceValue = "all" | "discord" | "web";
 
 const resolveTargetLabel = (targetType: string) =>
   targetType === "ask_answer" ? "Ask answer" : "Meeting summary";
+
+const buildFeedbackKey = (item: FeedbackRecord) => `${item.pk}:${item.sk}`;
+
+const mergeFeedbackItems = (
+  existing: FeedbackRecord[],
+  next: FeedbackRecord[],
+) => {
+  const map = new Map<string, FeedbackRecord>();
+  existing.forEach((item) => map.set(buildFeedbackKey(item), item));
+  next.forEach((item) => map.set(buildFeedbackKey(item), item));
+  return Array.from(map.values()).sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt),
+  );
+};
 
 function AdminFeedbackAccessDenied() {
   return (
@@ -39,15 +54,54 @@ export default function AdminFeedback() {
   const [targetType, setTargetType] = useState<FilterValue>("all");
   const [rating, setRating] = useState<RatingValue>("all");
   const [source, setSource] = useState<SourceValue>("all");
+  const [items, setItems] = useState<FeedbackRecord[]>([]);
+  const [pageCursor, setPageCursor] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  const query = trpc.adminFeedback.list.useQuery({
-    targetType: targetType === "all" ? undefined : targetType,
-    rating: rating === "all" ? undefined : rating,
-    source: source === "all" ? undefined : source,
-    limit: 100,
-  });
+  const query = trpc.adminFeedback.list.useQuery(
+    {
+      targetType: targetType === "all" ? undefined : targetType,
+      rating: rating === "all" ? undefined : rating,
+      source: source === "all" ? undefined : source,
+      limit: 100,
+      cursor: pageCursor ?? undefined,
+    },
+    {
+      enabled: isSuperAdmin,
+    },
+  );
 
-  const items = query.data?.items ?? [];
+  useEffect(() => {
+    setItems([]);
+    setPageCursor(null);
+    setNextCursor(null);
+    setIsLoadingMore(false);
+  }, [targetType, rating, source, isSuperAdmin]);
+
+  useEffect(() => {
+    if (!query.data) return;
+    setItems((prev) =>
+      pageCursor
+        ? mergeFeedbackItems(prev, query.data.items)
+        : query.data.items,
+    );
+    setNextCursor(query.data.nextCursor ?? null);
+    setIsLoadingMore(false);
+  }, [pageCursor, query.data]);
+
+  const handleLoadMore = () => {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    setPageCursor(nextCursor);
+  };
+
+  const handleRefresh = () => {
+    setItems([]);
+    setNextCursor(null);
+    setPageCursor(null);
+    void query.refetch();
+  };
   const stats = useMemo(() => {
     const totals = {
       meeting_summary: { up: 0, down: 0 },
@@ -80,7 +134,7 @@ export default function AdminFeedback() {
         </Stack>
         <Button
           variant="default"
-          onClick={() => query.refetch()}
+          onClick={handleRefresh}
           disabled={query.isLoading}
           data-testid="admin-feedback-refresh"
         >
@@ -133,7 +187,7 @@ export default function AdminFeedback() {
 
       <Surface tone="raised" p="lg" style={{ position: "relative" }}>
         <LoadingOverlay
-          visible={query.isLoading}
+          visible={query.isLoading && items.length === 0}
           overlayProps={uiOverlays.loading}
           loaderProps={{ size: "md" }}
         />
@@ -186,6 +240,16 @@ export default function AdminFeedback() {
               );
             })
           )}
+          {nextCursor ? (
+            <Button
+              variant="light"
+              onClick={handleLoadMore}
+              loading={isLoadingMore}
+              disabled={query.isFetching}
+            >
+              Load more
+            </Button>
+          ) : null}
         </Stack>
       </Surface>
     </Stack>

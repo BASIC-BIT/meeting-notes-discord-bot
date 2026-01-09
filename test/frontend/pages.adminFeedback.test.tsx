@@ -1,5 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, test } from "@jest/globals";
+import { waitFor } from "@testing-library/react";
 import { renderWithMantine, resetFrontendMocks } from "./testUtils";
 import { authState } from "./testUtils";
 import { setAdminFeedbackQuery } from "./mocks/trpc";
@@ -19,7 +20,7 @@ describe("AdminFeedback page", () => {
     ).toBe(true);
   });
 
-  test("renders feedback entries for super admins", () => {
+  test("renders feedback entries for super admins", async () => {
     authState.state = "authenticated";
     authState.user = { id: "user-1", isSuperAdmin: true };
     setAdminFeedbackQuery({
@@ -40,13 +41,18 @@ describe("AdminFeedback page", () => {
             comment: "Needs more detail.",
           },
         ],
+        nextCursor: null,
       },
       isLoading: false,
     });
 
     renderWithMantine(<AdminFeedback />);
 
-    expect(document.body.textContent?.includes("Needs more detail")).toBe(true);
+    await waitFor(() => {
+      expect(document.body.textContent?.includes("Needs more detail")).toBe(
+        true,
+      );
+    });
     expect(document.body.textContent?.includes("Meeting summary")).toBe(true);
   });
 });

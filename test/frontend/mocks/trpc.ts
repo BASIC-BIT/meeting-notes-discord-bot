@@ -162,7 +162,10 @@ type ConfigGlobalData = {
   appconfigEnabled: boolean;
   validation?: { missingRequired: string[] };
 };
-type AdminFeedbackData = { items: FeedbackRecord[] };
+type AdminFeedbackData = {
+  items: FeedbackRecord[];
+  nextCursor?: string | null;
+};
 
 const buildQueryState = <T>(data: T | null): QueryState<T> => ({
   data,
@@ -261,6 +264,7 @@ export const configGlobalQuery = buildQueryState<ConfigGlobalData>({
 });
 export const adminFeedbackQuery = buildQueryState<AdminFeedbackData>({
   items: [],
+  nextCursor: null,
 });
 
 export const billingCheckoutMutation = buildMutationState<
@@ -432,7 +436,7 @@ export const resetTrpcMocks = () => {
     overrides: [],
     appconfigEnabled: false,
   });
-  resetQueryState(adminFeedbackQuery, { items: [] });
+  resetQueryState(adminFeedbackQuery, { items: [], nextCursor: null });
 
   resetMutationState(billingCheckoutMutation, {
     url: "https://example.com/checkout",

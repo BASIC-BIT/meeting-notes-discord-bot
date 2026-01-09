@@ -90,6 +90,7 @@ export interface FeedbackRecord {
   guildId: string;
   channelId?: string;
   meetingId?: string;
+  // For ask_answer, channelId or conversationId is required.
   conversationId?: string;
   messageId?: string;
   notesVersion?: number;
