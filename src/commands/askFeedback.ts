@@ -73,18 +73,25 @@ export async function handleAskFeedbackUp(interaction: ButtonInteraction) {
   }
 
   await interaction.deferReply({ ephemeral: true });
-  await submitAskFeedback({
-    guildId: interaction.guildId,
-    channelId,
-    messageId,
-    userId: interaction.user.id,
-    userTag: interaction.user.tag,
-    displayName: resolveDisplayName(interaction),
-    rating: "up",
-    source: "discord",
-  });
+  try {
+    await submitAskFeedback({
+      guildId: interaction.guildId,
+      channelId,
+      messageId,
+      userId: interaction.user.id,
+      userTag: interaction.user.tag,
+      displayName: resolveDisplayName(interaction),
+      rating: "up",
+      source: "discord",
+    });
 
-  await interaction.editReply("Thanks for the feedback.");
+    await interaction.editReply("Thanks for the feedback.");
+  } catch (error) {
+    console.error("Error submitting ask feedback:", error);
+    await interaction.editReply(
+      "Unable to record feedback right now. Please try again later.",
+    );
+  }
 }
 
 export async function handleAskFeedbackDown(interaction: ButtonInteraction) {
@@ -133,17 +140,24 @@ export async function handleAskFeedbackModal(
   const comment = interaction.fields.getTextInputValue(ASK_FEEDBACK_FIELD_ID);
 
   await interaction.deferReply({ ephemeral: true });
-  await submitAskFeedback({
-    guildId: interaction.guildId,
-    channelId,
-    messageId,
-    userId: interaction.user.id,
-    userTag: interaction.user.tag,
-    displayName: resolveDisplayName(interaction),
-    rating: "down",
-    comment,
-    source: "discord",
-  });
+  try {
+    await submitAskFeedback({
+      guildId: interaction.guildId,
+      channelId,
+      messageId,
+      userId: interaction.user.id,
+      userTag: interaction.user.tag,
+      displayName: resolveDisplayName(interaction),
+      rating: "down",
+      comment,
+      source: "discord",
+    });
 
-  await interaction.editReply("Thanks for the feedback.");
+    await interaction.editReply("Thanks for the feedback.");
+  } catch (error) {
+    console.error("Error submitting ask feedback:", error);
+    await interaction.editReply(
+      "Unable to record feedback right now. Please try again later.",
+    );
+  }
 }
