@@ -100,4 +100,73 @@ describe("listFeedbackEntries", () => {
     expect(secondPage.items).toHaveLength(1);
     expect(secondPage.items[0]?.messageId).toBe("msg-1");
   });
+
+  it("fills a page when filters exclude early items", async () => {
+    const repo = getFeedbackRepository();
+    const records: Array<{
+      messageId: string;
+      createdAt: string;
+      rating: "up" | "down";
+    }> = [
+      {
+        messageId: "msg-6",
+        createdAt: "2025-01-06T00:00:00.000Z",
+        rating: "up",
+      },
+      {
+        messageId: "msg-5",
+        createdAt: "2025-01-05T00:00:00.000Z",
+        rating: "down",
+      },
+      {
+        messageId: "msg-4",
+        createdAt: "2025-01-04T00:00:00.000Z",
+        rating: "down",
+      },
+      {
+        messageId: "msg-3",
+        createdAt: "2025-01-03T00:00:00.000Z",
+        rating: "down",
+      },
+      {
+        messageId: "msg-2",
+        createdAt: "2025-01-02T00:00:00.000Z",
+        rating: "up",
+      },
+      {
+        messageId: "msg-1",
+        createdAt: "2025-01-01T00:00:00.000Z",
+        rating: "up",
+      },
+    ];
+
+    for (const record of records) {
+      await repo.write({
+        pk: `TARGET#ask_answer#conv-1#${record.messageId}`,
+        sk: "USER#u1",
+        type: "feedback",
+        targetType: "ask_answer",
+        targetId: `conv-1#${record.messageId}`,
+        guildId: "g1",
+        conversationId: "conv-1",
+        messageId: record.messageId,
+        rating: record.rating,
+        source: "web",
+        createdAt: record.createdAt,
+        updatedAt: record.createdAt,
+        userId: "u1",
+      });
+    }
+
+    const page = await listFeedbackEntries({
+      targetType: "ask_answer",
+      rating: "up",
+      limit: 2,
+    });
+
+    expect(page.items).toHaveLength(2);
+    expect(page.items[0]?.messageId).toBe("msg-6");
+    expect(page.items[1]?.messageId).toBe("msg-2");
+    expect(page.nextCursor).toBe("2025-01-02T00:00:00.000Z");
+  });
 });

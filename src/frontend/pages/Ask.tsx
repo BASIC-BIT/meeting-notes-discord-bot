@@ -364,7 +364,7 @@ export default function Ask() {
           conversationId,
           messageId,
           rating,
-          comment: comment?.trim() || undefined,
+          comment,
         });
         setFeedbackByMessage((prev) => ({
           ...prev,
@@ -505,6 +505,7 @@ export default function Ask() {
         onClose={() => {
           setFeedbackModalOpen(false);
           setPendingFeedback(null);
+          setFeedbackDraft("");
         }}
         title="Ask feedback"
         centered
@@ -524,6 +525,7 @@ export default function Ask() {
               onClick={() => {
                 setFeedbackModalOpen(false);
                 setPendingFeedback(null);
+                setFeedbackDraft("");
               }}
               disabled={feedbackMutation.isPending}
             >
