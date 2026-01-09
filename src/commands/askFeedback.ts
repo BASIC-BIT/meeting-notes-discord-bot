@@ -63,7 +63,7 @@ export function isAskFeedbackModal(customId: string): boolean {
 
 export async function handleAskFeedbackUp(interaction: ButtonInteraction) {
   const messageId = interaction.message?.id;
-  const channelId = interaction.channelId ?? undefined;
+  const channelId = interaction.channelId;
   if (!messageId || !interaction.guildId || !channelId) {
     await interaction.reply({
       content: "Unable to record feedback for this response.",
@@ -121,7 +121,7 @@ export async function handleAskFeedbackModal(
   interaction: ModalSubmitInteraction,
 ) {
   const messageId = extractMessageId(interaction.customId);
-  const channelId = interaction.channelId ?? undefined;
+  const channelId = interaction.channelId;
   if (!messageId || !interaction.guildId || !channelId) {
     await interaction.reply({
       content: "Unable to record feedback for this response.",
