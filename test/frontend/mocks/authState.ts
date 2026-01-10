@@ -3,6 +3,12 @@ export type MockAuthState = {
   loginUrl: string;
   loading: boolean;
   refresh: () => Promise<void>;
+  user?: {
+    id?: string;
+    username?: string;
+    avatar?: string | null;
+    isSuperAdmin?: boolean;
+  } | null;
 };
 
 const defaultLoginUrl = "https://example.com/login";
@@ -12,6 +18,7 @@ export const authState: MockAuthState = {
   loginUrl: defaultLoginUrl,
   loading: false,
   refresh: async () => {},
+  user: null,
 };
 
 export const resetAuthState = () => {
@@ -19,4 +26,5 @@ export const resetAuthState = () => {
   authState.loginUrl = defaultLoginUrl;
   authState.loading = false;
   authState.refresh = async () => {};
+  authState.user = null;
 };

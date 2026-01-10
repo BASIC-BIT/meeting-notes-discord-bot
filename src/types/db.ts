@@ -78,7 +78,7 @@ export interface NotesHistoryEntry {
 }
 
 export type FeedbackRating = "up" | "down";
-export type FeedbackTargetType = "meeting_summary";
+export type FeedbackTargetType = "meeting_summary" | "ask_answer";
 export type FeedbackSource = "discord" | "web";
 
 export interface FeedbackRecord {
@@ -90,6 +90,9 @@ export interface FeedbackRecord {
   guildId: string;
   channelId?: string;
   meetingId?: string;
+  // For ask_answer, channelId or conversationId is required.
+  conversationId?: string;
+  messageId?: string;
   notesVersion?: number;
   summarySentence?: string;
   summaryLabel?: string;

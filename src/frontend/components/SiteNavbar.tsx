@@ -183,6 +183,21 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
                 }}
                 style={{ borderRadius: theme.radius[uiRadii.control] }}
               />
+              <NavLink
+                label="Admin feedback"
+                description="Summary and Ask ratings"
+                data-testid="nav-admin-feedback"
+                leftSection={
+                  <ThemeIcon variant="transparent" color="gray" size={34}>
+                    <IconMessageCircle size={18} />
+                  </ThemeIcon>
+                }
+                onClick={() => {
+                  navigate({ to: "/portal/admin/feedback" });
+                  onClose?.();
+                }}
+                style={{ borderRadius: theme.radius[uiRadii.control] }}
+              />
             </Stack>
           </>
         ) : null}

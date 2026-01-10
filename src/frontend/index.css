@@ -50,3 +50,21 @@ html[data-visual-mode="true"] [data-visual-scroll] [data-scrollbars] {
   max-height: none !important;
   overflow: visible !important;
 }
+
+.ask-feedback-actions {
+  transition: opacity 120ms ease;
+}
+
+@media (hover: hover) {
+  .ask-message-bubble .ask-feedback-actions {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .ask-message-bubble:hover .ask-feedback-actions,
+  .ask-message-bubble:focus-within .ask-feedback-actions,
+  .ask-message-bubble:focus-visible .ask-feedback-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}

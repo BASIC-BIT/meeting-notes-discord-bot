@@ -6,14 +6,11 @@ import type {
 } from "../types/db";
 import { nowIso } from "../utils/time";
 import { getMeetingHistoryService } from "./meetingHistoryService";
-
-const MAX_FEEDBACK_COMMENT_LENGTH = 1000;
-
-const buildFeedbackPk = (
-  targetType: FeedbackRecord["targetType"],
-  targetId: string,
-) => `TARGET#${targetType}#${targetId}`;
-const buildFeedbackSk = (userId: string) => `USER#${userId}`;
+import {
+  buildFeedbackPk,
+  buildFeedbackSk,
+  normalizeFeedbackComment,
+} from "./feedbackHelpers";
 
 export const buildMeetingSummaryFeedbackKeys = (params: {
   channelIdTimestamp: string;
@@ -46,11 +43,7 @@ export async function submitMeetingSummaryFeedback(params: {
     params.channelIdTimestamp,
   );
 
-  const trimmedComment = params.comment?.trim();
-  const comment =
-    trimmedComment && trimmedComment.length > 0
-      ? trimmedComment.slice(0, MAX_FEEDBACK_COMMENT_LENGTH)
-      : undefined;
+  const comment = normalizeFeedbackComment(params.comment);
   const now = nowIso();
 
   const channelId =

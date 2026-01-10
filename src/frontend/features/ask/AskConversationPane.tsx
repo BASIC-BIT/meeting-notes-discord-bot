@@ -42,6 +42,11 @@ type AskConversationPaneProps = {
   highlightedMessageId: string | null;
   onCopyLink: (messageId?: string) => void;
   onCopyResponse: (text: string) => void;
+  showFeedback?: boolean;
+  feedbackState?: (messageId: string) => "up" | "down" | null;
+  feedbackPending?: boolean;
+  onFeedbackUp?: (messageId: string) => void;
+  onFeedbackDown?: (messageId: string) => void;
   chatViewportRef: RefObject<HTMLDivElement | null>;
   draft: string;
   errorMessage: string | null;
@@ -87,6 +92,11 @@ export function AskConversationPane({
   highlightedMessageId,
   onCopyLink,
   onCopyResponse,
+  showFeedback = false,
+  feedbackState,
+  feedbackPending = false,
+  onFeedbackUp,
+  onFeedbackDown,
   chatViewportRef,
   draft,
   errorMessage,
@@ -169,6 +179,11 @@ export function AskConversationPane({
           highlightedMessageId={highlightedMessageId}
           onCopyLink={onCopyLink}
           onCopyResponse={onCopyResponse}
+          showFeedback={showFeedback}
+          feedbackState={feedbackState}
+          feedbackPending={feedbackPending}
+          onFeedbackUp={onFeedbackUp}
+          onFeedbackDown={onFeedbackDown}
           viewportRef={chatViewportRef}
         />
         <Divider my="xs" />

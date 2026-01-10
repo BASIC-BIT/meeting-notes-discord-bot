@@ -7,6 +7,7 @@ import {
   PERMISSION_REASONS,
 } from "./permissions";
 import { ensureUserInGuild } from "../services/guildAccessService";
+import { isSuperAdmin } from "../services/adminAccessService";
 
 const t = initTRPC.context<TrpcContext>().create({
   errorFormatter({ shape, error }) {
@@ -84,8 +85,20 @@ const isGuildMember = t.middleware(
   },
 );
 
+const isSuperAdminAccess = t.middleware(({ ctx, next }) => {
+  if (!isSuperAdmin(ctx.user?.id)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Super admin access required",
+      cause: { reason: PERMISSION_REASONS.superAdminRequired },
+    });
+  }
+  return next();
+});
+
 export const router = t.router;
 export const publicProcedure = t.procedure;
 export const authedProcedure = t.procedure.use(isAuthed);
 export const manageGuildProcedure = authedProcedure.use(isManageGuild);
 export const guildMemberProcedure = authedProcedure.use(isGuildMember);
+export const superAdminProcedure = authedProcedure.use(isSuperAdminAccess);

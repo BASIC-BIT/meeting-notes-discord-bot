@@ -11,6 +11,7 @@ export const PERMISSION_REASONS = {
   guildMemberRequired: "GUILD_MEMBER_REQUIRED",
   askMembersDisabled: "ASK_MEMBERS_DISABLED",
   askSharingDisabled: "ASK_SHARING_DISABLED",
+  superAdminRequired: "SUPER_ADMIN_REQUIRED",
 } as const;
 
 export type PermissionReason =

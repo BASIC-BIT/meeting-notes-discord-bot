@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { Button, Group, Modal, Stack, Textarea } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { AskPageLayout } from "../features/ask/AskPageLayout";
 import { useAskActions } from "../features/ask/useAskActions";
@@ -57,6 +59,15 @@ export default function Ask() {
   const [archiveNextState, setArchiveNextState] = useState<boolean | null>(
     null,
   );
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+  const [feedbackDraft, setFeedbackDraft] = useState("");
+  const [pendingFeedback, setPendingFeedback] = useState<{
+    conversationId: string;
+    messageId: string;
+  } | null>(null);
+  const [feedbackByMessage, setFeedbackByMessage] = useState<
+    Record<string, "up" | "down">
+  >({});
   const [optimisticMessages, setOptimisticMessages] = useState<AskMessage[]>(
     [],
   );
@@ -132,6 +143,7 @@ export default function Ask() {
   const renameMutation = trpc.ask.rename.useMutation();
   const shareMutation = trpc.ask.setVisibility.useMutation();
   const archiveMutation = trpc.ask.setArchived.useMutation();
+  const feedbackMutation = trpc.feedback.submitAsk.useMutation();
 
   const mineConversations = listQuery.data?.conversations ?? [];
   const sharedConversations = sharedListQuery.data?.conversations ?? [];
@@ -274,6 +286,19 @@ export default function Ask() {
   });
   const canExport = resolveCanExport(activeConversation, listMode);
   const allowOptimistic = resolveAllowOptimistic(listMode, isArchived);
+  const activeConversationId = activeConversation?.id ?? activeId;
+  const feedbackKeyForMessage = useCallback(
+    (messageId: string) =>
+      activeConversationId ? `${activeConversationId}:${messageId}` : messageId,
+    [activeConversationId],
+  );
+  const feedbackStateForMessage = useCallback(
+    (messageId: string) =>
+      feedbackByMessage[feedbackKeyForMessage(messageId)] ?? null,
+    [feedbackByMessage, feedbackKeyForMessage],
+  );
+  const feedbackEnabled =
+    listMode === "mine" && Boolean(activeConversationId) && !isArchived;
   const displayMessages = useMemo(() => {
     const pending = allowOptimistic ? askMutation.isPending : false;
     return buildDisplayMessages({
@@ -324,6 +349,71 @@ export default function Ask() {
     optimisticMessages,
     activeMessages,
   });
+
+  const submitAskFeedback = useCallback(
+    async (
+      rating: "up" | "down",
+      conversationId: string,
+      messageId: string,
+      comment?: string,
+    ) => {
+      if (!selectedGuildId) return;
+      try {
+        await feedbackMutation.mutateAsync({
+          serverId: selectedGuildId,
+          conversationId,
+          messageId,
+          rating,
+          comment,
+        });
+        setFeedbackByMessage((prev) => ({
+          ...prev,
+          [`${conversationId}:${messageId}`]: rating,
+        }));
+        notifications.show({
+          color: "green",
+          message: "Thanks for the feedback.",
+        });
+      } catch {
+        notifications.show({
+          color: "red",
+          message: "Unable to submit feedback right now.",
+        });
+      }
+    },
+    [feedbackMutation, selectedGuildId],
+  );
+
+  const handleAskFeedbackUp = useCallback(
+    (messageId: string) => {
+      if (!activeConversationId) return;
+      void submitAskFeedback("up", activeConversationId, messageId);
+    },
+    [activeConversationId, submitAskFeedback],
+  );
+
+  const handleAskFeedbackDown = useCallback(
+    (messageId: string) => {
+      if (!activeConversationId) return;
+      setPendingFeedback({ conversationId: activeConversationId, messageId });
+      setFeedbackDraft("");
+      setFeedbackModalOpen(true);
+    },
+    [activeConversationId],
+  );
+
+  const handleAskFeedbackSubmit = useCallback(async () => {
+    if (!pendingFeedback) return;
+    await submitAskFeedback(
+      "down",
+      pendingFeedback.conversationId,
+      pendingFeedback.messageId,
+      feedbackDraft,
+    );
+    setFeedbackModalOpen(false);
+    setPendingFeedback(null);
+    setFeedbackDraft("");
+  }, [feedbackDraft, pendingFeedback, submitAskFeedback]);
   const actions = useAskActions({
     selectedGuildId,
     listMode,
@@ -349,6 +439,11 @@ export default function Ask() {
     highlightedMessageId,
     chatViewportRef,
     inputRef,
+    showFeedback: feedbackEnabled,
+    feedbackState: feedbackStateForMessage,
+    feedbackPending: feedbackMutation.isPending,
+    onFeedbackUp: handleAskFeedbackUp,
+    onFeedbackDown: handleAskFeedbackDown,
     draft,
     setDraft,
     errorMessage,
@@ -382,27 +477,70 @@ export default function Ask() {
   });
 
   return (
-    <AskPageLayout
-      shareModalProps={actions.shareModalProps}
-      archiveModalProps={actions.archiveModalProps}
-      listMode={listMode}
-      query={query}
-      onQueryChange={setQuery}
-      mineConversations={filteredMine}
-      archivedConversations={filteredArchived}
-      sharedConversations={filteredShared}
-      listBusy={listBusy}
-      listError={listError}
-      activeId={activeId}
-      onNewConversation={actions.handleNewConversation}
-      onNavigateConversation={(id, mode) => {
-        setIsCreatingNew(false);
-        navigateToConversation(id, mode);
-      }}
-      onListModeChange={handleListModeChange}
-      sharingEnabled={sharingEnabled}
-      askAccessAllowed={askAccessAllowed}
-      conversationPaneProps={actions.conversationPaneProps}
-    />
+    <>
+      <AskPageLayout
+        shareModalProps={actions.shareModalProps}
+        archiveModalProps={actions.archiveModalProps}
+        listMode={listMode}
+        query={query}
+        onQueryChange={setQuery}
+        mineConversations={filteredMine}
+        archivedConversations={filteredArchived}
+        sharedConversations={filteredShared}
+        listBusy={listBusy}
+        listError={listError}
+        activeId={activeId}
+        onNewConversation={actions.handleNewConversation}
+        onNavigateConversation={(id, mode) => {
+          setIsCreatingNew(false);
+          navigateToConversation(id, mode);
+        }}
+        onListModeChange={handleListModeChange}
+        sharingEnabled={sharingEnabled}
+        askAccessAllowed={askAccessAllowed}
+        conversationPaneProps={actions.conversationPaneProps}
+      />
+      <Modal
+        opened={feedbackModalOpen}
+        onClose={() => {
+          setFeedbackModalOpen(false);
+          setPendingFeedback(null);
+          setFeedbackDraft("");
+        }}
+        title="Ask feedback"
+        centered
+      >
+        <Stack gap="md">
+          <Textarea
+            label="What could be better? (optional)"
+            placeholder="Share details to help improve the answer."
+            value={feedbackDraft}
+            onChange={(event) => setFeedbackDraft(event.currentTarget.value)}
+            minRows={4}
+            maxLength={1000}
+          />
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              onClick={() => {
+                setFeedbackModalOpen(false);
+                setPendingFeedback(null);
+                setFeedbackDraft("");
+              }}
+              disabled={feedbackMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              onClick={handleAskFeedbackSubmit}
+              loading={feedbackMutation.isPending}
+            >
+              Send feedback
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </>
   );
 }
