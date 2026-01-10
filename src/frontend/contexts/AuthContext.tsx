@@ -9,9 +9,37 @@ type AuthContextValue = {
   loading: boolean;
   loginUrl: string;
   refresh: () => Promise<void>;
+  user?: {
+    id: string;
+    username: string;
+    avatar: string | null;
+    isSuperAdmin?: boolean;
+  } | null;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+const getBrowserLocation = (): Location | undefined =>
+  typeof window === "undefined" ? undefined : window.location;
+
+const resolvePortalRedirect = (location?: Location) => {
+  if (!location) {
+    return "/portal/select-server";
+  }
+  const pathname = location.pathname;
+  const useCurrentLocation =
+    pathname.startsWith("/portal") ||
+    pathname.startsWith("/live") ||
+    pathname.startsWith("/share");
+  if (useCurrentLocation) {
+    return location.href;
+  }
+  return `${location.origin}/portal/select-server`;
+};
+
+const buildLoginUrl = (location?: Location) =>
+  `${buildApiUrl("/auth/discord")}?redirect=${encodeURIComponent(
+    resolvePortalRedirect(location),
+  )}`;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const authQuery = trpc.auth.me.useQuery(undefined, {
@@ -24,13 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ? "authenticated"
       : "unauthenticated";
 
-  const portalRedirect =
-    typeof window !== "undefined"
-      ? `${window.location.origin}/portal/select-server`
-      : "/portal/select-server";
-  const loginUrl = `${buildApiUrl("/auth/discord")}?redirect=${encodeURIComponent(
-    portalRedirect,
-  )}`;
+  const loginUrl = buildLoginUrl(getBrowserLocation());
 
   const refetch = authQuery.refetch;
   const value = useMemo(
@@ -38,11 +60,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       state,
       loading,
       loginUrl,
+      user: authQuery.data ?? null,
       refresh: async () => {
         await refetch();
       },
     }),
-    [state, loading, loginUrl, refetch],
+    [state, loading, loginUrl, refetch, authQuery.data],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -51,5 +74,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
-  return ctx;
+  const loginUrl = buildLoginUrl(getBrowserLocation());
+  return useMemo(
+    () => (loginUrl === ctx.loginUrl ? ctx : { ...ctx, loginUrl }),
+    [ctx, loginUrl],
+  );
 }

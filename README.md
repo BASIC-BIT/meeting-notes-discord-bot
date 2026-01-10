@@ -1,16 +1,17 @@
 # Chronote
 
-A Discord bot that records voice meetings, transcribes them with OpenAI, generates notes, and posts results back to Discord. It also supports billing, tagging, and a static frontend.
+A Discord bot that records voice meetings, transcribes them with OpenAI, generates notes, and posts results back to Discord. It also supports billing, tagging, dictionary terms for domain jargon, and a static frontend.
 
 [Add the bot to your server](https://discord.com/oauth2/authorize?client_id=1278729036528619633)
 
 ## Commands
 
-- `/startmeeting` – Begin recording the meeting (audio + chat logs).
-- `/autorecord` – Configure auto-recording for a server/channel.
-- `/context` – Manage prompt context.
-- `/ask` – Ask questions over recent meeting history (guild scope by default).
-- `/onboard` – Guided setup (context, auto-record, feature tour, upgrade CTA).
+- `/startmeeting`: Begin recording the meeting (audio + chat logs).
+- `/autorecord`: Configure auto-recording for a server/channel.
+- `/context`: Manage prompt context.
+- `/dictionary`: Manage dictionary terms used in prompts.
+- `/ask`: Ask questions over recent meeting history (guild scope by default).
+- `/onboard`: Guided setup (context, auto-record, feature tour, upgrade CTA).
 
 ## Run locally
 
@@ -36,6 +37,15 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 - `yarn prompts:push` syncs local prompts to Langfuse and skips unchanged prompts by default. Use `--dry-run` or `--debug-diff` when needed.
 - `yarn prompts:pull` pulls prompts from Langfuse into `prompts/`. It skips prompts that use `extends` unless `--force` is passed.
 - `yarn prompts:check` compares local prompts to Langfuse. It runs inside `yarn run check` and CI.
+- Prompt sync scripts use the Langfuse JS SDK and read the same `LANGFUSE_*` env vars as runtime.
+
+### Langfuse LLM connection sync
+
+- LLM connections live in `langfuse/llm-connections/*.yml`.
+- `yarn llm-connections:push` upserts local connections to Langfuse.
+- `yarn llm-connections:pull` pulls connections from Langfuse into YAML files.
+- `yarn llm-connections:check` compares local YAML with Langfuse (keys only, no secrets). It runs inside `yarn run check` and CI.
+- Details and schema: `docs/langfuse-llm-connections.md`.
 
 ## Checks
 
@@ -46,8 +56,10 @@ These checks run before PR merge and deployment. Use `yarn run check` for the fu
 - Unit and integration tests (Jest) protect behavior and enforce coverage thresholds in `jest.config.ts`. Command: `yarn test`. Coverage requirements (global): statements 30%, branches 60%, functions 40%, lines 30%. Docs: https://jestjs.io/docs/29.7/configuration
 - Build (TypeScript + Vite) validates type safety and production bundles. Commands: `yarn build` (tsc), `yarn build:web` (vite build), and `yarn build:all` (both). Docs: https://www.typescriptlang.org/docs/handbook/compiler-options.html and https://vite.dev/guide/
 - E2E tests (Playwright) validate critical user flows. Command: `yarn test:e2e`. Docs: https://playwright.dev/docs/running-tests
+- Visual regression (Playwright screenshots) flags UI changes. Commands: `yarn test:visual` and `yarn test:visual:update`. Details: `docs/visual-regression.md`.
 - Code stats and complexity (scc + lizard) keep size and complexity visible. Command: `yarn code:stats`. Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can suppress known complexity offenders. Docs: https://github.com/boyter/scc and https://github.com/terryyin/lizard
 - Prompt sync (Langfuse) keeps repo prompt files aligned with Langfuse. Command: `yarn prompts:check`.
+- LLM connection sync (Langfuse) keeps LLM connection YAML aligned with Langfuse. Command: `yarn llm-connections:check`.
 - IaC scan (Checkov via uvx) catches Terraform misconfigurations. Command: `yarn checkov`. Docs: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html and https://docs.astral.sh/uv/concepts/tools/
 
 CI runs the same set as `yarn run check:ci` (see `.github/workflows/ci.yml`).
@@ -64,6 +76,7 @@ flowchart LR
   C --> E["build:all"]
   C --> F["code:stats"]
   C --> G["prompts:check"]
+  C --> H["llm-connections:check"]
 ```
 
 `yarn run check:ci`
@@ -78,6 +91,7 @@ flowchart LR
   A --> G["checkov"]
   A --> H["code:stats"]
   A --> I["prompts:check"]
+  A --> J["llm-connections:check"]
 ```
 
 PR CI workflow
@@ -92,6 +106,7 @@ flowchart LR
   A --> G["checkov job"]
   A --> H["code-stats job"]
   A --> P["prompts-check job"]
+  A --> Q["llm-connections-check job"]
 ```
 
 Deploy workflow (prod)
@@ -106,6 +121,7 @@ flowchart LR
   A --> G["checkov job"]
   A --> H["code-stats job"]
   A --> P["prompts-check job"]
+  A --> Q["llm-connections-check job"]
   B --> Z["checks complete"]
   C --> Z
   D --> Z
@@ -114,11 +130,12 @@ flowchart LR
   G --> Z
   H --> Z
   P --> Z
+  Q --> Z
   Z --> I["deploy backend"]
   Z --> J["deploy frontend"]
 ```
 
-Staging deploy is similar but skips Checkov and allows unit test failures to continue. Prompt check still runs.
+Staging deploy is similar but skips Checkov and allows unit test failures to continue. Prompt and LLM connection checks still run.
 
 Coverage update rule:
 
@@ -131,20 +148,31 @@ Coverage update rule:
 - Marketing site is public at `/`; the authenticated portal lives under `/portal/*`:
   - `/portal/select-server`
   - `/portal/server/:serverId/{library|ask|billing|settings}`
+- Upgrade flow entry points live under `/upgrade`, `/promo/:code`, and `/upgrade/select-server` with a success page at `/upgrade/success`. See `docs/upgrade-flow.md` for details and planned short-link support.
 - Deployed via GitHub Actions to S3 + CloudFront (see `_infra/` and `.github/workflows/deploy.yml`).
 - Static hosting variables: `FRONTEND_BUCKET`, `FRONTEND_DOMAIN` (optional), `FRONTEND_CERT_ARN` (when custom domain is set). Allow the SPA to call the API by setting `FRONTEND_ALLOWED_ORIGINS` (comma-separated, e.g., CloudFront domain). CloudFront distribution outputs are emitted by Terraform.
 - API hosting: backend runs behind an ALB when `API_DOMAIN` is set (e.g., `api.chronote.gg`). Terraform sets a GitHub Actions env var `VITE_API_BASE_URL` so the frontend uses the API domain at build time. OAuth callback should be `https://api.<domain>/auth/discord/callback`.
 - Local dev uses Vite proxying for `/auth`, `/user`, `/api`, and `/trpc` (tRPC).
 
+## Architecture decision records
+
+- ADRs live in `docs/` and use the existing format (see `docs/adr-20260106-voice-receiver-resubscribe.md`).
+- Naming: `adr-YYYYMMDD-<slug>.md`.
+- Required sections: Status, Date, Owners, Context, Decision, Consequences, Alternatives Considered, Notes.
+- Create or update an ADR when a decision changes behavior, data contracts, or system structure.
+
 ## Backend / services
 
-- Bot + API: Node 20, Express 5. API routes are modularized under `src/api/` (billing, guilds). New typed API surface is tRPC at `/trpc` (routers in `src/trpc/`).
+- Bot + API: Node 22, Express 5. API routes are modularized under `src/api/` (billing, guilds). New typed API surface is tRPC at `/trpc` (routers in `src/trpc/`).
 - Voice capture: discord.js v14, @discordjs/voice/opus, prism-media.
+- Transcription flow and tuning: `docs/audio-transcription.md`.
+- Feature toggle evaluation checklist: `docs/feature-toggles.md`.
 - OpenAI: gpt-4o-transcribe for ASR, gpt-5.1 for notes/corrections, gpt-5-mini for live gate, DALL-E 3 for images.
 - Prompt management and tracing: Langfuse for prompt versioning, tracing, and prompt sync scripts.
+- Langfuse transcription traces attach compressed MP3 snippets (mono 16 kHz VBR, 8 MB cap) for observability.
 - Billing: Stripe Checkout + Billing Portal; webhook handler persists GuildSubscription and PaymentTransaction in DynamoDB and handles payment_failed / subscription_deleted to downgrade appropriately (guild-scoped billing only).
 - Sessions: Express sessions stored in DynamoDB `SessionTable` (TTL on `expiresAt`).
-- Storage: DynamoDB tables include GuildSubscription, PaymentTransaction, StripeWebhookEventTable (idempotency with TTL), AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, AskConversationTable, SessionTable, InstallerTable, OnboardingStateTable. Transcripts and audio artifacts go to S3 (`TRANSCRIPTS_BUCKET`).
+- Storage: DynamoDB tables include GuildSubscription, PaymentTransaction, StripeWebhookEventTable (idempotency with TTL), AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, DictionaryTable, MeetingHistory, AskConversationTable, SessionTable, InstallerTable, OnboardingStateTable. Transcripts and audio artifacts go to S3 (`TRANSCRIPTS_BUCKET`).
 
 ### Stripe webhook testing (local)
 

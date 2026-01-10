@@ -1,11 +1,7 @@
 import React from "react";
 import { beforeEach, describe, expect, test } from "@jest/globals";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import {
-  renderWithMantine,
-  resetFrontendMocks,
-  setRouteParams,
-} from "./testUtils";
+import { renderWithMantine, resetFrontendMocks } from "./testUtils";
 import { guildState } from "./testUtils";
 import {
   setAskConversationQuery,
@@ -34,7 +30,7 @@ describe("Ask page", () => {
 
   test("renders conversation messages for selected server", async () => {
     guildState.selectedGuildId = "g1";
-    setRouteParams({ conversationId: "c1" });
+    setRouteSearch({ conversationId: "c1" });
     setAskListQuery({
       data: {
         conversations: [
@@ -85,7 +81,7 @@ describe("Ask page", () => {
 
   test("shows public share link when public sharing is enabled", async () => {
     guildState.selectedGuildId = "g1";
-    setRouteParams({ conversationId: "c1" });
+    setRouteSearch({ conversationId: "c1" });
     setAskSettingsQuery({
       data: { askMembersEnabled: true, askSharingPolicy: "public" },
     });
@@ -133,7 +129,7 @@ describe("Ask page", () => {
 
   test("falls back to server share when public sharing is disabled", async () => {
     guildState.selectedGuildId = "g1";
-    setRouteParams({ conversationId: "c1" });
+    setRouteSearch({ conversationId: "c1" });
     setAskSettingsQuery({
       data: { askMembersEnabled: true, askSharingPolicy: "server" },
     });
@@ -175,15 +171,15 @@ describe("Ask page", () => {
     const linkInput = (await screen.findByLabelText(
       "Shared link",
     )) as HTMLInputElement;
-    expect(linkInput.value).toContain("/portal/server/g1/ask/c1");
+    expect(linkInput.value).toContain("/portal/server/g1/ask");
+    expect(linkInput.value).toContain("conversationId=c1");
     expect(linkInput.value).toContain("list=shared");
     expect(screen.queryByText("Make public")).not.toBeInTheDocument();
   });
 
   test("shows shared list mode as read only with owner", async () => {
     guildState.selectedGuildId = "g1";
-    setRouteParams({ conversationId: "c2" });
-    setRouteSearch({ list: "shared" });
+    setRouteSearch({ conversationId: "c2", list: "shared" });
     setAskSettingsQuery({
       data: { askMembersEnabled: true, askSharingPolicy: "server" },
     });

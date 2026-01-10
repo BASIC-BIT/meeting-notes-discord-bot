@@ -5,4 +5,5 @@ export { LibraryPage } from "./LibraryPage";
 export { AskPage } from "./AskPage";
 export { BillingPage } from "./BillingPage";
 export { SettingsPage } from "./SettingsPage";
+export { AdminConfigPage } from "./AdminConfigPage";
 export { testIds } from "./testIds";

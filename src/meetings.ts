@@ -14,10 +14,9 @@ import {
 import { DiscordGatewayAdapterCreator } from "@discordjs/voice/dist";
 import { AudioSnippet } from "./types/audio";
 import {
-  clearSnippetTimer,
   openOutputFile,
   subscribeToUserVoice,
-  updateSnippetsIfNecessary,
+  userStartTalking,
   userStopTalking,
 } from "./audio";
 import {
@@ -33,6 +32,8 @@ import {
   fromUser,
 } from "./utils/participants";
 import { config } from "./services/configService";
+import { resolveMeetingRuntimeConfig } from "./services/meetingConfigService";
+import { listDictionaryEntriesService } from "./services/dictionaryService";
 import { createTtsQueue } from "./ttsQueue";
 import { maybeSpeakChatMessage } from "./chatTts";
 import {
@@ -42,6 +43,7 @@ import {
   type MeetingStartReason,
 } from "./types/meetingLifecycle";
 import { meetingsStarted } from "./metrics";
+import type { ConfigTier } from "./config/types";
 
 const meetings = new Map<string, MeetingData>();
 
@@ -99,6 +101,7 @@ export interface MeetingInitOptions {
   chatTtsVoice?: string;
   maxMeetingDurationMs?: number;
   maxMeetingDurationPretty?: string;
+  subscriptionTier?: ConfigTier;
   onEndMeeting?: (meeting: MeetingData) => Promise<void> | void;
 }
 
@@ -135,6 +138,7 @@ export async function initializeMeeting(
     chatTtsVoice,
     maxMeetingDurationMs,
     maxMeetingDurationPretty,
+    subscriptionTier,
     onEndMeeting,
   } = options;
   const resolvedStartReason =
@@ -225,6 +229,7 @@ export async function initializeMeeting(
     autoRecordRule,
     participants: new Map(),
     tags,
+    subscriptionTier,
   };
 
   if (liveAudioPlayer) {
@@ -270,8 +275,7 @@ export async function initializeMeeting(
 
   // Set up speaking event handlers
   receiver.speaking.on("start", (userId) => {
-    clearSnippetTimer(meeting, userId);
-    updateSnippetsIfNecessary(meeting, userId);
+    userStartTalking(meeting, userId);
   });
 
   receiver.speaking.on("end", (userId) => {
@@ -313,6 +317,25 @@ export async function initializeMeeting(
   // Add meeting to the global map
   addMeeting(meeting);
   meetingsStarted.inc();
+
+  try {
+    meeting.runtimeConfig = await resolveMeetingRuntimeConfig({
+      guildId: meeting.guildId,
+      channelId: meeting.voiceChannel.id,
+      userId: meeting.creator.id,
+      tier: subscriptionTier,
+    });
+  } catch (error) {
+    console.warn("Failed to resolve meeting runtime config:", error);
+  }
+
+  try {
+    meeting.dictionaryEntries = await listDictionaryEntriesService(
+      meeting.guildId,
+    );
+  } catch (error) {
+    console.warn("Failed to load dictionary entries:", error);
+  }
 
   // Set a timer to automatically end the meeting after the specified duration
   if (onTimeout) {

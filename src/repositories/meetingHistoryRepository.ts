@@ -5,6 +5,8 @@ import {
   getRecentMeetingsForChannel,
   getRecentMeetingsForGuild,
   updateMeetingNotes,
+  updateMeetingName,
+  updateMeetingArchive,
   updateMeetingStatus,
   updateMeetingTags,
   writeMeetingHistory,
@@ -22,6 +24,7 @@ export type MeetingHistoryRepository = {
   listRecentByGuild: (
     guildId: string,
     limit?: number,
+    options?: { archivedOnly?: boolean; includeArchived?: boolean },
   ) => Promise<MeetingHistory[]>;
   listByGuildTimestampRange: (
     guildId: string,
@@ -32,6 +35,7 @@ export type MeetingHistoryRepository = {
     guildId: string,
     channelId: string,
     limit?: number,
+    options?: { archivedOnly?: boolean; includeArchived?: boolean },
   ) => Promise<MeetingHistory[]>;
   updateNotes: (params: {
     guildId: string;
@@ -41,15 +45,27 @@ export type MeetingHistoryRepository = {
     editedBy: string;
     summarySentence?: string;
     summaryLabel?: string;
+    meetingName?: string;
     suggestion?: SuggestionHistoryEntry;
     expectedPreviousVersion?: number;
     metadata?: { notesMessageIds?: string[]; notesChannelId?: string };
   }) => Promise<boolean>;
+  updateMeetingName: (
+    guildId: string,
+    channelIdTimestamp: string,
+    meetingName: string,
+  ) => Promise<boolean>;
   updateStatus: (
     guildId: string,
     channelIdTimestamp: string,
     status: MeetingStatus,
   ) => Promise<void>;
+  updateArchive: (params: {
+    guildId: string;
+    channelId_timestamp: string;
+    archived: boolean;
+    archivedByUserId: string;
+  }) => Promise<boolean>;
   updateTags: (
     guildId: string,
     channelIdTimestamp: string,
@@ -57,14 +73,28 @@ export type MeetingHistoryRepository = {
   ) => Promise<void>;
 };
 
+const filterArchivedMeetings = (
+  meetings: MeetingHistory[],
+  options?: { archivedOnly?: boolean; includeArchived?: boolean },
+) => {
+  if (options?.archivedOnly) {
+    return meetings.filter((meeting) => Boolean(meeting.archivedAt));
+  }
+  if (options?.includeArchived) {
+    return meetings;
+  }
+  return meetings.filter((meeting) => !meeting.archivedAt);
+};
+
 const realRepository: MeetingHistoryRepository = {
   write: writeMeetingHistory,
   get: getMeetingHistoryRecord,
-  listRecentByGuild: async (guildId, limit) => {
+  listRecentByGuild: async (guildId, limit, options) => {
     const meetings = await getRecentMeetingsForGuild(guildId, limit);
-    return meetings.filter(
+    const active = meetings.filter(
       (meeting) => meeting.status !== MEETING_STATUS.CANCELLED,
     );
+    return filterArchivedMeetings(active, options);
   },
   listByGuildTimestampRange: async (guildId, startTimestamp, endTimestamp) => {
     const meetings = await getMeetingsForGuildInRange(
@@ -76,15 +106,16 @@ const realRepository: MeetingHistoryRepository = {
       (meeting) => meeting.status !== MEETING_STATUS.CANCELLED,
     );
   },
-  listRecentByChannel: async (guildId, channelId, limit) => {
+  listRecentByChannel: async (guildId, channelId, limit, options) => {
     const meetings = await getRecentMeetingsForChannel(
       guildId,
       channelId,
       limit,
     );
-    return meetings.filter(
+    const active = meetings.filter(
       (meeting) => meeting.status !== MEETING_STATUS.CANCELLED,
     );
+    return filterArchivedMeetings(active, options);
   },
   updateNotes: (params) =>
     updateMeetingNotes(
@@ -95,11 +126,14 @@ const realRepository: MeetingHistoryRepository = {
       params.editedBy,
       params.summarySentence,
       params.summaryLabel,
+      params.meetingName,
       params.suggestion,
       params.expectedPreviousVersion,
       params.metadata,
     ),
+  updateMeetingName: updateMeetingName,
   updateStatus: updateMeetingStatus,
+  updateArchive: updateMeetingArchive,
   updateTags: updateMeetingTags,
 };
 
@@ -123,18 +157,21 @@ const mockRepository: MeetingHistoryRepository = {
       (item) => item.channelId_timestamp === channelIdTimestamp,
     );
   },
-  async listRecentByGuild(guildId, limit = 10) {
+  async listRecentByGuild(guildId, limit = 10, options) {
     const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
-    return [...items]
-      .filter((item) => item.status !== MEETING_STATUS.CANCELLED)
+    const active = [...items].filter(
+      (item) => item.status !== MEETING_STATUS.CANCELLED,
+    );
+    return filterArchivedMeetings(active, options)
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
       .slice(0, limit);
   },
-  async listRecentByChannel(guildId, channelId, limit = 5) {
+  async listRecentByChannel(guildId, channelId, limit = 5, options) {
     const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
-    return items
+    const active = items
       .filter((item) => item.channelId === channelId)
-      .filter((item) => item.status !== MEETING_STATUS.CANCELLED)
+      .filter((item) => item.status !== MEETING_STATUS.CANCELLED);
+    return filterArchivedMeetings(active, options)
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
       .slice(0, limit);
   },
@@ -160,6 +197,7 @@ const mockRepository: MeetingHistoryRepository = {
       notes: params.notes,
       summarySentence: params.summarySentence ?? existing.summarySentence,
       summaryLabel: params.summaryLabel ?? existing.summaryLabel,
+      meetingName: params.meetingName ?? existing.meetingName,
       notesVersion: params.notesVersion,
       notesLastEditedBy: params.editedBy,
       notesLastEditedAt: now,
@@ -170,6 +208,21 @@ const mockRepository: MeetingHistoryRepository = {
         params.metadata?.notesChannelId ?? existing.notesChannelId,
     };
     getMockStore().meetingHistoryByGuild.set(params.guildId, items);
+    return true;
+  },
+  async updateMeetingName(guildId, channelIdTimestamp, meetingName) {
+    const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
+    const idx = items.findIndex(
+      (item) => item.channelId_timestamp === channelIdTimestamp,
+    );
+    if (idx === -1) return false;
+    const now = new Date().toISOString();
+    items[idx] = {
+      ...items[idx],
+      meetingName,
+      updatedAt: now,
+    };
+    getMockStore().meetingHistoryByGuild.set(guildId, items);
     return true;
   },
   async updateTags(guildId, channelIdTimestamp, tags) {
@@ -193,6 +246,28 @@ const mockRepository: MeetingHistoryRepository = {
       updatedAt: new Date().toISOString(),
     };
     getMockStore().meetingHistoryByGuild.set(guildId, items);
+  },
+  async updateArchive({
+    guildId,
+    channelId_timestamp,
+    archived,
+    archivedByUserId,
+  }) {
+    const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
+    const idx = items.findIndex(
+      (item) => item.channelId_timestamp === channelId_timestamp,
+    );
+    if (idx === -1) return false;
+    const now = new Date().toISOString();
+    const existing = items[idx];
+    items[idx] = {
+      ...existing,
+      archivedAt: archived ? now : undefined,
+      archivedByUserId: archived ? archivedByUserId : undefined,
+      updatedAt: now,
+    };
+    getMockStore().meetingHistoryByGuild.set(guildId, items);
+    return true;
   },
 };
 

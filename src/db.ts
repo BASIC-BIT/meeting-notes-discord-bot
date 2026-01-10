@@ -27,7 +27,10 @@ import {
   StripeWebhookEvent,
   SuggestionHistoryEntry,
   UserSpeechSettings,
+  DictionaryEntry,
+  ConfigOverrideRecord,
   AskConversationShareRecord,
+  FeedbackRecord,
 } from "./types/db";
 import type { MeetingStatus } from "./types/meetingLifecycle";
 
@@ -231,6 +234,28 @@ export async function getAllAutoRecordSettings(
   return [];
 }
 
+export async function scanAutoRecordSettings(): Promise<AutoRecordSettings[]> {
+  const items: AutoRecordSettings[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("AutoRecordSettingsTable"),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as AutoRecordSettings),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 // Delete AutoRecordSetting
 export async function deleteAutoRecordSetting(
   guildId: string,
@@ -368,6 +393,153 @@ export async function deleteUserSpeechSettings(
   await dynamoDbClient.send(command);
 }
 
+// Dictionary operations
+export async function writeDictionaryEntry(
+  entry: DictionaryEntry,
+): Promise<void> {
+  const params = {
+    TableName: tableName("DictionaryTable"),
+    Item: marshall(entry, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getDictionaryEntry(
+  guildId: string,
+  termKey: string,
+): Promise<DictionaryEntry | undefined> {
+  const params = {
+    TableName: tableName("DictionaryTable"),
+    Key: marshall({ guildId, termKey }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as DictionaryEntry;
+  }
+  return undefined;
+}
+
+export async function listDictionaryEntries(
+  guildId: string,
+): Promise<DictionaryEntry[]> {
+  const params = {
+    TableName: tableName("DictionaryTable"),
+    KeyConditionExpression: "guildId = :guildId",
+    ExpressionAttributeValues: marshall({
+      ":guildId": guildId,
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as DictionaryEntry);
+  }
+  return [];
+}
+
+export async function deleteDictionaryEntry(
+  guildId: string,
+  termKey: string,
+): Promise<void> {
+  const params = {
+    TableName: tableName("DictionaryTable"),
+    Key: marshall({ guildId, termKey }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+// Config Overrides operations
+export async function writeConfigOverride(
+  record: ConfigOverrideRecord,
+): Promise<void> {
+  const params = {
+    TableName: tableName("ConfigOverridesTable"),
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getConfigOverride(
+  scopeId: string,
+  configKey: string,
+): Promise<ConfigOverrideRecord | undefined> {
+  const params = {
+    TableName: tableName("ConfigOverridesTable"),
+    Key: marshall({ scopeId, configKey }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as ConfigOverrideRecord;
+  }
+  return undefined;
+}
+
+export async function deleteConfigOverride(
+  scopeId: string,
+  configKey: string,
+): Promise<void> {
+  const params = {
+    TableName: tableName("ConfigOverridesTable"),
+    Key: marshall({ scopeId, configKey }),
+  };
+  const command = new DeleteItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function listConfigOverrides(
+  scopeId: string,
+): Promise<ConfigOverrideRecord[]> {
+  const params = {
+    TableName: tableName("ConfigOverridesTable"),
+    KeyConditionExpression: "scopeId = :scopeId",
+    ExpressionAttributeValues: marshall({
+      ":scopeId": scopeId,
+    }),
+  };
+  const command = new QueryCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Items) {
+    return result.Items.map((item) => unmarshall(item) as ConfigOverrideRecord);
+  }
+  return [];
+}
+
+export async function scanConfigOverridesByScopePrefix(
+  scopePrefix: string,
+): Promise<ConfigOverrideRecord[]> {
+  const items: ConfigOverrideRecord[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("ConfigOverridesTable"),
+      FilterExpression: "begins_with(#scopeId, :scopePrefix)",
+      ExpressionAttributeNames: {
+        "#scopeId": "scopeId",
+      },
+      ExpressionAttributeValues: marshall({
+        ":scopePrefix": scopePrefix,
+      }),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as ConfigOverrideRecord),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 export async function getAllChannelContexts(
   guildId: string,
 ): Promise<ChannelContext[]> {
@@ -386,6 +558,28 @@ export async function getAllChannelContexts(
   return [];
 }
 
+export async function scanChannelContexts(): Promise<ChannelContext[]> {
+  const items: ChannelContext[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("ChannelContextTable"),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as ChannelContext),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 export async function deleteChannelContext(
   guildId: string,
   channelId: string,
@@ -396,6 +590,28 @@ export async function deleteChannelContext(
   };
   const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+export async function scanServerContexts(): Promise<ServerContext[]> {
+  const items: ServerContext[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+
+  do {
+    const params = {
+      TableName: tableName("ServerContextTable"),
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as ServerContext),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
 }
 
 // Guild installer mapping
@@ -582,6 +798,7 @@ export async function updateMeetingNotes(
   editedBy: string,
   summarySentence?: string,
   summaryLabel?: string,
+  meetingName?: string,
   suggestion?: SuggestionHistoryEntry,
   expectedPreviousVersion?: number,
   metadata?: {
@@ -663,6 +880,12 @@ export async function updateMeetingNotes(
     values[":summaryLabel"] = summaryLabel;
   }
 
+  if (meetingName !== undefined) {
+    updateParts.push("#meetingName = :meetingName");
+    expressionAttributeNames["#meetingName"] = "meetingName";
+    values[":meetingName"] = meetingName;
+  }
+
   if (suggestion) {
     values[":suggestionEntry"] = [suggestion];
   }
@@ -710,6 +933,47 @@ export async function updateMeetingNotes(
   }
 }
 
+export async function updateMeetingName(
+  guildId: string,
+  channelId_timestamp: string,
+  meetingName: string,
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const params: UpdateItemCommand["input"] = {
+    TableName: tableName("MeetingHistoryTable"),
+    Key: marshall({ guildId, channelId_timestamp }),
+    UpdateExpression:
+      "SET #meetingName = :meetingName, #updatedAt = :updatedAt",
+    ExpressionAttributeNames: {
+      "#meetingName": "meetingName",
+      "#updatedAt": "updatedAt",
+      "#channelIdTimestamp": "channelId_timestamp",
+    },
+    ExpressionAttributeValues: marshall(
+      {
+        ":meetingName": meetingName,
+        ":updatedAt": now,
+      },
+      { removeUndefinedValues: true },
+    ),
+    ConditionExpression: "attribute_exists(#channelIdTimestamp)",
+  };
+
+  const command = new UpdateItemCommand(params);
+  try {
+    await dynamoDbClient.send(command);
+    return true;
+  } catch (error) {
+    if (
+      (error as { name?: string }).name === "ConditionalCheckFailedException"
+    ) {
+      return false;
+    }
+    console.error("Failed to update meeting name:", error);
+    return false;
+  }
+}
+
 export async function updateMeetingStatus(
   guildId: string,
   channelId_timestamp: string,
@@ -735,6 +999,72 @@ export async function updateMeetingStatus(
 
   const command = new UpdateItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+export async function updateMeetingArchive(params: {
+  guildId: string;
+  channelId_timestamp: string;
+  archived: boolean;
+  archivedByUserId: string;
+}): Promise<boolean> {
+  const now = new Date().toISOString();
+  const updateParts = ["#updatedAt = :updatedAt"];
+  const removeParts: string[] = [];
+  const expressionAttributeNames: Record<string, string> = {
+    "#updatedAt": "updatedAt",
+    "#channelIdTimestamp": "channelId_timestamp",
+  };
+  const values: Record<string, unknown> = {
+    ":updatedAt": now,
+  };
+
+  if (params.archived) {
+    updateParts.push("#archivedAt = :archivedAt");
+    updateParts.push("#archivedByUserId = :archivedByUserId");
+    expressionAttributeNames["#archivedAt"] = "archivedAt";
+    expressionAttributeNames["#archivedByUserId"] = "archivedByUserId";
+    values[":archivedAt"] = now;
+    values[":archivedByUserId"] = params.archivedByUserId;
+  } else {
+    removeParts.push("#archivedAt", "#archivedByUserId");
+    expressionAttributeNames["#archivedAt"] = "archivedAt";
+    expressionAttributeNames["#archivedByUserId"] = "archivedByUserId";
+  }
+
+  const updateExpression = [
+    `SET ${updateParts.join(", ")}`,
+    removeParts.length > 0 ? `REMOVE ${removeParts.join(", ")}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const request: UpdateItemCommand["input"] = {
+    TableName: tableName("MeetingHistoryTable"),
+    Key: marshall({
+      guildId: params.guildId,
+      channelId_timestamp: params.channelId_timestamp,
+    }),
+    UpdateExpression: updateExpression,
+    ExpressionAttributeNames: expressionAttributeNames,
+    ExpressionAttributeValues: marshall(values, {
+      removeUndefinedValues: true,
+    }),
+    ConditionExpression: "attribute_exists(#channelIdTimestamp)",
+  };
+
+  const command = new UpdateItemCommand(request);
+  try {
+    await dynamoDbClient.send(command);
+    return true;
+  } catch (error) {
+    if (
+      (error as { name?: string }).name === "ConditionalCheckFailedException"
+    ) {
+      return false;
+    }
+    console.error("Failed to update meeting archive:", error);
+    return false;
+  }
 }
 
 function buildAskPartitionKey(userId: string, guildId: string) {
@@ -892,6 +1222,31 @@ export async function deleteAskConversationShare(
   };
   const command = new DeleteItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+export async function writeFeedback(record: FeedbackRecord): Promise<void> {
+  const params = {
+    TableName: tableName("FeedbackTable"),
+    Item: marshall(record, { removeUndefinedValues: true }),
+  };
+  const command = new PutItemCommand(params);
+  await dynamoDbClient.send(command);
+}
+
+export async function getFeedback(
+  pk: string,
+  sk: string,
+): Promise<FeedbackRecord | undefined> {
+  const params = {
+    TableName: tableName("FeedbackTable"),
+    Key: marshall({ pk, sk }),
+  };
+  const command = new GetItemCommand(params);
+  const result = await dynamoDbClient.send(command);
+  if (result.Item) {
+    return unmarshall(result.Item) as FeedbackRecord;
+  }
+  return undefined;
 }
 
 export async function updateMeetingTags(

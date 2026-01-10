@@ -2,7 +2,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.27"
     }
     github = {
       source  = "integrations/github"
@@ -10,7 +10,7 @@ terraform {
     }
     grafana = {
       source  = "grafana/grafana"
-      version = "~> 2.7"
+      version = "~> 4.21"
     }
     random = {
       source  = "hashicorp/random"
@@ -62,6 +62,20 @@ variable "OPENAI_ORGANIZATION_ID" {
 variable "OPENAI_PROJECT_ID" {
   sensitive = true
   default   = ""
+}
+
+variable "LANGFUSE_PUBLIC_KEY" {
+  description = "Langfuse public key (for prompt sync and tracing)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "LANGFUSE_SECRET_KEY" {
+  description = "Langfuse secret key (for prompt sync and tracing)"
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 variable "LANGFUSE_BASE_URL" {
@@ -346,21 +360,21 @@ provider "github" {
   token = var.GITHUB_TOKEN
 }
 
-locals {
-  name_prefix             = "${var.project_name}-${var.environment}"
-  transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "${local.name_prefix}-transcripts-${data.aws_caller_identity.current.account_id}"
-  frontend_bucket_name    = var.FRONTEND_BUCKET != "" ? var.FRONTEND_BUCKET : "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}"
+  locals {
+    name_prefix             = "${var.project_name}-${var.environment}"
+    transcripts_bucket_name = var.TRANSCRIPTS_BUCKET != "" ? var.TRANSCRIPTS_BUCKET : "${local.name_prefix}-transcripts-${data.aws_caller_identity.current.account_id}"
+    frontend_bucket_name    = var.FRONTEND_BUCKET != "" ? var.FRONTEND_BUCKET : "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}"
   frontend_cert_arn = var.FRONTEND_CERT_ARN != "" ? var.FRONTEND_CERT_ARN : (
     length(aws_acm_certificate_validation.frontend_cert) > 0 ? aws_acm_certificate_validation.frontend_cert[0].certificate_arn : ""
   )
   api_cert_arn = var.API_CERT_ARN != "" ? var.API_CERT_ARN : (
     length(aws_acm_certificate_validation.api_cert) > 0 ? aws_acm_certificate_validation.api_cert[0].certificate_arn : ""
   )
-  api_base_url = var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}" : "http://${aws_lb.api_alb.dns_name}"
-  discord_callback_url = var.DISCORD_CALLBACK_URL != "" ? var.DISCORD_CALLBACK_URL : (
-    var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}/auth/discord/callback" : ""
-  )
-}
+    api_base_url = var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}" : "http://${aws_lb.api_alb.dns_name}"
+    discord_callback_url = var.DISCORD_CALLBACK_URL != "" ? var.DISCORD_CALLBACK_URL : (
+      var.API_DOMAIN != "" ? "https://${var.API_DOMAIN}/auth/discord/callback" : ""
+    )
+  }
 
 resource "aws_ecr_repository" "app_ecr_repo" {
   name                 = "${local.name_prefix}-bot-repo"
@@ -477,6 +491,13 @@ resource "github_actions_environment_variable" "envvar_ecs_log_group" {
   environment   = github_repository_environment.repo_env.environment
   variable_name = "ECS_LOG_GROUP"
   value         = aws_cloudwatch_log_group.app_log_group.name
+}
+
+resource "github_actions_environment_variable" "envvar_secrets_prefix" {
+  repository    = data.github_repository.repo.name
+  environment   = github_repository_environment.repo_env.environment
+  variable_name = "SECRETS_PREFIX"
+  value         = local.name_prefix
 }
 
 resource "aws_vpc" "app_vpc" {
@@ -997,8 +1018,11 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.session_table.arn,
           aws_dynamodb_table.server_context_table.arn,
           aws_dynamodb_table.channel_context_table.arn,
+          aws_dynamodb_table.dictionary_table.arn,
           aws_dynamodb_table.user_speech_settings_table.arn,
+          aws_dynamodb_table.config_overrides_table.arn,
           aws_dynamodb_table.ask_conversation_table.arn,
+          aws_dynamodb_table.feedback_table.arn,
           aws_dynamodb_table.meeting_history_table.arn,
           "${aws_dynamodb_table.meeting_history_table.arn}/index/*",
           aws_dynamodb_table.installer_table.arn,
@@ -1139,10 +1163,14 @@ resource "aws_ecs_task_definition" "app_task" {
           name  = "OPENAI_ORGANIZATION_ID"
           value = var.OPENAI_ORGANIZATION_ID
         },
-        {
-          name  = "OPENAI_PROJECT_ID"
-          value = var.OPENAI_PROJECT_ID
-        },
+          {
+            name  = "OPENAI_PROJECT_ID"
+            value = var.OPENAI_PROJECT_ID
+          },
+          {
+            name  = "REDIS_URL"
+            value = local.redis_url
+          },
         {
           name  = "LANGFUSE_BASE_URL"
           value = var.LANGFUSE_BASE_URL
@@ -1174,6 +1202,26 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "NOTES_MODEL"
           value = var.NOTES_MODEL
+        },
+        {
+          name  = "APP_CONFIG_ENABLED"
+          value = var.APP_CONFIG_ENABLED
+        },
+        {
+          name  = "APP_CONFIG_APPLICATION_ID"
+          value = aws_appconfig_application.chronote_config.id
+        },
+        {
+          name  = "APP_CONFIG_ENVIRONMENT_ID"
+          value = aws_appconfig_environment.chronote_config_env.environment_id
+        },
+        {
+          name  = "APP_CONFIG_PROFILE_ID"
+          value = aws_appconfig_configuration_profile.chronote_config_profile.configuration_profile_id
+        },
+        {
+          name  = "APP_CONFIG_DEPLOYMENT_STRATEGY_ID"
+          value = aws_appconfig_deployment_strategy.chronote_config_strategy.id
         },
         {
           name  = "TRANSCRIPTS_BUCKET"
@@ -1322,6 +1370,10 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "BILLING_LANDING_URL"
           value = var.BILLING_LANDING_URL
+        },
+        {
+          name  = "SUPER_ADMIN_USER_IDS"
+          value = var.SUPER_ADMIN_USER_IDS
         },
       ]
       secrets = [
@@ -1689,6 +1741,37 @@ resource "aws_dynamodb_table" "ask_conversation_table" {
   }
 }
 
+# Feedback Table
+resource "aws_dynamodb_table" "feedback_table" {
+  name         = "${local.name_prefix}-FeedbackTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "FeedbackTable"
+  }
+}
+
 # Server Context Table
 resource "aws_dynamodb_table" "server_context_table" {
   name         = "${local.name_prefix}-ServerContextTable"
@@ -1742,6 +1825,37 @@ resource "aws_dynamodb_table" "channel_context_table" {
 
   tags = {
     Name = "ChannelContextTable"
+  }
+}
+
+# Dictionary Table
+resource "aws_dynamodb_table" "dictionary_table" {
+  name         = "${local.name_prefix}-DictionaryTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "guildId"
+  range_key    = "termKey"
+
+  attribute {
+    name = "guildId"
+    type = "S"
+  }
+
+  attribute {
+    name = "termKey"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+
+  tags = {
+    Name = "DictionaryTable"
   }
 }
 

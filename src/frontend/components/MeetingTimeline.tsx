@@ -1,4 +1,9 @@
-import type { ComponentType, ReactNode, RefObject } from "react";
+import type {
+  ComponentType,
+  HTMLAttributes,
+  ReactNode,
+  RefObject,
+} from "react";
 import {
   Box,
   Button,
@@ -54,12 +59,13 @@ type MeetingTimelineProps = {
   events: MeetingEvent[];
   activeFilters: MeetingEventType[];
   onToggleFilter?: (filter: MeetingEventType) => void;
-  height: number;
+  height: number | string;
   emptyLabel: string;
   title?: string;
   headerActions?: ReactNode;
   showFilters?: boolean;
   viewportRef?: RefObject<HTMLDivElement | null>;
+  viewportProps?: HTMLAttributes<HTMLDivElement>;
 };
 
 export default function MeetingTimeline({
@@ -72,17 +78,28 @@ export default function MeetingTimeline({
   headerActions,
   showFilters = true,
   viewportRef,
+  viewportProps,
 }: MeetingTimelineProps) {
   const theme = useMantineTheme();
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
+  const isFillHeight = height === "100%";
   const toggleFilter = onToggleFilter ?? (() => {});
   const visibleEvents = showFilters
     ? events.filter((event) => activeFilters.includes(event.type))
     : events;
 
+  const scrollAreaProps = isFillHeight
+    ? { style: { flex: 1, minHeight: 0 } }
+    : { h: height };
+
   return (
-    <Stack gap="sm">
+    <Stack
+      gap="sm"
+      style={
+        isFillHeight ? { height: "100%", minHeight: 0, flex: 1 } : undefined
+      }
+    >
       <Group justify="space-between" align="center" wrap="wrap">
         <Group gap="sm">
           <ThemeIcon variant="light" color="brand">
@@ -110,7 +127,13 @@ export default function MeetingTimeline({
             : null}
         </Group>
       </Group>
-      <ScrollArea h={height} offsetScrollbars viewportRef={viewportRef}>
+      <ScrollArea
+        {...scrollAreaProps}
+        offsetScrollbars
+        viewportRef={viewportRef}
+        viewportProps={viewportProps}
+        data-visual-scroll
+      >
         {visibleEvents.length === 0 ? (
           <Center py="xl">
             <Text size="sm" c="dimmed">
@@ -119,13 +142,18 @@ export default function MeetingTimeline({
           </Center>
         ) : (
           <Stack gap={0}>
-            {visibleEvents.map((event) => {
+            {visibleEvents.map((event, index) => {
+              const safeId = event.id.replace(/[^\w-]/g, "");
+              const anchorId = `timeline-${safeId || index}`;
               const meta = EVENT_META[event.type];
               const Icon = meta.icon;
               const showMetaLabel = Boolean(event.speaker);
               return (
                 <Box
                   key={event.id}
+                  id={anchorId}
+                  data-event-id={event.id}
+                  data-timeline-anchor={anchorId}
                   px="sm"
                   py="sm"
                   style={{

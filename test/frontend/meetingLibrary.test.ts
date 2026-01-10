@@ -2,11 +2,11 @@ import { describe, expect, test } from "@jest/globals";
 import {
   buildMeetingDetails,
   deriveSummary,
-  deriveTitle,
   filterMeetingItems,
   formatChannelLabel,
   formatDateLabel,
   formatDurationLabel,
+  resolveMeetingTitle,
 } from "../../src/frontend/utils/meetingLibrary";
 import { MEETING_STATUS } from "../../src/types/meetingLifecycle";
 
@@ -18,8 +18,10 @@ describe("meeting library utils", () => {
   });
 
   test("formatDurationLabel handles hours and minutes", () => {
-    expect(formatDurationLabel(59)).toBe("0m");
+    expect(formatDurationLabel(0)).toBe("1m");
+    expect(formatDurationLabel(59)).toBe("1m");
     expect(formatDurationLabel(60)).toBe("1m");
+    expect(formatDurationLabel(3600)).toBe("1h 00m");
     expect(formatDurationLabel(3660)).toBe("1h 01m");
   });
 
@@ -27,12 +29,39 @@ describe("meeting library utils", () => {
     expect(formatDateLabel("not-a-date")).toBe("Unknown date");
   });
 
-  test("deriveTitle skips headings and falls back to channel label", () => {
-    const notes = ["- Highlights", "Decisions:", "* Roadmap kickoff"].join(
-      "\n",
-    );
-    expect(deriveTitle(notes, "#planning")).toBe("Roadmap kickoff");
-    expect(deriveTitle("", "#general")).toBe("Meeting in general");
+  test("resolveMeetingTitle prioritizes meeting name then summaries", () => {
+    expect(
+      resolveMeetingTitle({
+        meetingName: "Sprint planning",
+        summaryLabel: "Weekly sync",
+        summarySentence: "We planned the sprint.",
+        channelLabel: "#planning",
+      }),
+    ).toBe("Sprint planning");
+    expect(
+      resolveMeetingTitle({
+        meetingName: null,
+        summaryLabel: "Weekly sync",
+        summarySentence: "We planned the sprint.",
+        channelLabel: "#planning",
+      }),
+    ).toBe("Weekly sync");
+    expect(
+      resolveMeetingTitle({
+        meetingName: null,
+        summaryLabel: null,
+        summarySentence: "We planned the sprint.",
+        channelLabel: "#planning",
+      }),
+    ).toBe("We planned the sprint.");
+    expect(
+      resolveMeetingTitle({
+        meetingName: null,
+        summaryLabel: null,
+        summarySentence: null,
+        channelLabel: "#general",
+      }),
+    ).toBe("Meeting in general");
   });
 
   test("deriveSummary prefers summary sentence and summary lines", () => {

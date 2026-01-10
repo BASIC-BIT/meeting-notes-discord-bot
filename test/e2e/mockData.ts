@@ -12,12 +12,14 @@ const chronoteGuild =
   findGuild("Chronote Crew") ?? store.userGuilds[1] ?? ddmGuild;
 
 const ddmMeetings = store.meetingHistoryByGuild.get(ddmGuild.id) ?? [];
-const firstMeetingNotes = ddmMeetings[0]?.notes ?? "";
+const activeMeetings = ddmMeetings.filter((meeting) => !meeting.archivedAt);
+const firstMeetingNotes = activeMeetings[0]?.notes ?? "";
 const meetingTitle = firstMeetingNotes.split("\n")[0]?.trim() || "Meeting";
 
 const conversationKey = `USER#${store.user.id}#GUILD#${ddmGuild.id}`;
 const conversations = store.askConversationsByKey.get(conversationKey) ?? [];
-const firstConversation = conversations[0];
+const activeConversations = conversations.filter((conv) => !conv.archivedAt);
+const firstConversation = activeConversations[0];
 const conversationSummary = firstConversation?.summary ?? "";
 const conversationSummarySnippet = conversationSummary
   ? conversationSummary.split(" ").slice(0, 6).join(" ")
@@ -44,7 +46,7 @@ export const mockGuilds = {
 };
 
 export const mockLibrary = {
-  meetingCount: ddmMeetings.length,
+  meetingCount: activeMeetings.length,
   meetingTitle,
 };
 

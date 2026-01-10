@@ -1,9 +1,10 @@
 import express from "express";
+import { SERVER_CONTEXT_KEY_LIST, SERVER_CONTEXT_KEYS } from "../config/keys";
 import {
-  clearServerContextService,
-  fetchServerContext,
-  setServerContext,
-} from "../services/appContextService";
+  clearConfigOverrideForScope,
+  setConfigOverrideForScope,
+} from "../services/configOverridesService";
+import { config } from "../services/configService";
 import {
   listAutoRecordSettings,
   removeAutoRecordSetting,
@@ -14,12 +15,32 @@ import {
   ensureManageGuildWithUserToken,
   ensureUserInGuild,
 } from "../services/guildAccessService";
+import {
+  listBotGuildsCached,
+  listGuildChannelsCached,
+  listUserGuildsCached,
+} from "../services/discordCacheService";
+import type { DiscordGuild } from "../repositories/types";
 import { answerQuestionService } from "../services/askService";
-import { config } from "../services/configService";
+import { renderAskAnswer } from "../services/askCitations";
+import {
+  getSnapshotString,
+  resolveConfigSnapshot,
+} from "../services/unifiedConfigService";
+import { normalizeTags, parseTags } from "../utils/tags";
 
 type AuthedUser = {
   accessToken?: string;
   id?: string;
+};
+
+type SessionGuildCache = {
+  guildIds?: string[];
+  guildIdsFetchedAt?: number;
+  userGuilds?: DiscordGuild[];
+  userGuildsFetchedAt?: number;
+  botGuildIds?: string[];
+  botGuildIdsFetchedAt?: number;
 };
 
 export function registerGuildRoutes(app: express.Express) {
@@ -62,11 +83,15 @@ export function registerGuildRoutes(app: express.Express) {
   };
 
   const requireManageGuild = async (
+    req: express.Request,
     res: express.Response,
     user: AuthedUser,
     guildId: string,
   ): Promise<boolean> => {
-    const ok = await ensureManageGuildWithUserToken(user.accessToken, guildId);
+    const ok = await ensureManageGuildWithUserToken(user.accessToken, guildId, {
+      userId: user.id,
+      session: req.session,
+    });
     if (ok === null) {
       res.status(429).json({ error: "Discord rate limited. Please retry." });
       return false;
@@ -85,7 +110,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         console.warn("Context 403: missing Manage Guild", {
           guildId,
           userId: user?.id,
@@ -95,11 +120,28 @@ export function registerGuildRoutes(app: express.Express) {
       if (!(await ensureBotPresence(req, res, guildId))) {
         return;
       }
-      const ctx = await fetchServerContext(guildId);
+      const snapshot = await resolveConfigSnapshot({ guildId });
+      const contextValue =
+        getSnapshotString(snapshot, SERVER_CONTEXT_KEYS.context, {
+          trim: true,
+        }) ?? "";
+      const defaultNotesChannelId = getSnapshotString(
+        snapshot,
+        SERVER_CONTEXT_KEYS.defaultNotesChannelId,
+        { trim: true },
+      );
+      const defaultTagsValue = getSnapshotString(
+        snapshot,
+        SERVER_CONTEXT_KEYS.defaultTags,
+        { trim: true },
+      );
+      const defaultTags = defaultTagsValue
+        ? (parseTags(defaultTagsValue) ?? [])
+        : [];
       res.json({
-        context: ctx?.context ?? "",
-        defaultNotesChannelId: ctx?.defaultNotesChannelId ?? null,
-        defaultTags: ctx?.defaultTags ?? [],
+        context: contextValue,
+        defaultNotesChannelId,
+        defaultTags,
       });
     },
   );
@@ -110,7 +152,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       if (!(await ensureBotPresence(req, res, guildId))) {
@@ -121,18 +163,70 @@ export function registerGuildRoutes(app: express.Express) {
         defaultNotesChannelId?: string | null;
         defaultTags?: string[];
       };
-      const update = {
-        ...(context !== undefined ? { context } : {}),
-        ...(defaultNotesChannelId !== undefined
-          ? { defaultNotesChannelId }
-          : {}),
-        ...(defaultTags !== undefined ? { defaultTags } : {}),
-      };
-      if (Object.keys(update).length === 0) {
+      if (
+        context === undefined &&
+        defaultNotesChannelId === undefined &&
+        defaultTags === undefined
+      ) {
         res.status(400).json({ error: "No updates provided" });
         return;
       }
-      await setServerContext(guildId, user.id, update);
+      const scope = { scope: "server", guildId } as const;
+      const tasks: Promise<void>[] = [];
+      if (context !== undefined) {
+        const trimmed = context.trim();
+        if (trimmed.length > 0) {
+          tasks.push(
+            setConfigOverrideForScope(
+              scope,
+              SERVER_CONTEXT_KEYS.context,
+              trimmed,
+              user.id,
+            ),
+          );
+        } else {
+          tasks.push(
+            clearConfigOverrideForScope(scope, SERVER_CONTEXT_KEYS.context),
+          );
+        }
+      }
+      if (defaultNotesChannelId !== undefined) {
+        if (defaultNotesChannelId) {
+          tasks.push(
+            setConfigOverrideForScope(
+              scope,
+              SERVER_CONTEXT_KEYS.defaultNotesChannelId,
+              defaultNotesChannelId,
+              user.id,
+            ),
+          );
+        } else {
+          tasks.push(
+            clearConfigOverrideForScope(
+              scope,
+              SERVER_CONTEXT_KEYS.defaultNotesChannelId,
+            ),
+          );
+        }
+      }
+      if (defaultTags !== undefined) {
+        const normalized = normalizeTags(defaultTags);
+        if (normalized) {
+          tasks.push(
+            setConfigOverrideForScope(
+              scope,
+              SERVER_CONTEXT_KEYS.defaultTags,
+              normalized.join(", "),
+              user.id,
+            ),
+          );
+        } else {
+          tasks.push(
+            clearConfigOverrideForScope(scope, SERVER_CONTEXT_KEYS.defaultTags),
+          );
+        }
+      }
+      await Promise.all(tasks);
       res.json({ ok: true });
     },
   );
@@ -143,13 +237,18 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       if (!(await ensureBotPresence(req, res, guildId))) {
         return;
       }
-      await clearServerContextService(guildId);
+      const scope = { scope: "server", guildId } as const;
+      await Promise.all(
+        SERVER_CONTEXT_KEY_LIST.map((key) =>
+          clearConfigOverrideForScope(scope, key),
+        ),
+      );
       res.json({ ok: true });
     },
   );
@@ -161,7 +260,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       const rules = await listAutoRecordSettings(guildId);
@@ -175,7 +274,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser & { id: string };
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       const { mode, voiceChannelId, textChannelId, tags } = req.body as {
@@ -207,7 +306,7 @@ export function registerGuildRoutes(app: express.Express) {
     async (req, res): Promise<void> => {
       const guildId = req.params.guildId;
       const user = req.user as AuthedUser;
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       const { channelId } = req.body as { channelId?: string };
@@ -231,16 +330,14 @@ export function registerGuildRoutes(app: express.Express) {
         res.status(401).json({ error: "No access token. Please re-login." });
         return;
       }
-      const sessionData = req.session as typeof req.session & {
-        guildIds?: string[];
-        guildIdsFetchedAt?: number;
-        botGuildIds?: string[];
-        botGuildIdsFetchedAt?: number;
-      };
+      const sessionData = req.session as typeof req.session & SessionGuildCache;
       const cachedGuilds = sessionData.guildIds ?? [];
       const cachedHasGuild = cachedGuilds.includes(guildId);
       if (!cachedHasGuild) {
-        const accessCheck = await ensureUserInGuild(user.accessToken, guildId);
+        const accessCheck = await ensureUserInGuild(user.accessToken, guildId, {
+          session: req.session,
+          userId: user.id,
+        });
         if (accessCheck === null) {
           res
             .status(429)
@@ -260,22 +357,7 @@ export function registerGuildRoutes(app: express.Express) {
         return;
       }
       try {
-        const resp = await fetch(
-          `https://discord.com/api/guilds/${guildId}/channels`,
-          {
-            headers: { Authorization: `Bot ${config.discord.botToken}` },
-          },
-        );
-        if (!resp.ok) {
-          res.status(500).json({ error: "Unable to fetch guild channels" });
-          return;
-        }
-        const channels = (await resp.json()) as Array<{
-          id: string;
-          name: string;
-          type: number;
-          position?: number;
-        }>;
+        const channels = await listGuildChannelsCached(guildId);
         const voiceTypes = new Set([2, 13]);
         const textTypes = new Set([0, 5]);
         const byPosition = (
@@ -309,7 +391,7 @@ export function registerGuildRoutes(app: express.Express) {
         res.status(401).json({ error: "No access token. Please re-login." });
         return;
       }
-      if (!(await requireManageGuild(res, user, guildId))) {
+      if (!(await requireManageGuild(req, res, user, guildId))) {
         return;
       }
       const { question, tags, scope, channelId } = req.body as {
@@ -322,14 +404,21 @@ export function registerGuildRoutes(app: express.Express) {
         res.status(400).json({ error: "question is required" });
         return;
       }
-      const { answer } = await answerQuestionService({
+      const { answer, citations } = await answerQuestionService({
         guildId,
         channelId: channelId || "",
         question,
         tags,
         scope,
       });
-      res.json({ answer });
+      const portalBaseUrl = config.frontend.siteUrl.trim().replace(/\/$/, "");
+      const rendered = renderAskAnswer({
+        text: answer,
+        citations: citations ?? [],
+        guildId,
+        portalBaseUrl,
+      });
+      res.json({ answer: rendered });
     },
   );
 
@@ -341,44 +430,18 @@ export function registerGuildRoutes(app: express.Express) {
       return;
     }
     try {
-      const userGuildsResp = await fetch(
-        "https://discord.com/api/users/@me/guilds",
-        {
-          headers: { Authorization: `Bearer ${user.accessToken}` },
-        },
-      );
-      if (!userGuildsResp.ok) {
-        res.status(500).json({ error: "Unable to fetch user guilds" });
-        return;
-      }
-      const userGuilds = (await userGuildsResp.json()) as Array<{
-        id: string;
-        name: string;
-        icon?: string;
-        permissions: string;
-        owner?: boolean;
-      }>;
+      const userGuilds = await listUserGuildsCached({
+        accessToken: user.accessToken,
+        userId: user.id,
+      });
 
-      const sessionData = req.session as typeof req.session & {
-        guildIds?: string[];
-        guildIdsFetchedAt?: number;
-        botGuildIds?: string[];
-        botGuildIdsFetchedAt?: number;
-      };
+      const sessionData = req.session as typeof req.session & SessionGuildCache;
       sessionData.guildIds = userGuilds.map((guild) => guild.id);
       sessionData.guildIdsFetchedAt = Date.now();
+      sessionData.userGuilds = userGuilds;
+      sessionData.userGuildsFetchedAt = sessionData.guildIdsFetchedAt;
 
-      const botGuildsResp = await fetch(
-        "https://discord.com/api/users/@me/guilds",
-        {
-          headers: { Authorization: `Bot ${config.discord.botToken}` },
-        },
-      );
-      if (!botGuildsResp.ok) {
-        res.status(500).json({ error: "Unable to fetch bot guilds" });
-        return;
-      }
-      const botGuilds = (await botGuildsResp.json()) as Array<{ id: string }>;
+      const botGuilds = await listBotGuildsCached();
       const botGuildIds = new Set(botGuilds.map((g) => g.id));
       sessionData.botGuildIds = botGuilds.map((guild) => guild.id);
       sessionData.botGuildIdsFetchedAt = Date.now();
@@ -389,7 +452,7 @@ export function registerGuildRoutes(app: express.Express) {
       const eligible = userGuilds
         .filter((g) => botGuildIds.has(g.id))
         .filter((g) => {
-          const perms = BigInt(g.permissions);
+          const perms = BigInt(g.permissions ?? "0");
           return (
             g.owner ||
             (perms & BigInt(MANAGE_GUILD)) !== BigInt(0) ||

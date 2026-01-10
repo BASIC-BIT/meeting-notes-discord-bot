@@ -7,3 +7,8 @@ import "@testing-library/jest-dom";
 // Provide API base for tests so apiClient can build URLs without import.meta
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).__API_BASE_URL__ = process.env.VITE_API_BASE_URL || "";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__MOCK_FIXED_NOW__ =
+  process.env.VITE_MOCK_FIXED_NOW || process.env.MOCK_FIXED_NOW || "";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__VISUAL_MODE__ = process.env.VITE_VISUAL_MODE || "";

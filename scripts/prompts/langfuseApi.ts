@@ -1,8 +1,14 @@
-import "dotenv/config";
-import { Buffer } from "node:buffer";
+import type { CreateChatPromptBodyWithPlaceholders } from "@langfuse/client";
+import type {
+  ChatMessageWithPlaceholders,
+  CreatePromptRequest,
+  Prompt,
+  PromptMeta,
+  PromptMetaListResponse,
+} from "@langfuse/core";
+import { getLangfuseClient } from "../langfuse/client";
 
 export type PromptType = "text" | "chat";
-
 export type ChatMessage = {
   role: string;
   content: string;
@@ -19,68 +25,47 @@ export type LangfusePrompt = {
   commitMessage?: string | null;
 };
 
-export type PromptMeta = {
-  name: string;
-  type: PromptType;
-  versions: number[];
-  labels: string[];
-  tags: string[];
-  lastUpdatedAt: string;
-  lastConfig: unknown;
-};
+export type { PromptMeta, PromptMetaListResponse };
 
-export type PromptMetaListResponse = {
-  data: PromptMeta[];
-  meta: {
-    page: number;
-    limit: number;
-    totalItems: number;
-    totalPages: number;
+function isChatMessage(
+  message: ChatMessageWithPlaceholders,
+): message is ChatMessageWithPlaceholders.Chatmessage {
+  return (
+    typeof (message as ChatMessage).role === "string" &&
+    typeof (message as ChatMessage).content === "string"
+  );
+}
+
+function toLangfusePrompt(prompt: Prompt): LangfusePrompt {
+  if (prompt.type === "chat") {
+    const messages = Array.isArray(prompt.prompt)
+      ? prompt.prompt
+          .filter(isChatMessage)
+          .map((msg) => ({ role: msg.role, content: msg.content }))
+      : [];
+
+    return {
+      name: prompt.name,
+      type: "chat",
+      prompt: messages,
+      config: prompt.config ?? {},
+      labels: prompt.labels ?? [],
+      tags: prompt.tags ?? [],
+      version: prompt.version,
+      commitMessage: prompt.commitMessage ?? undefined,
+    };
+  }
+
+  return {
+    name: prompt.name,
+    type: "text",
+    prompt: typeof prompt.prompt === "string" ? prompt.prompt : "",
+    config: prompt.config ?? {},
+    labels: prompt.labels ?? [],
+    tags: prompt.tags ?? [],
+    version: prompt.version,
+    commitMessage: prompt.commitMessage ?? undefined,
   };
-};
-
-function getBaseUrl(): string {
-  const baseUrl = process.env.LANGFUSE_BASE_URL?.trim();
-  return baseUrl && baseUrl.length > 0
-    ? baseUrl
-    : "https://us.cloud.langfuse.com";
-}
-
-function getAuthHeader(): string {
-  const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
-  const secretKey = process.env.LANGFUSE_SECRET_KEY;
-  if (!publicKey || !secretKey) {
-    throw new Error(
-      "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required.",
-    );
-  }
-  const token = Buffer.from(`${publicKey}:${secretKey}`).toString("base64");
-  return `Basic ${token}`;
-}
-
-async function requestJson<T>(
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<T> {
-  const baseUrl = getBaseUrl();
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: {
-      Authorization: getAuthHeader(),
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `Langfuse API error ${response.status} ${response.statusText}: ${text}`,
-    );
-  }
-
-  return (await response.json()) as T;
 }
 
 export async function listPrompts(options: {
@@ -92,24 +77,8 @@ export async function listPrompts(options: {
   fromUpdatedAt?: string;
   toUpdatedAt?: string;
 }): Promise<PromptMetaListResponse> {
-  const params = new URLSearchParams();
-  if (options.name) params.set("name", options.name);
-  if (options.label) params.set("label", options.label);
-  if (options.tag) params.set("tag", options.tag);
-  if (options.page) params.set("page", String(options.page));
-  if (options.limit) params.set("limit", String(options.limit));
-  if (options.fromUpdatedAt) {
-    params.set("fromUpdatedAt", options.fromUpdatedAt);
-  }
-  if (options.toUpdatedAt) {
-    params.set("toUpdatedAt", options.toUpdatedAt);
-  }
-
-  const query = params.toString();
-  const path = query
-    ? `/api/public/v2/prompts?${query}`
-    : "/api/public/v2/prompts";
-  return requestJson<PromptMetaListResponse>("GET", path);
+  const client = getLangfuseClient();
+  return client.api.prompts.list(options);
 }
 
 export async function getPrompt(options: {
@@ -117,20 +86,49 @@ export async function getPrompt(options: {
   label?: string;
   version?: number;
 }): Promise<LangfusePrompt> {
-  const params = new URLSearchParams();
-  if (options.label) params.set("label", options.label);
-  if (options.version != null) params.set("version", String(options.version));
-
-  const encodedName = encodeURIComponent(options.name);
-  const query = params.toString();
-  const path = query
-    ? `/api/public/v2/prompts/${encodedName}?${query}`
-    : `/api/public/v2/prompts/${encodedName}`;
-  return requestJson<LangfusePrompt>("GET", path);
+  const client = getLangfuseClient();
+  const request =
+    options.label || options.version != null
+      ? {
+          label: options.label,
+          version: options.version,
+        }
+      : undefined;
+  const prompt = await client.api.prompts.get(options.name, request);
+  return toLangfusePrompt(prompt);
 }
 
 export async function createPrompt(
   payload: Omit<LangfusePrompt, "version">,
 ): Promise<LangfusePrompt> {
-  return requestJson<LangfusePrompt>("POST", "/api/public/v2/prompts", payload);
+  const client = getLangfuseClient();
+  const labels = payload.labels ?? [];
+  const tags = payload.tags ?? [];
+  const commitMessage = payload.commitMessage ?? undefined;
+
+  if (payload.type === "chat") {
+    const request: CreateChatPromptBodyWithPlaceholders = {
+      type: "chat",
+      name: payload.name,
+      prompt: payload.prompt as ChatMessage[],
+      config: payload.config ?? {},
+      labels,
+      tags,
+      commitMessage,
+    };
+    const created = await client.prompt.create(request);
+    return toLangfusePrompt(created.promptResponse);
+  }
+
+  const request: CreatePromptRequest.Text = {
+    type: "text",
+    name: payload.name,
+    prompt: typeof payload.prompt === "string" ? payload.prompt : "",
+    config: payload.config ?? {},
+    labels,
+    tags,
+    commitMessage,
+  };
+  const created = await client.prompt.create(request);
+  return toLangfusePrompt(created.promptResponse);
 }

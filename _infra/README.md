@@ -16,12 +16,10 @@ This stack provisions:
 ### Bootstrap steps (Grafana service account token)
 
 1. **First apply** (creates AMP + AMG):
-
    - Leave `grafana_api_key` and `grafana_url` empty in `terraform.tfvars`.
    - Run: `terraform apply`
 
 2. **Create a Grafana service account + token** (preferred):
-
    - Open the Grafana workspace URL.
    - In Grafana: _Administration → Service accounts_ → **New service account** (role: Admin).
    - Create a **token** and copy it.
@@ -50,6 +48,8 @@ definition. You must set the secret values after the first apply.
 - `${project_name}-${environment}/discord-client-secret`
 - `${project_name}-${environment}/oauth-secret`
 - `${project_name}-${environment}/openai-api-key`
+- `${project_name}-${environment}/langfuse-public-key`
+- `${project_name}-${environment}/langfuse-secret-key`
 - `${project_name}-${environment}/stripe-secret-key`
 - `${project_name}-${environment}/stripe-webhook-secret`
 
@@ -59,6 +59,14 @@ Notes:
 
 - These secrets should **not** live in `terraform.tfvars`.
 - Local development still uses `.env` values.
+- Each secret must have an `AWSCURRENT` value. If a secret exists without a value, set **SecretString** to create one.
+
+Example CLI:
+
+```bash
+aws secretsmanager put-secret-value --secret-id ${project_name}-${environment}/langfuse-public-key --secret-string "lf_public_..."
+aws secretsmanager put-secret-value --secret-id ${project_name}-${environment}/langfuse-secret-key --secret-string "lf_secret_..."
+```
 
 ## API domain (ALB)
 

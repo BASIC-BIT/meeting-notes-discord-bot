@@ -1,0 +1,87 @@
+import type { DictionaryEntry } from "../types/db";
+import { getDictionaryRepository } from "../repositories/dictionaryRepository";
+import {
+  buildDictionaryTermKey,
+  DICTIONARY_DEFINITION_MAX_LENGTH,
+  DICTIONARY_TERM_MAX_LENGTH,
+  normalizeDictionaryDefinition,
+  normalizeDictionaryTerm,
+} from "../utils/dictionary";
+
+const sortEntries = (entries: DictionaryEntry[]) =>
+  [...entries].sort((a, b) => {
+    if (a.updatedAt !== b.updatedAt) {
+      return b.updatedAt.localeCompare(a.updatedAt);
+    }
+    return a.term.localeCompare(b.term);
+  });
+
+export async function listDictionaryEntriesService(
+  guildId: string,
+): Promise<DictionaryEntry[]> {
+  const entries = await getDictionaryRepository().listByGuild(guildId);
+  return sortEntries(entries);
+}
+
+export async function upsertDictionaryEntryService(params: {
+  guildId: string;
+  term: string;
+  definition?: string | null;
+  userId: string;
+}): Promise<DictionaryEntry> {
+  const term = normalizeDictionaryTerm(params.term);
+  if (!term) {
+    throw new Error("Dictionary term cannot be empty.");
+  }
+  if (term.length > DICTIONARY_TERM_MAX_LENGTH) {
+    throw new Error(
+      `Dictionary term must be ${DICTIONARY_TERM_MAX_LENGTH} characters or less.`,
+    );
+  }
+  const definition = normalizeDictionaryDefinition(params.definition);
+  if (definition && definition.length > DICTIONARY_DEFINITION_MAX_LENGTH) {
+    throw new Error(
+      `Dictionary definition must be ${DICTIONARY_DEFINITION_MAX_LENGTH} characters or less.`,
+    );
+  }
+
+  const repository = getDictionaryRepository();
+  const termKey = buildDictionaryTermKey(term);
+  const existing = await repository.get(params.guildId, termKey);
+  const now = new Date().toISOString();
+  const entry: DictionaryEntry = {
+    guildId: params.guildId,
+    termKey,
+    term,
+    definition,
+    createdAt: existing?.createdAt ?? now,
+    createdBy: existing?.createdBy ?? params.userId,
+    updatedAt: now,
+    updatedBy: params.userId,
+  };
+
+  await repository.write(entry);
+  return entry;
+}
+
+export async function removeDictionaryEntryService(params: {
+  guildId: string;
+  term: string;
+}): Promise<void> {
+  const term = normalizeDictionaryTerm(params.term);
+  if (!term) {
+    throw new Error("Dictionary term cannot be empty.");
+  }
+  const termKey = buildDictionaryTermKey(term);
+  await getDictionaryRepository().remove(params.guildId, termKey);
+}
+
+export async function clearDictionaryEntriesService(
+  guildId: string,
+): Promise<void> {
+  const repository = getDictionaryRepository();
+  const entries = await repository.listByGuild(guildId);
+  await Promise.all(
+    entries.map((entry) => repository.remove(guildId, entry.termKey)),
+  );
+}

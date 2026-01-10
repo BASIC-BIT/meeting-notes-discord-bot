@@ -24,8 +24,8 @@ export class SettingsPage {
     return this.page.getByTestId(testIds.settings.override);
   }
 
-  loadingGlobal(): Locator {
-    return this.page.getByTestId(testIds.settings.loadingGlobal).first();
+  loadingConfig(): Locator {
+    return this.page.getByTestId(testIds.settings.loadingConfig).first();
   }
 
   loadingOverrides(): Locator {
@@ -34,7 +34,7 @@ export class SettingsPage {
 
   async waitForLoaded(expectedOverrideName?: string): Promise<void> {
     await this.root().waitFor({ state: "visible" });
-    await this.loadingGlobal().waitFor({ state: "hidden" });
+    await this.loadingConfig().waitFor({ state: "hidden" });
     await this.loadingOverrides().waitFor({ state: "hidden" });
     if (expectedOverrideName) {
       await this.overrideByName(expectedOverrideName).waitFor({
@@ -45,16 +45,33 @@ export class SettingsPage {
     }
   }
 
+  async expandGroup(label: string): Promise<void> {
+    const control = this.root().getByRole("button", { name: label }).first();
+    if (await control.count()) {
+      const expanded = await control.getAttribute("aria-expanded");
+      if (expanded !== "true") {
+        await control.click();
+      }
+    }
+  }
+
+  groupByName(label: string): Locator {
+    const slug = label.toLowerCase().replace(/\s+/g, "-");
+    return this.page.getByTestId(`settings-config-group-${slug}`);
+  }
+
   overrideByName(name: string): Locator {
     return this.overrides().filter({ hasText: name }).first();
   }
 
   removeFirstOverride(): Locator {
-    return this.firstOverride().getByTestId(testIds.settings.removeOverride);
+    return this.firstOverride().getByRole("button", {
+      name: /remove override/i,
+    });
   }
 
   async openFirstOverrideEdit(): Promise<void> {
-    await this.firstOverride().getByRole("button", { name: /edit/i }).click();
+    await this.firstOverride().click();
   }
 
   modal(): Locator {
@@ -77,20 +94,20 @@ export class SettingsPage {
     return this.page.getByTestId("settings-save-defaults");
   }
 
+  saveConfigButton(): Locator {
+    return this.page.getByTestId(testIds.settings.saveConfig);
+  }
+
   chatTtsToggle(): Locator {
-    return this.page.getByText(/enable chat-to-speech by default/i);
+    return this.page.getByRole("button", { name: /chat tts/i });
   }
 
   chronoteVoiceSelect(): Locator {
-    return this.page.getByRole("textbox", {
-      name: /default chronote voice/i,
-    });
+    return this.page.getByRole("textbox", { name: /live voice tts voice/i });
   }
 
   chatTtsVoiceSelect(): Locator {
-    return this.page.getByRole("textbox", {
-      name: /default chat-to-speech voice/i,
-    });
+    return this.page.getByPlaceholder(/chat tts voice/i);
   }
 
   async selectChronoteVoice(label: string): Promise<void> {

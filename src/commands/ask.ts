@@ -3,6 +3,7 @@ import { normalizeTags, parseTags } from "../utils/tags";
 import { getGuildLimits } from "../services/subscriptionService";
 import { answerQuestionService } from "../services/askService";
 import { config } from "../services/configService";
+import { renderAskAnswer } from "../services/askCitations";
 
 export async function handleAskCommand(
   interaction: ChatInputCommandInteraction,
@@ -27,7 +28,7 @@ export async function handleAskCommand(
     const { limits } = await getGuildLimits(interaction.guildId);
     const maxMeetings = limits.maxAskMeetings ?? config.ask.maxMeetings;
 
-    const { answer } = await answerQuestionService({
+    const { answer, citations } = await answerQuestionService({
       guildId: interaction.guildId!,
       channelId: interaction.channelId!,
       question,
@@ -35,8 +36,15 @@ export async function handleAskCommand(
       scope,
       maxMeetings,
     });
+    const portalBaseUrl = config.frontend.siteUrl.trim().replace(/\/$/, "");
+    const rendered = renderAskAnswer({
+      text: answer,
+      citations: citations ?? [],
+      guildId: interaction.guildId!,
+      portalBaseUrl,
+    });
 
-    await interaction.editReply(answer);
+    await interaction.editReply(rendered);
   } catch (error) {
     console.error("Error handling /ask:", error);
     await interaction.editReply("Error answering that question.");

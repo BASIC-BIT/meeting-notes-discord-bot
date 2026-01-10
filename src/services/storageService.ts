@@ -7,10 +7,20 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "./configService";
 import { getMockStore } from "../repositories/mockStore";
 
+const storageCredentials =
+  config.storage.accessKeyId.length > 0 &&
+  config.storage.secretAccessKey.length > 0
+    ? {
+        accessKeyId: config.storage.accessKeyId,
+        secretAccessKey: config.storage.secretAccessKey,
+      }
+    : undefined;
+
 const s3Client = new S3Client({
   region: config.storage.awsRegion,
   endpoint: config.storage.endpoint,
   forcePathStyle: config.storage.forcePathStyle,
+  ...(storageCredentials ? { credentials: storageCredentials } : {}),
 });
 
 export async function uploadObjectToS3(

@@ -10,14 +10,17 @@ import type {
   OnboardingState,
   StripeWebhookEvent,
   UserSpeechSettings,
+  ConfigOverrideRecord,
+  DictionaryEntry,
+  FeedbackRecord,
 } from "../types/db";
 import type {
   AskConversation,
   AskMessage,
   AskSharedConversation,
 } from "../types/ask";
+import { CONFIG_KEYS } from "../config/keys";
 import { config } from "../services/configService";
-import { nowIso } from "../utils/time";
 import type {
   DiscordChannel,
   DiscordGuild,
@@ -45,7 +48,10 @@ type MockStore = {
   askConversationsByKey: Map<string, AskConversation[]>;
   askMessagesByConversation: Map<string, AskMessage[]>;
   askSharesByGuild: Map<string, AskSharedConversation[]>;
+  feedbackByTarget: Map<string, FeedbackRecord[]>;
   userSpeechSettings: Map<string, UserSpeechSettings>;
+  configOverrides: Map<string, ConfigOverrideRecord>;
+  dictionaryEntriesByGuild: Map<string, DictionaryEntry[]>;
 };
 
 const MANAGE_GUILD = 1 << 5;
@@ -61,6 +67,11 @@ const mockUser: AuthedProfile = {
 } as AuthedProfile;
 
 function buildDefaultStore(): MockStore {
+  const fixedNowIso = process.env.MOCK_FIXED_NOW;
+  const fixedNowMs = fixedNowIso ? Date.parse(fixedNowIso) : Number.NaN;
+  const baseNowMs = Number.isFinite(fixedNowMs) ? fixedNowMs : Date.now();
+  const baseNowIso = new Date(baseNowMs).toISOString();
+  const mockNowIso = () => baseNowIso;
   const permissions = (BigInt(MANAGE_GUILD) | BigInt(ADMIN)).toString();
   const userGuilds: DiscordGuild[] = [
     {
@@ -133,7 +144,7 @@ function buildDefaultStore(): MockStore {
       enabled: true,
       recordAll: false,
       createdBy: mockUser.id,
-      createdAt: nowIso(),
+      createdAt: mockNowIso(),
       tags: ["campaign", "weekly"],
     },
   ]);
@@ -149,7 +160,7 @@ function buildDefaultStore(): MockStore {
     liveVoiceCommandsEnabled: false,
     askMembersEnabled: true,
     askSharingPolicy: "server",
-    updatedAt: nowIso(),
+    updatedAt: mockNowIso(),
     updatedBy: mockUser.id,
   });
 
@@ -160,7 +171,7 @@ function buildDefaultStore(): MockStore {
     context: "Tabletop voice channel for D&D sessions and campaign recaps.",
     liveVoiceEnabled: true,
     liveVoiceCommandsEnabled: false,
-    updatedAt: nowIso(),
+    updatedAt: mockNowIso(),
     updatedBy: mockUser.id,
   });
 
@@ -168,7 +179,7 @@ function buildDefaultStore(): MockStore {
   guildInstallers.set("1249723747896918109", {
     guildId: "1249723747896918109",
     installerId: mockUser.id,
-    installedAt: nowIso(),
+    installedAt: mockNowIso(),
   });
 
   const subscriptions = new Map<string, GuildSubscription>();
@@ -177,9 +188,9 @@ function buildDefaultStore(): MockStore {
     status: "active",
     tier: "basic",
     subscriptionType: "stripe",
-    startDate: nowIso(),
+    startDate: mockNowIso(),
     nextBillingDate: new Date(
-      Date.now() + 1000 * 60 * 60 * 24 * 25,
+      baseNowMs + 1000 * 60 * 60 * 24 * 25,
     ).toISOString(),
     stripeCustomerId: "cus_mock_basic",
     stripeSubscriptionId: "sub_mock_basic",
@@ -190,7 +201,7 @@ function buildDefaultStore(): MockStore {
     status: "free",
     tier: "free",
     subscriptionType: "free",
-    startDate: nowIso(),
+    startDate: mockNowIso(),
     mode: "test",
   });
 
@@ -198,6 +209,291 @@ function buildDefaultStore(): MockStore {
   const stripeWebhookEvents = new Map<string, StripeWebhookEvent>();
   const onboardingStates = new Map<string, OnboardingState>();
   const userSpeechSettings = new Map<string, UserSpeechSettings>();
+  const configOverrides = new Map<string, ConfigOverrideRecord>();
+  const dictionaryEntriesByGuild = new Map<string, DictionaryEntry[]>();
+  const feedbackByTarget = new Map<string, FeedbackRecord[]>();
+
+  const addOverride = (record: ConfigOverrideRecord) => {
+    configOverrides.set(`${record.scopeId}#${record.configKey}`, record);
+  };
+
+  const addServerOverride = (
+    guildId: string,
+    configKey: string,
+    value: unknown,
+    updatedAt: string,
+    updatedBy: string,
+  ) => {
+    addOverride({
+      scopeId: `server#${guildId}`,
+      configKey,
+      value,
+      updatedAt,
+      updatedBy,
+    });
+  };
+
+  const addChannelOverride = (
+    guildId: string,
+    channelId: string,
+    configKey: string,
+    value: unknown,
+    updatedAt: string,
+    updatedBy: string,
+  ) => {
+    addOverride({
+      scopeId: `channel#${guildId}#${channelId}`,
+      configKey,
+      value,
+      updatedAt,
+      updatedBy,
+    });
+  };
+
+  serverContexts.forEach((context) => {
+    const updatedAt = context.updatedAt;
+    const updatedBy = context.updatedBy;
+    addServerOverride(
+      context.guildId,
+      CONFIG_KEYS.context.instructions,
+      context.context,
+      updatedAt,
+      updatedBy,
+    );
+    if (context.defaultNotesChannelId) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.notes.channelId,
+        context.defaultNotesChannelId,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.defaultTags?.length) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.notes.tags,
+        context.defaultTags.join(", "),
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceEnabled !== undefined) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.liveVoice.enabled,
+        context.liveVoiceEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceCommandsEnabled !== undefined) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.liveVoice.commandsEnabled,
+        context.liveVoiceCommandsEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceTtsVoice) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.liveVoice.ttsVoice,
+        context.liveVoiceTtsVoice,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.chatTtsEnabled !== undefined) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.chatTts.enabled,
+        context.chatTtsEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.chatTtsVoice) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.chatTts.voice,
+        context.chatTtsVoice,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.askMembersEnabled !== undefined) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.ask.membersEnabled,
+        context.askMembersEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.askSharingPolicy) {
+      addServerOverride(
+        context.guildId,
+        CONFIG_KEYS.ask.sharingPolicy,
+        context.askSharingPolicy,
+        updatedAt,
+        updatedBy,
+      );
+    }
+  });
+
+  channelContexts.forEach((context) => {
+    const updatedAt = context.updatedAt;
+    const updatedBy = context.updatedBy;
+    if (context.context) {
+      addChannelOverride(
+        context.guildId,
+        context.channelId,
+        CONFIG_KEYS.context.instructions,
+        context.context,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceEnabled !== undefined) {
+      addChannelOverride(
+        context.guildId,
+        context.channelId,
+        CONFIG_KEYS.liveVoice.enabled,
+        context.liveVoiceEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.liveVoiceCommandsEnabled !== undefined) {
+      addChannelOverride(
+        context.guildId,
+        context.channelId,
+        CONFIG_KEYS.liveVoice.commandsEnabled,
+        context.liveVoiceCommandsEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+    if (context.chatTtsEnabled !== undefined) {
+      addChannelOverride(
+        context.guildId,
+        context.channelId,
+        CONFIG_KEYS.chatTts.enabled,
+        context.chatTtsEnabled,
+        updatedAt,
+        updatedBy,
+      );
+    }
+  });
+
+  autoRecordByGuild.forEach((rules, guildId) => {
+    rules.forEach((rule) => {
+      const updatedAt = rule.createdAt;
+      const updatedBy = rule.createdBy;
+      if (rule.recordAll || rule.channelId === "ALL") {
+        addServerOverride(
+          guildId,
+          CONFIG_KEYS.autorecord.enabled,
+          rule.enabled,
+          updatedAt,
+          updatedBy,
+        );
+        if (rule.enabled && rule.textChannelId) {
+          addServerOverride(
+            guildId,
+            CONFIG_KEYS.notes.channelId,
+            rule.textChannelId,
+            updatedAt,
+            updatedBy,
+          );
+        }
+        if (rule.enabled && rule.tags?.length) {
+          addServerOverride(
+            guildId,
+            CONFIG_KEYS.notes.tags,
+            rule.tags.join(", "),
+            updatedAt,
+            updatedBy,
+          );
+        }
+        return;
+      }
+      addChannelOverride(
+        guildId,
+        rule.channelId,
+        CONFIG_KEYS.autorecord.enabled,
+        rule.enabled,
+        updatedAt,
+        updatedBy,
+      );
+      if (rule.enabled && rule.textChannelId) {
+        addChannelOverride(
+          guildId,
+          rule.channelId,
+          CONFIG_KEYS.notes.channelId,
+          rule.textChannelId,
+          updatedAt,
+          updatedBy,
+        );
+      }
+      if (rule.enabled && rule.tags?.length) {
+        addChannelOverride(
+          guildId,
+          rule.channelId,
+          CONFIG_KEYS.notes.tags,
+          rule.tags.join(", "),
+          updatedAt,
+          updatedBy,
+        );
+      }
+    });
+  });
+
+  const ensureServerDefault = (
+    guildId: string,
+    key: string,
+    value: unknown,
+  ) => {
+    const scopeId = `server#${guildId}`;
+    const mapKey = `${scopeId}#${key}`;
+    if (configOverrides.has(mapKey)) return;
+    addServerOverride(guildId, key, value, mockNowIso(), mockUser.id);
+  };
+
+  userGuilds.forEach((guild) => {
+    ensureServerDefault(guild.id, CONFIG_KEYS.features.experimental, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.autorecord.enabled, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.liveVoice.enabled, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.liveVoice.commandsEnabled, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.chatTts.enabled, false);
+    ensureServerDefault(guild.id, CONFIG_KEYS.ask.membersEnabled, true);
+    ensureServerDefault(guild.id, CONFIG_KEYS.ask.sharingPolicy, "server");
+  });
+
+  dictionaryEntriesByGuild.set("1249723747896918109", [
+    {
+      guildId: "1249723747896918109",
+      termKey: "chronote",
+      term: "Chronote",
+      definition: "Meeting Notes Bot brand name.",
+      createdAt: mockNowIso(),
+      createdBy: mockUser.id,
+      updatedAt: mockNowIso(),
+      updatedBy: mockUser.id,
+    },
+    {
+      guildId: "1249723747896918109",
+      termKey: "dynamodb",
+      term: "DynamoDB",
+      definition: "AWS key value and document database.",
+      createdAt: mockNowIso(),
+      createdBy: mockUser.id,
+      updatedAt: mockNowIso(),
+      updatedBy: mockUser.id,
+    },
+  ]);
 
   const meetingHistoryByGuild = new Map<string, MeetingHistory[]>();
   const buildMeeting = (params: {
@@ -208,17 +504,24 @@ function buildDefaultStore(): MockStore {
     tags?: string[];
     textChannelId: string;
     meetingIdSuffix: string;
+    archived?: boolean;
   }): MeetingHistory => {
     const timestamp = new Date(
-      Date.now() - params.minutesAgo * 60 * 1000,
+      baseNowMs - params.minutesAgo * 60 * 1000,
     ).toISOString();
     const channelId_timestamp = `${params.channelId}#${timestamp}`;
     const transcriptKey = `mock/transcripts/${params.guildId}/${params.channelId}-${params.meetingIdSuffix}.json`;
+    const transcriptSpeakers = ["GM", "Rin", "Ada", "Chronote"];
     const transcriptLines = [
       { speaker: "GM", text: "The party returns to the vault entrance." },
       { speaker: "Rin", text: "We should secure allies before midnight." },
       { speaker: "Ada", text: "I want a favor in return." },
+      ...Array.from({ length: 36 }, (_, index) => ({
+        speaker: transcriptSpeakers[index % transcriptSpeakers.length],
+        text: `Extended transcript detail ${index + 1} for timeline overflow.`,
+      })),
     ];
+    const transcriptLineIntervalMs = 60 * 1000;
     const segments = transcriptLines.map((line, index) => ({
       userId: `mock-${line.speaker.toLowerCase()}`,
       username: line.speaker.toLowerCase(),
@@ -226,7 +529,7 @@ function buildDefaultStore(): MockStore {
       serverNickname: line.speaker,
       tag: line.speaker,
       startedAt: new Date(
-        Date.parse(timestamp) + index * 90 * 1000,
+        Date.parse(timestamp) + index * transcriptLineIntervalMs,
       ).toISOString(),
       text: line.text,
     }));
@@ -234,7 +537,7 @@ function buildDefaultStore(): MockStore {
       transcriptKey,
       JSON.stringify(
         {
-          generatedAt: nowIso(),
+          generatedAt: mockNowIso(),
           segments,
           text: transcriptLines
             .map((line) => `${line.speaker}: ${line.text}`)
@@ -275,8 +578,16 @@ function buildDefaultStore(): MockStore {
       notesChannelId: params.textChannelId,
       notesMessageIds: ["1451653357407174727"],
       transcriptS3Key: transcriptKey,
+      archivedAt: params.archived ? mockNowIso() : undefined,
+      archivedByUserId: params.archived ? mockUser.id : undefined,
     };
   };
+  const LONG_NOTES_LINE_COUNT = 40;
+  const LONG_NOTES_BLOCK = Array.from(
+    { length: LONG_NOTES_LINE_COUNT },
+    (_, index) =>
+      `Detail ${index + 1}: Follow-up notes from the meeting timeline.`,
+  ).join("\n");
   meetingHistoryByGuild.set("1249723747896918109", [
     buildMeeting({
       guildId: "1249723747896918109",
@@ -285,8 +596,16 @@ function buildDefaultStore(): MockStore {
       meetingIdSuffix: "ddm-1",
       textChannelId: "text-1",
       tags: ["campaign", "heist", "npc"],
-      notes:
-        "Meeting Summary (Banana / Indigo)\nDecision: revisit the vault after securing allies.\nAction: Rin posts the map + loot sheet in #campaign-info.\nNext time: Sunday 7pm (voice).\nHighlights + attendance included.",
+      notes: [
+        "Meeting Summary (Banana / Indigo)",
+        "Decision: revisit the vault after securing allies.",
+        "Action: Rin posts the map + loot sheet in #campaign-info.",
+        "Next time: Sunday 7pm (voice).",
+        "Highlights + attendance included.",
+        "",
+        "Extended notes:",
+        LONG_NOTES_BLOCK,
+      ].join("\n"),
     }),
     buildMeeting({
       guildId: "1249723747896918109",
@@ -305,6 +624,7 @@ function buildDefaultStore(): MockStore {
       meetingIdSuffix: "ddm-3",
       textChannelId: "text-2",
       tags: ["community", "staff"],
+      archived: true,
       notes:
         "Chapter 01 - Crossed Wires\nSummary: Staff aligned on moderation changes, event schedule, and follow-ups.",
     }),
@@ -322,14 +642,44 @@ function buildDefaultStore(): MockStore {
     }),
   ]);
 
+  const feedbackTimestamp = mockNowIso();
+  const firstMeeting = meetingHistoryByGuild.get("1249723747896918109")?.[0];
+  if (firstMeeting) {
+    const pk = `TARGET#meeting_summary#${firstMeeting.channelId_timestamp}`;
+    feedbackByTarget.set(pk, [
+      {
+        pk,
+        sk: `USER#${mockUser.id}`,
+        type: "feedback",
+        targetType: "meeting_summary",
+        targetId: firstMeeting.channelId_timestamp,
+        guildId: firstMeeting.guildId,
+        channelId: firstMeeting.channelId,
+        meetingId: firstMeeting.meetingId,
+        notesVersion: firstMeeting.notesVersion,
+        summarySentence: firstMeeting.summarySentence,
+        summaryLabel: firstMeeting.summaryLabel,
+        rating: "up",
+        comment: "Clear summary and next steps.",
+        source: "web",
+        createdAt: feedbackTimestamp,
+        updatedAt: feedbackTimestamp,
+        userId: mockUser.id,
+        userTag: `${mockUser.username}#${mockUser.discriminator}`,
+        displayName: mockUser.username,
+      },
+    ]);
+  }
+
   const askConversationsByKey = new Map<string, AskConversation[]>();
   const askMessagesByConversation = new Map<string, AskMessage[]>();
   const askSharesByGuild = new Map<string, AskSharedConversation[]>();
   const conversationId = "conv-mock-1";
   const conversationIdTwo = "conv-mock-2";
+  const conversationIdThree = "conv-mock-3";
   const conversationKey = `USER#${mockUser.id}#GUILD#1249723747896918109`;
-  const createdAt = nowIso();
-  const updatedAt = nowIso();
+  const createdAt = mockNowIso();
+  const updatedAt = mockNowIso();
   askConversationsByKey.set(conversationKey, [
     {
       id: conversationId,
@@ -350,6 +700,15 @@ function buildDefaultStore(): MockStore {
       sharedAt: updatedAt,
       sharedByUserId: mockUser.id,
       sharedByTag: `${mockUser.username}#${mockUser.discriminator}`,
+    },
+    {
+      id: conversationIdThree,
+      title: "Old combat recap",
+      summary: "Archived recap for a prior combat session.",
+      createdAt,
+      updatedAt,
+      archivedAt: updatedAt,
+      archivedByUserId: mockUser.id,
     },
   ]);
   askSharesByGuild.set("1249723747896918109", [
@@ -414,7 +773,7 @@ function buildDefaultStore(): MockStore {
     ]),
   ];
   const seededMessages: AskMessage[] = [];
-  const baseTime = Date.now() - seededPairs.length * 6 * 60 * 1000;
+  const baseTime = baseNowMs - seededPairs.length * 6 * 60 * 1000;
   seededPairs.forEach(([question, answer], index) => {
     const questionTime = new Date(
       baseTime + index * 6 * 60 * 1000,
@@ -476,7 +835,10 @@ function buildDefaultStore(): MockStore {
     askConversationsByKey,
     askMessagesByConversation,
     askSharesByGuild,
+    feedbackByTarget,
     userSpeechSettings,
+    configOverrides,
+    dictionaryEntriesByGuild,
   };
 }
 

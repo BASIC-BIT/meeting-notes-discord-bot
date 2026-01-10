@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20.19.2"
+          node-version: "22.12.0"
           cache: "yarn"
           cache-dependency-path: "yarn.lock"
 
@@ -40,7 +40,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20.19.2"
+          node-version: "22.12.0"
           cache: "yarn"
           cache-dependency-path: "yarn.lock"
 
@@ -64,6 +64,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Get Python version
+        id: py-version
+        run: |
+          python_version=$(python3 -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
+          echo "version=$python_version" >> $GITHUB_OUTPUT
+
+      - name: Cache pip (lizard)
+        id: pip-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ steps.py-version.outputs.version }}-lizard
+
       - name: Code stats (scc + lizard)
         run: |
           docker run --rm -v ${{ github.workspace }}:/pwd ghcr.io/boyter/scc:master \
@@ -83,7 +96,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20.19.2"
+          node-version: "22.12.0"
           cache: "yarn"
           cache-dependency-path: "yarn.lock"
 
@@ -98,6 +111,31 @@ jobs:
           LANGFUSE_PROMPT_LABEL: ${{ vars.LANGFUSE_PROMPT_LABEL }}
         run: yarn prompts:check
 
+  llm-connections-check:
+    name: LLM Connections Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.12.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run Langfuse LLM connection check
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASE_URL: ${{ vars.LANGFUSE_BASE_URL }}
+          LLM_CONNECTIONS_ENV: ${{ vars.LLM_CONNECTIONS_ENV }}
+        run: yarn llm-connections:check
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -108,7 +146,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20.19.2"
+          node-version: "22.12.0"
           cache: "yarn"
           cache-dependency-path: "yarn.lock"
 
@@ -133,6 +171,8 @@ jobs:
   e2e-tests:
     name: E2E Tests (Playwright)
     runs-on: ubuntu-latest
+    env:
+      FRONTEND_SITE_URL: http://127.0.0.1:5173
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -140,12 +180,25 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20.19.2"
+          node-version: "22.12.0"
           cache: "yarn"
           cache-dependency-path: "yarn.lock"
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: pw-version
+        run: |
+          pw_version=$(node -p 'require("@playwright/test/package.json").version')
+          echo "version=$pw_version" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw-version.outputs.version }}
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
@@ -155,7 +208,16 @@ jobs:
 
   deploybackend:
     name: Deploy Backend (Staging)
-    needs: [lint, test, code-stats, prompts-check, build, e2e-tests]
+    needs:
+      [
+        lint,
+        test,
+        code-stats,
+        prompts-check,
+        llm-connections-check,
+        build,
+        e2e-tests,
+      ]
     runs-on: ubuntu-latest
     environment: staging
     env:
@@ -163,6 +225,7 @@ jobs:
       ECS_SERVICE: ${{ vars.ECS_SERVICE }}
       ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
       ECS_LOG_GROUP: ${{ vars.ECS_LOG_GROUP }}
+      SECRETS_PREFIX: ${{ vars.SECRETS_PREFIX }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -174,6 +237,51 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: Preflight Secrets Manager values
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+
+          SECRETS_PREFIX="${SECRETS_PREFIX:-}"
+          if [ -z "$SECRETS_PREFIX" ] && [ -n "${ECS_TASK_FAMILY:-}" ]; then
+            SECRETS_PREFIX="${ECS_TASK_FAMILY%-bot-task}"
+          fi
+          if [ -z "$SECRETS_PREFIX" ]; then
+            echo "ERROR: SECRETS_PREFIX is not set and could not be derived."
+            exit 1
+          fi
+
+          SECRETS=(
+            "${SECRETS_PREFIX}/discord-bot-token"
+            "${SECRETS_PREFIX}/discord-client-secret"
+            "${SECRETS_PREFIX}/oauth-secret"
+            "${SECRETS_PREFIX}/openai-api-key"
+            "${SECRETS_PREFIX}/langfuse-public-key"
+            "${SECRETS_PREFIX}/langfuse-secret-key"
+            "${SECRETS_PREFIX}/stripe-secret-key"
+            "${SECRETS_PREFIX}/stripe-webhook-secret"
+          )
+
+          missing=()
+          for secret in "${SECRETS[@]}"; do
+            if ! versions=$(aws secretsmanager list-secret-version-ids --secret-id "$secret" --region "$AWS_REGION" 2>/dev/null); then
+              missing+=("$secret (missing)")
+              continue
+            fi
+            if ! echo "$versions" | jq -e '.Versions[]? | select(.VersionStages | index("AWSCURRENT"))' >/dev/null; then
+              missing+=("$secret (no AWSCURRENT value)")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "ERROR: Missing or unset Secrets Manager values:"
+            printf ' - %s\n' "${missing[@]}"
+            exit 1
+          fi
+
+          echo "Secrets Manager preflight passed."
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -184,14 +292,24 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker run --rm $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ls -la dist/index.js || {
+          set -euo pipefail
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "Image tag already exists, skipping build and push."
+            echo "image=$IMAGE" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          docker build -t "$IMAGE" .
+          docker run --rm "$IMAGE" ls -la dist/index.js || {
             echo "ERROR: dist/index.js not found in Docker image!"
             exit 1
           }
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
       - name: Get current task definition
         id: current-task-def
@@ -287,10 +405,20 @@ jobs:
             echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Failed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Failure time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+          fi
 
   deploy-frontend:
     name: Deploy Frontend (Staging)
-    needs: [lint, test, code-stats, prompts-check, build, e2e-tests]
+    needs:
+      [
+        lint,
+        test,
+        code-stats,
+        prompts-check,
+        llm-connections-check,
+        build,
+        e2e-tests,
+      ]
     runs-on: ubuntu-latest
     environment: staging
     env:
@@ -309,7 +437,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20.19.2"
+          node-version: "22.12.0"
           cache: "yarn"
           cache-dependency-path: "yarn.lock"
 

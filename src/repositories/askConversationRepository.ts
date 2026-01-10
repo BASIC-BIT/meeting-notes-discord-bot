@@ -35,6 +35,8 @@ const toConversation = (record: AskConversationRecord): AskConversation => ({
   sharedAt: record.sharedAt,
   sharedByUserId: record.sharedByUserId,
   sharedByTag: record.sharedByTag,
+  archivedAt: record.archivedAt,
+  archivedByUserId: record.archivedByUserId,
 });
 
 const toMessage = (record: AskMessageRecord): AskMessage => ({
@@ -43,6 +45,7 @@ const toMessage = (record: AskMessageRecord): AskMessage => ({
   text: record.text,
   createdAt: record.createdAt,
   sourceMeetingIds: record.sourceMeetingIds,
+  citations: record.citations,
 });
 
 const toSharedConversation = (
@@ -55,6 +58,7 @@ const toSharedConversation = (
   sharedAt: record.sharedAt,
   ownerUserId: record.ownerUserId,
   ownerTag: record.ownerTag,
+  archivedAt: record.archivedAt,
 });
 
 export type AskConversationRepository = {
@@ -136,6 +140,8 @@ const realRepository: AskConversationRepository = {
       sharedAt: conversation.sharedAt,
       sharedByUserId: conversation.sharedByUserId,
       sharedByTag: conversation.sharedByTag,
+      archivedAt: conversation.archivedAt,
+      archivedByUserId: conversation.archivedByUserId,
     };
     await writeAskConversation(record);
   },
@@ -150,6 +156,7 @@ const realRepository: AskConversationRepository = {
       text: message.text,
       createdAt: message.createdAt,
       sourceMeetingIds: message.sourceMeetingIds,
+      citations: message.citations,
     };
     await writeAskMessage(record);
   },

@@ -31,6 +31,12 @@ describe("ServerSelect page", () => {
     guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
     renderWithMantine(<ServerSelect />);
 
+    expect(
+      screen.getByText("Choose a server to continue."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Servers you manage")).toBeInTheDocument();
+    expect(screen.queryByText("View-only servers")).toBeNull();
+
     fireEvent.click(screen.getByTestId("server-open"));
 
     expect(guildState.setSelectedGuildId).toHaveBeenCalledWith("g1");
@@ -41,10 +47,13 @@ describe("ServerSelect page", () => {
     });
   });
 
-  test("navigates non-managers to Ask", () => {
+  test("navigates view-only servers to shared threads route", () => {
     guildState.loading = false;
     guildState.guilds = [{ id: "g2", name: "Guild Two", canManage: false }];
     renderWithMantine(<ServerSelect />);
+
+    expect(screen.getByText("View-only servers")).toBeInTheDocument();
+    expect(screen.queryByText("Servers you manage")).toBeNull();
 
     fireEvent.click(screen.getByTestId("server-open"));
 
@@ -52,5 +61,17 @@ describe("ServerSelect page", () => {
       to: "/portal/server/$serverId/ask",
       params: { serverId: "g2" },
     });
+  });
+
+  test("shows both sections when mixed access", () => {
+    guildState.loading = false;
+    guildState.guilds = [
+      { id: "g1", name: "Guild One", canManage: true },
+      { id: "g2", name: "Guild Two", canManage: false },
+    ];
+    renderWithMantine(<ServerSelect />);
+
+    expect(screen.getByText("Servers you manage")).toBeInTheDocument();
+    expect(screen.getByText("View-only servers")).toBeInTheDocument();
   });
 });

@@ -3,15 +3,15 @@
 ## What this project is
 
 - Discord bot that records voice meetings, transcribes them with OpenAI (gpt-4o-transcribe), generates notes with GPT-5.1, and posts results back to Discord.
-- Supports auto-recording, meeting history in DynamoDB, context injection (server/channel/meeting), and a user-driven notes correction flow using LLMs.
+- Supports auto-recording, meeting history in DynamoDB, context injection (server/channel/meeting), dictionary terms for prompt context, and a user-driven notes correction flow using LLMs.
 
 ## Tech stack
 
-- Runtime: Node.js 20, TypeScript.
+- Runtime: Node.js 22, TypeScript.
 - Discord: discord.js v14, discord-api-types, @discordjs/voice for audio capture, @discordjs/opus, prism-media.
 - AI: openai SDK; gpt-4o-transcribe for transcription; gpt-5.1 for cleanup/notes/corrections; gpt-5-mini for live gate; DALL-E 3 for images.
 - Observability and prompt management: Langfuse for tracing, prompt versioning, and prompt sync scripts.
-- Storage: AWS DynamoDB (tables: GuildSubscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, MeetingHistory, SessionTable), S3 for transcripts/audio.
+- Storage: AWS DynamoDB (tables: GuildSubscription, PaymentTransaction, AccessLogs, RecordingTranscript, AutoRecordSettings, ServerContext, ChannelContext, DictionaryTable, MeetingHistory, SessionTable), S3 for transcripts/audio.
 - Infra: Terraform -> AWS ECS Fargate, ECR, CloudWatch logs; static frontend on S3 + CloudFront with OAC; local Dynamo via docker-compose.
 - IaC scanning: Checkov runs in `.github/workflows/ci.yml` on PRs and main pushes. Local: `npm run checkov` (uses `uvx --from checkov checkov`; install uv first: https://docs.astral.sh/uv/).
 - Known/suppressed infra choices:
@@ -25,7 +25,7 @@
 
 - Entry: `index.ts` -> `setupBot()` and `setupWebServer()`.
 - Bot interactions: `src/bot.ts`
-  - Slash commands: `/startmeeting`, `/autorecord`, `/context`.
+  - Slash commands: `/startmeeting`, `/autorecord`, `/context`, `/dictionary`.
   - Buttons: end meeting, generate image, suggest correction.
   - Auto-record on voice join if configured.
 - Web server: `webserver.ts` (health check; optional Discord OAuth scaffolding). API routes are modularized under `src/api/` (billing, guilds) and share services with bot commands (ask/context/autorecord/billing).
@@ -36,6 +36,8 @@
 - Transcription & notes: `transcription.ts`
   - Builds context from server/channel/meeting and recent history (`services/contextService.ts`).
   - GPT prompts tuned for cleanup, notes, and optional image generation.
+- Dictionary management: `commands/dictionary.ts`, `services/dictionaryService.ts`
+  - Terms are injected into transcription and context prompts, definitions are used outside transcription to reduce prompt bloat.
 - Notes correction flow: `commands/notesCorrections.ts`
   - “Suggest correction” button → modal (single textarea).
   - Fetches saved notes + transcript from DB, calls GPT-4o with a “minimal edits, do not copy transcript” prompt, shows a compact line diff, requires approval (meeting creator or ManageChannels if auto-record), updates embed + MeetingHistory and bumps version/last editor.
@@ -59,17 +61,23 @@
 ## Data model highlights (see `src/types/db.ts`)
 
 - MeetingHistory: guildId, channelId_timestamp, meetingId, notes, `transcriptS3Key`, context, attendees, duration, transcribe/generate flags, notesMessageId/channelId, notesVersion, notesLastEditedBy/At, meetingCreatorId, isAutoRecording, `suggestionsHistory`, `notesHistory`.
+- DictionaryEntry: guildId, termKey, term, definition, created/updated metadata.
 - ServerContext / ChannelContext store prompt context.
 - AutoRecordSettings enable record-all or per-channel auto-start.
 
 ## Frontend
 
 - Vite + React 19 lives in `src/frontend/`; production build is static assets in `build/frontend/` served via S3/CloudFront (see deploy workflow). Use `yarn frontend:dev` for local HMR.
+- Storybook lives in `.storybook/` for component development. Start it with `yarn storybook` (port 6006 by default).
+- To capture component screenshots, run `yarn test-storybook` while Storybook is running. Screenshots are written to `test/storybook/screenshots`.
+- When making UI changes, use the VLM to review the Storybook screenshots so you can verify the component changes without scanning the full page.
+- When making UI changes, review Playwright visual snapshots in `test/e2e/visual.spec.ts-snapshots` with the VLM to understand existing UI flows. It is OK to update snapshots with `yarn test:visual:update` or use the Playwright MCP during UI work.
 
 ## Infra (Terraform)
 
 - Variables (tfvars.example): Discord IDs/tokens, OpenAI keys, OAuth secrets, ENABLE_OAUTH (false by default in example), AWS/GitHub tokens.
 - ECS task environment passes all relevant vars from Terraform; OpenAI org/project optional; OAuth vars included but can be blank if disabled.
+- Future work suggestion: keep cache and Redis Terraform resources in `_infra/cache.tf`, and add new cache infrastructure there.
 
 ## Known nuances / gotchas
 
@@ -81,9 +89,21 @@
 - Prompt fragments live in `prompts/_fragments` and are composed via `extends` in front matter. `prompts:pull` skips prompts that use `extends` unless `--force` is passed.
 - **Current outbound network rules (ECS service SG)**: temporarily allowing all egress (UDP/TCP any port) for Discord voice debugging. Previously it was limited to TCP 443 and DNS (53) only. Remember to tighten this once voice is stable and update this note.
 - Avoid `in`/`instanceof`/`typeof` hedging for core platform APIs; we target a known Node/SDK set. Prefer simple, direct calls with minimal branching.
+- Config UX: treat overrides as implicit (setting a value creates an override), show a clear inherited vs overridden indicator, keep a reset-to-default action, and avoid disabling inputs just to signal default values.
+- Config taxonomy: avoid hardcoded group names in UI, derive them from the registry or make them required, and keep advanced and experimental settings collapsed by default to reduce noise.
+- Config typing: avoid freeform strings for fixed option sets (for example TTS voice), use enumerated options and shared constants, and avoid hardcoded config key strings in consumers by relying on shared key constants or typed accessors.
+- Config access: prefer shared helpers that resolve and transform config values (trim strings, validate enums, etc.) instead of inline snapshot parsing. When you add a helper to replace boilerplate, update existing consumers proactively, keep it KISS, and avoid hedging.
+- Portal base URLs are always configured. Do not add fallback behavior for missing `FRONTEND_SITE_URL` or relative portal links; treat missing config as an error.
+- Avoid hedging and speculative fallbacks. Follow YAGNI and KISS, do not add code for hypothetical cases unless explicitly required.
+- Config constraints: when numeric settings depend on caps, use minKey/maxKey to reference other config entries, clamp inputs in the UI, and enforce bounds in API validation.
+- Playwright mock mode: ensure only the mock API (port 3001) and frontend dev server (port 5173) are running. If ports are occupied, stop them first (`Get-NetTCPConnection -LocalPort 3001,5173 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ }`). Clear `VITE_API_BASE_URL` (for example via `.env.local`) so the frontend uses the mock server.
 - Comment hygiene: don’t leave transient or change-log style comments (e.g., “SDK v3 exposes transformToString”). Use comments only to clarify non-obvious logic, constraints, or intent.
 - Writing style: do not use em dashes in copy/docs/comments; prefer commas, parentheses, or hyphens.
 - README should stay high signal for users, avoid listing research outcomes like query parameter details. Put rationale or research notes in planning documentation files instead.
+- Backwards compatibility: ask the user whether changes need to preserve compatibility for URLs, API contracts, stored data, or behavior. If unsure, ask before implementing and favor simplicity for early-stage tradeoffs.
+- Backwards compatibility update (January 6, 2026): prioritize DynamoDB data compatibility; URLs and UI flows can change without preserving prior behavior.
+- Workflow sync: when changing GitHub Actions env or steps, review `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, and `.github/workflows/deploy-staging.yml` to keep them aligned.
+- ADRs: use the existing ADR format (see `docs/adr-20260106-voice-receiver-resubscribe.md`). New ADRs must live in `docs/` with filename `adr-YYYYMMDD-<slug>.md` and include Status, Date, Owners, Context, Decision, Consequences, Alternatives Considered, and Notes. Keep ADRs short and factual. Update or add ADRs when a design decision changes behavior or data contracts.
 - “Remember that …” shorthand: when the user says “remember that <rule>”, add it to AGENTS.md under the relevant section as a standing rule.
 - Do not suppress runtime warnings by monkey-patching globals (e.g., overriding console.error). Fix the underlying issue or accept the warning; never silence it via code hacks.
 - Stripe webhook parsing: keep a single `express.raw({ type: "application/json" })` at app-level in `webserver.ts`; do not add per-route raw parsers elsewhere.
@@ -107,8 +127,10 @@
 ## Checks
 
 - Local full gate: `yarn run check` (lint --fix, prettier --write, then in parallel test, build:all, code:stats, prompts:check).
-- CI-parity local gate: `yarn run check:ci` (lint:check, prettier:check, test, build:all, test:e2e, checkov, code:stats, prompts:check). Avoid `yarn check` (built-in Yarn integrity command).
+- CI-parity local gate: `yarn run check:ci` (lint:check, prettier:check, test, build:all, test:e2e, checkov, code:stats, prompts:check, docker:build). Avoid `yarn check` (built-in Yarn integrity command).
 - CI runs the same set as `check:ci` (see `.github/workflows/ci.yml`).
+- When running checks locally, avoid docker builds unless explicitly requested.
+- Visual regression baselines: update with `yarn test:visual:update`.
 
 Why each check exists:
 
@@ -130,3 +152,115 @@ Coverage guidance:
 ## Non-idiomatic typing
 
 If you find yourself using keywords like `tyepof`, `as`, etc. you should then pause and think about how you can improve that code. This might involve a web search to go search online for the idiomatic way of using the library/framework/etc. Look for a way that leverages typescript best practices, such as type narrowing, to write clean maintainable code
+
+## Online Research
+
+Use your web search tool and/or the Context7 MCP tools to pare down uncertainty of developing or debugging work, Especially anything relating to an external library.
+
+For context 7 library IDs you should save off the resolved library ID of packages that we use as you find them as you look them up as necessary during work.
+
+Known Context7 IDs:
+
+- React (react.dev): /reactjs/react.dev
+- Discord.js 14.25.1 docs: /websites/discord_js_packages_discord_js_14_25_1
+- OpenAI Node SDK: /openai/openai-node
+- Express: /expressjs/express
+- AWS SDK for JavaScript v3: /aws/aws-sdk-js-v3
+- TanStack Query v5 (React Query): /websites/tanstack_query_v5
+- tRPC: /trpc/trpc
+- TanStack Router: /tanstack/router
+- Zod v4 docs: /websites/zod_dev_v4
+- Zustand: /pmndrs/zustand
+- Mantine: /mantinedev/mantine
+- Playwright: /microsoft/playwright.dev
+- Langfuse JS/TS SDKs: /langfuse/langfuse-js
+- Stripe Node SDK: /stripe/stripe-node
+- Vite: /vitejs/vite
+
+# Testing Strategy
+
+Look for an appropriate spread of testing across our various different layers to determine the appropriate layer to add any new or modified features to. There are going to be lots of cases, especially in the back-end right now, where we don't have an appropriate level of unit testing and end-to-end integration testing, Playwright snapshot tests, etc., That we should consider adding if we don't already have for any given change. Really any file we modify, we should be able to back it up with some sort of automated testing. Keep in mind that when I make that consideration, I am also thinking about coverage. I'm thinking about making sure builds pass, making sure that a lot of our checks are in place to make sure that the code will truly work in practice, you know running the Docker build, running the TypeScript build, as well as complexity checks. We currently have a lot of ignoring in our complexity checks which we define for SCC and Lizard. We should strive if we make a change in a place that has complexity ignored, or has low coverage of tests that we should go in as part of that work to consider how we can at a minimum not make the problem worse but hopefully also rectify the deficiency while still primarily focusing on the goal at hand.
+
+## Clean Code Guidelines
+
+### Constants Over Magic Numbers
+
+- Replace hard-coded values with named constants
+- Use descriptive constant names that explain the value's purpose
+- Keep constants at the top of the file or in a dedicated constants file
+
+### Meaningful Names
+
+- Variables, functions, and classes should reveal their purpose
+- Names should explain why something exists and how it's used
+- Avoid abbreviations unless they're universally understood
+
+### Smart Comments
+
+- Don't comment on what the code does - make the code self-documenting
+- Use comments to explain why something is done a certain way
+- Document APIs, complex algorithms, and non-obvious side effects
+
+### Single Responsibility
+
+- Each function should do exactly one thing
+- Functions should be small and focused
+- If a function needs a comment to explain what it does, it should be split
+
+### DRY (Don't Repeat Yourself)
+
+- Extract repeated code into reusable functions
+- Share common logic through proper abstraction
+- Maintain single sources of truth
+
+### Clean Structure
+
+- Keep related code together
+- Organize code in a logical hierarchy
+- Use consistent file and folder naming conventions
+
+### Encapsulation
+
+- Hide implementation details
+- Expose clear interfaces
+- Move nested conditionals into well-named functions
+
+### Code Quality Maintenance
+
+- Refactor continuously
+- Fix technical debt early
+- Leave code cleaner than you found it
+
+### Testing
+
+- Write tests before fixing bugs
+- Keep tests readable and maintainable
+- Test edge cases and error conditions
+
+### Version Control
+
+- Write clear commit messages
+- Make small, focused commits
+- Use meaningful branch names
+
+## Code Quality Guidelines
+
+### Prefer Existing Solutions
+
+- Avoid reinventing common solutions for parsing, formatting, routing, auth, or data handling. Do quick research for a well supported library or platform feature first.
+- If an AI output behavior needs to change, prefer prompt guidance or model constraints before adding post-processing logic.
+- Introduce custom logic only when there is a clear gap, document the reason, and keep it small and configurable.
+
+### LLM Output and Text Parsing
+
+- Prefer prompt changes, response format constraints, or model guidance over new parsing heuristics in code.
+- Avoid custom NLP rules such as hard-coded abbreviation lists. If parsing is required, research and use a well supported library or standards based approach.
+- If custom parsing is unavoidable, keep it minimal, configurable, and documented with tests that cover known edge cases.
+
+### Verify Information
+
+Always verify information before presenting it. Do not make assumptions or speculate without clear evidence.
+
+### No Apologies
+
+Never use apologies.

@@ -77,6 +77,32 @@ export interface NotesHistoryEntry {
   editedAt: string; // ISO timestamp
 }
 
+export type FeedbackRating = "up" | "down";
+export type FeedbackTargetType = "meeting_summary";
+export type FeedbackSource = "discord" | "web";
+
+export interface FeedbackRecord {
+  pk: string; // TARGET#<targetType>#<targetId>
+  sk: string; // USER#<userId>
+  type: "feedback";
+  targetType: FeedbackTargetType;
+  targetId: string;
+  guildId: string;
+  channelId?: string;
+  meetingId?: string;
+  notesVersion?: number;
+  summarySentence?: string;
+  summaryLabel?: string;
+  rating: FeedbackRating;
+  comment?: string;
+  source: FeedbackSource;
+  createdAt: string; // ISO timestamp
+  updatedAt: string; // ISO timestamp
+  userId: string;
+  userTag?: string;
+  displayName?: string;
+}
+
 // Auto Record Settings Type
 export interface AutoRecordSettings {
   guildId: string; // Partition key
@@ -127,6 +153,25 @@ export interface UserSpeechSettings {
   updatedBy: string; // User ID who last updated
 }
 
+export interface DictionaryEntry {
+  guildId: string; // Partition key
+  termKey: string; // Sort key, normalized term
+  term: string; // Display term
+  definition?: string;
+  createdAt: string; // ISO timestamp
+  createdBy: string; // User ID who created
+  updatedAt: string; // ISO timestamp
+  updatedBy: string; // User ID who last updated
+}
+
+export interface ConfigOverrideRecord {
+  scopeId: string; // Partition key, formatted as scope#id
+  configKey: string; // Sort key
+  value: unknown;
+  updatedAt: string; // ISO timestamp
+  updatedBy: string; // User ID who last updated
+}
+
 export interface GuildInstaller {
   guildId: string; // Partition key
   installerId: string;
@@ -162,6 +207,7 @@ export interface MeetingHistory {
   timestamp: string; // ISO timestamp (denormalized)
   tags?: string[]; // Freeform tags for filtering / search
   notes?: string; // AI-generated notes (comprehensive, includes everything)
+  meetingName?: string; // User-facing meeting name (editable)
   summarySentence?: string; // One-sentence summary for UI
   summaryLabel?: string; // Short label (5 words or fewer)
   context?: string; // Meeting-specific context if provided
@@ -179,12 +225,15 @@ export interface MeetingHistory {
   endReason?: MeetingEndReason;
   endTriggeredByUserId?: string;
   cancellationReason?: string;
+  summaryMessageId?: string; // Message id for the summary embed
   notesMessageIds?: string[]; // All message ids when notes span multiple messages
   notesChannelId?: string; // Channel id where notes were posted
   notesVersion?: number; // Incremented on corrections
   updatedAt?: string; // Last time notes were edited
   notesLastEditedBy?: string; // User ID who last edited notes
   notesLastEditedAt?: string; // Timestamp of last notes edit
+  archivedAt?: string; // Timestamp when archived
+  archivedByUserId?: string; // User ID who archived
   transcript?: string; // Deprecated: transcript now stored in S3 JSON; kept only for legacy records
   transcriptS3Key?: string; // S3 object key where transcript JSON is stored
   suggestionsHistory?: SuggestionHistoryEntry[]; // Chronological list of suggestions applied
@@ -208,6 +257,8 @@ export interface AskConversationRecord {
   sharedAt?: string;
   sharedByUserId?: string;
   sharedByTag?: string;
+  archivedAt?: string;
+  archivedByUserId?: string;
 }
 
 export interface AskMessageRecord {
@@ -220,6 +271,13 @@ export interface AskMessageRecord {
   text: string;
   createdAt: string;
   sourceMeetingIds?: string[];
+  citations?: AskCitationRecord[];
+}
+
+export interface AskCitationRecord {
+  index: number;
+  meetingId: string;
+  eventId?: string;
 }
 
 export interface AskConversationShareRecord {
@@ -237,4 +295,6 @@ export interface AskConversationShareRecord {
   sharedAt: string;
   sharedByUserId: string;
   sharedByTag?: string;
+  archivedAt?: string;
+  archivedByUserId?: string;
 }

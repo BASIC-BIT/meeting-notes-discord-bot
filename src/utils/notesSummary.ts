@@ -5,13 +5,9 @@
 export function formatNotesWithSummary(
   notes: string,
   summarySentence?: string,
-  summaryLabel?: string,
 ): string {
   const trimmedNotes = notes.trim();
   const lines: string[] = [];
-  if (summaryLabel) {
-    lines.push(`Label: ${summaryLabel}`);
-  }
   if (summarySentence) {
     lines.push(`Summary: ${summarySentence}`);
   }

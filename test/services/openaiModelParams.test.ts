@@ -1,0 +1,59 @@
+import { expect, test } from "@jest/globals";
+import { resolveChatParamsForRole } from "../../src/services/openaiModelParams";
+
+const baseConfig = {
+  samplingMode: "temperature" as const,
+  reasoningEffort: "low" as const,
+  temperature: 0,
+  verbosity: "default" as const,
+};
+
+test("drops temperature for gpt-5-mini and falls back to reasoning", () => {
+  const params = resolveChatParamsForRole({
+    role: "notes",
+    model: "gpt-5-mini",
+    config: baseConfig,
+  });
+
+  expect(params.temperature).toBeUndefined();
+  expect(params.reasoning_effort).toBe("low");
+});
+
+test("uses temperature with reasoning none for gpt-5.2", () => {
+  const params = resolveChatParamsForRole({
+    role: "notes",
+    model: "gpt-5.2",
+    config: { ...baseConfig, temperature: 0.2 },
+  });
+
+  expect(params.temperature).toBe(0.2);
+  expect(params.reasoning_effort).toBe("none");
+});
+
+test("clamps reasoning effort for gpt-5.2-pro", () => {
+  const params = resolveChatParamsForRole({
+    role: "liveVoiceGate",
+    model: "gpt-5.2-pro",
+    config: { ...baseConfig, samplingMode: "reasoning" },
+  });
+
+  expect(params.reasoning_effort).toBe("medium");
+  expect(params.temperature).toBeUndefined();
+});
+
+test("falls back to temperature for non GPT-5 models", () => {
+  const params = resolveChatParamsForRole({
+    role: "liveVoiceGate",
+    model: "gpt-4o-mini",
+    config: {
+      samplingMode: "reasoning",
+      reasoningEffort: "high",
+      temperature: 0.3,
+      verbosity: "high",
+    },
+  });
+
+  expect(params.temperature).toBe(0.3);
+  expect(params.reasoning_effort).toBeUndefined();
+  expect(params.verbosity).toBeUndefined();
+});
