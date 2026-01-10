@@ -2,30 +2,10 @@ import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
 import { MEETING_STATUS } from "../types/meetingLifecycle";
 import { writeMeetingHistoryService } from "../services/meetingHistoryService";
-import { getNotes } from "../transcription";
-import { generateMeetingSummaries } from "../services/meetingSummaryService";
-
-async function resolveMeetingNotes(
-  meeting: MeetingData,
-): Promise<string | undefined> {
-  if (!meeting.generateNotes) return meeting.notesText;
-  if (meeting.notesText) return meeting.notesText;
-  if (!meeting.finalTranscript) {
-    console.warn(
-      "Skipping notes generation for meeting history because final transcript is missing.",
-    );
-    return meeting.notesText;
-  }
-
-  try {
-    const notes = await getNotes(meeting);
-    meeting.notesText = notes;
-    return notes;
-  } catch (error) {
-    console.error("Error generating notes for meeting history:", error);
-    return meeting.notesText;
-  }
-}
+import {
+  ensureMeetingNotes,
+  ensureMeetingSummaries,
+} from "../services/meetingNotesService";
 
 function buildNotesMetadata(
   meeting: MeetingData,
@@ -104,32 +84,6 @@ function buildNotesHistory(options: {
   ];
 }
 
-async function resolveMeetingSummaries(
-  meeting: MeetingData,
-  notes: string | undefined,
-): Promise<{ summarySentence?: string; summaryLabel?: string }> {
-  if (meeting.summarySentence || meeting.summaryLabel) {
-    return {
-      summarySentence: meeting.summarySentence,
-      summaryLabel: meeting.summaryLabel,
-    };
-  }
-  if (!notes || !notes.trim()) {
-    return {};
-  }
-  const summaries = await generateMeetingSummaries({
-    notes,
-    serverName: meeting.guild.name,
-    channelName: meeting.voiceChannel.name,
-    tags: meeting.tags,
-    now: new Date(),
-    parentSpanContext: meeting.langfuseParentSpanContext,
-  });
-  meeting.summarySentence = summaries.summarySentence;
-  meeting.summaryLabel = summaries.summaryLabel;
-  return summaries;
-}
-
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   if (!meeting.transcribeMeeting) {
     return;
@@ -165,6 +119,8 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
         endReason: meeting.endReason,
         endTriggeredByUserId: meeting.endTriggeredByUserId,
         cancellationReason: meeting.cancellationReason,
+        summaryMessageId:
+          meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
         notesMessageIds: meeting.notesMessageIds,
         notesChannelId: meeting.notesChannelId,
         transcriptS3Key: meeting.transcriptS3Key,
@@ -178,8 +134,8 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       return;
     }
 
-    const notes = await resolveMeetingNotes(meeting);
-    const summaries = await resolveMeetingSummaries(meeting, notes);
+    const notes = await ensureMeetingNotes(meeting);
+    const summaries = await ensureMeetingSummaries(meeting, notes);
     const transcriptS3Key = meeting.transcriptS3Key;
     const { notesVersion, notesLastEditedBy, notesLastEditedAt, notesHistory } =
       buildNotesMetadata(meeting, notes, timestamp);
@@ -192,6 +148,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       timestamp,
       tags: meeting.tags,
       notes,
+      meetingName: meeting.meetingName,
       summarySentence: summaries.summarySentence,
       summaryLabel: summaries.summaryLabel,
       context: meeting.meetingContext,
@@ -208,6 +165,8 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       endReason: meeting.endReason,
       endTriggeredByUserId: meeting.endTriggeredByUserId,
       cancellationReason: meeting.cancellationReason,
+      summaryMessageId:
+        meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
       notesMessageIds: meeting.notesMessageIds,
       notesChannelId: meeting.notesChannelId,
       notesVersion,

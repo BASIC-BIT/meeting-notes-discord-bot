@@ -4,10 +4,12 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderWithMantine, resetFrontendMocks } from "./testUtils";
 import { guildState } from "./testUtils";
 import {
+  feedbackSubmitSummaryMutation,
   setMeetingsDetailQuery,
   setMeetingsListQuery,
   setServersChannelsQuery,
 } from "./mocks/trpc";
+import PortalServerLayout from "../../src/frontend/layouts/PortalServerLayout";
 import Library from "../../src/frontend/pages/Library";
 
 describe("Library page", () => {
@@ -29,7 +31,13 @@ describe("Library page", () => {
       isLoading: false,
       error: null,
     });
-    renderWithMantine(<Library />);
+    renderWithMantine(
+      <>
+        <PortalServerLayout />
+        <Library />
+      </>,
+    );
+    expect(screen.getByTestId("library-refresh-top")).toBeInTheDocument();
     expect(
       screen.getByText(/No meetings match these filters yet/i),
     ).toBeInTheDocument();
@@ -75,15 +83,97 @@ describe("Library page", () => {
         },
       },
     });
-    renderWithMantine(<Library />);
+    renderWithMantine(
+      <>
+        <PortalServerLayout />
+        <Library />
+      </>,
+    );
 
     fireEvent.click(screen.getByTestId("library-meeting-row"));
 
     await waitFor(() => {
       expect(screen.getByText(/Audio isn/i)).toBeInTheDocument();
     });
+    expect(screen.getByText(/Full transcript/i)).toBeInTheDocument();
+    expect(screen.getByText(/Was this summary helpful/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Mark summary helpful/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/Timeline data will appear after the meeting finishes/i),
+      screen.getByLabelText(/Mark summary needs work/i),
     ).toBeInTheDocument();
+  });
+
+  test("submits summary feedback from the meeting drawer", async () => {
+    const meetingTimestamp = "2025-12-20T12:00:00.000Z";
+    setMeetingsListQuery({
+      data: {
+        meetings: [
+          {
+            id: "row-1",
+            meetingId: "m1",
+            channelId: "c1",
+            channelName: "General",
+            timestamp: meetingTimestamp,
+            duration: 3600,
+            tags: ["alpha"],
+            notes: "Summary: Weekly sync",
+            summarySentence: "Weekly sync summary",
+            summaryLabel: "Highlights",
+            audioAvailable: false,
+            transcriptAvailable: true,
+          },
+        ],
+      },
+    });
+    setMeetingsDetailQuery({
+      data: {
+        meeting: {
+          id: "detail-1",
+          meetingId: "m1",
+          channelId: "c1",
+          timestamp: meetingTimestamp,
+          duration: 3600,
+          tags: ["alpha"],
+          notes: "Summary: Weekly sync",
+          summarySentence: null,
+          summaryLabel: null,
+          audioUrl: null,
+          attendees: [],
+          events: [],
+        },
+      },
+    });
+    renderWithMantine(
+      <>
+        <PortalServerLayout />
+        <Library />
+      </>,
+    );
+
+    fireEvent.click(screen.getByTestId("library-meeting-row"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Audio isn/i)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(/Mark summary needs work/i));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Summary feedback/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/What could be better/i), {
+      target: { value: "Add a few more decision details." },
+    });
+    fireEvent.click(screen.getByText(/Send feedback/i));
+
+    await waitFor(() => {
+      expect(feedbackSubmitSummaryMutation.mutateAsync).toHaveBeenCalledWith({
+        serverId: "g1",
+        meetingId: "detail-1",
+        rating: "down",
+        comment: "Add a few more decision details.",
+      });
+    });
   });
 });

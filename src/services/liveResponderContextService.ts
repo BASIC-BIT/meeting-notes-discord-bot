@@ -102,10 +102,10 @@ export async function buildLiveResponderContext(
       m.summarySentence?.trim() ||
       truncate((m.notes || "").trim(), config.liveVoice.pastMeetingsMaxChars) ||
       "(no notes)";
-    const label = m.summaryLabel?.trim();
+    const name = m.meetingName?.trim() || m.summaryLabel?.trim();
     const tagLine = tagText ? `  ${tagText}\n` : "";
-    const labelLine = label ? `  Label: ${label}\n` : "";
-    return `- Meeting ${date}\n${tagLine}${labelLine}  Summary: ${summary}`;
+    const nameLine = name ? `  Name: ${name}\n` : "";
+    return `- Meeting ${date}\n${tagLine}${nameLine}  Summary: ${summary}`;
   });
 
   const windowBlock =

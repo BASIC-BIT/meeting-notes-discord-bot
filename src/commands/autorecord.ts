@@ -12,7 +12,8 @@ import {
   removeAutoRecordSetting,
   saveAutoRecordSetting,
 } from "../services/autorecordService";
-import { fetchServerContext } from "../services/appContextService";
+import { CONFIG_KEYS } from "../config/keys";
+import { resolveConfigString } from "../services/unifiedConfigService";
 import { parseTags } from "../utils/tags";
 
 export async function handleAutoRecordCommand(
@@ -368,8 +369,11 @@ async function handleEnableAllAutoRecord(
 async function handleListAutoRecord(interaction: ChatInputCommandInteraction) {
   try {
     const settings = await listAutoRecordSettings(interaction.guild!.id);
-    const serverContext = await fetchServerContext(interaction.guild!.id);
-    const defaultNotesChannelId = serverContext?.defaultNotesChannelId;
+    const defaultNotesChannelId = await resolveConfigString(
+      { guildId: interaction.guild!.id },
+      CONFIG_KEYS.notes.channelId,
+      { trim: true, logLabel: "Failed to resolve server config defaults" },
+    );
 
     if (settings.length === 0) {
       await interaction.reply({

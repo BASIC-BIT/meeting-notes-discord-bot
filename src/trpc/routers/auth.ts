@@ -1,4 +1,5 @@
 import { publicProcedure, router } from "../trpc";
+import { isSuperAdmin } from "../../services/adminAccessService";
 
 export const authRouter = router({
   me: publicProcedure.query(({ ctx }) => {
@@ -7,6 +8,7 @@ export const authRouter = router({
       id: ctx.user.id,
       username: ctx.user.username,
       avatar: ctx.user.avatar,
+      isSuperAdmin: isSuperAdmin(ctx.user.id),
     };
   }),
 });

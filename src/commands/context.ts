@@ -5,10 +5,11 @@ import {
   ChannelType,
 } from "discord.js";
 import {
-  clearServerContextService,
-  fetchServerContext,
-  setServerContext,
-} from "../services/appContextService";
+  clearConfigOverrideForScope,
+  getConfigOverrideForScope,
+  setConfigOverrideForScope,
+} from "../services/configOverridesService";
+import { CONFIG_KEYS } from "../config/keys";
 import {
   clearChannelContext,
   fetchChannelContext,
@@ -74,8 +75,17 @@ async function handleSetServerContext(
   interaction: ChatInputCommandInteraction,
 ) {
   const contextText = interaction.options.getString("context", true);
+  const trimmedContext = contextText.trim();
 
-  if (contextText.length > 2000) {
+  if (trimmedContext.length === 0) {
+    await interaction.reply({
+      content: "Context cannot be empty.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (trimmedContext.length > 2000) {
     await interaction.reply({
       content: "Context must be 2000 characters or less.",
       ephemeral: true,
@@ -84,15 +94,18 @@ async function handleSetServerContext(
   }
 
   try {
-    await setServerContext(interaction.guild!.id, interaction.user.id, {
-      context: contextText,
-    });
+    await setConfigOverrideForScope(
+      { scope: "server", guildId: interaction.guild!.id },
+      CONFIG_KEYS.context.instructions,
+      trimmedContext,
+      interaction.user.id,
+    );
 
     const embed = new EmbedBuilder()
       .setTitle("Server Context Updated")
       .setDescription("The server-wide context has been updated successfully.")
       .addFields(
-        { name: "Context", value: contextText.substring(0, 1024) },
+        { name: "Context", value: trimmedContext.substring(0, 1024) },
         {
           name: "Updated By",
           value: `<@${interaction.user.id}>`,
@@ -182,7 +195,12 @@ async function handleViewContext(interaction: ChatInputCommandInteraction) {
   const channel = interaction.options.getChannel("channel");
 
   try {
-    const serverContext = await fetchServerContext(interaction.guild!.id);
+    const serverContext = await getConfigOverrideForScope(
+      { scope: "server", guildId: interaction.guild!.id },
+      CONFIG_KEYS.context.instructions,
+    );
+    const serverContextValue =
+      typeof serverContext?.value === "string" ? serverContext.value : "";
     let channelContext: ChannelContext | undefined;
 
     if (channel) {
@@ -197,14 +215,14 @@ async function handleViewContext(interaction: ChatInputCommandInteraction) {
       .setColor(0x3498db)
       .setTimestamp();
 
-    if (serverContext) {
+    if (serverContextValue) {
       embed.addFields({
         name: "Server Context",
-        value: serverContext.context.substring(0, 1024),
+        value: serverContextValue.substring(0, 1024),
       });
       embed.addFields({
         name: "Server Context Metadata",
-        value: `Updated by <@${serverContext.updatedBy}> on <t:${Math.floor(new Date(serverContext.updatedAt).getTime() / 1000)}:F>`,
+        value: `Updated by <@${serverContext?.updatedBy}> on <t:${Math.floor(new Date(serverContext?.updatedAt ?? Date.now()).getTime() / 1000)}:F>`,
       });
     } else {
       embed.addFields({
@@ -247,8 +265,11 @@ async function handleClearServerContext(
   interaction: ChatInputCommandInteraction,
 ) {
   try {
-    const existing = await fetchServerContext(interaction.guild!.id);
-    if (!existing) {
+    const existing = await getConfigOverrideForScope(
+      { scope: "server", guildId: interaction.guild!.id },
+      CONFIG_KEYS.context.instructions,
+    );
+    if (!existing || typeof existing.value !== "string") {
       await interaction.reply({
         content: "No server context to clear.",
         ephemeral: true,
@@ -256,7 +277,10 @@ async function handleClearServerContext(
       return;
     }
 
-    await clearServerContextService(interaction.guild!.id);
+    await clearConfigOverrideForScope(
+      { scope: "server", guildId: interaction.guild!.id },
+      CONFIG_KEYS.context.instructions,
+    );
 
     const embed = new EmbedBuilder()
       .setTitle("Server Context Cleared")
@@ -312,7 +336,12 @@ async function handleClearChannelContext(
 
 async function handleListContexts(interaction: ChatInputCommandInteraction) {
   try {
-    const serverContext = await fetchServerContext(interaction.guild!.id);
+    const serverContext = await getConfigOverrideForScope(
+      { scope: "server", guildId: interaction.guild!.id },
+      CONFIG_KEYS.context.instructions,
+    );
+    const serverContextValue =
+      typeof serverContext?.value === "string" ? serverContext.value : "";
     const channelContexts = await listChannelContexts(interaction.guild!.id);
 
     const embed = new EmbedBuilder()
@@ -321,12 +350,12 @@ async function handleListContexts(interaction: ChatInputCommandInteraction) {
       .setTimestamp();
 
     // Add server context
-    if (serverContext?.context) {
+    if (serverContextValue) {
       embed.addFields({
         name: "📋 Server Context",
         value:
-          serverContext.context.substring(0, 200) +
-          (serverContext.context.length > 200 ? "..." : ""),
+          serverContextValue.substring(0, 200) +
+          (serverContextValue.length > 200 ? "..." : ""),
       });
     }
 
@@ -358,7 +387,7 @@ async function handleListContexts(interaction: ChatInputCommandInteraction) {
       });
     }
 
-    if (!serverContext && channelContexts.length === 0) {
+    if (!serverContextValue && channelContexts.length === 0) {
       embed.setDescription("No contexts have been set for this server.");
     }
 

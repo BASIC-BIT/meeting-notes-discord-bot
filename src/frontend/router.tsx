@@ -14,12 +14,22 @@ const PortalServerLayout = lazyRouteComponent(
   () => import("./layouts/PortalServerLayout"),
 );
 const ServerSelect = lazyRouteComponent(() => import("./pages/ServerSelect"));
+const Home = lazyRouteComponent(() => import("./pages/Home"));
+const PromoLanding = lazyRouteComponent(() => import("./pages/PromoLanding"));
+const Upgrade = lazyRouteComponent(() => import("./pages/Upgrade"));
+const UpgradeServerSelect = lazyRouteComponent(
+  () => import("./pages/UpgradeServerSelect"),
+);
+const UpgradeSuccess = lazyRouteComponent(
+  () => import("./pages/UpgradeSuccess"),
+);
 const Library = lazyRouteComponent(() => import("./pages/Library"));
 const Ask = lazyRouteComponent(() => import("./pages/Ask"));
 const PublicAsk = lazyRouteComponent(() => import("./pages/PublicAsk"));
 const Billing = lazyRouteComponent(() => import("./pages/Billing"));
 const Settings = lazyRouteComponent(() => import("./pages/Settings"));
 const LiveMeeting = lazyRouteComponent(() => import("./pages/LiveMeeting"));
+const AdminConfig = lazyRouteComponent(() => import("./pages/AdminConfig"));
 import { useGuildContext } from "./contexts/GuildContext";
 import { usePortalStore } from "./stores/portalStore";
 
@@ -31,10 +41,100 @@ const rootRoute = new RootRoute({
   component: RootLayout,
 });
 
-const homeRoute = new Route({
+const marketingRoute = new Route({
   getParentRoute: () => rootRoute,
-  path: "/",
+  id: "marketing",
   component: MarketingLayout,
+});
+
+const optionalStringParam = z
+  .preprocess((value) => {
+    if (value === undefined || value === null) return undefined;
+    return String(value);
+  }, z.string())
+  .optional();
+
+const booleanParamValues = new Map<string, boolean>([
+  ["true", true],
+  ["1", true],
+  ["false", false],
+  ["0", false],
+]);
+
+const optionalBooleanParam = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (value === true || value === false) return value;
+  const parsed = booleanParamValues.get(String(value).toLowerCase());
+  return parsed;
+}, z.boolean().optional());
+
+const portalMeetingSearchSchema = z.object({
+  meetingId: optionalStringParam,
+  eventId: optionalStringParam,
+  fullScreen: optionalBooleanParam,
+}).parse;
+
+const homeRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "/",
+  component: Home,
+});
+
+const promoRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "promo/$code",
+  component: PromoLanding,
+});
+
+const upgradeRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "upgrade",
+  component: Upgrade,
+  validateSearch: z.object({
+    promo: z.string().optional(),
+    serverId: optionalStringParam,
+    plan: z.enum(["basic", "pro"]).optional(),
+    interval: z.enum(["month", "year"]).optional(),
+    canceled: z
+      .preprocess((value) => {
+        if (value === "true") return true;
+        if (value === "false") return false;
+        return value;
+      }, z.boolean().optional())
+      .optional(),
+  }).parse,
+});
+
+const upgradeSelectRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "upgrade/select-server",
+  component: UpgradeServerSelect,
+  validateSearch: z.object({
+    promo: z.string().optional(),
+    serverId: optionalStringParam,
+    plan: z.enum(["basic", "pro"]).optional(),
+    interval: z.enum(["month", "year"]).optional(),
+    canceled: z
+      .preprocess((value) => {
+        if (value === "true") return true;
+        if (value === "false") return false;
+        return value;
+      }, z.boolean().optional())
+      .optional(),
+  }).parse,
+});
+
+const upgradeSuccessRoute = new Route({
+  getParentRoute: () => marketingRoute,
+  path: "upgrade/success",
+  component: UpgradeSuccess,
+  validateSearch: z.object({
+    promo: z.string().optional(),
+    serverId: optionalStringParam,
+    plan: z.enum(["basic", "pro"]).optional(),
+    interval: z.enum(["month", "year"]).optional(),
+    session_id: z.string().optional(),
+  }).parse,
 });
 
 const liveMeetingRoute = new Route({
@@ -80,36 +180,39 @@ const portalSelectRoute = new Route({
   getParentRoute: () => portalRoute,
   path: "select-server",
   component: ServerSelect,
+  validateSearch: z.object({ promo: z.string().optional() }).parse,
 });
 
 const portalServerRoute = new Route({
   getParentRoute: () => portalRoute,
   path: "server/$serverId",
   component: PortalServerLayout,
+  validateSearch: portalMeetingSearchSchema,
 });
 
 const portalLibraryRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "library",
   component: Library,
-  validateSearch: z.object({ meetingId: z.string().optional() }).parse,
+  validateSearch: z.object({
+    meetingId: optionalStringParam,
+    eventId: optionalStringParam,
+    fullScreen: optionalBooleanParam,
+  }).parse,
 });
 
 const askSearchSchema = z.object({
-  list: z.enum(["mine", "shared"]).optional(),
+  list: z.enum(["mine", "shared", "archived"]).optional(),
+  conversationId: z.string().optional(),
   messageId: z.string().optional(),
+  meetingId: optionalStringParam,
+  eventId: optionalStringParam,
+  fullScreen: optionalBooleanParam,
 }).parse;
 
 const portalAskRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "ask",
-  component: Ask,
-  validateSearch: askSearchSchema,
-});
-
-const portalAskConversationRoute = new Route({
-  getParentRoute: () => portalServerRoute,
-  path: "ask/$conversationId",
   component: Ask,
   validateSearch: askSearchSchema,
 });
@@ -129,6 +232,7 @@ const portalBillingRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "billing",
   component: Billing,
+  validateSearch: z.object({ promo: z.string().optional() }).parse,
 });
 
 const portalSettingsRoute = new Route({
@@ -137,8 +241,20 @@ const portalSettingsRoute = new Route({
   component: Settings,
 });
 
+const portalAdminConfigRoute = new Route({
+  getParentRoute: () => portalRoute,
+  path: "admin/config",
+  component: AdminConfig,
+});
+
 const routeTree = rootRoute.addChildren([
-  homeRoute,
+  marketingRoute.addChildren([
+    homeRoute,
+    promoRoute,
+    upgradeRoute,
+    upgradeSelectRoute,
+    upgradeSuccessRoute,
+  ]),
   liveMeetingRoute,
   publicAskRoute,
   portalRoute.addChildren([
@@ -147,10 +263,10 @@ const routeTree = rootRoute.addChildren([
     portalServerRoute.addChildren([
       portalLibraryRoute,
       portalAskRoute,
-      portalAskConversationRoute,
       portalBillingRoute,
       portalSettingsRoute,
     ]),
+    portalAdminConfigRoute,
   ]),
 ]);
 

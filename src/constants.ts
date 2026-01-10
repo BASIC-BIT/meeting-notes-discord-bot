@@ -14,16 +14,18 @@ export const MAXIMUM_MEETING_DURATION = 7_200_000; // Max meeting duration of 2 
 export const MAXIMUM_MEETING_DURATION_PRETTY = "2 hours"; // Max meeting duration of 2 hours
 
 export const TRANSCRIPTION_MAX_RETRIES = 3;
-export const TRANSCRIPTION_MAX_CONCURRENT = 1;
+export const TRANSCRIPTION_MAX_CONCURRENT = 2;
 export const TRANSCRIPTION_MAX_QUEUE = 100;
 export const TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES = 5;
 export const TRANSCRIPTION_BREAK_DURATION = 10_000;
-export const TRANSCRIPTION_RATE_MIN_TIME = 1_300; // Rate limit in minimum milliseconds between requests
+export const TRANSCRIPTION_RATE_MIN_TIME = 800; // Rate limit in minimum milliseconds between requests
 
-export const MAX_DISCORD_UPLOAD_SIZE = 24_000_000; //24MB, to give safety margin from Discord's 25MB upload limit
+export const LANGFUSE_AUDIO_ATTACHMENT_MAX_CONCURRENT = 1;
+export const LANGFUSE_AUDIO_ATTACHMENT_MIN_TIME = 0;
 
 export const GPT_MODEL_MAX_TOKENS = 128000;
 
 export const TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE = 0.75; // If over 25% of lines were lost in cleanup, assume something went wrong and return original transcription
 
 export const TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD = 0.15; // If transcription is less than 15% different from prompt, it's likely verbatim output
+export const TRANSCRIPTION_GLOSSARY_TERM_ONLY_MAX_SECONDS = 1;

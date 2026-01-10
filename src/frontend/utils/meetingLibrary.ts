@@ -7,27 +7,22 @@ import {
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 const SUMMARY_CUTOFF = 180;
-const TITLE_SKIP = new Set([
-  "highlights",
-  "decisions",
-  "action items",
-  "actions",
-  "recap",
-  "summary",
-]);
 
 export type MeetingDetails = {
   id: string;
   meetingId: string;
   title: string;
+  meetingName?: string;
   summary: string;
   summaryLabel?: string;
+  summaryFeedback?: "up" | "down" | null;
   notes: string;
   dateLabel: string;
   durationLabel: string;
   tags: string[];
   channel: string;
   audioUrl?: string | null;
+  archivedAt?: string | null;
   attendees: string[];
   decisions: string[];
   actions: string[];
@@ -43,9 +38,15 @@ export type MeetingDetailInput = {
   duration: number;
   tags?: string[];
   notes?: string | null;
+  notesChannelId?: string | null;
+  notesMessageId?: string | null;
+  transcript?: string | null;
+  meetingName?: string | null;
   summarySentence?: string | null;
   summaryLabel?: string | null;
+  summaryFeedback?: "up" | "down" | null;
   audioUrl?: string | null;
+  archivedAt?: string | null;
   attendees?: string[];
   events?: MeetingEvent[];
   status?: MeetingStatus;
@@ -73,9 +74,10 @@ export const formatChannelLabel = (name?: string, fallback?: string) => {
 };
 
 export const formatDurationLabel = (seconds: number) => {
-  const safe = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const totalMinutes = Math.max(1, Math.floor(safeSeconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
   if (hours > 0) {
     return `${hours}h ${String(minutes).padStart(2, "0")}m`;
   }
@@ -107,23 +109,19 @@ const stripLinePrefix = (line: string) =>
     .replace(/^\d+[.)]\s*/, "")
     .trim();
 
-const normalizeHeadingToken = (line: string) =>
-  stripLinePrefix(line)
-    .replace(/[:\s-]+$/, "")
-    .toLowerCase();
-
-export const deriveTitle = (notes: string, channelLabel: string) => {
-  const lines = normalizeNotes(notes)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const candidate = lines.find(
-    (line) => !TITLE_SKIP.has(normalizeHeadingToken(line)),
-  );
-  if (candidate) {
-    return stripLinePrefix(candidate);
-  }
-  return `Meeting in ${channelLabel.replace(/^#/, "")}`;
+export const resolveMeetingTitle = (params: {
+  meetingName?: string | null;
+  summaryLabel?: string | null;
+  summarySentence?: string | null;
+  channelLabel: string;
+}) => {
+  const meetingName = params.meetingName?.trim();
+  if (meetingName) return meetingName;
+  const summaryLabel = params.summaryLabel?.trim();
+  if (summaryLabel) return summaryLabel;
+  const summarySentence = params.summarySentence?.trim();
+  if (summarySentence) return summarySentence;
+  return `Meeting in ${params.channelLabel.replace(/^#/, "")}`;
 };
 
 export const deriveSummary = (
@@ -232,18 +230,28 @@ export const buildMeetingDetails = (
   );
   const rawNotes = detail.notes ?? "";
 
+  const title = resolveMeetingTitle({
+    meetingName: detail.meetingName,
+    summaryLabel: detail.summaryLabel,
+    summarySentence: detail.summarySentence,
+    channelLabel,
+  });
+
   return {
     id: detail.id,
     meetingId: detail.meetingId,
-    title: deriveTitle(rawNotes, channelLabel),
+    title,
+    meetingName: detail.meetingName ?? undefined,
     summary: deriveSummary(rawNotes, detail.summarySentence),
     summaryLabel: resolveSummaryLabel(detail.summaryLabel),
+    summaryFeedback: detail.summaryFeedback ?? null,
     notes: resolveNotes(detail.notes),
     dateLabel: formatDateLabel(detail.timestamp),
     durationLabel: formatDurationLabel(detail.duration),
     tags: resolveTags(detail.tags),
     channel: channelLabel,
     audioUrl: detail.audioUrl ?? null,
+    archivedAt: detail.archivedAt ?? null,
     attendees: resolveAttendees(detail.attendees),
     decisions: [],
     actions: [],

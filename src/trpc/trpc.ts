@@ -11,8 +11,13 @@ import { ensureUserInGuild } from "../services/guildAccessService";
 const t = initTRPC.context<TrpcContext>().create({
   errorFormatter({ shape, error }) {
     const reason = getPermissionReason(error.cause);
+    const message =
+      error.code === "INTERNAL_SERVER_ERROR"
+        ? "Unexpected error. Please try again."
+        : shape.message;
     return {
       ...shape,
+      message,
       data: {
         ...shape.data,
         reason,
@@ -40,7 +45,12 @@ const isManageGuild = t.middleware(
     }
     const resolvedInput = input ?? (await getRawInput());
     const guildId = requireGuildId(resolvedInput);
-    await requireManageGuild({ accessToken: ctx.user.accessToken, guildId });
+    await requireManageGuild({
+      accessToken: ctx.user.accessToken,
+      guildId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
+    });
     return next();
   },
 );
@@ -52,7 +62,10 @@ const isGuildMember = t.middleware(
     }
     const resolvedInput = input ?? (await getRawInput());
     const guildId = requireGuildId(resolvedInput);
-    const allowed = await ensureUserInGuild(ctx.user.accessToken, guildId);
+    const allowed = await ensureUserInGuild(ctx.user.accessToken, guildId, {
+      session: ctx.req.session,
+      userId: ctx.user.id,
+    });
     if (allowed === null) {
       throw new TRPCError({
         code: "TOO_MANY_REQUESTS",

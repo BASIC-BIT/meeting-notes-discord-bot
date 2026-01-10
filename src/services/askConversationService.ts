@@ -7,6 +7,8 @@ import type {
   AskMessage,
 } from "../types/ask";
 import { nowIso } from "../utils/time";
+import { config } from "./configService";
+import { renderAskAnswer, stripCitationTags } from "./askCitations";
 
 const DEFAULT_TITLE = "New question";
 
@@ -15,6 +17,29 @@ const truncate = (text: string, maxLen: number) =>
 
 const summarize = (text: string) =>
   truncate(text.replace(/\s+/g, " ").trim(), 160);
+
+const resolvePortalBaseUrl = () =>
+  config.frontend.siteUrl.trim().replace(/\/$/, "");
+
+const renderMessageForDisplay = (options: {
+  message: AskMessage;
+  guildId: string;
+  portalBaseUrl: string;
+}): AskMessage => {
+  if (options.message.role !== "chronote") {
+    return { ...options.message };
+  }
+  const rendered = renderAskAnswer({
+    text: options.message.text,
+    citations: options.message.citations ?? [],
+    guildId: options.guildId,
+    portalBaseUrl: options.portalBaseUrl,
+  });
+  return {
+    ...options.message,
+    text: rendered,
+  };
+};
 
 const buildConversation = (
   userId: string,
@@ -65,6 +90,8 @@ const buildShareRecord = (options: {
     sharedAt,
     sharedByUserId,
     sharedByTag,
+    archivedAt: conversation.archivedAt,
+    archivedByUserId: conversation.archivedByUserId,
   };
 };
 
@@ -85,6 +112,7 @@ export async function listSharedAskConversations(
   const conversations = await repo.listSharedConversations(guildId);
   return conversations
     .filter((conv) => conv.ownerUserId !== viewerUserId)
+    .filter((conv) => !conv.archivedAt)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
@@ -103,9 +131,12 @@ export async function getAskConversationWithMessages(
     return undefined;
   }
   const messages = await repo.listMessages(userId, guildId, conversationId);
+  const portalBaseUrl = resolvePortalBaseUrl();
   return {
     conversation,
-    messages,
+    messages: messages.map((message) =>
+      renderMessageForDisplay({ message, guildId, portalBaseUrl }),
+    ),
   };
 }
 
@@ -131,9 +162,12 @@ export async function getSharedConversationWithMessages(
     guildId,
     conversationId,
   );
+  const portalBaseUrl = resolvePortalBaseUrl();
   return {
     conversation,
-    messages,
+    messages: messages.map((message) =>
+      renderMessageForDisplay({ message, guildId, portalBaseUrl }),
+    ),
     shared,
   };
 }
@@ -213,6 +247,42 @@ export async function setAskConversationVisibility(params: {
   return updated;
 }
 
+export async function setAskConversationArchived(params: {
+  userId: string;
+  guildId: string;
+  conversationId: string;
+  archived: boolean;
+}) {
+  const repo = getAskConversationRepository();
+  const { userId, guildId, conversationId, archived } = params;
+  const existing = await repo.getConversation(userId, guildId, conversationId);
+  if (!existing) {
+    return undefined;
+  }
+  const now = nowIso();
+  const updated: AskConversation = {
+    ...existing,
+    archivedAt: archived ? now : undefined,
+    archivedByUserId: archived ? userId : undefined,
+    updatedAt: now,
+  };
+  await repo.writeConversation(userId, guildId, updated);
+  if (isSharedVisibility(updated.visibility) && updated.sharedAt) {
+    await repo.writeSharedConversation(
+      buildShareRecord({
+        guildId,
+        ownerUserId: userId,
+        ownerTag: updated.sharedByTag,
+        conversation: updated,
+        sharedAt: updated.sharedAt,
+        sharedByUserId: updated.sharedByUserId ?? userId,
+        sharedByTag: updated.sharedByTag,
+      }),
+    );
+  }
+  return updated;
+}
+
 export async function askWithConversation(params: {
   userId: string;
   guildId: string;
@@ -259,7 +329,11 @@ export async function askWithConversation(params: {
     text: message.text,
   }));
 
-  const { answer, sourceMeetingIds } = await answerQuestionService({
+  const {
+    answer: rawAnswer,
+    sourceMeetingIds,
+    citations,
+  } = await answerQuestionService({
     guildId,
     channelId: channelId ?? "",
     question,
@@ -268,13 +342,22 @@ export async function askWithConversation(params: {
     history,
     viewerUserId,
   });
+  const resolvedCitations = citations ?? [];
+  const portalBaseUrl = resolvePortalBaseUrl();
+  const renderedAnswer = renderAskAnswer({
+    text: rawAnswer,
+    citations: resolvedCitations,
+    guildId,
+    portalBaseUrl,
+  });
 
   const replyMessage: AskMessage = {
     id: uuid(),
     role: "chronote",
-    text: answer,
+    text: rawAnswer,
     createdAt: nowIso(),
     sourceMeetingIds,
+    citations: resolvedCitations,
   };
   await repo.writeMessage(userId, guildId, conversation.id, replyMessage);
 
@@ -284,7 +367,7 @@ export async function askWithConversation(params: {
   const updatedConversation: AskConversation = {
     ...conversation,
     title: shouldUpdateTitle ? truncate(question, 80) : conversation.title,
-    summary: summarize(answer) || conversation.summary,
+    summary: summarize(stripCitationTags(rawAnswer)) || conversation.summary,
     updatedAt: nowIso(),
   };
   await repo.writeConversation(userId, guildId, updatedConversation);
@@ -305,9 +388,20 @@ export async function askWithConversation(params: {
 
   return {
     conversationId: conversation.id,
-    answer,
+    answer: renderedAnswer,
     sourceMeetingIds,
     conversation: updatedConversation,
-    messages: [userMessage, replyMessage],
+    messages: [
+      renderMessageForDisplay({
+        message: userMessage,
+        guildId,
+        portalBaseUrl,
+      }),
+      renderMessageForDisplay({
+        message: replyMessage,
+        guildId,
+        portalBaseUrl,
+      }),
+    ],
   };
 }

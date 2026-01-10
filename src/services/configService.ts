@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import path from "node:path";
 
 // Load environment variables once
 dotenv.config();
@@ -56,6 +57,9 @@ class ConfigService {
     transcriptionCleanupPromptName:
       process.env.LANGFUSE_PROMPT_TRANSCRIPTION_CLEANUP ||
       "chronote-transcription-cleanup-chat",
+    transcriptionCoalescePromptName:
+      process.env.LANGFUSE_PROMPT_TRANSCRIPTION_COALESCE ||
+      "chronote-transcription-coalesce-chat",
     imagePromptName:
       process.env.LANGFUSE_PROMPT_IMAGE || "chronote-image-prompt-chat",
     askPromptName:
@@ -89,6 +93,17 @@ class ConfigService {
     longStoryTargetChars:
       parseInt(process.env.NOTES_LONG_STORY_TARGET_CHARS || "20000", 10) ||
       20000,
+  };
+
+  // AppConfig configuration
+  readonly appConfig = {
+    enabled: process.env.APP_CONFIG_ENABLED === "true",
+    applicationId: process.env.APP_CONFIG_APPLICATION_ID || "",
+    environmentId: process.env.APP_CONFIG_ENVIRONMENT_ID || "",
+    profileId: process.env.APP_CONFIG_PROFILE_ID || "",
+    deploymentStrategyId: process.env.APP_CONFIG_DEPLOYMENT_STRATEGY_ID || "",
+    cacheTtlMs:
+      parseInt(process.env.APP_CONFIG_CACHE_TTL_MS || "60000", 10) || 60000,
   };
 
   // Live voice configuration
@@ -137,12 +152,26 @@ class ConfigService {
     stripeMode: process.env.STRIPE_MODE || "live",
   };
 
+  // Admin configuration
+  readonly admin = {
+    superAdminUserIds: (process.env.SUPER_ADMIN_USER_IDS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  };
+
   // Database Configuration
   readonly database = {
     useLocalDynamoDB:
       process.env.NODE_ENV === "development" &&
       process.env.USE_LOCAL_DYNAMODB === "true",
     tablePrefix: process.env.DDB_TABLE_PREFIX || "",
+  };
+
+  readonly paths = {
+    meetingTempDir:
+      process.env.MEETING_TEMP_DIR?.trim() ||
+      path.resolve(process.cwd(), "tmp", "meetings"),
   };
 
   // Storage Configuration
@@ -152,6 +181,8 @@ class ConfigService {
     awsRegion: process.env.AWS_REGION || "us-east-1",
     endpoint: process.env.STORAGE_ENDPOINT,
     forcePathStyle: process.env.STORAGE_FORCE_PATH_STYLE === "true",
+    accessKeyId: process.env.STORAGE_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.STORAGE_SECRET_ACCESS_KEY || "",
   };
 
   // Bedrock Data Automation configuration (evals)
@@ -201,6 +232,44 @@ class ConfigService {
     // future: rate limit/budget configs per API route can live here
   };
 
+  // Cache configuration
+  readonly cache = {
+    enabled: process.env.CACHE_ENABLED !== "false",
+    redisUrl: process.env.REDIS_URL || process.env.CACHE_REDIS_URL || "",
+    keyPrefix:
+      process.env.CACHE_KEY_PREFIX ||
+      process.env.DDB_TABLE_PREFIX ||
+      process.env.NODE_ENV ||
+      "development",
+    memorySize: parseInt(process.env.CACHE_MEMORY_SIZE || "2000", 10) || 2000,
+    invalidationEnabled: process.env.CACHE_INVALIDATION_ENABLED !== "false",
+    referencesTtlSeconds:
+      parseInt(process.env.CACHE_REFERENCES_TTL_SECONDS || "86400", 10) ||
+      86400,
+    defaultTtlSeconds:
+      parseInt(process.env.CACHE_DEFAULT_TTL_SECONDS || "60", 10) || 60,
+    discord: {
+      userGuildsTtlSeconds:
+        parseInt(
+          process.env.CACHE_DISCORD_USER_GUILDS_TTL_SECONDS || "60",
+          10,
+        ) || 60,
+      botGuildsTtlSeconds:
+        parseInt(
+          process.env.CACHE_DISCORD_BOT_GUILDS_TTL_SECONDS || "300",
+          10,
+        ) || 300,
+      channelsTtlSeconds:
+        parseInt(process.env.CACHE_DISCORD_CHANNELS_TTL_SECONDS || "60", 10) ||
+        60,
+      rolesTtlSeconds:
+        parseInt(process.env.CACHE_DISCORD_ROLES_TTL_SECONDS || "60", 10) || 60,
+      membersTtlSeconds:
+        parseInt(process.env.CACHE_DISCORD_MEMBERS_TTL_SECONDS || "30", 10) ||
+        30,
+    },
+  };
+
   readonly stripe = {
     secretKey: process.env.STRIPE_SECRET_KEY || "",
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
@@ -233,10 +302,7 @@ class ConfigService {
       .map((origin) => origin.trim())
       .filter((origin) => origin.length > 0)
       .map((origin) => origin.replace(/\/$/, "")),
-    siteUrl:
-      process.env.FRONTEND_SITE_URL ||
-      (process.env.FRONTEND_ALLOWED_ORIGINS || "").split(",")[0]?.trim() ||
-      "",
+    siteUrl: process.env.FRONTEND_SITE_URL || "",
   };
 
   constructor() {
@@ -252,6 +318,10 @@ class ConfigService {
           { name: "DISCORD_CLIENT_ID", value: this.discord.clientId },
           { name: "OPENAI_API_KEY", value: this.openai.apiKey },
         ];
+    required.push({
+      name: "FRONTEND_SITE_URL",
+      value: this.frontend.siteUrl,
+    });
 
     const hasLangfuseConfig =
       this.langfuse.publicKey.length > 0 || this.langfuse.secretKey.length > 0;
@@ -276,6 +346,24 @@ class ConfigService {
       required.push(
         { name: "STRIPE_SUCCESS_URL", value: this.stripe.successUrl },
         { name: "STRIPE_CANCEL_URL", value: this.stripe.cancelUrl },
+      );
+    }
+
+    if (this.appConfig.enabled) {
+      required.push(
+        {
+          name: "APP_CONFIG_APPLICATION_ID",
+          value: this.appConfig.applicationId,
+        },
+        {
+          name: "APP_CONFIG_ENVIRONMENT_ID",
+          value: this.appConfig.environmentId,
+        },
+        { name: "APP_CONFIG_PROFILE_ID", value: this.appConfig.profileId },
+        {
+          name: "APP_CONFIG_DEPLOYMENT_STRATEGY_ID",
+          value: this.appConfig.deploymentStrategyId,
+        },
       );
     }
 

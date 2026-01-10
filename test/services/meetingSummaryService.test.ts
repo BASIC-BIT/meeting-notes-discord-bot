@@ -6,9 +6,8 @@ afterEach(() => {
 });
 
 test("parseMeetingSummaryResponse trims summaries", async () => {
-  const { parseMeetingSummaryResponse } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
   const parsed = parseMeetingSummaryResponse(
     '{"summarySentence":"  A short summary.  ","summaryLabel":"  Weekly sync "}',
   );
@@ -19,27 +18,64 @@ test("parseMeetingSummaryResponse trims summaries", async () => {
 });
 
 test("parseMeetingSummaryResponse returns undefined on empty input", async () => {
-  const { parseMeetingSummaryResponse } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
   const parsed = parseMeetingSummaryResponse(" ");
   expect(parsed).toBeUndefined();
 });
 
 test("parseMeetingSummaryResponse drops invalid summaries", async () => {
-  const { parseMeetingSummaryResponse } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
   const parsed = parseMeetingSummaryResponse(
     '{"summarySentence":"First sentence. Second sentence.","summaryLabel":"Too many words in this label"}',
   );
-  expect(parsed).toBeUndefined();
+  expect(parsed).toEqual({
+    summarySentence: "First sentence. Second sentence.",
+    summaryLabel: undefined,
+  });
+});
+
+test("parseMeetingSummaryResponse keeps full text when multiple sentences are returned", async () => {
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
+  const parsed = parseMeetingSummaryResponse(
+    '{"summarySentence":"First sentence. Second sentence! Third?","summaryLabel":"Weekly sync"}',
+  );
+  expect(parsed).toEqual({
+    summarySentence: "First sentence. Second sentence! Third?",
+    summaryLabel: "Weekly sync",
+  });
+});
+
+test("parseMeetingSummaryResponse avoids splitting on abbreviations", async () => {
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
+  const parsed = parseMeetingSummaryResponse(
+    '{"summarySentence":"Dr. Smith reviewed version 3.14 changes. Next steps soon.","summaryLabel":"Weekly sync"}',
+  );
+  expect(parsed).toEqual({
+    summarySentence:
+      "Dr. Smith reviewed version 3.14 changes. Next steps soon.",
+    summaryLabel: "Weekly sync",
+  });
+});
+
+test("parseMeetingSummaryResponse keeps decimals intact", async () => {
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
+  const parsed = parseMeetingSummaryResponse(
+    '{"summarySentence":"Version 3.14 was released. Next steps soon.","summaryLabel":"Weekly sync"}',
+  );
+  expect(parsed).toEqual({
+    summarySentence: "Version 3.14 was released. Next steps soon.",
+    summaryLabel: "Weekly sync",
+  });
 });
 
 test("parseMeetingSummaryResponse keeps valid sentence when label is invalid", async () => {
-  const { parseMeetingSummaryResponse } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { parseMeetingSummaryResponse } =
+    await import("../../src/services/meetingSummaryService");
   const parsed = parseMeetingSummaryResponse(
     '{"summarySentence":"A single sentence.","summaryLabel":"Weekly sync!"}',
   );
@@ -72,6 +108,8 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
             `Server: ${variables?.serverName ?? ""}`,
             `Channel: ${variables?.channelName ?? ""}`,
             `Tags: ${variables?.tagLine ?? ""}`,
+            "Recent meeting names:",
+            `${variables?.recentMeetingNames ?? ""}`,
             `${variables?.previousSummaryBlock ?? ""}`,
             "Notes:",
             `${variables?.notes ?? ""}`,
@@ -97,10 +135,15 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
     __esModule: true,
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
   }));
+  jest.doMock("../../src/services/meetingNameService", () => ({
+    __esModule: true,
+    listRecentMeetingNamesForPrompt: jest
+      .fn()
+      .mockResolvedValue("- Sprint planning"),
+  }));
 
-  const { generateMeetingSummaries } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { generateMeetingSummaries } =
+    await import("../../src/services/meetingSummaryService");
   const { config } = await import("../../src/services/configService");
 
   const now = new Date("2025-02-03T12:00:00Z");
@@ -128,12 +171,15 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
   const call = mockCreate.mock.calls[0][0];
   expect(call.model).toBe(config.notes.model);
   expect(call.temperature).toBe(0);
+  expect(call.reasoning_effort).toBe("none");
   expect(call.response_format).toEqual({ type: "json_object" });
   const userPrompt = call.messages[1].content;
   expect(userPrompt).toContain(`Today is ${expectedDate}.`);
   expect(userPrompt).toContain("Server: Chronote HQ");
   expect(userPrompt).toContain("Channel: general");
   expect(userPrompt).toContain("Tags: alpha, beta");
+  expect(userPrompt).toContain("Recent meeting names:");
+  expect(userPrompt).toContain("- Sprint planning");
   expect(userPrompt).toContain("Previous summary sentence: Old summary.");
   expect(userPrompt).toContain("Previous summary label: Old label");
   expect(userPrompt).toContain("Notes:");
@@ -162,9 +208,8 @@ test("generateMeetingSummaries returns empty object on error", async () => {
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
   }));
 
-  const { generateMeetingSummaries } = await import(
-    "../../src/services/meetingSummaryService"
-  );
+  const { generateMeetingSummaries } =
+    await import("../../src/services/meetingSummaryService");
 
   const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
   const result = await generateMeetingSummaries({

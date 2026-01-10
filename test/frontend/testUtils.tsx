@@ -9,6 +9,7 @@ import {
   resetNavigateSpy,
   resetRouterState,
   setRouteParams,
+  setRouteSearch,
   setRouterPathname,
 } from "./mocks/routerState";
 import "./mocks/mockFrontendContexts";
@@ -30,5 +31,6 @@ export {
   guildState,
   navigateSpy,
   setRouteParams,
+  setRouteSearch,
   setRouterPathname,
 };

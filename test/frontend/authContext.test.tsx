@@ -30,9 +30,34 @@ function AuthProbe({
   );
 }
 
+function AuthProbeWithBump({
+  onCapture,
+  onBumpReady,
+}: {
+  onCapture: (value: AuthSnapshot) => void;
+  onBumpReady: (bump: () => void) => void;
+}) {
+  const value = useAuth();
+  const [, setTick] = React.useState(0);
+  const bump = React.useCallback(() => {
+    setTick((current) => current + 1);
+  }, []);
+  onBumpReady(bump);
+  onCapture(value);
+  return (
+    <div
+      data-testid="auth-state"
+      data-state={value.state}
+      data-loading={value.loading ? "true" : "false"}
+      data-login={value.loginUrl}
+    />
+  );
+}
+
 describe("AuthContext", () => {
   beforeEach(() => {
     resetTrpcMocks();
+    window.history.pushState({}, "", "/");
   });
 
   test("reports unauthenticated state and builds login url", async () => {
@@ -51,8 +76,14 @@ describe("AuthContext", () => {
     expect(node).toHaveAttribute("data-state", "unauthenticated");
     expect(node).toHaveAttribute("data-loading", "false");
     const loginUrl = node.getAttribute("data-login");
-    expect(loginUrl).toContain("/auth/discord");
-    expect(loginUrl).toContain("redirect=");
+    if (!loginUrl) {
+      throw new Error("Missing login url");
+    }
+    const resolved = new URL(loginUrl, window.location.origin);
+    expect(resolved.pathname).toBe("/auth/discord");
+    expect(resolved.searchParams.get("redirect")).toBe(
+      `${window.location.origin}/portal/select-server`,
+    );
     if (!captured) {
       throw new Error("Missing auth snapshot");
     }
@@ -60,6 +91,60 @@ describe("AuthContext", () => {
       await captured.refresh();
     });
     expect(authQuery.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses current location for portal redirect targets", () => {
+    setAuthQuery({ data: null, isLoading: false });
+    window.history.pushState(
+      {},
+      "",
+      "/portal/server/g1/library?meetingId=meeting-1#section-1",
+    );
+    render(
+      <AuthProvider>
+        <AuthProbe onCapture={() => {}} />
+      </AuthProvider>,
+    );
+    const node = screen.getByTestId("auth-state");
+    const loginUrl = node.getAttribute("data-login");
+    if (!loginUrl) {
+      throw new Error("Missing login url");
+    }
+    const resolved = new URL(loginUrl, window.location.origin);
+    expect(resolved.searchParams.get("redirect")).toBe(window.location.href);
+  });
+
+  test("refreshes login url after navigation without provider rerender", () => {
+    setAuthQuery({ data: null, isLoading: false });
+    let bump: (() => void) | null = null;
+    render(
+      <AuthProvider>
+        <AuthProbeWithBump
+          onCapture={() => {}}
+          onBumpReady={(value) => {
+            bump = value;
+          }}
+        />
+      </AuthProvider>,
+    );
+    window.history.pushState(
+      {},
+      "",
+      "/portal/server/g1/library?meetingId=meeting-2",
+    );
+    if (!bump) {
+      throw new Error("Missing rerender callback");
+    }
+    act(() => {
+      bump?.();
+    });
+    const node = screen.getByTestId("auth-state");
+    const loginUrl = node.getAttribute("data-login");
+    if (!loginUrl) {
+      throw new Error("Missing login url");
+    }
+    const resolved = new URL(loginUrl, window.location.origin);
+    expect(resolved.searchParams.get("redirect")).toBe(window.location.href);
   });
 
   test("reports authenticated when data is present", () => {

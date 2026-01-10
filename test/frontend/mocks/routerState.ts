@@ -7,8 +7,23 @@ export const navigateSpy = jest.fn();
 export const routerState = {
   pathname: "/",
 };
-export const routeParams: { serverId?: string; conversationId?: string } = {};
-let routeSearch: { meetingId?: string; list?: string; messageId?: string } = {};
+export const routeParams: {
+  serverId?: string;
+  conversationId?: string;
+  code?: string;
+} = {};
+let routeSearch: {
+  meetingId?: string;
+  list?: string;
+  conversationId?: string;
+  messageId?: string;
+  promo?: string;
+  serverId?: string;
+  plan?: string;
+  interval?: string;
+  canceled?: boolean | string;
+  session_id?: string;
+} = {};
 
 export const getRouteSearch = () => routeSearch;
 
@@ -31,6 +46,7 @@ export const resetRouterState = () => {
   routerState.pathname = "/";
   routeParams.serverId = undefined;
   routeParams.conversationId = undefined;
+  routeParams.code = undefined;
   routeSearch = {};
   notifyRouteSearch();
 };
@@ -42,15 +58,24 @@ export const setRouterPathname = (pathname: string) => {
 export const setRouteParams = (params: {
   serverId?: string;
   conversationId?: string;
+  code?: string;
 }) => {
   routeParams.serverId = params.serverId;
   routeParams.conversationId = params.conversationId;
+  routeParams.code = params.code;
 };
 
 export const setRouteSearch = (search: {
   meetingId?: string;
   list?: string;
+  conversationId?: string;
   messageId?: string;
+  promo?: string;
+  serverId?: string;
+  plan?: string;
+  interval?: string;
+  canceled?: boolean | string;
+  session_id?: string;
 }) => {
   routeSearch = { ...routeSearch, ...search };
   notifyRouteSearch();

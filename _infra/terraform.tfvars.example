@@ -13,8 +13,14 @@ NODE_ENV="production"                         # recommended for ECS task
 ENABLE_ONBOARDING="false"
 OPENAI_ORGANIZATION_ID=""                     # optional
 OPENAI_PROJECT_ID=""                          # optional
+REDIS_URL=""                                  # optional; enables Redis cache
+REDIS_AUTH_TOKEN="change-me-redis-auth-token" # required for managed Redis
 NOTES_MODEL="gpt-5.2"                         # optional; model for notes and summaries
+APP_CONFIG_ENABLED="true"                     # optional; enable AppConfig for unified config
+SUPER_ADMIN_USER_IDS=""                       # comma-separated Discord user IDs
 LANGFUSE_BASE_URL=""                          # optional; set for self-hosted
+LANGFUSE_PUBLIC_KEY=""                        # required for Langfuse prompts
+LANGFUSE_SECRET_KEY=""                        # required for Langfuse prompts
 LANGFUSE_TRACING_ENABLED="true"               # optional; set false to disable traces
 LANGFUSE_TRACING_ENVIRONMENT="prod"
 LANGFUSE_RELEASE=""
@@ -62,10 +68,10 @@ STRIPE_PRICE_LOOKUP_BASIC_MONTHLY="chronote_basic_monthly"
 STRIPE_PRICE_LOOKUP_BASIC_ANNUAL="chronote_basic_annual"
 STRIPE_PRICE_LOOKUP_PRO_MONTHLY="chronote_pro_monthly"
 STRIPE_PRICE_LOOKUP_PRO_ANNUAL="chronote_pro_annual"
-STRIPE_SUCCESS_URL=""
-STRIPE_CANCEL_URL=""
-STRIPE_PORTAL_RETURN_URL=""
-BILLING_LANDING_URL=""
+STRIPE_SUCCESS_URL=""                      # e.g., https://app.example.com/upgrade/success
+STRIPE_CANCEL_URL=""                       # e.g., https://app.example.com/upgrade/select-server?canceled=true
+STRIPE_PORTAL_RETURN_URL=""                # e.g., https://app.example.com/portal/select-server
+BILLING_LANDING_URL=""                     # e.g., https://app.example.com/upgrade
 
 # Observability (hosted AMG/AMP)
 # Create a Grafana service account token (preferred) or AMG API key, then set these:

@@ -1,24 +1,21 @@
 import { ButtonInteraction, Client, EmbedBuilder } from "discord.js";
 import { writeFileSync } from "node:fs";
-import type { ChunkInfo } from "../types/audio";
+import path from "node:path";
 import {
   buildMixedAudio,
-  cleanupAudioSegments,
+  cleanupSpeakerTracks,
   closeOutputFile,
   compileTranscriptions,
-  splitAudioIntoChunks,
   startProcessingSnippet,
   waitForAudioOnlyFinishProcessing,
   waitForFinishProcessing,
 } from "../audio";
 import {
-  sendMeetingEndEmbed,
-  sendMeetingEndEmbedToChannel,
-  sendTranscriptionFiles,
+  updateMeetingProcessingMessage,
+  updateMeetingSummaryMessage,
 } from "../embed";
-import { deleteDirectoryRecursively, deleteIfExists } from "../util";
+import { deleteIfExists } from "../util";
 import { MeetingData } from "../types/meeting-data";
-import { generateAndSendNotes } from "./generateNotes";
 import { saveMeetingHistoryToDatabase } from "./saveMeetingHistory";
 import { updateMeetingStatusService } from "../services/meetingHistoryService";
 import { renderChatEntryLine } from "../utils/chatLog";
@@ -32,22 +29,42 @@ import {
   getRollingUsageForGuild,
   getRollingWindowMs,
 } from "../services/meetingUsageService";
-import { withMeetingEndTrace } from "../observability/meetingTrace";
+import {
+  withMeetingEndTrace,
+  withMeetingEndStep,
+  type MeetingEndStepOptions,
+} from "../observability/meetingTrace";
 import { evaluateAutoRecordCancellation } from "../services/autoRecordCancellationService";
 import { meetingsCancelled } from "../metrics";
 import { describeAutoRecordRule } from "../utils/meetingLifecycle";
 import { deleteMeeting, getMeeting, hasMeeting } from "../meetings";
 import { MEETING_END_REASONS, MEETING_STATUS } from "../types/meetingLifecycle";
+import {
+  ensureMeetingNotes,
+  ensureMeetingSummaries,
+} from "../services/meetingNotesService";
+import {
+  cleanupMeetingTempDir,
+  ensureMeetingTempDir,
+} from "../services/tempFileService";
 
 type EndMeetingFlowOptions = {
   client: Client;
   meeting: MeetingData;
-  sendEndEmbed: (
-    chatLogFilePath: string,
-    splitFiles: ChunkInfo[],
-  ) => Promise<void>;
-  acknowledge?: () => Promise<void>;
 };
+
+async function runMeetingEndStep<T>(
+  meeting: MeetingData,
+  name: string,
+  run: () => Promise<T>,
+  options: MeetingEndStepOptions = {},
+): Promise<T> {
+  const startedAt = Date.now();
+  const result = await withMeetingEndStep(meeting, name, run, options);
+  const durationMs = Date.now() - startedAt;
+  console.log(`Meeting end step completed: ${name} durationMs=${durationMs}`);
+  return result;
+}
 
 export async function handleEndMeetingButton(
   client: Client,
@@ -83,22 +100,12 @@ export async function handleEndMeetingButton(
     meeting.endReason = MEETING_END_REASONS.BUTTON;
     meeting.endTriggeredByUserId = interaction.user.id;
 
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate();
+    }
+
     await withMeetingEndTrace(meeting, async () => {
-      await runEndMeetingFlow({
-        client,
-        meeting,
-        acknowledge: async () => {
-          await interaction.deferReply();
-        },
-        sendEndEmbed: async (chatLogFilePath, splitFiles) => {
-          await sendMeetingEndEmbed(
-            meeting,
-            interaction,
-            chatLogFilePath,
-            splitFiles,
-          );
-        },
-      });
+      await runEndMeetingFlow({ client, meeting });
     });
   } catch (error) {
     console.error("Error during meeting end:", error);
@@ -106,6 +113,9 @@ export async function handleEndMeetingButton(
       meeting.setFinished();
       meeting.finished = true;
       deleteMeeting(meeting.guildId);
+    }
+    if (meeting) {
+      await cleanupMeetingTempDir(meeting);
     }
   }
 }
@@ -116,18 +126,7 @@ export async function handleEndMeetingOther(
 ) {
   try {
     await withMeetingEndTrace(meeting, async () => {
-      await runEndMeetingFlow({
-        client,
-        meeting,
-        sendEndEmbed: async (chatLogFilePath, splitFiles) => {
-          await sendMeetingEndEmbedToChannel(
-            meeting,
-            meeting.textChannel,
-            chatLogFilePath,
-            splitFiles,
-          );
-        },
-      });
+      await runEndMeetingFlow({ client, meeting });
     });
   } catch (error) {
     console.error("Error during meeting end:", error);
@@ -136,11 +135,12 @@ export async function handleEndMeetingOther(
       meeting.finished = true;
       deleteMeeting(meeting.guildId);
     }
+    await cleanupMeetingTempDir(meeting);
   }
 }
 
 async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
-  const { client, meeting, sendEndEmbed, acknowledge } = options;
+  const { client, meeting } = options;
   if (meeting.finishing || meeting.finished) {
     return;
   }
@@ -158,130 +158,160 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
   stopThinkingCueLoop(meeting);
   meeting.ttsQueue?.stopAndClear();
 
-  if (acknowledge) {
-    await acknowledge();
-  }
-
-  if (meeting.initialInteraction) {
-    try {
-      await meeting.initialInteraction.editReply({
-        components: [],
-      }); // Remove "End Meeting" button from initial reply if able
-    } catch (e) {
-      console.error(
-        "Initial Interaction timed out, couldn't remove End Meeting button from initial reply, continuing...",
-        e,
-      );
-    }
-  }
-
-  await clearStartMessageComponents(meeting);
-
-  if (meeting.connection) {
-    meeting.connection.disconnect();
-    meeting.connection.destroy();
-  }
-
-  const chatLogFilePath = `./chatlog-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
-  writeFileSync(
-    chatLogFilePath,
-    meeting.chatLog.map((e) => renderChatEntryLine(e)).join("\n"),
+  await runMeetingEndStep(meeting, "update-processing-message", () =>
+    updateMeetingProcessingMessage(meeting),
   );
 
-  // checking if the current snippet exists should only matter when there was no audio recorded at all
-  meeting.audioData.currentSnippets.forEach((snippet) => {
-    startProcessingSnippet(meeting, snippet.userId);
-  });
+  const meetingTempDir = await ensureMeetingTempDir(meeting);
+  try {
+    const chatLogFilePath = path.join(meetingTempDir, "chat.txt");
+    writeFileSync(
+      chatLogFilePath,
+      meeting.chatLog.map((e) => renderChatEntryLine(e)).join("\n"),
+    );
 
-  await waitForAudioOnlyFinishProcessing(meeting);
-
-  await closeOutputFile(meeting);
-
-  const cancellationDecision = await evaluateAutoRecordCancellation(meeting);
-  if (cancellationDecision.cancel) {
-    meeting.cancelled = true;
-    meeting.cancellationReason = cancellationDecision.reason;
-    meeting.endReason = MEETING_END_REASONS.AUTO_CANCELLED;
-    await handleAutoRecordCancellation(meeting, chatLogFilePath);
-    await cleanupAudioSegments(meeting);
-    return;
-  }
-
-  const combinedAudioFile = meeting.audioData.outputFileName!;
-  const mixedAudioFile = await buildMixedAudio(meeting);
-  const outputAudioFile = mixedAudioFile ?? combinedAudioFile;
-
-  const splitAudioDir = `./split_${meeting.guildId}_${meeting.channelId}_${Date.now()}`;
-  const splitFiles = await splitAudioIntoChunks(outputAudioFile, splitAudioDir);
-
-  await sendEndEmbed(chatLogFilePath, splitFiles);
-
-  let transcriptForUpload: string | undefined;
-  const transcriptionsReady = meeting.audioData.audioFiles.every(
-    (file) => !file.processing,
-  );
-
-  if (meeting.transcribeMeeting) {
-    let waitingForTranscriptionsMessage:
-      | Awaited<ReturnType<typeof meeting.textChannel.send>>
-      | undefined;
-    if (!transcriptionsReady) {
-      waitingForTranscriptionsMessage = await meeting.textChannel.send(
-        "Processing transcription... please wait...",
-      );
-      await waitForFinishProcessing(meeting);
-    }
-
-    const transcriptions = await compileTranscriptions(client, meeting);
-    meeting.finalTranscript = transcriptions;
-
-    const transcriptionFilePath = `./transcription-${meeting.guildId}-${meeting.channelId}-${Date.now()}.txt`;
-    writeFileSync(transcriptionFilePath, transcriptions);
-
-    await sendTranscriptionFiles(meeting, transcriptionFilePath);
-
-    deleteIfExists(transcriptionFilePath);
-
-    if (waitingForTranscriptionsMessage) {
-      await waitingForTranscriptionsMessage.delete();
-    }
-
-    if (meeting.finalTranscript && meeting.generateNotes) {
-      const waitingForMeetingNotesMessage = await meeting.textChannel.send(
-        "Generating meeting notes... please wait...",
-      );
-      await generateAndSendNotes(meeting);
-      await waitingForMeetingNotesMessage.delete();
-    }
-
-    transcriptForUpload = await compileTranscriptions(client, meeting, {
-      includeCues: true,
+    // checking if the current snippet exists should only matter when there was no audio recorded at all
+    meeting.audioData.currentSnippets.forEach((snippet) => {
+      startProcessingSnippet(meeting, snippet.userId);
     });
+
+    if (meeting.connection) {
+      meeting.connection.disconnect();
+      meeting.connection.destroy();
+    }
+
+    await runMeetingEndStep(meeting, "wait-audio-only", () =>
+      waitForAudioOnlyFinishProcessing(meeting),
+    );
+
+    await runMeetingEndStep(meeting, "close-output-file", () =>
+      closeOutputFile(meeting),
+    );
+
+    const cancellationDecision = await runMeetingEndStep(
+      meeting,
+      "auto-record-cancellation",
+      () => evaluateAutoRecordCancellation(meeting),
+      {
+        metadata: {
+          audioFiles: meeting.audioData.audioFiles.length,
+        },
+      },
+    );
+    if (cancellationDecision.cancel) {
+      meeting.cancelled = true;
+      meeting.cancellationReason = cancellationDecision.reason;
+      meeting.endReason = MEETING_END_REASONS.AUTO_CANCELLED;
+      await runMeetingEndStep(meeting, "auto-record-cancel-flow", () =>
+        handleAutoRecordCancellation(meeting, chatLogFilePath),
+      );
+      await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>
+        cleanupSpeakerTracks(meeting),
+      );
+      return;
+    }
+
+    const combinedAudioFile = meeting.audioData.outputFileName!;
+    const mixedAudioFile = await runMeetingEndStep(
+      meeting,
+      "build-mixed-audio",
+      () => buildMixedAudio(meeting),
+      {
+        metadata: {
+          speakerTrackCount: meeting.audioData.speakerTracks?.size ?? 0,
+        },
+      },
+    );
+    const outputAudioFile = mixedAudioFile ?? combinedAudioFile;
+
+    let transcriptForUpload: string | undefined;
+    const transcriptionsReady = meeting.audioData.audioFiles.every(
+      (file) => !file.processing,
+    );
+
+    if (meeting.transcribeMeeting) {
+      if (!transcriptionsReady) {
+        const pending = meeting.audioData.audioFiles.filter(
+          (file) => file.processing,
+        ).length;
+        console.log(
+          `Waiting for transcriptions to finish: pending=${pending} meetingId=${meeting.meetingId}`,
+        );
+        await runMeetingEndStep(
+          meeting,
+          "wait-transcriptions",
+          () => waitForFinishProcessing(meeting),
+          {
+            metadata: {
+              pending,
+            },
+          },
+        );
+      }
+
+      const transcriptions = await runMeetingEndStep(
+        meeting,
+        "compile-transcriptions",
+        () => compileTranscriptions(client, meeting),
+      );
+      meeting.finalTranscript = transcriptions;
+
+      if (meeting.generateNotes) {
+        const notes = await runMeetingEndStep(meeting, "generate-notes", () =>
+          ensureMeetingNotes(meeting),
+        );
+        await runMeetingEndStep(meeting, "generate-summary", () =>
+          ensureMeetingSummaries(meeting, notes),
+        );
+      }
+
+      transcriptForUpload = await runMeetingEndStep(
+        meeting,
+        "compile-transcriptions-upload",
+        () =>
+          compileTranscriptions(client, meeting, {
+            includeCues: true,
+          }),
+      );
+    }
+
+    // Upload artifacts after transcript generation (or audio/chat only)
+    await runMeetingEndStep(meeting, "upload-artifacts", () =>
+      uploadMeetingArtifacts(meeting, {
+        audioFilePath: outputAudioFile,
+        chatFilePath: chatLogFilePath,
+        transcriptText: transcriptForUpload,
+      }),
+    );
+
+    await runMeetingEndStep(meeting, "update-summary-message", () =>
+      updateMeetingSummaryMessage(meeting),
+    );
+
+    deleteIfExists(chatLogFilePath);
+    deleteIfExists(outputAudioFile);
+    if (outputAudioFile !== combinedAudioFile) {
+      // Only delete the combined file when a separate mixed file was used.
+      deleteIfExists(combinedAudioFile);
+    }
+    await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>
+      cleanupSpeakerTracks(meeting),
+    );
+
+    // Save meeting history to database before cleanup
+    await runMeetingEndStep(meeting, "save-meeting-history", () =>
+      saveMeetingHistoryToDatabase(meeting),
+    );
+    await runMeetingEndStep(meeting, "minutes-limit-notice", () =>
+      maybeSendMinutesLimitNotice(meeting),
+    );
+
+    meeting.setFinished();
+    meeting.finished = true;
+    deleteMeeting(meeting.guildId);
+  } finally {
+    await cleanupMeetingTempDir(meeting);
   }
-
-  // Upload artifacts after transcript generation (or audio/chat only)
-  await uploadMeetingArtifacts(meeting, {
-    audioFilePath: outputAudioFile,
-    chatFilePath: chatLogFilePath,
-    transcriptText: transcriptForUpload,
-  });
-
-  deleteIfExists(chatLogFilePath);
-  deleteIfExists(outputAudioFile);
-  if (mixedAudioFile && mixedAudioFile !== combinedAudioFile) {
-    deleteIfExists(combinedAudioFile);
-  }
-  await cleanupAudioSegments(meeting);
-
-  deleteDirectoryRecursively(splitAudioDir);
-
-  // Save meeting history to database before cleanup
-  await saveMeetingHistoryToDatabase(meeting);
-  await maybeSendMinutesLimitNotice(meeting);
-
-  meeting.setFinished();
-  meeting.finished = true;
-  deleteMeeting(meeting.guildId);
 }
 
 async function handleAutoRecordCancellation(
@@ -372,18 +402,6 @@ async function markMeetingProcessing(meeting: MeetingData) {
     });
   } catch (error) {
     console.warn("Failed to mark meeting as processing", error);
-  }
-}
-
-async function clearStartMessageComponents(meeting: MeetingData) {
-  if (!meeting.startMessageId) return;
-  try {
-    const message = await meeting.textChannel.messages.fetch(
-      meeting.startMessageId,
-    );
-    await message.edit({ components: [] });
-  } catch (e) {
-    console.warn("Could not clear start message buttons", e);
   }
 }
 

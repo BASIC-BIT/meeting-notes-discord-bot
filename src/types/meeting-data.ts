@@ -11,13 +11,14 @@ import type { SpanContext } from "@opentelemetry/api";
 import { AudioData } from "./audio";
 import { ChatEntry } from "./chat";
 import { Participant } from "./participants";
-import type { UserSpeechSettings } from "./db";
+import type { DictionaryEntry, UserSpeechSettings } from "./db";
 import type { TtsQueue } from "../ttsQueue";
 import type {
   AutoRecordRule,
   MeetingEndReason,
   MeetingStartReason,
 } from "./meetingLifecycle";
+import type { ConfigTier, MeetingRuntimeConfig } from "../config/types";
 
 export type LiveVoiceCommandPending = {
   type: "end_meeting";
@@ -80,6 +81,8 @@ export interface MeetingData {
   generateNotes: boolean;
   meetingContext?: string;
   onEndMeeting?: (meeting: MeetingData) => Promise<void> | void;
+  subscriptionTier?: ConfigTier;
+  runtimeConfig?: MeetingRuntimeConfig;
 
   finalTranscript?: string;
   transcriptS3Key?: string;
@@ -89,13 +92,16 @@ export interface MeetingData {
   notesLastEditedBy?: string;
   notesLastEditedAt?: string;
   notesText?: string;
+  meetingName?: string;
   summarySentence?: string;
   summaryLabel?: string;
   participants: Map<string, Participant>;
   audioS3Key?: string;
   chatS3Key?: string;
   tags?: string[];
+  dictionaryEntries?: DictionaryEntry[];
   startMessageId?: string;
+  summaryMessageId?: string;
   messagesToDelete?: string[];
 }
 

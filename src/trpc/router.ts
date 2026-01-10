@@ -4,7 +4,10 @@ import { authRouter } from "./routers/auth";
 import { autorecordRouter } from "./routers/autorecord";
 import { billingRouter } from "./routers/billing";
 import { channelContextsRouter } from "./routers/channelContexts";
+import { configRouter } from "./routers/config";
 import { contextRouter } from "./routers/context";
+import { dictionaryRouter } from "./routers/dictionary";
+import { feedbackRouter } from "./routers/feedback";
 import { meetingsRouter } from "./routers/meetings";
 import { pricingRouter } from "./routers/pricing";
 import { serversRouter } from "./routers/servers";
@@ -15,7 +18,10 @@ export const appRouter = router({
   autorecord: autorecordRouter,
   billing: billingRouter,
   channelContexts: channelContextsRouter,
+  config: configRouter,
   context: contextRouter,
+  dictionary: dictionaryRouter,
+  feedback: feedbackRouter,
   meetings: meetingsRouter,
   pricing: pricingRouter,
   servers: serversRouter,

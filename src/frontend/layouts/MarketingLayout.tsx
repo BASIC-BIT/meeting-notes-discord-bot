@@ -2,12 +2,15 @@ import {
   AppShell,
   Box,
   Container,
+  type AppShellStylesNames,
   useComputedColorScheme,
   useMantineTheme,
 } from "@mantine/core";
+import { Outlet } from "@tanstack/react-router";
+import type { CSSProperties } from "react";
 import SiteFooter from "../components/SiteFooter";
 import SiteHeader from "../components/SiteHeader";
-import Home from "../pages/Home";
+import { useVisualMode } from "../hooks/useVisualMode";
 import {
   appBackground,
   pagePaddingX,
@@ -22,22 +25,51 @@ export default function MarketingLayout() {
   const theme = useMantineTheme();
   const colorScheme = useComputedColorScheme("dark");
   const isDark = colorScheme === "dark";
+  const visualMode = useVisualMode();
 
-  return (
-    <AppShell
-      padding={0}
-      header={{ height: shellHeights.header }}
-      styles={{
-        header: {
+  const appShellStyle = {
+    minHeight: visualMode ? "100vh" : undefined,
+    height: visualMode ? "auto" : undefined,
+    overflow: visualMode ? "visible" : undefined,
+  };
+
+  const appShellStyles: Partial<Record<AppShellStylesNames, CSSProperties>> = {
+    header: visualMode
+      ? {
+          borderBottom: shellBorder(theme, isDark),
+          backgroundColor: shellHeaderBackground(isDark),
+          backdropFilter: "blur(16px)",
+          boxShadow: shellShadow(isDark),
+          position: "static",
+        }
+      : {
           borderBottom: shellBorder(theme, isDark),
           backgroundColor: shellHeaderBackground(isDark),
           backdropFilter: "blur(16px)",
           boxShadow: shellShadow(isDark),
         },
-        main: {
+    main: visualMode
+      ? {
+          backgroundColor: appBackground(theme, isDark),
+          paddingTop: 0,
+          paddingBottom: 0,
+          paddingInlineStart: 0,
+          paddingInlineEnd: 0,
+          minHeight: "auto",
+          height: "auto",
+          overflow: "visible",
+        }
+      : {
           backgroundColor: appBackground(theme, isDark),
         },
-      }}
+  };
+
+  return (
+    <AppShell
+      padding={0}
+      header={{ height: shellHeights.header }}
+      style={appShellStyle}
+      styles={appShellStyles}
     >
       <AppShell.Header p="md">
         <SiteHeader
@@ -55,7 +87,7 @@ export default function MarketingLayout() {
           }}
         >
           <Container size="xl" px={pagePaddingX}>
-            <Home />
+            <Outlet />
           </Container>
           <SiteFooter />
         </Box>

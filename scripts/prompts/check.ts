@@ -19,10 +19,14 @@ function parseFlagValue(flag: string): string | undefined {
 
 async function main() {
   const dir = parseFlagValue("--dir") ?? "prompts";
-  const label =
-    parseFlagValue("--label") ??
-    process.env.LANGFUSE_PROMPT_LABEL ??
-    "production";
+  const labelOverride = parseFlagValue("--label");
+  const envLabel = process.env.LANGFUSE_PROMPT_LABEL?.trim() || "production";
+
+  const resolveLabel = (labels: string[]): string => {
+    if (labelOverride) return labelOverride;
+    if (labels.length > 0) return labels[0];
+    return envLabel;
+  };
 
   const files = await listPromptFiles(dir);
   if (files.length === 0) {
@@ -37,6 +41,7 @@ async function main() {
     if (local.fragment) {
       continue;
     }
+    const label = resolveLabel(local.labels);
     const remote = await getPrompt({ name: local.name, label });
 
     const issues: string[] = [];

@@ -2,29 +2,30 @@ import type OpenAI from "openai";
 import type { SpanContext } from "@opentelemetry/api";
 import { ChatEntry } from "./types/chat";
 import { renderChatEntryLine } from "./utils/chatLog";
-import { distance as levenshteinDistance } from "fastest-levenshtein";
 import {
   createReadStream,
   existsSync,
-  mkdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import path from "node:path";
 import {
   BYTES_PER_SAMPLE,
   CHANNELS,
   RECORD_SAMPLE_RATE,
   TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
   TRANSCRIPTION_BREAK_DURATION,
+  TRANSCRIPTION_GLOSSARY_TERM_ONLY_MAX_SECONDS,
+  LANGFUSE_AUDIO_ATTACHMENT_MAX_CONCURRENT,
+  LANGFUSE_AUDIO_ATTACHMENT_MIN_TIME,
   TRANSCRIPTION_MAX_CONCURRENT,
   TRANSCRIPTION_MAX_QUEUE,
   TRANSCRIPTION_MAX_RETRIES,
-  TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD,
   TRANSCRIPTION_RATE_MIN_TIME,
   TRANSCRIBE_SAMPLE_RATE,
 } from "./constants";
 import ffmpeg from "fluent-ffmpeg";
-import { AudioSnippet } from "./types/audio";
+import { AudioSnippet, TranscriptVariant } from "./types/audio";
 import {
   bulkhead,
   circuitBreaker,
@@ -45,7 +46,18 @@ import { config } from "./services/configService";
 import { formatParticipantLabel } from "./utils/participants";
 import { getBotNameVariants } from "./utils/botNames";
 import { createOpenAIClient } from "./services/openaiClient";
-import { getModelChoice } from "./services/modelFactory";
+import { buildModelOverrides, getModelChoice } from "./services/modelFactory";
+import { resolveChatParamsForRole } from "./services/openaiModelParams";
+import {
+  buildDictionaryPromptLines,
+  DEFAULT_DICTIONARY_BUDGETS,
+} from "./utils/dictionary";
+import {
+  buildGlossaryTermSet,
+  getPromptSimilarityMetrics,
+  isGlossaryTermOnlyTranscript,
+} from "./utils/transcriptionGuards";
+import type { ModelParamRole } from "./config/types";
 import {
   getLangfuseChatPrompt,
   type LangfusePromptMeta,
@@ -56,64 +68,73 @@ import {
   updateActiveObservation,
   updateActiveTrace,
 } from "@langfuse/tracing";
+import { buildLangfuseTranscriptionAudioAttachment } from "./observability/langfuseAudioAttachment";
+import { buildLangfuseTranscriptionUsageDetails } from "./observability/langfuseUsageDetails";
+import { ensureMeetingTempDirSync } from "./services/tempFileService";
 // import { Transcription, TranscriptionVerbose } from "openai/resources/audio/transcriptions";
 
-// Check if transcription is too similar to the prompt or glossary content (likely verbatim output)
-function isTranscriptionLikelyPrompt(
+type TranscriptionGuardResult = {
+  text: string;
+  flags: string[];
+  promptSimilarity: ReturnType<typeof getPromptSimilarityMetrics>;
+  glossaryTermOnly: boolean;
+};
+
+export function applyTranscriptionGuards(
+  meeting: MeetingData,
   transcription: string,
-  fullPrompt: string,
+  prompt: string,
   glossaryContent: string,
-): boolean {
-  // Normalize all strings for comparison
-  const normalizedTranscription = transcription.trim().toLowerCase();
-  const normalizedPrompt = fullPrompt.trim().toLowerCase();
-  const normalizedGlossary = glossaryContent.trim().toLowerCase();
+  context?: TranscriptionTraceContext,
+): TranscriptionGuardResult {
+  const trimmed = transcription.trim();
+  const suppressionEnabled =
+    meeting.runtimeConfig?.transcription.suppressionEnabled ?? true;
+  const promptSimilarity = getPromptSimilarityMetrics({
+    transcription: trimmed,
+    fullPrompt: prompt,
+    glossaryContent,
+  });
+  if (!suppressionEnabled) {
+    return {
+      text: trimmed,
+      flags: [],
+      promptSimilarity,
+      glossaryTermOnly: false,
+    };
+  }
+  const termSet = buildGlossaryTermSet({
+    serverName: meeting.guild.name,
+    channelName: meeting.voiceChannel.name,
+    dictionaryTerms: meeting.dictionaryEntries?.map((entry) => entry.term),
+  });
+  const glossaryTermOnly = isGlossaryTermOnlyTranscript(trimmed, termSet);
+  const flags: string[] = [];
 
-  // Extract just the first line of the glossary content (Server Name: ...)
-  const firstLineOfGlossary = glossaryContent
-    .split("\n")[0]
-    .trim()
-    .toLowerCase();
+  if (promptSimilarity.isPromptLike) {
+    flags.push("prompt_like");
+  }
 
-  // Calculate similarity against the full prompt, just the glossary content, and just the first line
-  const distanceFull = levenshteinDistance(
-    normalizedTranscription,
-    normalizedPrompt,
-  );
-  const distanceContent = levenshteinDistance(
-    normalizedTranscription,
-    normalizedGlossary,
-  );
-  const distanceFirstLine = levenshteinDistance(
-    normalizedTranscription,
-    firstLineOfGlossary,
-  );
+  const maxGlossarySeconds = TRANSCRIPTION_GLOSSARY_TERM_ONLY_MAX_SECONDS;
+  const audioSeconds = context?.audioSeconds ?? 0;
+  const shouldSuppressGlossaryTerm =
+    glossaryTermOnly && audioSeconds > 0 && audioSeconds < maxGlossarySeconds;
 
-  const maxLengthFull = Math.max(
-    normalizedTranscription.length,
-    normalizedPrompt.length,
-  );
-  const maxLengthContent = Math.max(
-    normalizedTranscription.length,
-    normalizedGlossary.length,
-  );
-  const maxLengthFirstLine = Math.max(
-    normalizedTranscription.length,
-    firstLineOfGlossary.length,
-  );
+  if (glossaryTermOnly) {
+    flags.push("glossary_term_only");
+  }
 
-  const similarityFull = maxLengthFull > 0 ? distanceFull / maxLengthFull : 0;
-  const similarityContent =
-    maxLengthContent > 0 ? distanceContent / maxLengthContent : 0;
-  const similarityFirstLine =
-    maxLengthFirstLine > 0 ? distanceFirstLine / maxLengthFirstLine : 0;
+  const shouldSuppressPromptLike = promptSimilarity.isPromptLike;
+  const text =
+    shouldSuppressGlossaryTerm || shouldSuppressPromptLike ? "" : trimmed;
+  if (shouldSuppressGlossaryTerm) {
+    flags.push("glossary_term_suppressed");
+  }
+  if (shouldSuppressPromptLike) {
+    flags.push("prompt_suppressed");
+  }
 
-  // If similarity is below threshold for any comparison, it's likely the prompt was output verbatim
-  return (
-    similarityFull < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD ||
-    similarityContent < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD ||
-    similarityFirstLine < TRANSCRIPTION_PROMPT_SIMILARITY_THRESHOLD
-  );
+  return { text, flags, promptSimilarity, glossaryTermOnly };
 }
 
 type TranscriptionTraceContext = {
@@ -123,6 +144,9 @@ type TranscriptionTraceContext = {
   audioBytes: number;
 };
 
+const getMeetingModelOverrides = (meeting: MeetingData) =>
+  buildModelOverrides(meeting.runtimeConfig?.modelChoices);
+
 async function transcribeInternal(
   meeting: MeetingData,
   file: string,
@@ -131,7 +155,10 @@ async function transcribeInternal(
   const glossaryContent = getTranscriptionGlossaryContent(meeting);
   const prompt = getTranscriptionKeywords(meeting);
 
-  const modelChoice = getModelChoice("transcription");
+  const modelChoice = getModelChoice(
+    "transcription",
+    getMeetingModelOverrides(meeting),
+  );
   const traceMetadata = {
     guildId: meeting.guild.id,
     channelId: meeting.voiceChannel.id,
@@ -153,18 +180,29 @@ async function transcribeInternal(
       response_format: "json",
       // include: ["logprobs"],
     });
+    return transcription.text;
+  };
 
-    // Check if the transcription is suspiciously similar to the prompt or glossary content
-    if (
-      isTranscriptionLikelyPrompt(transcription.text, prompt, glossaryContent)
-    ) {
-      console.warn(
-        "Transcription appears to be verbatim prompt output, likely no transcribable audio",
-      );
-      return "";
+  const applyGuardsAndLog = (rawText: string) => {
+    const guardResult = applyTranscriptionGuards(
+      meeting,
+      rawText,
+      prompt,
+      glossaryContent,
+      context,
+    );
+
+    if (guardResult.flags.length > 0) {
+      console.warn("Transcription flagged by guard checks.", {
+        ...traceMetadata,
+        flags: guardResult.flags,
+        promptSimilarity: guardResult.promptSimilarity,
+        glossaryTermOnly: guardResult.glossaryTermOnly,
+        transcriptionLength: guardResult.text.length,
+      });
     }
 
-    return transcription.text;
+    return guardResult;
   };
 
   if (!isLangfuseTracingEnabled()) {
@@ -176,7 +214,8 @@ async function transcribeInternal(
       tags: ["feature:transcription"],
       metadata: traceMetadata,
     });
-    return await runTranscription(openAIClient);
+    const output = await runTranscription(openAIClient);
+    return applyGuardsAndLog(output).text;
   }
 
   return await startActiveObservation(
@@ -188,12 +227,13 @@ async function transcribeInternal(
         tags: ["feature:transcription"],
         metadata: traceMetadata,
       });
+      const observationInput = {
+        language: "en",
+        prompt,
+      };
       updateActiveObservation(
         {
-          input: {
-            language: "en",
-            prompt,
-          },
+          input: observationInput,
           model: modelChoice.model,
           modelParameters: {
             temperature: 0,
@@ -204,23 +244,52 @@ async function transcribeInternal(
         { asType: "generation" },
       );
 
+      void langfuseAttachmentLimiter
+        .schedule(() => buildLangfuseTranscriptionAudioAttachment(file))
+        .then((audioAttachment) => {
+          if (!audioAttachment) return;
+          updateActiveObservation(
+            {
+              input: {
+                ...observationInput,
+                audio: audioAttachment.media,
+              },
+              metadata: {
+                audioAttachmentBytes: audioAttachment.byteLength,
+                audioAttachmentContentType: audioAttachment.contentType,
+              },
+            },
+            { asType: "generation" },
+          );
+        })
+        .catch((error) => {
+          console.warn(
+            "Failed to attach transcription audio to Langfuse.",
+            error,
+          );
+        });
+
       const openAIClient = createOpenAIClient({ disableTracing: true });
       const output = await runTranscription(openAIClient);
+      const guardResult = applyGuardsAndLog(output);
 
-      const usageDetails = context?.audioSeconds
-        ? {
-            audioSeconds: Number(context.audioSeconds.toFixed(3)),
-          }
-        : undefined;
+      const usageDetails = buildLangfuseTranscriptionUsageDetails(
+        context?.audioSeconds,
+      );
       updateActiveObservation(
         {
-          output,
+          output: guardResult.text,
           usageDetails,
+          metadata: {
+            transcriptionFlags: guardResult.flags,
+            promptSimilarity: guardResult.promptSimilarity,
+            glossaryTermOnly: guardResult.glossaryTermOnly,
+          },
         },
         { asType: "generation" },
       );
 
-      return output;
+      return guardResult.text;
     },
     { asType: "generation" },
   );
@@ -247,6 +316,11 @@ const limiter = new Bottleneck({
   minTime: TRANSCRIPTION_RATE_MIN_TIME,
 });
 
+const langfuseAttachmentLimiter = new Bottleneck({
+  maxConcurrent: LANGFUSE_AUDIO_ATTACHMENT_MAX_CONCURRENT,
+  minTime: LANGFUSE_AUDIO_ATTACHMENT_MIN_TIME,
+});
+
 async function transcribe(
   meeting: MeetingData,
   file: string,
@@ -263,14 +337,15 @@ export async function transcribeSnippet(
   options: { tempSuffix?: string } = {},
 ): Promise<string> {
   const suffix = options.tempSuffix ? `_${options.tempSuffix}` : "";
-  const tempPcmFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}_transcript.pcm`;
-  const tempWavFileName = `./temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}.wav`;
-
-  // Ensure the directories exist
-  const tempDir = "./";
-  if (!existsSync(tempDir)) {
-    mkdirSync(tempDir, { recursive: true });
-  }
+  const tempDir = ensureMeetingTempDirSync(meeting);
+  const tempPcmFileName = path.join(
+    tempDir,
+    `temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}_transcript.pcm`,
+  );
+  const tempWavFileName = path.join(
+    tempDir,
+    `temp_snippet_${snippet.userId}_${snippet.timestamp}${suffix}.wav`,
+  );
 
   // Write the PCM buffer to a file
   const buffer = Buffer.concat(snippet.chunks);
@@ -354,12 +429,14 @@ export async function cleanupTranscription(
     meeting,
     transcription,
   );
-  const modelChoice = getModelChoice("transcriptionCleanup");
+  const modelChoice = getModelChoice(
+    "transcriptionCleanup",
+    getMeetingModelOverrides(meeting),
+  );
   return await chat(
     meeting,
     {
       messages: [...messages],
-      temperature: 0,
     },
     {
       model: modelChoice.model,
@@ -368,13 +445,71 @@ export async function cleanupTranscription(
       tags: ["feature:transcription_cleanup"],
       langfusePrompt,
       parentSpanContext: meeting.langfuseParentSpanContext,
+      modelParamRole: "transcriptionCleanup",
+    },
+  );
+}
+
+type CoalesceInput = {
+  slowTranscript: string;
+  fastTranscripts: TranscriptVariant[];
+};
+
+export async function getTranscriptionCoalescePrompt(
+  meeting: MeetingData,
+  input: CoalesceInput,
+) {
+  const contextData = await buildMeetingContext(meeting, false);
+  const formattedContext = formatContextForPrompt(contextData, "transcription");
+  const fastTranscriptBlock = input.fastTranscripts
+    .map((entry) => `- (rev ${entry.revision}) ${entry.text}`)
+    .join("\n");
+
+  return await getLangfuseChatPrompt({
+    name: config.langfuse.transcriptionCoalescePromptName,
+    variables: {
+      formattedContext,
+      serverName: meeting.guild.name,
+      voiceChannelName: meeting.voiceChannel.name,
+      attendees: Array.from(meeting.attendance).join(", "),
+      slowTranscript: input.slowTranscript,
+      fastTranscriptBlock,
+    },
+  });
+}
+
+export async function coalesceTranscription(
+  meeting: MeetingData,
+  input: CoalesceInput,
+): Promise<string> {
+  const { messages, langfusePrompt } = await getTranscriptionCoalescePrompt(
+    meeting,
+    input,
+  );
+  const modelChoice = getModelChoice(
+    "transcriptionCoalesce",
+    getMeetingModelOverrides(meeting),
+  );
+  return await chat(
+    meeting,
+    {
+      messages: [...messages],
+    },
+    {
+      model: modelChoice.model,
+      traceName: "transcription-coalesce",
+      generationName: "transcription-coalesce",
+      tags: ["feature:transcription_coalesce"],
+      langfusePrompt,
+      parentSpanContext: meeting.langfuseParentSpanContext,
+      modelParamRole: "transcriptionCoalesce",
     },
   );
 }
 
 type ChatInput = Omit<
   OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
-  "model" | "user"
+  "model" | "user" | "temperature" | "reasoning_effort" | "verbosity"
 >;
 
 type ChatOptions = {
@@ -385,6 +520,7 @@ type ChatOptions = {
   metadata?: Record<string, unknown>;
   langfusePrompt?: LangfusePromptMeta;
   parentSpanContext?: SpanContext;
+  modelParamRole?: ModelParamRole;
 };
 
 async function chat(
@@ -392,7 +528,15 @@ async function chat(
   body: ChatInput,
   options: ChatOptions = {},
 ): Promise<string> {
-  const model = options.model ?? getModelChoice("notes").model;
+  const model =
+    options.model ??
+    getModelChoice("notes", getMeetingModelOverrides(meeting)).model;
+  const modelParamRole = options.modelParamRole ?? "notes";
+  const modelParams = resolveChatParamsForRole({
+    role: modelParamRole,
+    model,
+    config: meeting.runtimeConfig?.modelParams?.[modelParamRole],
+  });
   const openAIClient = createOpenAIClient({
     traceName: options.traceName ?? "notes",
     generationName: options.generationName ?? "notes",
@@ -415,8 +559,11 @@ async function chat(
       model,
       user: meeting.creator.id,
       ...body,
+      ...modelParams,
     });
-    console.log(response.choices[0].finish_reason);
+    console.log(
+      `Chat completion finish reason: ${response.choices[0].finish_reason} (trace=${options.traceName ?? "notes"} model=${model})`,
+    );
     if (response.choices[0].finish_reason !== "length") {
       done = true;
     }
@@ -428,7 +575,9 @@ async function chat(
     });
     count++;
   }
-  console.log(`Chat took ${count} calls to fully complete due to length.`);
+  console.log(
+    `Chat took ${count} calls to fully complete due to length (trace=${options.traceName ?? "notes"} model=${model}).`,
+  );
   return output;
 }
 
@@ -463,10 +612,23 @@ Channel: ${channelName}`;
 export function getTranscriptionKeywords(meeting: MeetingData): string {
   let content = getTranscriptionGlossaryContent(meeting);
 
+  const budgets =
+    meeting.runtimeConfig?.dictionary ?? DEFAULT_DICTIONARY_BUDGETS;
+  const { transcriptionLines } = buildDictionaryPromptLines(
+    meeting.dictionaryEntries ?? [],
+    budgets,
+  );
+  if (transcriptionLines.length > 0) {
+    content += `\nDictionary terms:\n${transcriptionLines.join("\n")}`;
+  }
+
   // Add meeting context if provided
   if (meeting.meetingContext) {
     content += `\nMeeting Context: ${meeting.meetingContext}`;
   }
+
+  content +=
+    "\nTranscript instruction: Do not include any glossary text in the transcript.";
 
   return `<glossary>(do not include in transcript):
 ${content}
@@ -527,24 +689,29 @@ export async function getImage(meeting: MeetingData): Promise<string> {
     },
   });
 
+  const imagePromptModel = getModelChoice(
+    "imagePrompt",
+    getMeetingModelOverrides(meeting),
+  );
   const imagePrompt = await chat(
     meeting,
     {
       messages: [...messages],
-      temperature: 0.5,
     },
     {
+      model: imagePromptModel.model,
       traceName: "image-prompt",
       generationName: "image-prompt",
       tags: ["feature:image_prompt"],
       langfusePrompt,
       parentSpanContext: meeting.langfuseParentSpanContext,
+      modelParamRole: "imagePrompt",
     },
   );
 
   console.log(imagePrompt);
 
-  const imageModel = getModelChoice("image");
+  const imageModel = getModelChoice("image", getMeetingModelOverrides(meeting));
   const imageClient = createOpenAIClient({
     traceName: "image",
     generationName: "image",
@@ -685,7 +852,6 @@ export async function getNotes(meeting: MeetingData): Promise<string> {
     meeting,
     {
       messages: [...messages],
-      temperature: 0,
     },
     {
       traceName: "notes",
@@ -693,6 +859,7 @@ export async function getNotes(meeting: MeetingData): Promise<string> {
       tags: ["feature:notes"],
       langfusePrompt,
       parentSpanContext: meeting.langfuseParentSpanContext,
+      modelParamRole: "notes",
     },
   );
 }

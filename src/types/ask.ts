@@ -1,6 +1,10 @@
 export type AskMessageRole = "user" | "chronote";
-
 export type AskConversationVisibility = "private" | "server" | "public";
+export type AskCitation = {
+  index: number;
+  meetingId: string;
+  eventId?: string;
+};
 
 export interface AskConversation {
   id: string;
@@ -12,6 +16,8 @@ export interface AskConversation {
   sharedAt?: string;
   sharedByUserId?: string;
   sharedByTag?: string;
+  archivedAt?: string;
+  archivedByUserId?: string;
 }
 
 export interface AskMessage {
@@ -20,6 +26,7 @@ export interface AskMessage {
   text: string;
   createdAt: string;
   sourceMeetingIds?: string[];
+  citations?: AskCitation[];
 }
 
 export interface AskSharedConversation {
@@ -30,4 +37,5 @@ export interface AskSharedConversation {
   sharedAt?: string;
   ownerUserId: string;
   ownerTag?: string;
+  archivedAt?: string;
 }

@@ -45,8 +45,13 @@ export const uiTypography = {
     fontWeight: 600,
   },
   logo: {
+    fontFamily:
+      '"Zen Dots", Inter, system-ui, -apple-system, Segoe UI, sans-serif',
+    display: "inline-block",
     letterSpacing: "-0.02em",
     lineHeight: 1,
+    transform: "scaleY(1.1)",
+    transformOrigin: "center",
     fontWeight: 850,
   },
 } as const;
@@ -106,10 +111,13 @@ export const shellBorder = (theme: MantineTheme, isDark: boolean) =>
   `1px solid ${isDark ? theme.colors.dark[4] : theme.colors.gray[2]}`;
 
 export const shellHeaderBackground = (isDark: boolean) =>
-  isDark ? "rgba(12, 15, 24, 0.92)" : "rgba(255, 255, 255, 0.92)";
+  isDark ? "rgba(12, 15, 24, 0.92)" : "rgba(246, 248, 252, 0.92)";
 
 export const shellFooterBackground = (isDark: boolean) =>
-  isDark ? "rgba(12, 15, 24, 0.78)" : "rgba(255, 255, 255, 0.88)";
+  isDark ? "rgba(12, 15, 24, 0.78)" : "rgba(246, 248, 252, 0.9)";
+
+export const shellNavbarBackground = (isDark: boolean) =>
+  isDark ? "rgba(12, 15, 24, 0.92)" : "rgba(246, 248, 252, 0.96)";
 
 export const shellShadow = (isDark: boolean) =>
   isDark ? "0 12px 40px rgba(0,0,0,0.35)" : "0 12px 40px rgba(15,23,42,0.08)";

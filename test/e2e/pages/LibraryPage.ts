@@ -16,6 +16,17 @@ export class LibraryPage {
     return this.page.getByTestId(testIds.library.refresh);
   }
 
+  archiveFilter(): Locator {
+    return this.page.getByTestId(testIds.library.archiveFilter);
+  }
+
+  async selectArchiveView(view: "active" | "archived" | "all"): Promise<void> {
+    const label =
+      view === "archived" ? "Archived" : view === "all" ? "All" : "Active";
+    await this.archiveFilter().click();
+    await this.page.getByRole("option", { name: label }).click();
+  }
+
   meetingRows(): Locator {
     return this.page.getByTestId(testIds.library.meetingRow);
   }
@@ -51,8 +62,44 @@ export class LibraryPage {
     return this.page.getByTestId(testIds.library.drawer);
   }
 
+  drawerContent(): Locator {
+    return this.drawer().getByTestId(testIds.library.drawerContent);
+  }
+
+  drawerSummaryScroll(): Locator {
+    return this.drawer().getByTestId(testIds.library.summaryScroll);
+  }
+
+  drawerSummaryViewport(): Locator {
+    return this.drawer().getByTestId(testIds.library.summaryViewport);
+  }
+
+  drawerTimelineViewport(): Locator {
+    return this.drawer().getByTestId(testIds.library.timelineViewport);
+  }
+
+  drawerTimelineEvents(): Locator {
+    return this.drawer().locator("[data-event-id]");
+  }
+
+  drawerFullscreenToggle(): Locator {
+    return this.drawer().getByTestId(testIds.library.fullscreenToggle);
+  }
+
   drawerDownload(): Locator {
     return this.drawer().getByTestId(testIds.library.download);
+  }
+
+  drawerArchive(): Locator {
+    return this.drawer().getByTestId(testIds.library.archive);
+  }
+
+  drawerUnarchive(): Locator {
+    return this.drawer().getByTestId(testIds.library.unarchive);
+  }
+
+  drawerArchiveConfirm(): Locator {
+    return this.page.getByTestId(testIds.library.archiveConfirm);
   }
 
   drawerSummaryLabel(): Locator {
@@ -60,7 +107,7 @@ export class LibraryPage {
   }
 
   drawerTimelineLabel(): Locator {
-    return this.drawer().getByText("Timeline", { exact: true }).first();
+    return this.drawer().getByText("Transcript", { exact: true }).first();
   }
 
   async closeDrawer(): Promise<void> {

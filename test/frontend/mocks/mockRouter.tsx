@@ -8,14 +8,21 @@ import {
   subscribeRouteSearch,
 } from "./routerState";
 
+type RouteSearch = {
+  meetingId?: string;
+  list?: string;
+  conversationId?: string;
+  messageId?: string;
+  promo?: string;
+  serverId?: string;
+  plan?: string;
+  interval?: string;
+  canceled?: boolean | string;
+  session_id?: string;
+};
+
 type NavigateOptions = {
-  search?:
-    | ((prev: { meetingId?: string; list?: string; messageId?: string }) => {
-        meetingId?: string;
-        list?: string;
-        messageId?: string;
-      })
-    | { meetingId?: string; list?: string; messageId?: string };
+  search?: RouteSearch | ((prev: RouteSearch) => RouteSearch);
 };
 
 const buildSearchString = () => {
@@ -28,6 +35,32 @@ const buildSearchString = () => {
   const query = params.toString();
   return query ? `?${query}` : "";
 };
+
+const resolveRouteId = (pathname: string) => {
+  if (pathname.startsWith("/portal/server/")) {
+    if (pathname.endsWith("/ask")) return "/portal/server/$serverId/ask";
+    if (pathname.endsWith("/library"))
+      return "/portal/server/$serverId/library";
+    if (pathname.endsWith("/billing"))
+      return "/portal/server/$serverId/billing";
+    if (pathname.endsWith("/settings"))
+      return "/portal/server/$serverId/settings";
+    return "/portal/server/$serverId";
+  }
+  return pathname;
+};
+
+const buildRouterState = () => ({
+  location: {
+    pathname: routerState.pathname,
+    search: buildSearchString(),
+  },
+  matches: [
+    {
+      routeId: resolveRouteId(routerState.pathname),
+    },
+  ],
+});
 
 const navigate = (options?: NavigateOptions) => {
   navigateSpy(options);
@@ -59,21 +92,9 @@ jest.mock("@tanstack/react-router", () => ({
       getRouteSearch,
     ),
   useRouterState: (options?: {
-    select?: (state: {
-      location: { pathname: string; search: string };
-    }) => string;
-  }) =>
-    options?.select
-      ? options.select({
-          location: {
-            pathname: routerState.pathname,
-            search: buildSearchString(),
-          },
-        })
-      : {
-          location: {
-            pathname: routerState.pathname,
-            search: buildSearchString(),
-          },
-        },
+    select?: (state: ReturnType<typeof buildRouterState>) => unknown;
+  }) => {
+    const state = buildRouterState();
+    return options?.select ? options.select(state) : state;
+  },
 }));

@@ -90,6 +90,18 @@ const tables = [
     BillingMode: "PAY_PER_REQUEST",
   },
   {
+    TableName: "DictionaryTable",
+    KeySchema: [
+      { AttributeName: "guildId", KeyType: "HASH" },
+      { AttributeName: "termKey", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "guildId", AttributeType: "S" },
+      { AttributeName: "termKey", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
     TableName: "UserSpeechSettingsTable",
     KeySchema: [
       { AttributeName: "guildId", KeyType: "HASH" },
@@ -98,6 +110,18 @@ const tables = [
     AttributeDefinitions: [
       { AttributeName: "guildId", AttributeType: "S" },
       { AttributeName: "userId", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "ConfigOverridesTable",
+    KeySchema: [
+      { AttributeName: "scopeId", KeyType: "HASH" },
+      { AttributeName: "configKey", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "scopeId", AttributeType: "S" },
+      { AttributeName: "configKey", AttributeType: "S" },
     ],
     BillingMode: "PAY_PER_REQUEST",
   },
@@ -150,6 +174,18 @@ const tables = [
   },
   {
     TableName: "AskConversationTable",
+    KeySchema: [
+      { AttributeName: "pk", KeyType: "HASH" },
+      { AttributeName: "sk", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "pk", AttributeType: "S" },
+      { AttributeName: "sk", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
+    TableName: "FeedbackTable",
     KeySchema: [
       { AttributeName: "pk", KeyType: "HASH" },
       { AttributeName: "sk", KeyType: "RANGE" },

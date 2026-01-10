@@ -2,6 +2,7 @@ import { test as base, expect } from "@playwright/test";
 import {
   AskPage,
   BillingPage,
+  AdminConfigPage,
   HomePage,
   LibraryPage,
   PortalNav,
@@ -17,6 +18,7 @@ type Fixtures = {
   askPage: AskPage;
   billingPage: BillingPage;
   settingsPage: SettingsPage;
+  adminConfigPage: AdminConfigPage;
 };
 
 export const test = base.extend<Fixtures>({
@@ -40,6 +42,9 @@ export const test = base.extend<Fixtures>({
   },
   settingsPage: async ({ page }, use) => {
     await use(new SettingsPage(page));
+  },
+  adminConfigPage: async ({ page }, use) => {
+    await use(new AdminConfigPage(page));
   },
 });
 

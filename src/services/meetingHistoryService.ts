@@ -16,8 +16,13 @@ export async function getMeetingHistoryService(
 export async function listRecentMeetingsForGuildService(
   guildId: string,
   limit?: number,
+  options?: { archivedOnly?: boolean; includeArchived?: boolean },
 ) {
-  return getMeetingHistoryRepository().listRecentByGuild(guildId, limit);
+  return getMeetingHistoryRepository().listRecentByGuild(
+    guildId,
+    limit,
+    options,
+  );
 }
 
 export async function listMeetingsForGuildInRangeService(
@@ -29,6 +34,17 @@ export async function listMeetingsForGuildInRangeService(
     guildId,
     startTimestamp,
     endTimestamp,
+  );
+}
+
+const MIN_TIMESTAMP_ISO = "1970-01-01T00:00:00.000Z";
+const MAX_TIMESTAMP_ISO = "9999-12-31T23:59:59.999Z";
+
+export async function listAllMeetingsForGuildService(guildId: string) {
+  return listMeetingsForGuildInRangeService(
+    guildId,
+    MIN_TIMESTAMP_ISO,
+    MAX_TIMESTAMP_ISO,
   );
 }
 
@@ -52,11 +68,24 @@ export async function updateMeetingNotesService(params: {
   editedBy: string;
   summarySentence?: string;
   summaryLabel?: string;
+  meetingName?: string;
   suggestion?: SuggestionHistoryEntry;
   expectedPreviousVersion?: number;
   metadata?: { notesMessageIds?: string[]; notesChannelId?: string };
 }) {
   return getMeetingHistoryRepository().updateNotes(params);
+}
+
+export async function updateMeetingNameService(params: {
+  guildId: string;
+  channelId_timestamp: string;
+  meetingName: string;
+}) {
+  return getMeetingHistoryRepository().updateMeetingName(
+    params.guildId,
+    params.channelId_timestamp,
+    params.meetingName,
+  );
 }
 
 export async function updateMeetingTagsService(
@@ -81,4 +110,13 @@ export async function updateMeetingStatusService(params: {
     params.channelId_timestamp,
     params.status,
   );
+}
+
+export async function updateMeetingArchiveService(params: {
+  guildId: string;
+  channelId_timestamp: string;
+  archived: boolean;
+  archivedByUserId: string;
+}) {
+  return getMeetingHistoryRepository().updateArchive(params);
 }

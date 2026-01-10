@@ -16,6 +16,7 @@
 
 - [ ] Create Secrets Manager entries (prod + staging)
 - [ ] Map secrets to ECS task env
+- [ ] Set Langfuse public and secret keys in Secrets Manager (prod + staging)
 - [ ] Add/verify env vars in Terraform (prod + staging)
 
 ## Infrastructure

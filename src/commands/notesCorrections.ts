@@ -3,7 +3,9 @@ import {
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
+  EmbedBuilder,
   GuildMember,
+  Message,
   ModalBuilder,
   ModalSubmitInteraction,
   PermissionFlagsBits,
@@ -17,26 +19,41 @@ import {
   updateMeetingNotesService,
 } from "../services/meetingHistoryService";
 import { stripCodeFences } from "../utils/text";
-import { buildPaginatedEmbeds } from "../utils/embedPagination";
 import { MeetingHistory, SuggestionHistoryEntry } from "../types/db";
 import { fetchJsonFromS3 } from "../services/storageService";
 import { formatParticipantLabel } from "../utils/participants";
 import { generateMeetingSummaries } from "../services/meetingSummaryService";
 import { formatNotesWithSummary } from "../utils/notesSummary";
+import {
+  isMeetingNameAutoSynced,
+  resolveMeetingNameFromSummary,
+} from "../services/meetingNameService";
+import { buildMeetingNotesEmbeds } from "../utils/meetingNotes";
+import { MEETING_RENAME_PREFIX } from "./meetingName";
 import { createOpenAIClient } from "../services/openaiClient";
-import { getModelChoice } from "../services/modelFactory";
+import { buildModelOverrides, getModelChoice } from "../services/modelFactory";
 import { config } from "../services/configService";
 import { getLangfuseChatPrompt } from "../services/langfusePromptService";
+import { buildSummaryFeedbackButtonIds } from "./summaryFeedback";
+import {
+  resolveChatParamsForRole,
+  resolveModelParamsForContext,
+} from "../services/openaiModelParams";
+import { resolveModelChoicesForContext } from "../services/modelChoiceService";
+import type { ModelParamConfig } from "../config/types";
 
 type PendingCorrection = {
   guildId: string;
   channelIdTimestamp: string;
+  meetingId?: string;
   channelId?: string;
   notesMessageIds?: string[];
   notesChannelId?: string;
+  summaryMessageId?: string;
   meetingCreatorId?: string;
   isAutoRecording?: boolean;
   tags?: string[];
+  meetingName?: string;
   summarySentence?: string;
   summaryLabel?: string;
   originalNotes: string;
@@ -46,12 +63,22 @@ type PendingCorrection = {
   suggestion: SuggestionHistoryEntry;
 };
 
+type CorrectionSummariesResult = {
+  notesBody: string;
+  summaries: {
+    summarySentence?: string;
+    summaryLabel?: string;
+    meetingName?: string;
+  };
+};
+
 const pendingCorrections = new Map<string, PendingCorrection>();
 
 const CORRECTION_PREFIX = "notes_correction";
 const CORRECTION_MODAL_PREFIX = "notes_correction_modal";
 const CORRECTION_ACCEPT_PREFIX = "notes_correction_accept";
 const CORRECTION_REJECT_PREFIX = "notes_correction_reject";
+const TAG_HISTORY_PREFIX = "edit_tags_history";
 
 function encodeKey(channelIdTimestamp: string): string {
   return Buffer.from(channelIdTimestamp).toString("base64");
@@ -66,11 +93,36 @@ function buildCorrectionRow(
   channelIdTimestamp: string,
 ): ActionRowBuilder<ButtonBuilder> {
   const encodedKey = encodeKey(channelIdTimestamp);
+  const feedbackIds = buildSummaryFeedbackButtonIds(channelIdTimestamp);
+  const feedbackUpButton = new ButtonBuilder()
+    .setCustomId(feedbackIds.up)
+    .setLabel("Helpful")
+    .setStyle(ButtonStyle.Secondary)
+    .setEmoji("\u{1F44D}");
+  const feedbackDownButton = new ButtonBuilder()
+    .setCustomId(feedbackIds.down)
+    .setLabel("Needs work")
+    .setStyle(ButtonStyle.Secondary)
+    .setEmoji("\u{1F914}");
   const correctionButton = new ButtonBuilder()
     .setCustomId(`${CORRECTION_PREFIX}:${guildId}:${encodedKey}`)
     .setLabel("Suggest correction")
     .setStyle(ButtonStyle.Secondary);
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(correctionButton);
+  const renameButton = new ButtonBuilder()
+    .setCustomId(`${MEETING_RENAME_PREFIX}:${guildId}:${encodedKey}`)
+    .setLabel("Rename meeting")
+    .setStyle(ButtonStyle.Secondary);
+  const editTagsButton = new ButtonBuilder()
+    .setCustomId(`${TAG_HISTORY_PREFIX}:${guildId}:${encodedKey}`)
+    .setLabel("Edit Tags")
+    .setStyle(ButtonStyle.Secondary);
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    feedbackUpButton,
+    feedbackDownButton,
+    correctionButton,
+    renameButton,
+    editTagsButton,
+  );
 }
 
 function trimForDiscord(content: string, limit = 1800): string {
@@ -102,6 +154,8 @@ interface CorrectionInput {
   suggestion: string;
   requesterTag: string;
   previousSuggestions?: SuggestionHistoryEntry[];
+  modelParams?: ModelParamConfig;
+  modelOverride?: string;
 }
 
 function formatSuggestionsForPrompt(
@@ -125,6 +179,8 @@ async function generateCorrectedNotes({
   suggestion,
   requesterTag,
   previousSuggestions,
+  modelParams,
+  modelOverride,
 }: CorrectionInput): Promise<string> {
   const priorSuggestions = formatSuggestionsForPrompt(previousSuggestions);
   const { messages, langfusePrompt } = await getLangfuseChatPrompt({
@@ -139,7 +195,17 @@ async function generateCorrectedNotes({
   });
 
   try {
-    const modelChoice = getModelChoice("notesCorrection");
+    const modelChoice = getModelChoice(
+      "notesCorrection",
+      buildModelOverrides(
+        modelOverride ? { notesCorrection: modelOverride } : undefined,
+      ),
+    );
+    const chatParams = resolveChatParamsForRole({
+      role: "notesCorrection",
+      model: modelChoice.model,
+      config: modelParams,
+    });
     const openAIClient = createOpenAIClient({
       traceName: "notes-correction",
       generationName: "notes-correction",
@@ -151,8 +217,8 @@ async function generateCorrectedNotes({
     });
     const completion = await openAIClient.chat.completions.create({
       model: modelChoice.model,
-      temperature: 0,
       messages,
+      ...chatParams,
     });
 
     const content = completion.choices[0]?.message?.content;
@@ -278,6 +344,16 @@ export async function handleNotesCorrectionModal(
   };
 
   const transcript = await resolveTranscript(history);
+  const modelParams = await resolveModelParamsForContext({
+    guildId,
+    channelId: history.channelId ?? channelIdTimestamp.split("#")[0],
+    userId: interaction.user.id,
+  });
+  const modelChoices = await resolveModelChoicesForContext({
+    guildId,
+    channelId: history.channelId ?? channelIdTimestamp.split("#")[0],
+    userId: interaction.user.id,
+  });
 
   const newNotes = await generateCorrectedNotes({
     currentNotes: history.notes,
@@ -285,6 +361,8 @@ export async function handleNotesCorrectionModal(
     suggestion,
     requesterTag: interaction.user.tag,
     previousSuggestions: history.suggestionsHistory,
+    modelParams: modelParams.notesCorrection,
+    modelOverride: modelChoices.notesCorrection,
   });
 
   const diff = buildUnifiedDiff(history.notes, newNotes);
@@ -293,12 +371,15 @@ export async function handleNotesCorrectionModal(
   pendingCorrections.set(token, {
     guildId,
     channelIdTimestamp,
+    meetingId: history.meetingId,
     channelId: history.channelId,
     notesMessageIds: history.notesMessageIds,
     notesChannelId: history.notesChannelId,
+    summaryMessageId: history.summaryMessageId,
     meetingCreatorId: history.meetingCreatorId,
     isAutoRecording: history.isAutoRecording,
     tags: history.tags,
+    meetingName: history.meetingName,
     summarySentence: history.summarySentence,
     summaryLabel: history.summaryLabel,
     originalNotes: history.notes,
@@ -348,6 +429,7 @@ async function applyCorrection(
     row,
     notesBody,
     newVersion,
+    summaries.meetingName,
   );
   const updateSucceeded = await persistCorrectionUpdate({
     pending,
@@ -366,11 +448,14 @@ async function applyCorrection(
     return false;
   }
 
+  await updateSummaryMessageForCorrection(interaction, pending, summaries);
+
   // Update succeeded - remove old messages if we posted replacements
   await cleanupOldNotesMessages(
     channel,
     pending.notesMessageIds,
     newMessageIds,
+    pending.summaryMessageId,
   );
 
   return true;
@@ -380,33 +465,65 @@ function resolveChannelName(
   interaction: ButtonInteraction,
   channelId: string,
 ): string {
-  const channel = interaction.guild?.channels.cache.get(channelId);
-  return channel?.name ?? channelId;
+  const guild = interaction.guild;
+  if (!guild) {
+    return channelId;
+  }
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel) {
+    return channelId;
+  }
+  return channel.name || channelId;
 }
 
 async function buildCorrectionSummaries(
   interaction: ButtonInteraction,
   pending: PendingCorrection,
-): Promise<{
-  notesBody: string;
-  summaries: { summarySentence?: string; summaryLabel?: string };
-}> {
+): Promise<CorrectionSummariesResult> {
   const serverName = interaction.guild?.name ?? "Unknown server";
   const channelName = resolveChannelName(
     interaction,
     pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
   );
+  const modelParams = await resolveModelParamsForContext({
+    guildId: pending.guildId,
+    channelId: pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
+    userId: interaction.user.id,
+  });
+  const modelChoices = await resolveModelChoicesForContext({
+    guildId: pending.guildId,
+    channelId: pending.channelId ?? pending.channelIdTimestamp.split("#")[0],
+    userId: interaction.user.id,
+  });
+  const [, timestamp] = pending.channelIdTimestamp.split("#");
+  const meetingDate = timestamp ? new Date(timestamp) : new Date();
   const summaries = await generateMeetingSummaries({
+    guildId: pending.guildId,
     notes: pending.newNotes,
     serverName,
     channelName,
     tags: pending.tags,
-    now: new Date(),
+    now: meetingDate,
+    meetingId: pending.meetingId,
     previousSummarySentence: pending.summarySentence,
     previousSummaryLabel: pending.summaryLabel,
+    modelParams: modelParams.meetingSummary,
+    modelOverride: modelChoices.meetingSummary,
   });
   const summarySentence = summaries.summarySentence ?? pending.summarySentence;
   const summaryLabel = summaries.summaryLabel ?? pending.summaryLabel;
+  const shouldUpdateMeetingName = isMeetingNameAutoSynced(
+    pending.meetingName,
+    pending.summaryLabel,
+  );
+  const resolvedMeetingName = shouldUpdateMeetingName
+    ? await resolveMeetingNameFromSummary({
+        guildId: pending.guildId,
+        meetingId: pending.meetingId,
+        summaryLabel,
+      })
+    : pending.meetingName;
+  const meetingName = resolvedMeetingName ?? pending.meetingName;
   if (
     !summaries.summarySentence &&
     !summaries.summaryLabel &&
@@ -416,12 +533,47 @@ async function buildCorrectionSummaries(
       "Meeting summary generation returned empty, keeping previous summaries.",
     );
   }
-  const notesBody = formatNotesWithSummary(
-    pending.newNotes,
-    summarySentence,
-    summaryLabel,
-  );
-  return { notesBody, summaries: { summarySentence, summaryLabel } };
+  const notesBody = formatNotesWithSummary(pending.newNotes, summarySentence);
+  return {
+    notesBody,
+    summaries: { summarySentence, summaryLabel, meetingName },
+  };
+}
+
+const SUMMARY_DEFAULT_TITLE = "Meeting Summary";
+const SUMMARY_EMPTY_DESCRIPTION = "Summary unavailable.";
+
+function resolveSummaryTitle(
+  meetingName?: string,
+  summaryLabel?: string,
+): string {
+  const name = meetingName?.trim();
+  if (name) return name;
+  const label = summaryLabel?.trim();
+  if (label) return label;
+  return SUMMARY_DEFAULT_TITLE;
+}
+
+function resolveSummaryDescription(
+  summarySentence?: string,
+  summaryLabel?: string,
+): string {
+  const summary = summarySentence?.trim() ?? summaryLabel?.trim();
+  if (summary && summary.length > 0) return summary;
+  return SUMMARY_EMPTY_DESCRIPTION;
+}
+
+function isSummaryMessage(message: Message<boolean>): boolean {
+  const embed = message.embeds[0];
+  if (!embed?.fields?.length) return false;
+  const names = new Set(embed.fields.map((field) => field.name.toLowerCase()));
+  let matches = 0;
+  for (const name of ["start time", "end time", "duration"]) {
+    if (names.has(name)) {
+      matches += 1;
+    }
+  }
+  return matches >= 2;
 }
 
 async function updateNotesEmbedsForCorrection(
@@ -430,6 +582,7 @@ async function updateNotesEmbedsForCorrection(
   row: ActionRowBuilder<ButtonBuilder>,
   notesBody: string,
   newVersion: number,
+  meetingName?: string,
 ): Promise<{
   newMessageIds?: string[];
   channel: Awaited<ReturnType<typeof interactionChannelFetch>> | null;
@@ -448,6 +601,7 @@ async function updateNotesEmbedsForCorrection(
     newVersion,
     interaction.user.tag,
     color,
+    meetingName,
   );
   const newMessageIds = await sendUpdatedEmbeds(channel, embeds, row);
   return { newMessageIds, channel };
@@ -457,7 +611,11 @@ async function persistCorrectionUpdate(params: {
   pending: PendingCorrection;
   newVersion: number;
   editedBy: string;
-  summaries: { summarySentence?: string; summaryLabel?: string };
+  summaries: {
+    summarySentence?: string;
+    summaryLabel?: string;
+    meetingName?: string;
+  };
   newMessageIds?: string[];
 }): Promise<boolean> {
   const { pending, newVersion, editedBy, summaries, newMessageIds } = params;
@@ -469,6 +627,7 @@ async function persistCorrectionUpdate(params: {
     editedBy,
     summarySentence: summaries.summarySentence,
     summaryLabel: summaries.summaryLabel,
+    meetingName: summaries.meetingName,
     suggestion: pending.suggestion,
     expectedPreviousVersion: pending.notesVersion,
     metadata: {
@@ -482,12 +641,13 @@ async function cleanupOldNotesMessages(
   channel: Awaited<ReturnType<typeof interactionChannelFetch>> | null,
   existingIds?: string[],
   newMessageIds?: string[],
+  summaryMessageId?: string,
 ): Promise<void> {
   if (!channel || !existingIds?.length || !newMessageIds?.length) {
     return;
   }
   try {
-    await deleteOldNotesMessages(channel, existingIds);
+    await deleteOldNotesMessages(channel, existingIds, summaryMessageId);
   } catch (error) {
     console.error("Failed to clean up old notes messages after update:", error);
   }
@@ -510,21 +670,20 @@ async function getPendingOrNotify(
   return pending;
 }
 
-const NOTES_EMBED_TITLE = "Meeting Notes (AI Generated)";
-
 function buildUpdatedEmbeds(
   newNotes: string,
   version: number,
   editedByTag?: string,
   color?: number | null,
+  meetingName?: string,
 ) {
   const footerText = editedByTag
     ? `v${version} • Edited by ${editedByTag}`
     : `v${version}`;
 
-  return buildPaginatedEmbeds({
-    text: newNotes,
-    baseTitle: NOTES_EMBED_TITLE,
+  return buildMeetingNotesEmbeds({
+    notesBody: newNotes,
+    meetingName,
     footerText,
     color: color ?? undefined,
   });
@@ -571,15 +730,84 @@ async function sendUpdatedEmbeds(
 async function deleteOldNotesMessages(
   channel: Awaited<ReturnType<typeof interactionChannelFetch>>,
   messageIds: string[],
+  summaryMessageId?: string,
 ): Promise<void> {
   if (!channel?.isSendable()) return;
   for (const id of messageIds) {
     try {
+      if (summaryMessageId && id === summaryMessageId) {
+        continue;
+      }
       const msg = await channel.messages.fetch(id);
+      if (!summaryMessageId && isSummaryMessage(msg)) {
+        continue;
+      }
       await msg.delete();
     } catch (error) {
       console.error("Failed to delete old notes message after update:", error);
     }
+  }
+}
+
+async function updateSummaryMessageForCorrection(
+  interaction: ButtonInteraction,
+  pending: PendingCorrection,
+  summaries: {
+    summarySentence?: string;
+    summaryLabel?: string;
+    meetingName?: string;
+  },
+): Promise<void> {
+  if (!pending.notesChannelId) return;
+  const channel = await interactionChannelFetch(
+    pending.notesChannelId,
+    interaction,
+  );
+  if (!channel?.isSendable()) return;
+
+  let summaryMessage: Message<boolean> | null = null;
+  if (pending.summaryMessageId) {
+    try {
+      summaryMessage = await channel.messages.fetch(pending.summaryMessageId);
+    } catch (error) {
+      console.warn(
+        "Failed to fetch summary message for correction update",
+        error,
+      );
+    }
+  }
+
+  if (!summaryMessage && pending.notesMessageIds?.length) {
+    for (const id of pending.notesMessageIds) {
+      try {
+        const candidate = await channel.messages.fetch(id);
+        if (isSummaryMessage(candidate)) {
+          summaryMessage = candidate;
+          break;
+        }
+      } catch (error) {
+        console.warn("Failed to scan notes messages for summary update", error);
+      }
+    }
+  }
+
+  if (!summaryMessage) return;
+  const existingEmbed = summaryMessage.embeds[0];
+  if (!existingEmbed) return;
+  const updated = EmbedBuilder.from(existingEmbed)
+    .setTitle(
+      resolveSummaryTitle(summaries.meetingName, summaries.summaryLabel),
+    )
+    .setDescription(
+      resolveSummaryDescription(
+        summaries.summarySentence,
+        summaries.summaryLabel,
+      ),
+    );
+  try {
+    await summaryMessage.edit({ embeds: [updated] });
+  } catch (error) {
+    console.warn("Failed to update summary message after correction", error);
   }
 }
 

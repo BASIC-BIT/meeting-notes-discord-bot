@@ -1,11 +1,25 @@
 import { listRecentMeetingsForGuildService } from "./meetingHistoryService";
 import { config } from "./configService";
+import { listDictionaryEntriesService } from "./dictionaryService";
 import { normalizeTags, parseTags } from "../utils/tags";
 import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
 import { ensureUserCanViewChannel } from "./discordPermissionsService";
 import { createOpenAIClient } from "./openaiClient";
-import { getModelChoice } from "./modelFactory";
+import { buildModelOverrides, getModelChoice } from "./modelFactory";
 import { getLangfuseChatPrompt } from "./langfusePromptService";
+import { resolveModelChoicesForContext } from "./modelChoiceService";
+import {
+  resolveChatParamsForRole,
+  resolveModelParamsForContext,
+} from "./openaiModelParams";
+import { resolveConfigSnapshot } from "./unifiedConfigService";
+import { resolveGuildSubscription } from "./subscriptionService";
+import {
+  buildDictionaryPromptLines,
+  resolveDictionaryBudgets,
+} from "../utils/dictionary";
+import type { AskCitation } from "../types/ask";
+import { buildAskCitations, stripCitationTags } from "./askCitations";
 
 export type AskScope = "guild" | "channel";
 
@@ -28,6 +42,7 @@ export interface AskRequest {
 export interface AskResponse {
   answer: string;
   sourceMeetingIds?: string[];
+  citations?: AskCitation[];
 }
 
 function truncate(text: string, maxLen: number): string {
@@ -45,19 +60,52 @@ const scrubInternalIds = (text: string) =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
-const buildContextBlocks = (meetings: MeetingSummary[], guildId: string) =>
-  meetings.map((m) => {
+const ASK_MAX_COMPLETION_TOKENS = 800;
+const ASK_MEETING_DELIMITER = "---";
+
+const buildDictionaryBlock = async (guildId: string): Promise<string> => {
+  try {
+    const [entries, subscription] = await Promise.all([
+      listDictionaryEntriesService(guildId),
+      resolveGuildSubscription(guildId),
+    ]);
+    const snapshot = await resolveConfigSnapshot({
+      guildId,
+      tier: subscription.tier,
+    });
+    if (!entries.length) return "None.";
+    const valuesByKey: Record<string, unknown> = {};
+    Object.entries(snapshot.values).forEach(([key, entry]) => {
+      valuesByKey[key] = entry.value;
+    });
+    const budgets = resolveDictionaryBudgets(valuesByKey, snapshot.tier);
+    const { contextLines } = buildDictionaryPromptLines(entries, budgets);
+    return contextLines.length > 0 ? contextLines.join("\n") : "None.";
+  } catch (error) {
+    console.warn("Failed to build dictionary block for Ask:", error);
+    return "None.";
+  }
+};
+
+export const buildAskContextBlocks = (meetings: MeetingSummary[]) =>
+  meetings.map((m, index) => {
+    const meetingIndex = index + 1;
     const date = new Date(m.timestamp).toLocaleDateString();
-    const tagText = m.tags?.length ? `Tags: ${m.tags.join(", ")}` : "";
+    const tagLine = m.tags?.length
+      ? `Tags: ${m.tags.join(", ")}`
+      : "Tags: None";
+    const statusLine = `Status: ${m.archivedAt ? "Archived" : "Active"}`;
     const notes = m.notes
       ? truncate(scrubInternalIds(m.notes), 900)
       : "(no notes)";
-    const sourceLink =
-      m.notesChannelId && m.notesMessageIds?.length
-        ? `https://discord.com/channels/${guildId}/${m.notesChannelId}/${m.notesMessageIds[0]}`
-        : "";
-    const sourceLine = sourceLink ? `\n  Source: ${sourceLink}` : "";
-    return `- Meeting ${date} ${tagText}\n  Notes: ${notes}${sourceLine}`;
+    return [
+      `<meeting index="${meetingIndex}">`,
+      `Date: ${date}`,
+      tagLine,
+      statusLine,
+      `Notes: ${notes}`,
+      `</meeting>`,
+    ].join("\n");
   });
 
 const filterMeetings = (
@@ -106,6 +154,7 @@ const buildNoMeetingsResponse = (
       answer:
         "I don't have any meetings yet. Start one with `/startmeeting` in Discord or enable auto-recording in Settings.",
       sourceMeetingIds: [],
+      citations: [],
     };
   }
   const note =
@@ -114,12 +163,11 @@ const buildNoMeetingsResponse = (
           "No relevant meetings found. Upgrade for deeper history.",
         )
       : "No relevant meetings found.";
-  return { answer: note, sourceMeetingIds: [] };
+  return { answer: note, sourceMeetingIds: [], citations: [] };
 };
 
 const buildMockResponse = (
   question: string,
-  guildId: string,
   meetings: MeetingSummary[],
 ): AskResponse => {
   if (!meetings.length) {
@@ -127,20 +175,16 @@ const buildMockResponse = (
       answer:
         "Mock mode: no meetings found yet. Start one with `/startmeeting` in Discord or enable auto-recording in Settings.",
       sourceMeetingIds: [],
+      citations: [],
     };
   }
-  const sample = meetings[0];
   const sourceMeetingIds = meetings.map(
     (meeting) => meeting.channelId_timestamp,
   );
-  const mockSourceLink =
-    sample.notesChannelId && sample.notesMessageIds?.length
-      ? `https://discord.com/channels/${guildId}/${sample.notesChannelId}/${sample.notesMessageIds[0]}`
-      : "";
-  const sourceLine = mockSourceLink ? `\n\nSource: ${mockSourceLink}` : "";
   return {
-    answer: `Mock answer for "${question}".${sourceLine}`,
+    answer: `Mock answer for "${question}".`,
     sourceMeetingIds,
+    citations: [],
   };
 };
 
@@ -157,6 +201,7 @@ export async function answerQuestionService(
   const allMeetings = await listRecentMeetingsForGuildService(
     guildId,
     maxMeetings,
+    { includeArchived: true },
   );
   const scopedMeetings = filterMeetings(allMeetings, channelId, scope, tags);
   const meetings = req.viewerUserId
@@ -168,17 +213,19 @@ export async function answerQuestionService(
     : scopedMeetings;
 
   if (config.mock.enabled) {
-    return buildMockResponse(question, guildId, meetings);
+    return buildMockResponse(question, meetings);
   }
 
   if (!meetings.length) {
     return buildNoMeetingsResponse(allMeetings, maxMeetings);
   }
 
+  const dictionaryBlock = await buildDictionaryBlock(guildId);
+
   const sourceMeetingIds = meetings.map(
     (meeting) => meeting.channelId_timestamp,
   );
-  const contextBlocks = buildContextBlocks(meetings, guildId);
+  const contextBlocks = buildAskContextBlocks(meetings);
 
   const history = (req.history ?? []).slice(-10);
   const historyBlock =
@@ -186,7 +233,7 @@ export async function answerQuestionService(
       ? history
           .map((msg) => {
             const label = msg.role === "chronote" ? "Chronote" : "User";
-            return `${label}: ${msg.text}`;
+            return `${label}: ${stripCitationTags(msg.text)}`;
           })
           .join("\n")
       : "None.";
@@ -195,12 +242,29 @@ export async function answerQuestionService(
     name: config.langfuse.askPromptName,
     variables: {
       question,
-      contextBlocks: contextBlocks.join("\n"),
+      contextBlocks: contextBlocks.join(`\n\n${ASK_MEETING_DELIMITER}\n\n`),
       historyBlock,
+      dictionaryBlock,
+      maxAnswerTokens: String(ASK_MAX_COMPLETION_TOKENS),
     },
   });
 
-  const modelChoice = getModelChoice("ask");
+  const modelChoices = await resolveModelChoicesForContext({
+    guildId,
+    channelId,
+    userId: req.viewerUserId,
+  });
+  const modelChoice = getModelChoice("ask", buildModelOverrides(modelChoices));
+  const modelParams = await resolveModelParamsForContext({
+    guildId,
+    channelId,
+    userId: req.viewerUserId,
+  });
+  const chatParams = resolveChatParamsForRole({
+    role: "ask",
+    model: modelChoice.model,
+    config: modelParams.ask,
+  });
   const openAIClient = createOpenAIClient({
     traceName: "ask",
     generationName: "ask",
@@ -215,11 +279,16 @@ export async function answerQuestionService(
   const completion = await openAIClient.chat.completions.create({
     model: modelChoice.model,
     messages,
-    max_completion_tokens: 300,
+    max_completion_tokens: ASK_MAX_COMPLETION_TOKENS,
+    ...chatParams,
   });
 
+  const answer = completion.choices[0].message.content ?? "No answer.";
+  const citations = buildAskCitations({ text: answer, meetings });
+
   return {
-    answer: completion.choices[0].message.content ?? "No answer.",
+    answer,
     sourceMeetingIds,
+    citations,
   };
 }

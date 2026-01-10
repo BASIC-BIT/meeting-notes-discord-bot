@@ -1,0 +1,13 @@
+provider: openai
+adapter: openai
+secretKeyEnv: OPENAI_API_KEY
+baseUrl: https://api.openai.com/v1
+withDefaultModels: true
+customModels:
+  - gpt-5.2
+  - gpt-5.1
+  - gpt-5-mini
+  - gpt-4o-transcribe
+  - gpt-4o-transcribe-diarize
+extraHeadersEnv:
+  OpenAI-Project: OPENAI_PROJECT_ID

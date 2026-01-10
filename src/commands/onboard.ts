@@ -23,11 +23,12 @@ import {
 } from "../services/onboardingService";
 import { AutoRecordSettings } from "../types/db";
 import { config } from "../services/configService";
+import { CONFIG_KEYS } from "../config/keys";
 import {
   fetchGuildInstaller,
   saveGuildInstaller,
 } from "../services/guildInstallerService";
-import { setServerContext } from "../services/appContextService";
+import { setConfigOverrideForScope } from "../services/configOverridesService";
 import { saveAutoRecordSetting } from "../services/autorecordService";
 
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24; // 24h
@@ -332,7 +333,12 @@ export async function handleOnboardModalSubmit(
   const tone = interaction.fields.getTextInputValue("tone_notes");
   const combined = tone ? `${description}\n\nTone: ${tone}` : description;
 
-  await setServerContext(guild.id, interaction.user.id, { context: combined });
+  await setConfigOverrideForScope(
+    { scope: "server", guildId: guild.id },
+    CONFIG_KEYS.context.instructions,
+    combined.trim(),
+    interaction.user.id,
+  );
 
   await saveState(guild.id, interaction.user.id, {
     step: "autorecord",

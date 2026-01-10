@@ -6,6 +6,7 @@ import {
   createPortalSession,
   getBillingSnapshot,
   getMockBillingSnapshot,
+  resolvePromotionCodeId,
   seedMockSubscription,
 } from "../../services/billingService";
 import { resolvePaidPlanPriceId } from "../../services/pricingService";
@@ -24,6 +25,8 @@ const me = authedProcedure
     await requireManageGuild({
       accessToken: ctx.user.accessToken,
       guildId: input.serverId,
+      userId: ctx.user.id,
+      session: ctx.req.session,
     });
     if (config.mock.enabled) {
       return getMockBillingSnapshot(input.serverId);
@@ -44,6 +47,7 @@ const checkout = manageGuildProcedure
       serverId: z.string(),
       tier: z.enum(["basic", "pro"]),
       interval: z.enum(["month", "year"]).default("month"),
+      promotionCode: z.string().optional(),
     }),
   )
   .mutation(async ({ ctx, input }) => {
@@ -74,6 +78,17 @@ const checkout = manageGuildProcedure
           message: "Pricing unavailable for selected plan",
         });
       }
+      const promotionCode = input.promotionCode?.trim();
+      let promotionCodeId: string | null = null;
+      if (promotionCode) {
+        promotionCodeId = await resolvePromotionCodeId(stripe, promotionCode);
+        if (!promotionCodeId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Invalid promotion code",
+          });
+        }
+      }
       const url = await createCheckoutSession({
         stripe,
         user: {
@@ -83,9 +98,16 @@ const checkout = manageGuildProcedure
         },
         guildId: input.serverId,
         priceId,
+        promotionCodeId,
+        promotionCode,
+        tier: input.tier as PaidTier,
+        interval: input.interval as BillingInterval,
       });
       return { url };
     } catch (err) {
+      if (err instanceof TRPCError) {
+        throw err;
+      }
       console.error("Stripe checkout error", err);
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",

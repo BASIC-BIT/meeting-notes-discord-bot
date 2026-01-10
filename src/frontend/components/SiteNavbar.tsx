@@ -65,23 +65,30 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
   const theme = useMantineTheme();
   const scheme = useComputedColorScheme("dark");
   const isDark = scheme === "dark";
-  const { state: authState } = useAuth();
+  const { state: authState, user } = useAuth();
   const { selectedGuildId, guilds } = useGuildContext();
   const navigate = useNavigate();
 
+  const serverIdFromPath = pathname.match(/\/portal\/server\/([^/]+)/)?.[1];
   const selectedGuild = selectedGuildId
     ? (guilds.find((g) => g.id === selectedGuildId) ?? null)
     : null;
-  const selectedServerName = selectedGuild?.name ?? null;
-  const canManage = selectedGuild?.canManage ?? false;
+  const pathGuild = serverIdFromPath
+    ? (guilds.find((g) => g.id === serverIdFromPath) ?? null)
+    : null;
+  const resolvedGuild = selectedGuild ?? pathGuild;
+  const activeServerId = resolvedGuild?.id ?? selectedGuildId ?? null;
+  const selectedServerName = resolvedGuild?.name ?? null;
+  const canManage = resolvedGuild?.canManage ?? false;
+  const isSuperAdmin = Boolean(user?.isSuperAdmin);
 
   const resolveServerPath = (page: string) =>
-    selectedGuildId
-      ? `/portal/server/${selectedGuildId}/${page}`
+    activeServerId
+      ? `/portal/server/${activeServerId}/${page}`
       : "/portal/select-server";
 
   return (
-    <ScrollArea h="100%" offsetScrollbars>
+    <ScrollArea h="100%" offsetScrollbars data-visual-scroll>
       <Stack gap="md" p="md">
         {authState === "authenticated" ? (
           <Stack gap={6}>
@@ -156,6 +163,29 @@ export function SiteNavbar({ onClose, pathname }: SiteNavbarProps) {
             );
           })}
         </Stack>
+
+        {isSuperAdmin ? (
+          <>
+            <Divider />
+            <Stack gap={4}>
+              <NavLink
+                label="Admin config"
+                description="Global overrides"
+                data-testid="nav-admin-config"
+                leftSection={
+                  <ThemeIcon variant="transparent" color="gray" size={34}>
+                    <IconSettings size={18} />
+                  </ThemeIcon>
+                }
+                onClick={() => {
+                  navigate({ to: "/portal/admin/config" });
+                  onClose?.();
+                }}
+                style={{ borderRadius: theme.radius[uiRadii.control] }}
+              />
+            </Stack>
+          </>
+        ) : null}
 
         <Divider />
 

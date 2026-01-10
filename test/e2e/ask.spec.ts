@@ -39,4 +39,19 @@ test("ask page lists conversations and sends a question (mock)", async ({
   );
   await expect(askPage.input()).toBeEnabled({ timeout: 15000 });
   await expect(askPage.input()).toBeFocused();
+
+  if (mockAsk.conversationTitle) {
+    await askPage.switchListMode("mine");
+    await askPage.conversationItemByTitle(mockAsk.conversationTitle).click();
+    await expect(askPage.archiveButton()).toBeVisible();
+    await askPage.archiveButton().click();
+    await expect(askPage.archiveConfirmButton()).toBeVisible();
+    await askPage.archiveConfirmButton().click();
+    await askPage.switchListMode("archived");
+    await expect(
+      askPage.conversationItemByTitle(mockAsk.conversationTitle),
+    ).toBeVisible();
+    await askPage.conversationItemByTitle(mockAsk.conversationTitle).click();
+    await expect(askPage.unarchiveButton()).toBeVisible();
+  }
 });

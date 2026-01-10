@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  ActionIcon,
   Alert,
   Button,
+  Center,
   Group,
-  LoadingOverlay,
+  Loader,
   Modal,
   SegmentedControl,
   Stack,
@@ -12,399 +12,49 @@ import {
   Text,
   Textarea,
   TextInput,
-  ThemeIcon,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import {
-  IconAlertTriangle,
-  IconBroadcast,
-  IconEdit,
-  IconPlus,
-  IconRefresh,
-  IconSettings,
-  IconShare2,
-  IconTrash,
-} from "@tabler/icons-react";
+import { IconAlertTriangle, IconRefresh } from "@tabler/icons-react";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
-import Surface from "../components/Surface";
 import FormSelect from "../components/FormSelect";
+import Surface from "../components/Surface";
 import { trpc } from "../services/trpc";
 import { uiOverlays } from "../uiTokens";
 import { parseTags } from "../../utils/tags";
 import { TTS_VOICE_OPTIONS } from "../../utils/ttsVoices";
-import type { AutoRecordSettings, ChannelContext } from "../../types/db";
+import { CONFIG_KEYS } from "../../config/keys";
+import {
+  DEFAULT_DICTIONARY_BUDGETS,
+  resolveDictionaryBudgets,
+} from "../../utils/dictionary";
 
-type ChannelOption = {
-  value: string;
-  label: string;
-  botAccess: boolean;
-  missingPermissions: string[];
-};
+import {
+  buildChannelOverrides,
+  formatChannelLabel,
+  type ChannelOption,
+  type ChannelOverride,
+} from "../utils/settingsChannels";
+import { ChannelOverridesCard } from "../features/settings/ChannelOverridesCard";
+import { ServerConfigCard } from "../features/settings/ServerConfigCard";
+import { DictionaryCard } from "../features/settings/DictionaryCard";
 
-type ChannelOverride = {
-  channelId: string;
-  voiceLabel: string;
-  textLabel?: string;
-  textChannelId?: string;
-  tags?: string[];
-  context?: string;
-  autoRecordEnabled: boolean;
-  liveVoiceEnabled?: boolean;
-  liveVoiceCommandsEnabled?: boolean;
-  chatTtsEnabled?: boolean;
-};
-
-type GlobalContextData = {
-  context?: string | null;
-  defaultTags?: string[] | null;
-  defaultNotesChannelId?: string | null;
-  liveVoiceEnabled?: boolean | null;
-  liveVoiceCommandsEnabled?: boolean | null;
-  liveVoiceTtsVoice?: string | null;
-  chatTtsEnabled?: boolean | null;
-  chatTtsVoice?: string | null;
-  askMembersEnabled?: boolean | null;
-  askSharingPolicy?: "off" | "server" | "public" | null;
-};
-
-type AskSharingPolicy = "off" | "server" | "public";
-
-const formatChannelLabel = (channel: ChannelOption) =>
-  channel.botAccess ? channel.label : `${channel.label} (bot access needed)`;
-
-const mergeOverrideSources = (
-  channelRules: AutoRecordSettings[],
-  channelContexts: ChannelContext[],
-) => {
-  const merged = new Map<
-    string,
-    { rule?: AutoRecordSettings; context?: ChannelContext }
-  >();
-  channelRules.forEach((rule) => {
-    merged.set(rule.channelId, { rule });
-  });
-  channelContexts.forEach((context) => {
-    const existing = merged.get(context.channelId) ?? {};
-    merged.set(context.channelId, { ...existing, context });
-  });
-  return merged;
-};
-
-const resolveVoiceLabel = (
-  voiceChannelMap: Map<string, string>,
-  channelId: string,
-) => voiceChannelMap.get(channelId) ?? "Unknown channel";
-
-const resolveTextChannelId = (
-  rule: AutoRecordSettings | undefined,
-  defaultNotesChannelId: string | null,
-) => rule?.textChannelId ?? defaultNotesChannelId ?? undefined;
-
-const resolveOverrideTextLabel = (options: {
-  rule?: AutoRecordSettings;
-  resolvedTextChannelId?: string;
-  textChannelMap: Map<string, string>;
-  defaultNotesChannelId: string | null;
-}) => {
-  const { rule, resolvedTextChannelId, textChannelMap, defaultNotesChannelId } =
-    options;
-  if (!rule) return undefined;
-  const label = textChannelMap.get(resolvedTextChannelId ?? "");
-  if (label) return label;
-  return defaultNotesChannelId ? "Default notes channel" : "Unknown channel";
-};
-
-type ChannelOverrideSource = {
-  rule?: AutoRecordSettings;
-  context?: ChannelContext;
-};
-
-const toChannelOverride = (options: {
-  channelId: string;
-  entry: ChannelOverrideSource;
-  voiceChannelMap: Map<string, string>;
-  textChannelMap: Map<string, string>;
-  defaultNotesChannelId: string | null;
-}): ChannelOverride => {
-  const {
-    channelId,
-    entry,
-    voiceChannelMap,
-    textChannelMap,
-    defaultNotesChannelId,
-  } = options;
-  const voiceLabel = resolveVoiceLabel(voiceChannelMap, channelId);
-  const resolvedTextChannelId = resolveTextChannelId(
-    entry.rule,
-    defaultNotesChannelId,
-  );
-  const textLabel = resolveOverrideTextLabel({
-    rule: entry.rule,
-    resolvedTextChannelId,
-    textChannelMap,
-    defaultNotesChannelId,
-  });
-  return {
-    channelId,
-    voiceLabel,
-    textLabel,
-    textChannelId: entry.rule?.textChannelId,
-    tags: entry.rule?.tags,
-    context: entry.context?.context,
-    autoRecordEnabled: Boolean(entry.rule?.enabled),
-    liveVoiceEnabled: entry.context?.liveVoiceEnabled,
-    liveVoiceCommandsEnabled: entry.context?.liveVoiceCommandsEnabled,
-    chatTtsEnabled: entry.context?.chatTtsEnabled,
-  };
-};
-
-const sortOverridesByLabel = (left: ChannelOverride, right: ChannelOverride) =>
-  left.voiceLabel.localeCompare(right.voiceLabel);
-
-const buildChannelOverrides = (options: {
-  channelRules: AutoRecordSettings[];
-  channelContexts: ChannelContext[];
-  voiceChannelMap: Map<string, string>;
-  textChannelMap: Map<string, string>;
-  defaultNotesChannelId: string | null;
-}): ChannelOverride[] => {
-  const {
-    channelRules,
-    channelContexts,
-    voiceChannelMap,
-    textChannelMap,
-    defaultNotesChannelId,
-  } = options;
-  const merged = mergeOverrideSources(channelRules, channelContexts);
-  return Array.from(merged.entries())
-    .map(([channelId, entry]) =>
-      toChannelOverride({
-        channelId,
-        entry,
-        voiceChannelMap,
-        textChannelMap,
-        defaultNotesChannelId,
-      }),
-    )
-    .sort(sortOverridesByLabel);
-};
-
-const resolveDefaultNotesChannelId = (options: {
-  contextData?: GlobalContextData | null;
-  recordAllRule: AutoRecordSettings | null;
-}) => {
-  const { contextData, recordAllRule } = options;
-  return (
-    contextData?.defaultNotesChannelId ?? recordAllRule?.textChannelId ?? null
-  );
-};
-
-const resolveDefaultTags = (contextData?: GlobalContextData | null) =>
-  (contextData?.defaultTags ?? []).join(", ");
-
-const resolveAskMembersEnabled = (contextData?: GlobalContextData | null) =>
-  contextData?.askMembersEnabled ?? true;
-
-const resolveAskSharingPolicy = (contextData?: GlobalContextData | null) =>
-  contextData?.askSharingPolicy ?? "server";
-
-const coalesce = <T,>(value: T | null | undefined, fallback: T) =>
-  value ?? fallback;
-
-const resetGlobalDefaults = (options: {
-  setServerContext: (value: string) => void;
-  setDefaultTags: (value: string) => void;
-  setDefaultNotesChannelId: (value: string | null) => void;
-  setGlobalLiveVoiceEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
-  setGlobalChatTtsEnabled: (value: boolean) => void;
-  setGlobalChatTtsVoice: (value: string | null) => void;
-  setRecordAllEnabled: (value: boolean) => void;
-  setGlobalDirty: (value: boolean) => void;
-}) => {
-  const {
-    setServerContext,
-    setDefaultTags,
-    setDefaultNotesChannelId,
-    setGlobalLiveVoiceEnabled,
-    setGlobalLiveVoiceCommandsEnabled,
-    setGlobalLiveVoiceTtsVoice,
-    setGlobalChatTtsEnabled,
-    setGlobalChatTtsVoice,
-    setRecordAllEnabled,
-    setGlobalDirty,
-  } = options;
-  setServerContext("");
-  setDefaultNotesChannelId(null);
-  setDefaultTags("");
-  setGlobalLiveVoiceEnabled(false);
-  setGlobalLiveVoiceCommandsEnabled(false);
-  setGlobalLiveVoiceTtsVoice(null);
-  setGlobalChatTtsEnabled(false);
-  setGlobalChatTtsVoice(null);
-  setRecordAllEnabled(false);
-  setGlobalDirty(false);
-};
-
-const applyGlobalDefaults = (options: {
-  contextData: GlobalContextData;
-  recordAllRule: AutoRecordSettings | null;
-  setServerContext: (value: string) => void;
-  setDefaultTags: (value: string) => void;
-  setDefaultNotesChannelId: (value: string | null) => void;
-  setGlobalLiveVoiceEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
-  setGlobalChatTtsEnabled: (value: boolean) => void;
-  setGlobalChatTtsVoice: (value: string | null) => void;
-  setRecordAllEnabled: (value: boolean) => void;
-}) => {
-  const {
-    contextData,
-    recordAllRule,
-    setServerContext,
-    setDefaultTags,
-    setDefaultNotesChannelId,
-    setGlobalLiveVoiceEnabled,
-    setGlobalLiveVoiceCommandsEnabled,
-    setGlobalLiveVoiceTtsVoice,
-    setGlobalChatTtsEnabled,
-    setGlobalChatTtsVoice,
-    setRecordAllEnabled,
-  } = options;
-  setServerContext(coalesce(contextData.context, ""));
-  setDefaultTags(resolveDefaultTags(contextData));
-  setDefaultNotesChannelId(
-    resolveDefaultNotesChannelId({ contextData, recordAllRule }),
-  );
-  setGlobalLiveVoiceEnabled(coalesce(contextData.liveVoiceEnabled, false));
-  setGlobalLiveVoiceCommandsEnabled(
-    coalesce(contextData.liveVoiceCommandsEnabled, false),
-  );
-  setGlobalLiveVoiceTtsVoice(coalesce(contextData.liveVoiceTtsVoice, null));
-  setGlobalChatTtsEnabled(coalesce(contextData.chatTtsEnabled, false));
-  setGlobalChatTtsVoice(coalesce(contextData.chatTtsVoice, null));
-  setRecordAllEnabled(Boolean(recordAllRule));
-};
-
-const syncGlobalDefaults = (options: {
-  selectedGuildId: string | null;
-  contextData?: GlobalContextData | null;
-  recordAllRule: AutoRecordSettings | null;
-  globalDirty: boolean;
-  setServerContext: (value: string) => void;
-  setDefaultTags: (value: string) => void;
-  setDefaultNotesChannelId: (value: string | null) => void;
-  setGlobalLiveVoiceEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceCommandsEnabled: (value: boolean) => void;
-  setGlobalLiveVoiceTtsVoice: (value: string | null) => void;
-  setGlobalChatTtsEnabled: (value: boolean) => void;
-  setGlobalChatTtsVoice: (value: string | null) => void;
-  setRecordAllEnabled: (value: boolean) => void;
-  setGlobalDirty: (value: boolean) => void;
-}) => {
-  const {
-    selectedGuildId,
-    contextData,
-    recordAllRule,
-    globalDirty,
-    setServerContext,
-    setDefaultTags,
-    setDefaultNotesChannelId,
-    setGlobalLiveVoiceEnabled,
-    setGlobalLiveVoiceCommandsEnabled,
-    setGlobalLiveVoiceTtsVoice,
-    setGlobalChatTtsEnabled,
-    setGlobalChatTtsVoice,
-    setRecordAllEnabled,
-    setGlobalDirty,
-  } = options;
-
-  if (!selectedGuildId) {
-    resetGlobalDefaults({
-      setServerContext,
-      setDefaultNotesChannelId,
-      setDefaultTags,
-      setGlobalLiveVoiceEnabled,
-      setGlobalLiveVoiceCommandsEnabled,
-      setGlobalLiveVoiceTtsVoice,
-      setGlobalChatTtsEnabled,
-      setGlobalChatTtsVoice,
-      setRecordAllEnabled,
-      setGlobalDirty,
-    });
-    return;
-  }
-  if (!contextData || globalDirty) return;
-  applyGlobalDefaults({
-    contextData,
-    recordAllRule,
-    setServerContext,
-    setDefaultTags,
-    setDefaultNotesChannelId,
-    setGlobalLiveVoiceEnabled,
-    setGlobalLiveVoiceCommandsEnabled,
-    setGlobalLiveVoiceTtsVoice,
-    setGlobalChatTtsEnabled,
-    setGlobalChatTtsVoice,
-    setRecordAllEnabled,
-  });
-};
-
-const resetAskSettings = (options: {
-  setAskMembersEnabled: (value: boolean) => void;
-  setAskSharingPolicy: (value: AskSharingPolicy) => void;
-  setAskDirty: (value: boolean) => void;
-}) => {
-  const { setAskMembersEnabled, setAskSharingPolicy, setAskDirty } = options;
-  setAskMembersEnabled(true);
-  setAskSharingPolicy("server");
-  setAskDirty(false);
-};
-
-const applyAskSettings = (options: {
-  contextData: GlobalContextData;
-  setAskMembersEnabled: (value: boolean) => void;
-  setAskSharingPolicy: (value: AskSharingPolicy) => void;
-}) => {
-  const { contextData, setAskMembersEnabled, setAskSharingPolicy } = options;
-  setAskMembersEnabled(resolveAskMembersEnabled(contextData));
-  setAskSharingPolicy(resolveAskSharingPolicy(contextData));
-};
-
-const syncAskSettings = (options: {
-  selectedGuildId: string | null;
-  contextData?: GlobalContextData | null;
-  askDirty: boolean;
-  setAskMembersEnabled: (value: boolean) => void;
-  setAskSharingPolicy: (value: AskSharingPolicy) => void;
-  setAskDirty: (value: boolean) => void;
-}) => {
-  const {
-    selectedGuildId,
-    contextData,
-    askDirty,
-    setAskMembersEnabled,
-    setAskSharingPolicy,
-    setAskDirty,
-  } = options;
-  if (!selectedGuildId) {
-    resetAskSettings({
-      setAskMembersEnabled,
-      setAskSharingPolicy,
-      setAskDirty,
-    });
-    return;
-  }
-  if (!contextData || askDirty) return;
-  applyAskSettings({
-    contextData,
-    setAskMembersEnabled,
-    setAskSharingPolicy,
-  });
-};
+const SettingsLoadingState = () => (
+  <Stack gap="xl" data-testid="settings-page-loading">
+    <PageHeader
+      title="Server settings"
+      description="Configure how Chronote records, tags, and summarizes this server."
+    />
+    <Surface p="xl">
+      <Center py="xl">
+        <Stack gap="xs" align="center">
+          <Loader color="brand" />
+          <Text c="dimmed">Loading server settings...</Text>
+        </Stack>
+      </Center>
+    </Surface>
+  </Stack>
+);
 
 export default function Settings() {
   const { selectedGuildId, loading: guildLoading } = useGuildContext();
@@ -417,7 +67,7 @@ export default function Settings() {
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
   );
-  const contextQuery = trpc.context.get.useQuery(
+  const configQuery = trpc.config.server.useQuery(
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
   );
@@ -425,36 +75,21 @@ export default function Settings() {
     { serverId: selectedGuildId ?? "" },
     { enabled: Boolean(selectedGuildId) && !guildLoading },
   );
+  const dictionaryQuery = trpc.dictionary.list.useQuery(
+    { serverId: selectedGuildId ?? "" },
+    { enabled: Boolean(selectedGuildId) && !guildLoading },
+  );
 
   const addRuleMutation = trpc.autorecord.add.useMutation();
   const removeRuleMutation = trpc.autorecord.remove.useMutation();
-  const saveContextMutation = trpc.context.set.useMutation();
+  const setServerConfigMutation = trpc.config.setServerOverride.useMutation();
+  const clearServerConfigMutation =
+    trpc.config.clearServerOverride.useMutation();
   const setChannelContextMutation = trpc.channelContexts.set.useMutation();
   const clearChannelContextMutation = trpc.channelContexts.clear.useMutation();
-
-  const [serverContext, setServerContext] = useState("");
-  const [defaultNotesChannelId, setDefaultNotesChannelId] = useState<
-    string | null
-  >(null);
-  const [defaultTags, setDefaultTags] = useState("");
-  const [globalLiveVoiceEnabled, setGlobalLiveVoiceEnabled] = useState(false);
-  const [globalLiveVoiceCommandsEnabled, setGlobalLiveVoiceCommandsEnabled] =
-    useState(false);
-  const [globalLiveVoiceTtsVoice, setGlobalLiveVoiceTtsVoice] = useState<
-    string | null
-  >(null);
-  const [globalChatTtsEnabled, setGlobalChatTtsEnabled] = useState(false);
-  const [globalChatTtsVoice, setGlobalChatTtsVoice] = useState<string | null>(
-    null,
-  );
-  const [recordAllEnabled, setRecordAllEnabled] = useState(false);
-  const [globalDirty, setGlobalDirty] = useState(false);
-  const [savingGlobal, setSavingGlobal] = useState(false);
-  const [askMembersEnabled, setAskMembersEnabled] = useState(true);
-  const [askSharingPolicy, setAskSharingPolicy] =
-    useState<AskSharingPolicy>("server");
-  const [askDirty, setAskDirty] = useState(false);
-  const [savingAsk, setSavingAsk] = useState(false);
+  const dictionaryUpsertMutation = trpc.dictionary.upsert.useMutation();
+  const dictionaryRemoveMutation = trpc.dictionary.remove.useMutation();
+  const dictionaryClearMutation = trpc.dictionary.clear.useMutation();
 
   const [channelModalOpen, channelModal] = useDisclosure(false);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
@@ -477,10 +112,6 @@ export default function Settings() {
   >("inherit");
 
   useEffect(() => {
-    setGlobalDirty(false);
-    setAskDirty(false);
-    setAskMembersEnabled(true);
-    setAskSharingPolicy("server");
     setEditingChannelId(null);
     setChannelVoiceChannelId(null);
     setChannelAutoRecord(true);
@@ -503,6 +134,16 @@ export default function Settings() {
   const recordAllRule = autoRecordRules.find((rule) => rule.recordAll) ?? null;
   const channelRules = autoRecordRules.filter((rule) => !rule.recordAll);
   const channelContexts = channelContextsQuery.data?.contexts ?? [];
+  const recordAllEnabled = Boolean(recordAllRule);
+  const serverNotesChannelValue =
+    configQuery.data?.snapshot?.values[CONFIG_KEYS.notes.channelId]?.value;
+  const serverNotesChannelId =
+    typeof serverNotesChannelValue === "string" &&
+    serverNotesChannelValue.trim().length > 0
+      ? serverNotesChannelValue
+      : null;
+  const defaultNotesChannelId =
+    serverNotesChannelId ?? recordAllRule?.textChannelId ?? null;
 
   const voiceChannels = useMemo<ChannelOption[]>(
     () =>
@@ -543,6 +184,12 @@ export default function Settings() {
     () => new Map(textChannels.map((channel) => [channel.value, channel])),
     [textChannels],
   );
+  const defaultNotesAccess = defaultNotesChannelId
+    ? textChannelAccess.get(defaultNotesChannelId)
+    : undefined;
+  const defaultNotesLabel = defaultNotesAccess
+    ? formatChannelLabel(defaultNotesAccess)
+    : undefined;
 
   const overrides = useMemo(
     () =>
@@ -580,61 +227,40 @@ export default function Settings() {
     removeRuleMutation.isPending ||
     setChannelContextMutation.isPending ||
     clearChannelContextMutation.isPending;
-  const globalBusy =
+  const configBusy =
+    configQuery.isLoading || configQuery.isFetching || channelsQuery.isLoading;
+  const configUiContext = useMemo(
+    () => ({
+      textChannels,
+      ttsVoiceOptions: TTS_VOICE_OPTIONS,
+    }),
+    [textChannels],
+  );
+
+  const dictionaryBudgets = useMemo(() => {
+    const snapshot = configQuery.data?.snapshot;
+    if (!snapshot?.values) return DEFAULT_DICTIONARY_BUDGETS;
+    const valuesByKey: Record<string, unknown> = {};
+    Object.entries(snapshot.values).forEach(([key, entry]) => {
+      valuesByKey[key] = entry.value;
+    });
+    return resolveDictionaryBudgets(valuesByKey, snapshot.tier);
+  }, [configQuery.data?.snapshot]);
+
+  const dictionaryBusy =
+    dictionaryQuery.isLoading ||
+    dictionaryUpsertMutation.isPending ||
+    dictionaryRemoveMutation.isPending ||
+    dictionaryClearMutation.isPending;
+
+  const settingsInitialLoading =
+    guildLoading ||
+    !selectedGuildId ||
     rulesQuery.isLoading ||
     channelsQuery.isLoading ||
-    contextQuery.isLoading ||
-    savingGlobal;
-  const askBusy = contextQuery.isLoading || savingAsk;
-
-  useEffect(() => {
-    syncGlobalDefaults({
-      selectedGuildId,
-      contextData: contextQuery.data,
-      recordAllRule,
-      globalDirty,
-      setServerContext,
-      setDefaultTags,
-      setDefaultNotesChannelId,
-      setGlobalLiveVoiceEnabled,
-      setGlobalLiveVoiceCommandsEnabled,
-      setGlobalLiveVoiceTtsVoice,
-      setGlobalChatTtsEnabled,
-      setGlobalChatTtsVoice,
-      setRecordAllEnabled,
-      setGlobalDirty,
-    });
-  }, [contextQuery.data, recordAllRule, selectedGuildId, globalDirty]);
-
-  useEffect(() => {
-    syncAskSettings({
-      selectedGuildId,
-      contextData: contextQuery.data,
-      askDirty,
-      setAskMembersEnabled,
-      setAskSharingPolicy,
-      setAskDirty,
-    });
-  }, [contextQuery.data, selectedGuildId, askDirty]);
-
-  const recordAllRequiresNotesChannel =
-    recordAllEnabled && !defaultNotesChannelId;
-  const defaultNotesAccess = defaultNotesChannelId
-    ? textChannelAccess.get(defaultNotesChannelId)
-    : undefined;
-  const defaultNotesLabel = defaultNotesAccess
-    ? formatChannelLabel(defaultNotesAccess)
-    : undefined;
-  const defaultNotesMissingPermissions =
-    defaultNotesAccess && !defaultNotesAccess.botAccess
-      ? defaultNotesAccess.missingPermissions
-      : [];
-
-  const canSaveGlobal =
-    Boolean(selectedGuildId) &&
-    !recordAllRequiresNotesChannel &&
-    (!recordAllEnabled || defaultNotesMissingPermissions.length === 0);
-  const canSaveAsk = Boolean(selectedGuildId);
+    configQuery.isLoading ||
+    channelContextsQuery.isLoading ||
+    dictionaryQuery.isLoading;
 
   const openAddChannel = () => {
     setEditingChannelId(null);
@@ -708,68 +334,6 @@ export default function Settings() {
     voiceMissingPermissions.length > 0 ||
     (channelAutoRecord &&
       (!resolvedTextChannelId || textMissingPermissions.length > 0));
-
-  const handleSaveGlobal = async () => {
-    if (!selectedGuildId) return;
-    if (recordAllRequiresNotesChannel) return;
-    const parsedDefaultTags = parseTags(defaultTags) ?? [];
-    const trimmedContext = serverContext.trim();
-    try {
-      setSavingGlobal(true);
-      await saveContextMutation.mutateAsync({
-        serverId: selectedGuildId,
-        context: trimmedContext,
-        defaultNotesChannelId: defaultNotesChannelId ?? null,
-        defaultTags: parsedDefaultTags,
-        liveVoiceEnabled: globalLiveVoiceEnabled,
-        liveVoiceCommandsEnabled: globalLiveVoiceCommandsEnabled,
-        liveVoiceTtsVoice: globalLiveVoiceTtsVoice,
-        chatTtsEnabled: globalChatTtsEnabled,
-        chatTtsVoice: globalChatTtsVoice,
-      });
-      if (recordAllEnabled) {
-        if (!defaultNotesChannelId) return;
-        await addRuleMutation.mutateAsync({
-          serverId: selectedGuildId,
-          mode: "all",
-          textChannelId: defaultNotesChannelId,
-          tags: parsedDefaultTags,
-        });
-      } else if (recordAllRule) {
-        await removeRuleMutation.mutateAsync({
-          serverId: selectedGuildId,
-          channelId: "ALL",
-        });
-      }
-      await Promise.all([
-        trpcUtils.context.get.invalidate({ serverId: selectedGuildId }),
-        trpcUtils.autorecord.list.invalidate({ serverId: selectedGuildId }),
-      ]);
-      setGlobalDirty(false);
-    } catch (error) {
-      console.error("Failed to save global settings", error);
-    } finally {
-      setSavingGlobal(false);
-    }
-  };
-
-  const handleSaveAsk = async () => {
-    if (!selectedGuildId) return;
-    try {
-      setSavingAsk(true);
-      await saveContextMutation.mutateAsync({
-        serverId: selectedGuildId,
-        askMembersEnabled,
-        askSharingPolicy,
-      });
-      await trpcUtils.context.get.invalidate({ serverId: selectedGuildId });
-      setAskDirty(false);
-    } catch (error) {
-      console.error("Failed to save Ask settings", error);
-    } finally {
-      setSavingAsk(false);
-    }
-  };
 
   const handleSaveChannel = async () => {
     if (!selectedGuildId || !channelVoiceChannelId) return;
@@ -879,6 +443,10 @@ export default function Settings() {
     }
   };
 
+  if (settingsInitialLoading) {
+    return <SettingsLoadingState />;
+  }
+
   return (
     <Stack gap="xl" data-testid="settings-page">
       <PageHeader
@@ -886,381 +454,93 @@ export default function Settings() {
         description="Configure how Chronote records, tags, and summarizes this server."
       />
 
-      <Surface
-        p="lg"
-        style={{ position: "relative", overflow: "hidden" }}
-        data-testid="settings-global"
-      >
-        <LoadingOverlay
-          visible={globalBusy}
-          data-testid="settings-loading-global"
-          overlayProps={uiOverlays.loading}
-          loaderProps={{ size: "md" }}
-        />
-        <Stack gap="md">
-          <Group gap="sm">
-            <ThemeIcon variant="light" color="brand">
-              <IconSettings size={18} />
-            </ThemeIcon>
-            <Text fw={600}>Global defaults</Text>
-          </Group>
-          <Text size="sm" c="dimmed">
-            Defaults apply to all channels unless you override them below.
-          </Text>
-          <Switch
-            label="Record all voice channels by default"
-            checked={recordAllEnabled}
-            onChange={(event) => {
-              setRecordAllEnabled(event.currentTarget.checked);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-          />
-          <Switch
-            label="Enable live voice responder by default"
-            checked={globalLiveVoiceEnabled}
-            onChange={(event) => {
-              setGlobalLiveVoiceEnabled(event.currentTarget.checked);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-          />
-          <Switch
-            label="Enable live voice commands by default"
-            checked={globalLiveVoiceCommandsEnabled}
-            onChange={(event) => {
-              setGlobalLiveVoiceCommandsEnabled(event.currentTarget.checked);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-          />
-          <Switch
-            label="Enable chat-to-speech by default"
-            checked={globalChatTtsEnabled}
-            onChange={(event) => {
-              setGlobalChatTtsEnabled(event.currentTarget.checked);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-          />
-          <FormSelect
-            label="Default Chronote voice"
-            placeholder="Use platform default"
-            data={TTS_VOICE_OPTIONS}
-            value={globalLiveVoiceTtsVoice}
-            onChange={(value) => {
-              setGlobalLiveVoiceTtsVoice(value);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-            clearable
-          />
-          <FormSelect
-            label="Default chat-to-speech voice"
-            placeholder="Use platform default"
-            data={TTS_VOICE_OPTIONS}
-            value={globalChatTtsVoice}
-            onChange={(value) => {
-              setGlobalChatTtsVoice(value);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-            clearable
-          />
-          {recordAllEnabled ? (
-            <Alert
-              icon={<IconAlertTriangle size={16} />}
-              color="yellow"
-              variant="light"
-            >
-              Recording all channels uses the default notes channel below. You
-              can still override settings per channel.
-            </Alert>
-          ) : null}
-          <FormSelect
-            label="Default notes channel"
-            placeholder={
-              channelsQuery.isLoading ? "Loading..." : "Select channel"
-            }
-            data={textChannels.map((channel) => ({
-              value: channel.value,
-              label: formatChannelLabel(channel),
-            }))}
-            value={defaultNotesChannelId}
-            onChange={(value) => {
-              setDefaultNotesChannelId(value);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-          />
-          {recordAllRequiresNotesChannel ? (
-            <Text size="sm" c="red">
-              Default notes channel is required when record all is enabled.
-            </Text>
-          ) : null}
-          {defaultNotesMissingPermissions.length > 0 ? (
-            <Text size="sm" c="red">
-              Bot needs access to send messages (
-              {defaultNotesMissingPermissions.join(", ")}).
-            </Text>
-          ) : null}
-          <TextInput
-            label="Default tags"
-            placeholder="campaign, recap"
-            value={defaultTags}
-            onChange={(event) => {
-              setDefaultTags(event.currentTarget.value);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-          />
-          <Textarea
-            label="Server context"
-            minRows={4}
-            value={serverContext}
-            onChange={(event) => {
-              setServerContext(event.currentTarget.value);
-              setGlobalDirty(true);
-            }}
-            disabled={globalBusy}
-          />
-          <Group justify="flex-end">
-            <Button
-              variant="light"
-              onClick={handleSaveGlobal}
-              disabled={!canSaveGlobal || globalBusy}
-              loading={savingGlobal}
-              data-testid="settings-save-defaults"
-            >
-              Save defaults
-            </Button>
-          </Group>
-        </Stack>
-      </Surface>
+      <ServerConfigCard
+        busy={configBusy || !selectedGuildId}
+        registry={configQuery.data?.registry ?? []}
+        snapshot={configQuery.data?.snapshot}
+        overrides={configQuery.data?.overrides ?? []}
+        uiContext={configUiContext}
+        onSet={async (key, value) => {
+          if (!selectedGuildId) return;
+          await setServerConfigMutation.mutateAsync({
+            serverId: selectedGuildId,
+            key,
+            value,
+          });
+        }}
+        onClear={async (key) => {
+          if (!selectedGuildId) return;
+          await clearServerConfigMutation.mutateAsync({
+            serverId: selectedGuildId,
+            key,
+          });
+        }}
+        onSaved={() =>
+          selectedGuildId
+            ? Promise.all([
+                trpcUtils.config.server.invalidate({
+                  serverId: selectedGuildId,
+                }),
+                trpcUtils.autorecord.list.invalidate({
+                  serverId: selectedGuildId,
+                }),
+                trpcUtils.channelContexts.list.invalidate({
+                  serverId: selectedGuildId,
+                }),
+              ])
+            : Promise.resolve()
+        }
+      />
 
-      <Surface
-        p="lg"
-        style={{ position: "relative", overflow: "hidden" }}
-        data-testid="settings-ask"
-      >
-        <LoadingOverlay
-          visible={askBusy}
-          data-testid="settings-loading-ask"
-          overlayProps={uiOverlays.loading}
-          loaderProps={{ size: "md" }}
-        />
-        <Stack gap="md">
-          <Group gap="sm">
-            <ThemeIcon variant="light" color="brand">
-              <IconShare2 size={18} />
-            </ThemeIcon>
-            <Text fw={600}>Ask access and sharing</Text>
-          </Group>
-          <Text size="sm" c="dimmed">
-            Control who can use Ask and whether members can share threads.
-          </Text>
-          <Switch
-            label="Allow server members to use Ask"
-            checked={askMembersEnabled}
-            onChange={(event) => {
-              setAskMembersEnabled(event.currentTarget.checked);
-              setAskDirty(true);
-            }}
-            disabled={askBusy}
-          />
-          <Stack gap={6}>
-            <Text size="sm" fw={600}>
-              Sharing policy
-            </Text>
-            <SegmentedControl
-              value={askSharingPolicy}
-              onChange={(value) => {
-                setAskSharingPolicy(value as AskSharingPolicy);
-                setAskDirty(true);
-              }}
-              data={[
-                { label: "Off", value: "off" },
-                { label: "Server", value: "server" },
-                { label: "Public", value: "public" },
-              ]}
-              fullWidth
-              disabled={askBusy}
-            />
-            <Text size="xs" c="dimmed">
-              Sharing is opt-in per thread, and shared threads display the
-              author's Discord name. Public links are read only and visible
-              without login.
-            </Text>
-          </Stack>
-          <Group justify="flex-end">
-            <Button
-              variant="light"
-              onClick={handleSaveAsk}
-              disabled={!canSaveAsk || askBusy}
-              loading={savingAsk}
-              data-testid="settings-save-ask"
-            >
-              Save Ask settings
-            </Button>
-          </Group>
-        </Stack>
-      </Surface>
+      <DictionaryCard
+        busy={dictionaryBusy || !selectedGuildId}
+        entries={dictionaryQuery.data?.entries ?? []}
+        budgets={dictionaryBudgets}
+        onUpsert={async (term, definition) => {
+          if (!selectedGuildId) return;
+          await dictionaryUpsertMutation.mutateAsync({
+            serverId: selectedGuildId,
+            term,
+            definition,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
+        onRemove={async (term) => {
+          if (!selectedGuildId) return;
+          await dictionaryRemoveMutation.mutateAsync({
+            serverId: selectedGuildId,
+            term,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
+        onClear={async () => {
+          if (!selectedGuildId) return;
+          await dictionaryClearMutation.mutateAsync({
+            serverId: selectedGuildId,
+          });
+          await trpcUtils.dictionary.list.invalidate({
+            serverId: selectedGuildId,
+          });
+        }}
+      />
 
-      <Surface
-        p="lg"
-        style={{ position: "relative", overflow: "hidden" }}
-        data-testid="settings-overrides"
-      >
-        <LoadingOverlay
-          visible={channelBusy}
-          data-testid="settings-loading-overrides"
-          overlayProps={uiOverlays.loading}
-          loaderProps={{ size: "md" }}
-        />
-        <Stack gap="md">
-          <Group justify="space-between" gap="sm" wrap="wrap">
-            <Group gap="sm">
-              <ThemeIcon variant="light" color="brand">
-                <IconBroadcast size={18} />
-              </ThemeIcon>
-              <Text fw={600}>Channel overrides</Text>
-            </Group>
-            <Group gap="sm">
-              <Button
-                variant="subtle"
-                leftSection={<IconRefresh size={16} />}
-                onClick={() => channelsQuery.refetch()}
-                loading={channelsRefreshing}
-                disabled={channelBusy}
-                data-testid="settings-refresh-channels"
-              >
-                Refresh channels
-              </Button>
-              <Button
-                leftSection={<IconPlus size={16} />}
-                onClick={openAddChannel}
-                disabled={availableVoiceChannels.length === 0}
-                data-testid="settings-add-channel"
-              >
-                Add channel
-              </Button>
-            </Group>
-          </Group>
-          <Text size="sm" c="dimmed">
-            Add custom settings for specific voice channels. Channel context is
-            always applied when the meeting runs.
-          </Text>
-
-          {overrides.length === 0 ? (
-            <Text size="sm" c="dimmed">
-              No overrides yet. Add a voice channel to customize its notes,
-              tags, and context.
-            </Text>
-          ) : (
-            <Stack gap="sm">
-              {overrides.map((override) => {
-                const access = voiceChannelAccess.get(override.channelId);
-                const voiceMissing =
-                  access && !access.botAccess ? access.missingPermissions : [];
-                const resolvedNotesLabel =
-                  override.textLabel ??
-                  (defaultNotesChannelId
-                    ? textChannelMap.get(defaultNotesChannelId)
-                    : "Default notes channel");
-                const detailLines: ReactNode[] = [];
-                if (override.autoRecordEnabled) {
-                  const summary = override.tags?.length
-                    ? `Auto-recorded in ${resolvedNotesLabel ?? "Default notes channel"}. Tags: ${override.tags.join(", ")}`
-                    : `Auto-recorded in ${resolvedNotesLabel ?? "Default notes channel"}.`;
-                  detailLines.push(
-                    <Text size="sm" c="dimmed" key="auto">
-                      {summary}
-                    </Text>,
-                  );
-                } else if (recordAllEnabled) {
-                  detailLines.push(
-                    <Text size="sm" c="dimmed" key="auto-off">
-                      Auto-record disabled for this channel.
-                    </Text>,
-                  );
-                }
-                if (override.liveVoiceEnabled !== undefined) {
-                  detailLines.push(
-                    <Text size="sm" c="dimmed" key="live-voice">
-                      Live voice responder:{" "}
-                      {override.liveVoiceEnabled ? "On" : "Off"}
-                    </Text>,
-                  );
-                }
-                if (override.liveVoiceCommandsEnabled !== undefined) {
-                  detailLines.push(
-                    <Text size="sm" c="dimmed" key="live-voice-commands">
-                      Live voice commands:{" "}
-                      {override.liveVoiceCommandsEnabled ? "On" : "Off"}
-                    </Text>,
-                  );
-                }
-                if (override.chatTtsEnabled !== undefined) {
-                  detailLines.push(
-                    <Text size="sm" c="dimmed" key="chat-tts">
-                      Chat-to-speech: {override.chatTtsEnabled ? "On" : "Off"}
-                    </Text>,
-                  );
-                }
-                return (
-                  <Surface
-                    key={override.channelId}
-                    p="md"
-                    tone="soft"
-                    data-testid="settings-override"
-                    data-channel-id={override.channelId}
-                  >
-                    <Group
-                      justify="space-between"
-                      align="flex-start"
-                      wrap="nowrap"
-                    >
-                      <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
-                        <Text fw={600}>{override.voiceLabel}</Text>
-                        {detailLines.map((line) => line)}
-                        {override.context ? (
-                          <Text size="sm" c="dimmed" lineClamp={2}>
-                            Context: {override.context}
-                          </Text>
-                        ) : null}
-                        {voiceMissing.length > 0 ? (
-                          <Text size="sm" c="red">
-                            Bot needs access: {voiceMissing.join(", ")}
-                          </Text>
-                        ) : null}
-                      </Stack>
-                      <Group gap="xs" wrap="nowrap">
-                        <Button
-                          size="xs"
-                          variant="subtle"
-                          leftSection={<IconEdit size={14} />}
-                          onClick={() => openEditChannel(override)}
-                        >
-                          Edit
-                        </Button>
-                        <ActionIcon
-                          color="red"
-                          variant="subtle"
-                          aria-label="Remove override"
-                          data-testid="settings-remove-override"
-                          onClick={() => handleRemoveOverride(override)}
-                        >
-                          <IconTrash size={16} />
-                        </ActionIcon>
-                      </Group>
-                    </Group>
-                  </Surface>
-                );
-              })}
-            </Stack>
-          )}
-        </Stack>
-      </Surface>
+      <ChannelOverridesCard
+        busy={channelBusy}
+        refreshing={channelsRefreshing}
+        overrides={overrides}
+        availableVoiceChannels={availableVoiceChannels}
+        onRefresh={() => channelsQuery.refetch()}
+        onAdd={openAddChannel}
+        onSelect={(id) => {
+          const found = overrides.find((o) => o.channelId === id);
+          if (found) openEditChannel(found);
+        }}
+        onRemove={handleRemoveOverride}
+      />
 
       <Modal
         opened={channelModalOpen}

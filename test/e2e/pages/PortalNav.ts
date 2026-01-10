@@ -19,4 +19,8 @@ export class PortalNav {
   async goToSettings(): Promise<void> {
     await this.page.getByTestId(testIds.nav.settings).click();
   }
+
+  async goToAdminConfig(): Promise<void> {
+    await this.page.getByTestId(testIds.nav.adminConfig).click();
+  }
 }
