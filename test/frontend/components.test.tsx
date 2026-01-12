@@ -199,6 +199,7 @@ describe("frontend components", () => {
 
   test("renders SiteHeader portal variants and navbar toggle states", () => {
     authState.state = "authenticated";
+    authState.user = { username: "TestUser" };
     computedScheme = "light";
     mediaQueryMatches = true;
 
@@ -212,6 +213,9 @@ describe("frontend components", () => {
     );
     expect(screen.getByText("Switch server")).toBeInTheDocument();
     expect(screen.getByLabelText("Close navigation")).toBeInTheDocument();
+    const logoutButton = screen.getByTestId("logout-cta");
+    expect(logoutButton).toHaveAttribute("href", authState.logoutUrl);
+    expect(screen.getByLabelText("Switch account")).toBeInTheDocument();
     unmount();
 
     renderWithMantine(
@@ -224,6 +228,7 @@ describe("frontend components", () => {
     );
     expect(screen.queryByTestId("portal-cta")).toBeNull();
     expect(screen.getByLabelText("Open navigation")).toBeInTheDocument();
+    expect(screen.getByTestId("logout-cta")).toBeInTheDocument();
   });
 
   test("renders SiteHeader unauthenticated CTA and disabled state", () => {
