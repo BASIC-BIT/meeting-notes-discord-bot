@@ -4,7 +4,6 @@ import {
   Button,
   Container,
   Group,
-  Text,
   Tooltip,
   useComputedColorScheme,
   useMantineColorScheme,
@@ -16,11 +15,12 @@ import {
   IconMoonStars,
   IconSun,
   IconBrandGithub,
+  IconSwitchHorizontal,
 } from "@tabler/icons-react";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import SiteHeaderLogo from "./SiteHeaderLogo";
 import { useAuth } from "../contexts/AuthContext";
-import { uiLinks, uiTypography } from "../uiTokens";
 
 type SiteHeaderProps = {
   showNavbarToggle?: boolean;
@@ -30,33 +30,7 @@ type SiteHeaderProps = {
 };
 
 type AuthState = ReturnType<typeof useAuth>["state"];
-
-type HeaderLogoProps = {
-  isMobile: boolean;
-  isDark: boolean;
-};
-
-function HeaderLogo({ isMobile, isDark }: HeaderLogoProps) {
-  return (
-    <Link to="/" style={uiLinks.plain} data-testid="site-logo">
-      <Group gap="sm" align="center" wrap="nowrap">
-        <Box
-          component="img"
-          src="/meeting_notes_original_logo.png"
-          alt="Chronote logo"
-          style={{ width: 40, height: 40 }}
-        />
-        <Text
-          size={isMobile ? "lg" : "xl"}
-          c={isDark ? "white" : "dark.9"}
-          style={uiTypography.logo}
-        >
-          Chronote
-        </Text>
-      </Group>
-    </Link>
-  );
-}
+type AuthUser = ReturnType<typeof useAuth>["user"];
 
 type AdminCtaProps = {
   isSuperAdmin: boolean;
@@ -117,6 +91,34 @@ function PortalCtaButton({
   );
 }
 
+type LogoutButtonProps = {
+  authState: AuthState;
+  user: AuthUser;
+  logoutUrl: string;
+};
+
+function LogoutButton({ authState, user, logoutUrl }: LogoutButtonProps) {
+  if (authState !== "authenticated") return null;
+  const displayName = user?.username?.trim();
+  const tooltipLabel = displayName
+    ? `Signed in as ${displayName}`
+    : "Switch account";
+  return (
+    <Tooltip label={tooltipLabel}>
+      <ActionIcon
+        component="a"
+        href={logoutUrl}
+        variant="outline"
+        size="lg"
+        aria-label="Switch account"
+        data-testid="logout-cta"
+      >
+        <IconSwitchHorizontal size={18} />
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
 type GithubLinkProps = {
   showGithubLink: boolean;
 };
@@ -168,6 +170,8 @@ type HeaderActionsProps = {
   portalLabel: string;
   loginUrl: string;
   loading: boolean;
+  user: AuthUser;
+  logoutUrl: string;
   showGithubLink: boolean;
   isMobile: boolean;
   isDark: boolean;
@@ -181,6 +185,8 @@ function HeaderActions({
   portalLabel,
   loginUrl,
   loading,
+  user,
+  logoutUrl,
   showGithubLink,
   isMobile,
   isDark,
@@ -197,6 +203,7 @@ function HeaderActions({
         loading={loading}
         isMobile={isMobile}
       />
+      <LogoutButton authState={authState} user={user} logoutUrl={logoutUrl} />
       <GithubLink showGithubLink={showGithubLink} />
       <ThemeToggle isDark={isDark} onToggle={onToggleTheme} />
     </Group>
@@ -264,7 +271,7 @@ export function SiteHeader({
   });
   const computedScheme = useComputedColorScheme("dark");
   const isDark = computedScheme === "dark";
-  const { state: authState, loginUrl, loading, user } = useAuth();
+  const { state: authState, loginUrl, logoutUrl, loading, user } = useAuth();
 
   const showPortalCta = context !== "portal-select";
   const showGithubLink = true;
@@ -277,7 +284,7 @@ export function SiteHeader({
     authState === "authenticated" && Boolean(user?.isSuperAdmin);
   const headerPaddingRight = isMobile ? theme.spacing.xs : theme.spacing.sm;
 
-  const logo = <HeaderLogo isMobile={isMobile} isDark={isDark} />;
+  const logo = <SiteHeaderLogo isMobile={isMobile} isDark={isDark} />;
   const rightControls = (
     <HeaderActions
       isSuperAdmin={isSuperAdmin}
@@ -286,6 +293,8 @@ export function SiteHeader({
       portalLabel={portalLabel}
       loginUrl={loginUrl}
       loading={loading}
+      user={user}
+      logoutUrl={logoutUrl}
       showGithubLink={showGithubLink}
       isMobile={isMobile}
       isDark={isDark}

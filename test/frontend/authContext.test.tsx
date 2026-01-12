@@ -10,6 +10,7 @@ type AuthSnapshot = {
   state: string;
   loading: boolean;
   loginUrl: string;
+  logoutUrl: string;
   refresh: () => Promise<void>;
 };
 
@@ -26,6 +27,7 @@ function AuthProbe({
       data-state={value.state}
       data-loading={value.loading ? "true" : "false"}
       data-login={value.loginUrl}
+      data-logout={value.logoutUrl}
     />
   );
 }
@@ -50,15 +52,18 @@ function AuthProbeWithBump({
       data-state={value.state}
       data-loading={value.loading ? "true" : "false"}
       data-login={value.loginUrl}
+      data-logout={value.logoutUrl}
     />
   );
 }
 
-describe("AuthContext", () => {
-  beforeEach(() => {
-    resetTrpcMocks();
-    window.history.pushState({}, "", "/");
-  });
+const resetAuthContext = () => {
+  resetTrpcMocks();
+  window.history.pushState({}, "", "/");
+};
+
+describe("AuthContext unauthenticated", () => {
+  beforeEach(resetAuthContext);
 
   test("reports unauthenticated state and builds login url", async () => {
     setAuthQuery({ data: null, isLoading: false });
@@ -84,6 +89,15 @@ describe("AuthContext", () => {
     expect(resolved.searchParams.get("redirect")).toBe(
       `${window.location.origin}/portal/select-server`,
     );
+    const logoutUrl = node.getAttribute("data-logout");
+    if (!logoutUrl) {
+      throw new Error("Missing logout url");
+    }
+    const logoutResolved = new URL(logoutUrl, window.location.origin);
+    expect(logoutResolved.pathname).toBe("/logout");
+    expect(logoutResolved.searchParams.get("redirect")).toBe(
+      window.location.href,
+    );
     if (!captured) {
       throw new Error("Missing auth snapshot");
     }
@@ -92,6 +106,10 @@ describe("AuthContext", () => {
     });
     expect(authQuery.refetch).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("AuthContext navigation", () => {
+  beforeEach(resetAuthContext);
 
   test("uses current location for portal redirect targets", () => {
     setAuthQuery({ data: null, isLoading: false });
@@ -112,6 +130,14 @@ describe("AuthContext", () => {
     }
     const resolved = new URL(loginUrl, window.location.origin);
     expect(resolved.searchParams.get("redirect")).toBe(window.location.href);
+    const logoutUrl = node.getAttribute("data-logout");
+    if (!logoutUrl) {
+      throw new Error("Missing logout url");
+    }
+    const logoutResolved = new URL(logoutUrl, window.location.origin);
+    expect(logoutResolved.searchParams.get("redirect")).toBe(
+      window.location.href,
+    );
   });
 
   test("refreshes login url after navigation without provider rerender", () => {
@@ -145,7 +171,19 @@ describe("AuthContext", () => {
     }
     const resolved = new URL(loginUrl, window.location.origin);
     expect(resolved.searchParams.get("redirect")).toBe(window.location.href);
+    const logoutUrl = node.getAttribute("data-logout");
+    if (!logoutUrl) {
+      throw new Error("Missing logout url");
+    }
+    const logoutResolved = new URL(logoutUrl, window.location.origin);
+    expect(logoutResolved.searchParams.get("redirect")).toBe(
+      window.location.href,
+    );
   });
+});
+
+describe("AuthContext authenticated", () => {
+  beforeEach(resetAuthContext);
 
   test("reports authenticated when data is present", () => {
     setAuthQuery({ data: { id: "user-1" }, isLoading: false });

@@ -8,6 +8,7 @@ type AuthContextValue = {
   state: AuthState;
   loading: boolean;
   loginUrl: string;
+  logoutUrl: string;
   refresh: () => Promise<void>;
   user?: {
     id: string;
@@ -37,9 +38,21 @@ const resolvePortalRedirect = (location?: Location) => {
   return `${location.origin}/portal/select-server`;
 };
 
+const resolveLogoutRedirect = (location?: Location) => {
+  if (!location) {
+    return "/";
+  }
+  return location.href;
+};
+
 const buildLoginUrl = (location?: Location) =>
   `${buildApiUrl("/auth/discord")}?redirect=${encodeURIComponent(
     resolvePortalRedirect(location),
+  )}`;
+
+const buildLogoutUrl = (location?: Location) =>
+  `${buildApiUrl("/logout")}?redirect=${encodeURIComponent(
+    resolveLogoutRedirect(location),
   )}`;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -54,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       : "unauthenticated";
 
   const loginUrl = buildLoginUrl(getBrowserLocation());
+  const logoutUrl = buildLogoutUrl(getBrowserLocation());
 
   const refetch = authQuery.refetch;
   const value = useMemo(
@@ -61,12 +75,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       state,
       loading,
       loginUrl,
+      logoutUrl,
       user: authQuery.data ?? null,
       refresh: async () => {
         await refetch();
       },
     }),
-    [state, loading, loginUrl, refetch, authQuery.data],
+    [state, loading, loginUrl, logoutUrl, refetch, authQuery.data],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -76,8 +91,12 @@ export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   const loginUrl = buildLoginUrl(getBrowserLocation());
+  const logoutUrl = buildLogoutUrl(getBrowserLocation());
   return useMemo(
-    () => (loginUrl === ctx.loginUrl ? ctx : { ...ctx, loginUrl }),
-    [ctx, loginUrl],
+    () =>
+      loginUrl === ctx.loginUrl && logoutUrl === ctx.logoutUrl
+        ? ctx
+        : { ...ctx, loginUrl, logoutUrl },
+    [ctx, loginUrl, logoutUrl],
   );
 }
