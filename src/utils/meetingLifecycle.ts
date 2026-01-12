@@ -23,6 +23,8 @@ export const MEETING_END_REASON_LABELS: Record<MeetingEndReason, string> = {
   [MEETING_END_REASONS.WEB_UI]: "Ended via web UI",
   [MEETING_END_REASONS.AUTO_CANCELLED]:
     "Auto-recording cancelled due to lack of content",
+  [MEETING_END_REASONS.CLEANUP]:
+    "Marked failed during cleanup after the meeting appeared stuck",
   [MEETING_END_REASONS.UNKNOWN]: "Reason unknown",
 };
 

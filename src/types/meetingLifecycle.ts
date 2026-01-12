@@ -15,6 +15,7 @@ export const MEETING_END_REASONS = {
   BOT_DISCONNECT: "bot_disconnect",
   WEB_UI: "web_ui",
   AUTO_CANCELLED: "auto_cancelled",
+  CLEANUP: "cleanup",
   UNKNOWN: "unknown",
 } as const;
 
@@ -26,6 +27,7 @@ export const MEETING_STATUS = {
   PROCESSING: "processing",
   COMPLETE: "complete",
   CANCELLED: "cancelled",
+  FAILED: "failed",
 } as const;
 
 export type MeetingStatus =

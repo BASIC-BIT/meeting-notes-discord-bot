@@ -65,7 +65,9 @@ const resolveLiveStreamEnabled = (
 };
 
 const shouldRefetchMeeting = (status: string) =>
-  status === MEETING_STATUS.COMPLETE || status === MEETING_STATUS.CANCELLED;
+  status === MEETING_STATUS.COMPLETE ||
+  status === MEETING_STATUS.CANCELLED ||
+  status === MEETING_STATUS.FAILED;
 
 const resolveLiveStreamParams = (
   meeting: MeetingDetails | null,
@@ -163,6 +165,8 @@ const resolveTimelineEmptyLabel = (
       return "Meeting finished. Waiting for notes and timeline updates.";
     case MEETING_STATUS.CANCELLED:
       return "Meeting cancelled.";
+    case MEETING_STATUS.FAILED:
+      return "Meeting failed during cleanup.";
     default:
       return "Waiting for the first transcript line...";
   }

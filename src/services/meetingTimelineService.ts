@@ -281,7 +281,9 @@ export function buildMeetingTimelineEventsFromHistory(options: {
       history.endReason ??
       (history.status === MEETING_STATUS.CANCELLED
         ? MEETING_END_REASONS.AUTO_CANCELLED
-        : undefined),
+        : history.status === MEETING_STATUS.FAILED
+          ? MEETING_END_REASONS.CLEANUP
+          : undefined),
     triggeredByLabel: history.endTriggeredByUserId
       ? resolveHistoryParticipantLabel(
           history.participants,

@@ -14,6 +14,10 @@ resource "aws_secretsmanager_secret" "discord_bot_token" {
   tags        = local.secrets_tags
 }
 
+data "aws_secretsmanager_secret_version" "discord_bot_token_current" {
+  secret_id = aws_secretsmanager_secret.discord_bot_token.id
+}
+
 resource "aws_secretsmanager_secret" "discord_client_secret" {
   #checkov:skip=CKV2_AWS_57 reason: Rotation requires a Lambda; handled manually for now.
   name        = "${local.secrets_prefix}/discord-client-secret"

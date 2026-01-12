@@ -89,6 +89,12 @@ const renderDetailStatusBadge = (status?: MeetingStatus) => {
           Processing
         </Badge>
       );
+    case MEETING_STATUS.FAILED:
+      return (
+        <Badge color="orange" variant="light">
+          Failed
+        </Badge>
+      );
     default:
       return null;
   }

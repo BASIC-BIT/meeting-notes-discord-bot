@@ -26,7 +26,10 @@ import type { ChatEntry } from "../../types/chat";
 import type { MeetingEvent } from "../../types/meetingTimeline";
 import type { Participant } from "../../types/participants";
 import type { TranscriptPayload } from "../../types/transcript";
-import { MEETING_STATUS } from "../../types/meetingLifecycle";
+import {
+  MEETING_STATUS,
+  type MeetingStatus,
+} from "../../types/meetingLifecycle";
 import { manageGuildProcedure, router } from "../trpc";
 
 const resolveParticipantLabel = (participant: Participant) =>
@@ -35,6 +38,9 @@ const resolveParticipantLabel = (participant: Participant) =>
   participant.username ||
   participant.tag ||
   "Unknown";
+
+const isActiveMeetingStatus = (status?: MeetingStatus | null) =>
+  status === MEETING_STATUS.IN_PROGRESS || status === MEETING_STATUS.PROCESSING;
 
 const list = manageGuildProcedure
   .input(
@@ -98,8 +104,7 @@ const list = manageGuildProcedure
         channelName: channelMap.get(meeting.channelId) ?? meeting.channelId,
         timestamp: meeting.timestamp,
         duration:
-          meeting.status === MEETING_STATUS.IN_PROGRESS ||
-          meeting.status === MEETING_STATUS.PROCESSING ||
+          isActiveMeetingStatus(meeting.status) ||
           ((meeting.status === null || meeting.status === undefined) &&
             meeting.duration === 0)
             ? Math.max(
@@ -172,8 +177,7 @@ const detail = manageGuildProcedure
         channelId: history.channelId,
         timestamp: history.timestamp,
         duration:
-          history.status === MEETING_STATUS.IN_PROGRESS ||
-          history.status === MEETING_STATUS.PROCESSING ||
+          isActiveMeetingStatus(history.status) ||
           ((history.status === null || history.status === undefined) &&
             history.duration === 0)
             ? Math.max(

@@ -220,6 +220,11 @@ const resolveEvents = (events?: MeetingEvent[]) => events ?? [];
 const resolveStatus = (status?: MeetingDetails["status"]) =>
   status ?? MEETING_STATUS.COMPLETE;
 
+export const isMeetingTerminalStatus = (status?: MeetingStatus) =>
+  status === MEETING_STATUS.COMPLETE ||
+  status === MEETING_STATUS.CANCELLED ||
+  status === MEETING_STATUS.FAILED;
+
 export const buildMeetingDetails = (
   detail: MeetingDetailInput,
   channelNameMap: Map<string, string>,

@@ -103,6 +103,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
         channelId_timestamp: `${meeting.voiceChannel.id}#${timestamp}`,
         meetingId: meeting.meetingId,
         channelId: meeting.voiceChannel.id,
+        textChannelId: meeting.textChannel.id,
         timestamp,
         tags: meeting.tags,
         context: meeting.meetingContext,
@@ -123,6 +124,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
           meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
         notesMessageIds: meeting.notesMessageIds,
         notesChannelId: meeting.notesChannelId,
+        updatedAt: meeting.endTime?.toISOString() ?? timestamp,
         transcriptS3Key: meeting.transcriptS3Key,
         audioS3Key: meeting.audioS3Key,
         chatS3Key: meeting.chatS3Key,
@@ -145,6 +147,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       channelId_timestamp: `${meeting.voiceChannel.id}#${timestamp}`,
       meetingId: meeting.meetingId,
       channelId: meeting.voiceChannel.id,
+      textChannelId: meeting.textChannel.id,
       timestamp,
       tags: meeting.tags,
       notes,
@@ -173,6 +176,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       notesLastEditedBy,
       notesLastEditedAt,
       notesHistory,
+      updatedAt: meeting.endTime?.toISOString() ?? timestamp,
       transcriptS3Key,
       audioS3Key: meeting.audioS3Key,
       chatS3Key: meeting.chatS3Key,
@@ -199,6 +203,7 @@ export async function saveMeetingStartToDatabase(
       channelId_timestamp: `${meeting.voiceChannel.id}#${timestamp}`,
       meetingId: meeting.meetingId,
       channelId: meeting.voiceChannel.id,
+      textChannelId: meeting.textChannel.id,
       timestamp,
       tags: meeting.tags,
       context: meeting.meetingContext,
@@ -212,6 +217,7 @@ export async function saveMeetingStartToDatabase(
       startReason: meeting.startReason,
       startTriggeredByUserId: meeting.startTriggeredByUserId,
       autoRecordRule: meeting.autoRecordRule,
+      updatedAt: timestamp,
     };
     await writeMeetingHistoryService(history);
   } catch (error) {

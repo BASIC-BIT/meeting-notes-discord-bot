@@ -202,6 +202,24 @@ variable "FRONTEND_ALLOWED_ORIGINS" {
   default     = ""
 }
 
+variable "MEETING_CLEANUP_NOTIFY_DISCORD" {
+  description = "Enable Discord notifications for the cleanup job"
+  type        = string
+  default     = "true"
+}
+
+variable "MEETING_CLEANUP_IN_PROGRESS_HOURS" {
+  description = "Hours before in-progress meetings are considered stuck"
+  type        = string
+  default     = "4"
+}
+
+variable "MEETING_CLEANUP_PROCESSING_HOURS" {
+  description = "Hours before processing meetings are considered stuck"
+  type        = string
+  default     = "24"
+}
+
 variable "FRONTEND_SITE_URL" {
   description = "Primary frontend site URL"
   type        = string
@@ -1113,6 +1131,110 @@ resource "aws_iam_role_policy_attachment" "ecs_task_transcripts_policy" {
 resource "aws_iam_role_policy_attachment" "ecs_task_exec_transcripts_policy" {
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = aws_iam_policy.transcripts_s3_policy.arn
+}
+
+data "archive_file" "cleanup_stuck_meetings_zip" {
+  type        = "zip"
+  source_dir  = "${path.root}/../dist/jobs"
+  output_path = "${path.root}/../dist/cleanup-stuck-meetings.zip"
+}
+
+data "aws_iam_policy_document" "cleanup_stuck_meetings_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "cleanup_stuck_meetings_role" {
+  name               = "${local.name_prefix}-cleanup-stuck-meetings-role"
+  assume_role_policy = data.aws_iam_policy_document.cleanup_stuck_meetings_assume_role.json
+}
+
+data "aws_iam_policy_document" "cleanup_stuck_meetings_policy" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "dynamodb:Scan",
+      "dynamodb:UpdateItem",
+    ]
+    resources = [
+      aws_dynamodb_table.meeting_history_table.arn,
+      "${aws_dynamodb_table.meeting_history_table.arn}/index/*",
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "cloudwatch:PutMetricData",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "cleanup_stuck_meetings_policy" {
+  name        = "${local.name_prefix}-cleanup-stuck-meetings-policy"
+  description = "Policy for the cleanup stuck meetings Lambda"
+  policy      = data.aws_iam_policy_document.cleanup_stuck_meetings_policy.json
+}
+
+resource "aws_iam_role_policy_attachment" "cleanup_stuck_meetings_policy_attachment" {
+  role       = aws_iam_role.cleanup_stuck_meetings_role.name
+  policy_arn = aws_iam_policy.cleanup_stuck_meetings_policy.arn
+}
+
+resource "aws_lambda_function" "cleanup_stuck_meetings" {
+  function_name    = "${local.name_prefix}-cleanup-stuck-meetings"
+  role             = aws_iam_role.cleanup_stuck_meetings_role.arn
+  handler          = "cleanupStuckMeetings.handler"
+  runtime          = "nodejs20.x"
+  filename         = data.archive_file.cleanup_stuck_meetings_zip.output_path
+  source_code_hash = data.archive_file.cleanup_stuck_meetings_zip.output_base64sha256
+  timeout          = 300
+
+  environment {
+    variables = {
+      DDB_TABLE_PREFIX                 = "${local.name_prefix}-"
+      DISCORD_BOT_TOKEN                = data.aws_secretsmanager_secret_version.discord_bot_token_current.secret_string
+      MEETING_CLEANUP_NOTIFY_DISCORD   = var.MEETING_CLEANUP_NOTIFY_DISCORD
+      MEETING_CLEANUP_IN_PROGRESS_HOURS = var.MEETING_CLEANUP_IN_PROGRESS_HOURS
+      MEETING_CLEANUP_PROCESSING_HOURS  = var.MEETING_CLEANUP_PROCESSING_HOURS
+    }
+  }
+}
+
+resource "aws_cloudwatch_event_rule" "cleanup_stuck_meetings_daily" {
+  name                = "${local.name_prefix}-cleanup-stuck-meetings-daily"
+  schedule_expression = "rate(1 day)"
+}
+
+resource "aws_cloudwatch_event_target" "cleanup_stuck_meetings_target" {
+  rule      = aws_cloudwatch_event_rule.cleanup_stuck_meetings_daily.name
+  target_id = "cleanup-stuck-meetings"
+  arn       = aws_lambda_function.cleanup_stuck_meetings.arn
+}
+
+resource "aws_lambda_permission" "cleanup_stuck_meetings_invoke" {
+  statement_id  = "AllowCleanupStuckMeetingsInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.cleanup_stuck_meetings.arn
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.cleanup_stuck_meetings_daily.arn
 }
 
 # Update the ECS task definition to include the execution role ARN

@@ -41,6 +41,8 @@ const resolveStreamStatusLabel = (status: string) => {
       return "Complete";
     case MEETING_STATUS.CANCELLED:
       return "Cancelled";
+    case MEETING_STATUS.FAILED:
+      return "Failed";
     case "live":
       return "Live";
     default:
@@ -54,6 +56,8 @@ const resolveTimelineEmptyLabel = (status: string) => {
       return "Meeting finished. Waiting for notes and timeline updates.";
     case MEETING_STATUS.CANCELLED:
       return "Meeting cancelled.";
+    case MEETING_STATUS.FAILED:
+      return "Meeting failed during cleanup.";
     default:
       return "Waiting for the first transcript line...";
   }

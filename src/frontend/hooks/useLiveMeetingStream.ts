@@ -17,12 +17,14 @@ type LiveStreamStatus =
   | "processing"
   | "complete"
   | "cancelled"
+  | "failed"
   | "error";
 
 const toStreamStatus = (status: LiveMeetingStatus): LiveStreamStatus => {
   if (status === MEETING_STATUS.COMPLETE) return "complete";
   if (status === MEETING_STATUS.PROCESSING) return "processing";
   if (status === MEETING_STATUS.CANCELLED) return "cancelled";
+  if (status === MEETING_STATUS.FAILED) return "failed";
   return "live";
 };
 
@@ -97,8 +99,9 @@ export function useLiveMeetingStream({
 
     source.onerror = () => {
       setStatus((current) =>
-        current === MEETING_STATUS.COMPLETE ||
-        current === MEETING_STATUS.CANCELLED
+        current === "complete" ||
+        current === "cancelled" ||
+        current === "failed"
           ? current
           : "error",
       );

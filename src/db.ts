@@ -775,6 +775,43 @@ export async function getMeetingsForGuildInRange(
   return items;
 }
 
+export async function scanMeetingsByStatus(
+  statuses: MeetingStatus[],
+): Promise<MeetingHistory[]> {
+  if (statuses.length === 0) return [];
+  const items: MeetingHistory[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+  const statusFilters = statuses.map((_, index) => `#status = :status${index}`);
+  const expressionAttributeValues = marshall(
+    statuses.reduce<Record<string, MeetingStatus>>((acc, status, index) => {
+      acc[`:status${index}`] = status;
+      return acc;
+    }, {}),
+  );
+
+  do {
+    const params = {
+      TableName: tableName("MeetingHistoryTable"),
+      FilterExpression: statusFilters.join(" OR "),
+      ExpressionAttributeNames: {
+        "#status": "status",
+      },
+      ExpressionAttributeValues: expressionAttributeValues,
+      ExclusiveStartKey: lastKey,
+    };
+    const command = new ScanCommand(params);
+    const result = await dynamoDbClient.send(command);
+    if (result.Items) {
+      items.push(
+        ...result.Items.map((item) => unmarshall(item) as MeetingHistory),
+      );
+    }
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
+
+  return items;
+}
+
 export async function getMeetingHistory(
   guildId: string,
   channelId_timestamp: string,
@@ -1000,6 +1037,63 @@ export async function updateMeetingStatus(
 
   const command = new UpdateItemCommand(params);
   await dynamoDbClient.send(command);
+}
+
+export async function updateMeetingStatusIfStuck(params: {
+  guildId: string;
+  channelId_timestamp: string;
+  currentStatus: MeetingStatus;
+  nextStatus: MeetingStatus;
+  cutoffIso: string;
+  cutoffField: "timestamp" | "updatedAt";
+  endReason?: string;
+}): Promise<boolean> {
+  const now = new Date().toISOString();
+  const updateParts = ["#status = :nextStatus", "#updatedAt = :updatedAt"];
+  const expressionAttributeNames: Record<string, string> = {
+    "#status": "status",
+    "#updatedAt": "updatedAt",
+    "#cutoffField": params.cutoffField,
+  };
+  const expressionAttributeValues: Record<string, unknown> = {
+    ":currentStatus": params.currentStatus,
+    ":nextStatus": params.nextStatus,
+    ":updatedAt": now,
+    ":cutoff": params.cutoffIso,
+  };
+
+  if (params.endReason) {
+    updateParts.push("#endReason = :endReason");
+    expressionAttributeNames["#endReason"] = "endReason";
+    expressionAttributeValues[":endReason"] = params.endReason;
+  }
+
+  const command = new UpdateItemCommand({
+    TableName: tableName("MeetingHistoryTable"),
+    Key: marshall({
+      guildId: params.guildId,
+      channelId_timestamp: params.channelId_timestamp,
+    }),
+    UpdateExpression: `SET ${updateParts.join(", ")}`,
+    ConditionExpression: "#status = :currentStatus AND #cutoffField <= :cutoff",
+    ExpressionAttributeNames: expressionAttributeNames,
+    ExpressionAttributeValues: marshall(expressionAttributeValues, {
+      removeUndefinedValues: true,
+    }),
+  });
+
+  try {
+    await dynamoDbClient.send(command);
+    return true;
+  } catch (error) {
+    if (
+      (error as { name?: string }).name === "ConditionalCheckFailedException"
+    ) {
+      return false;
+    }
+    console.error("Failed to update stuck meeting status:", error);
+    return false;
+  }
 }
 
 export async function updateMeetingArchive(params: {
