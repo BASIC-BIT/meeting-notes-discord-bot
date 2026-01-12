@@ -17,6 +17,7 @@ const isTestEnv =
 
 function isAppConfigEnabled() {
   if (isTestEnv) return false;
+  if (config.mock.enabled) return false;
   return (
     config.appConfig.enabled &&
     config.appConfig.applicationId.length > 0 &&
