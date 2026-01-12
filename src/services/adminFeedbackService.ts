@@ -16,11 +16,6 @@ type FeedbackListResult = {
   nextCursor?: string;
 };
 
-const resolveCursorEndAt = (cursor?: string) => {
-  if (!cursor) return undefined;
-  return cursor;
-};
-
 const buildFeedbackKey = (item: FeedbackRecord) => `${item.pk}:${item.sk}`;
 
 const dedupeFeedback = (items: FeedbackRecord[]) => {
@@ -43,7 +38,7 @@ export async function listFeedbackEntries(params: {
   const hasFilters = Boolean(params.rating || params.source);
   const perTypeLimit = Math.min(limit * (hasFilters ? 2 : 1), 500);
   const repo = getFeedbackRepository();
-  const initialEndAt = resolveCursorEndAt(params.cursor);
+  const initialEndAt = params.cursor;
   const applyFilters = (items: FeedbackRecord[]) => {
     let filtered = items;
     if (params.rating) {
@@ -79,8 +74,7 @@ export async function listFeedbackEntries(params: {
           state.done = true;
         }
         if (batch.length > 0) {
-          const lastCreatedAt = batch[batch.length - 1]?.createdAt;
-          state.endAt = resolveCursorEndAt(lastCreatedAt);
+          state.endAt = batch[batch.length - 1]?.createdAt;
         }
         return batch;
       }),
