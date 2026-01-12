@@ -34,7 +34,8 @@ export default function SuperAdminLayout() {
   const colorScheme = useComputedColorScheme("dark");
   const isDark = colorScheme === "dark";
   const visualMode = useVisualMode();
-  const { state: authState, loading: authLoading, loginUrl } = useAuth();
+  const { state: authState, loading: authLoading, loginUrl, user } = useAuth();
+  const isSuperAdmin = Boolean(user?.isSuperAdmin);
 
   const baseHeaderStyles = {
     borderBottom: shellBorder(theme, isDark),
@@ -96,6 +97,15 @@ export default function SuperAdminLayout() {
         <Stack gap="xs" align="center">
           <Loader color="brand" />
           <Text c="dimmed">Loading admin console...</Text>
+        </Stack>
+      </Center>
+    ) : !isSuperAdmin ? (
+      <Center py="xl">
+        <Stack gap="sm" align="center">
+          <Text fw={600}>Super admin access required.</Text>
+          <Text size="sm" c="dimmed" ta="center">
+            Contact an administrator if you believe this is an error.
+          </Text>
         </Stack>
       </Center>
     ) : (
