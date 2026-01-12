@@ -1,5 +1,4 @@
 import {
-  Alert,
   Button,
   Group,
   SimpleGrid,
@@ -8,33 +7,11 @@ import {
   ThemeIcon,
   Title,
 } from "@mantine/core";
-import {
-  IconAlertTriangle,
-  IconMessageCircle,
-  IconSettings,
-} from "@tabler/icons-react";
+import { IconMessageCircle, IconSettings } from "@tabler/icons-react";
 import { Link } from "@tanstack/react-router";
 import Surface from "../components/Surface";
-import { useAuth } from "../contexts/AuthContext";
-
-function AdminHomeAccessDenied() {
-  return (
-    <Surface tone="soft" p="xl">
-      <Alert icon={<IconAlertTriangle size={16} />} color="red" variant="light">
-        Super admin access is required to view this page.
-      </Alert>
-    </Surface>
-  );
-}
 
 export default function AdminHome() {
-  const { user } = useAuth();
-  const isSuperAdmin = Boolean(user?.isSuperAdmin);
-
-  if (!isSuperAdmin) {
-    return <AdminHomeAccessDenied />;
-  }
-
   return (
     <Stack gap="lg" data-testid="admin-home-page">
       <Stack gap={4}>
