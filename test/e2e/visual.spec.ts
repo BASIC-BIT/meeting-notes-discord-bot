@@ -169,13 +169,11 @@ test.describe("visual regression", () => {
       await settingsPage.waitForLoaded(
         mockSettings.overrideChannelName || undefined,
       );
-      await page.waitForTimeout(150); // allow config hydration to settle
       await expectVisualScreenshot(page, "settings", mode);
 
       await settingsPage.expandGroup("Experimental");
       const experimentalGroup = settingsPage.groupByName("Experimental");
       await expect(experimentalGroup).toBeVisible();
-      await page.waitForTimeout(150); // allow experimental toggles to render
       await expectVisualScreenshot(page, "settings-experimental", mode);
 
       await settingsPage.openFirstOverrideEdit();
@@ -202,7 +200,6 @@ test.describe("visual regression", () => {
       await adminConfigPage
         .entryByKey("transcription.premium.enabled")
         .waitFor({ state: "visible" });
-      await page.waitForTimeout(150); // stabilize async field rendering
       await expectVisualScreenshot(page, "admin-config", mode);
     }
   });
