@@ -243,6 +243,14 @@ function MissingRequiredAlert({ missing }: MissingRequiredAlertProps) {
 
 function AdminConfigContent() {
   const { state, actions } = useAdminConfigState();
+  const entriesReady =
+    state.globalEntries.length === 0 ||
+    state.globalEntries.every(
+      (entry) =>
+        Object.hasOwn(state.localValues, entry.key) &&
+        Object.hasOwn(state.localModes, entry.key),
+    );
+  const isReady = !state.queryLoading && entriesReady;
   const uiContext = useMemo(
     () => ({
       ttsVoiceOptions: TTS_VOICE_OPTIONS,
@@ -252,7 +260,11 @@ function AdminConfigContent() {
   );
 
   return (
-    <Stack gap="lg" data-testid="admin-config-page">
+    <Stack
+      gap="lg"
+      data-testid="admin-config-page"
+      data-config-ready={isReady ? "true" : "false"}
+    >
       <Group justify="space-between" align="center">
         <Stack gap={2}>
           <Title order={2}>Admin configuration</Title>

@@ -259,6 +259,11 @@ export function ServerConfigCard({
     }),
     [resolvedValues, uiContextProp],
   );
+  const isReady =
+    Boolean(snapshot) &&
+    !busy &&
+    (serverEntries.length === 0 ||
+      serverEntries.every((entry) => Object.hasOwn(draft, entry.key)));
 
   const groupedEntries = useMemo(() => {
     const map = new Map<string, Map<string, ConfigEntryInput[]>>();
@@ -671,6 +676,7 @@ export function ServerConfigCard({
       p="lg"
       style={{ position: "relative", overflow: "hidden" }}
       data-testid="settings-config"
+      data-config-ready={isReady ? "true" : "false"}
     >
       <LoadingOverlay
         visible={busy || saving}

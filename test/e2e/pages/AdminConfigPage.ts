@@ -32,6 +32,12 @@ export class AdminConfigPage {
 
   async waitForLoaded(entryKey?: string): Promise<void> {
     await this.root().waitFor({ state: "visible" });
+    await this.page.waitForFunction(() => {
+      const element = document.querySelector(
+        '[data-testid="admin-config-page"]',
+      );
+      return element?.getAttribute("data-config-ready") === "true";
+    });
     if (entryKey) {
       await this.entryByKey(entryKey).waitFor({ state: "visible" });
     } else {

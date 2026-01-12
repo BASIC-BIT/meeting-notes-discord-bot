@@ -36,6 +36,10 @@ export class SettingsPage {
     await this.root().waitFor({ state: "visible" });
     await this.loadingConfig().waitFor({ state: "hidden" });
     await this.loadingOverrides().waitFor({ state: "hidden" });
+    await this.page.waitForFunction(() => {
+      const element = document.querySelector('[data-testid="settings-config"]');
+      return element?.getAttribute("data-config-ready") === "true";
+    });
     if (expectedOverrideName) {
       await this.overrideByName(expectedOverrideName).waitFor({
         state: "visible",
