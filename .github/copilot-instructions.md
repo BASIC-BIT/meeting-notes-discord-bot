@@ -1,3 +1,9 @@
+﻿# Copilot Review Instructions
+
+This file provides Copilot review context. It mirrors AGENTS.md and adds only high level prompt guidance to avoid drift.
+
+## AGENTS.md (source of truth)
+
 # AGENT ORIENTATION
 
 ## What this project is
@@ -39,8 +45,8 @@
 - Dictionary management: `commands/dictionary.ts`, `services/dictionaryService.ts`
   - Terms are injected into transcription and context prompts, definitions are used outside transcription to reduce prompt bloat.
 - Notes correction flow: `commands/notesCorrections.ts`
-  - “Suggest correction” button → modal (single textarea).
-  - Fetches saved notes + transcript from DB, calls GPT-4o with a “minimal edits, do not copy transcript” prompt, shows a compact line diff, requires approval (meeting creator or ManageChannels if auto-record), updates embed + MeetingHistory and bumps version/last editor.
+  - â€œSuggest correctionâ€ button â†’ modal (single textarea).
+  - Fetches saved notes + transcript from DB, calls GPT-4o with a â€œminimal edits, do not copy transcriptâ€ prompt, shows a compact line diff, requires approval (meeting creator or ManageChannels if auto-record), updates embed + MeetingHistory and bumps version/last editor.
 - Context management: `commands/context.ts` writes/reads ServerContext and ChannelContext.
 - Meeting history persistence: `commands/saveMeetingHistory.ts`, `db.ts` helpers.
 - Web server: `webserver.ts` (health check, optional Discord OAuth scaffolding).
@@ -81,7 +87,7 @@
 
 ## Known nuances / gotchas
 
-- Token leaks: don’t reintroduce secret re-exports in `constants.ts`; use `configService`.
+- Token leaks: donâ€™t reintroduce secret re-exports in `constants.ts`; use `configService`.
 - Discord interaction timing: modal/button handlers must reply within 3s; correction flow already uses direct replies.
 - Diff output is intentionally minimal (line diff, capped length); LLM output is stripped of code fences to avoid code-block embeds.
 - Meeting duration capped at 2h (`MAXIMUM_MEETING_DURATION`).
@@ -97,7 +103,7 @@
 - Avoid hedging and speculative fallbacks. Follow YAGNI and KISS, do not add code for hypothetical cases unless explicitly required.
 - Config constraints: when numeric settings depend on caps, use minKey/maxKey to reference other config entries, clamp inputs in the UI, and enforce bounds in API validation.
 - Playwright mock mode: ensure only the mock API (port 3001) and frontend dev server (port 5173) are running. If ports are occupied, stop them first (`Get-NetTCPConnection -LocalPort 3001,5173 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ }`). Clear `VITE_API_BASE_URL` (for example via `.env.local`) so the frontend uses the mock server.
-- Comment hygiene: don’t leave transient or change-log style comments (e.g., “SDK v3 exposes transformToString”). Use comments only to clarify non-obvious logic, constraints, or intent.
+- Comment hygiene: donâ€™t leave transient or change-log style comments (e.g., â€œSDK v3 exposes transformToStringâ€). Use comments only to clarify non-obvious logic, constraints, or intent.
 - Writing style: do not use em dashes in copy/docs/comments; prefer commas, parentheses, or hyphens.
 - Documentation accuracy: after changes that affect behavior, config, prompts, infra, or user flows, review and update `AGENTS.md`, `.github/copilot-instructions.md`, `README.md`, and any related `docs/` or prompt files to keep them accurate and high signal. Keep the copilot instructions high level to reduce drift.
 - README should stay high signal for users, avoid listing research outcomes like query parameter details. Put rationale or research notes in planning documentation files instead.
@@ -105,7 +111,7 @@
 - Backwards compatibility update (January 6, 2026): prioritize DynamoDB data compatibility; URLs and UI flows can change without preserving prior behavior.
 - Workflow sync: when changing GitHub Actions env or steps, review `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, and `.github/workflows/deploy-staging.yml` to keep them aligned.
 - ADRs: use the existing ADR format (see `docs/adr-20260106-voice-receiver-resubscribe.md`). New ADRs must live in `docs/` with filename `adr-YYYYMMDD-<slug>.md` and include Status, Date, Owners, Context, Decision, Consequences, Alternatives Considered, and Notes. Keep ADRs short and factual. Update or add ADRs when a design decision changes behavior or data contracts.
-- “Remember that …” shorthand: when the user says “remember that <rule>”, add it to AGENTS.md under the relevant section as a standing rule.
+- â€œRemember that â€¦â€ shorthand: when the user says â€œremember that <rule>â€, add it to AGENTS.md under the relevant section as a standing rule.
 - Do not suppress runtime warnings by monkey-patching globals (e.g., overriding console.error). Fix the underlying issue or accept the warning; never silence it via code hacks.
 - Stripe webhook parsing: keep a single `express.raw({ type: "application/json" })` at app-level in `webserver.ts`; do not add per-route raw parsers elsewhere.
 - React tests: when a test triggers state updates (e.g., data-fetching effects), wrap renders/updates in `act` (from `react`/RTL helpers) to avoid act warnings instead of silencing console errors.
@@ -265,3 +271,17 @@ Always verify information before presenting it. Do not make assumptions or specu
 ### No Apologies
 
 Never use apologies.
+
+## Prompt context (high level)
+
+- Prompts live in prompts/ and prompts/\_fragments, and are synced via Langfuse.
+- Notes should be concise and proportional to meeting length, and follow participant instructions over defaults.
+- Speaker order can be unreliable, avoid strong inference from ordering.
+- Use server nicknames when provided, else display names, else usernames, keep consistent.
+- Notes corrections should be minimal edits and avoid copying transcript text.
+- Discord embed markdown supports headings up to ###, avoid #### in notes output.
+
+## Drift guardrails
+
+- Keep this file aligned with AGENTS.md and avoid pasting full prompt content.
+- After changes that affect behavior, config, prompts, infra, or user flows, update docs and prompts as required by AGENTS.md.
