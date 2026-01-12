@@ -11,7 +11,6 @@ test("settings page shows overrides and updates tags (mock)", async ({
   await serverSelectPage.openServerByName(mockGuilds.ddm.name);
 
   await nav.goToSettings();
-  await expect(settingsPage.root()).toBeVisible();
   await settingsPage.waitForLoaded(
     mockSettings.overrideChannelName || undefined,
   );

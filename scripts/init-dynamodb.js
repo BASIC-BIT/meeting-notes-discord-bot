@@ -342,7 +342,15 @@ async function ensureFeedbackIndexExists() {
       error.message,
     );
     console.error(
-      "If you are using DynamoDB Local, delete the FeedbackTable and rerun init.",
+      "If you are using DynamoDB Local, you may need to reset your local database and rerun this init script.",
+    );
+    console.error(
+      "For example, if you run DynamoDB Local with docker-compose you can do:",
+    );
+    console.error("  docker-compose down -v");
+    console.error("  docker-compose up -d");
+    console.error(
+      "After resetting DynamoDB Local, rerun the initialization to recreate the FeedbackTable and its indexes.",
     );
   }
 }

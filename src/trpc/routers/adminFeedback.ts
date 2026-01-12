@@ -42,7 +42,9 @@ const list = superAdminProcedure
     });
 
     const guildIds = new Set(
-      result.items.map((item) => item.guildId).filter(Boolean),
+      result.items
+        .map((item) => item.guildId)
+        .filter((id): id is string => id !== undefined && id !== null),
     );
     const guildsById = await resolveGuildsById(guildIds);
 
