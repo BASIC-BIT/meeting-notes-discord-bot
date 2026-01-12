@@ -313,12 +313,21 @@ export function setupWebServer() {
   }
 
   app.get("/logout", (req, res) => {
+    const redirectParam = resolveRedirectParam(req);
+    const fallback =
+      config.frontend.siteUrl && config.frontend.siteUrl.length > 0
+        ? config.frontend.siteUrl
+        : "/";
+    const redirectTarget = redirectParam || fallback;
+    const finishLogout = () => {
+      res.redirect(redirectTarget);
+    };
     if (typeof req.logout === "function") {
       req.logout((err) => {
         if (err) {
           console.error(err);
         }
-        res.redirect("/");
+        finishLogout();
       });
       return;
     }
@@ -327,11 +336,11 @@ export function setupWebServer() {
         if (err) {
           console.error(err);
         }
-        res.redirect("/");
+        finishLogout();
       });
       return;
     }
-    res.redirect("/");
+    finishLogout();
   });
 
   app.get("/user", (req, res) => {
