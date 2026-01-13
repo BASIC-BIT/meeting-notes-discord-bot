@@ -171,7 +171,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.pw-version.outputs.version }}
@@ -215,7 +215,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: pw-cache-visual
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/AppData/Local/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.pw-version-visual.outputs.version }}
@@ -267,7 +267,7 @@ jobs:
 
       - name: Upload visual artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: visual-regression
           path: |
@@ -302,7 +302,7 @@ jobs:
 
       - name: Cache pip (lizard)
         id: pip-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ steps.py-version.outputs.version }}-lizard
