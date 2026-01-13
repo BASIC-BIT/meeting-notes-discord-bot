@@ -11,6 +11,7 @@ import {
   Grid,
   Group,
   Loader,
+  ScrollArea,
   Stack,
   Text,
   ThemeIcon,
@@ -24,7 +25,7 @@ import MeetingTimeline, {
 } from "../../../components/MeetingTimeline";
 import Surface from "../../../components/Surface";
 import { trpc } from "../../../services/trpc";
-import { uiOverlays } from "../../../uiTokens";
+import { uiOverlays, uiSpacing } from "../../../uiTokens";
 import {
   endLiveMeeting,
   fetchLiveMeetingStatus,
@@ -422,6 +423,7 @@ export default function MeetingDetailDrawer({
       summaryFeedback={summaryFeedback}
       feedbackPending={feedbackMutation.isPending}
       copyDisabled={!canCopySummary}
+      scrollable={!fullScreen}
       onFeedbackUp={handleSummaryFeedbackUp}
       onFeedbackDown={handleSummaryFeedbackDown}
       onCopySummary={handleCopySummary}
@@ -572,11 +574,25 @@ export default function MeetingDetailDrawer({
                         height: "100%",
                       }}
                     >
-                      <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
-                        {audioSection}
-                        {summarySection}
-                        {attendeesSection}
-                      </Stack>
+                      <ScrollArea
+                        style={{ flex: 1, minHeight: 0 }}
+                        offsetScrollbars
+                        type="always"
+                        scrollbarSize={10}
+                        data-visual-scroll
+                        data-testid="meeting-detail-left-scroll"
+                        styles={{
+                          viewport: {
+                            paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
+                          },
+                        }}
+                      >
+                        <Stack gap="md">
+                          {audioSection}
+                          {summarySection}
+                          {attendeesSection}
+                        </Stack>
+                      </ScrollArea>
                     </Grid.Col>
                     <Grid.Col
                       span={{ base: 12, lg: 7 }}

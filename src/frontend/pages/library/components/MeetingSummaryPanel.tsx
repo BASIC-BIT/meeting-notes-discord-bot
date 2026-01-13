@@ -36,6 +36,7 @@ type MeetingSummaryPanelProps = {
   summaryFeedback: SummaryFeedback;
   feedbackPending: boolean;
   copyDisabled: boolean;
+  scrollable?: boolean;
   onFeedbackUp: () => void;
   onFeedbackDown: () => void;
   onCopySummary: () => void;
@@ -48,11 +49,14 @@ export function MeetingSummaryPanel({
   summaryFeedback,
   feedbackPending,
   copyDisabled,
+  scrollable = true,
   onFeedbackUp,
   onFeedbackDown,
   onCopySummary,
   style,
 }: MeetingSummaryPanelProps) {
+  const panelFlex = scrollable ? 1 : "0 0 auto";
+  const panelMinHeight = scrollable ? 0 : undefined;
   const summaryBody = (
     <>
       <MarkdownBody content={summary} compact dimmed />
@@ -84,6 +88,7 @@ export function MeetingSummaryPanel({
       <MarkdownBody content={notes} />
     </>
   );
+  const summaryContent = <Stack gap="sm">{summaryBody}</Stack>;
 
   return (
     <Surface
@@ -91,8 +96,8 @@ export function MeetingSummaryPanel({
       style={{
         display: "flex",
         flexDirection: "column",
-        flex: 1,
-        minHeight: 0,
+        flex: panelFlex,
+        minHeight: panelMinHeight,
         ...style,
       }}
     >
@@ -133,22 +138,26 @@ export function MeetingSummaryPanel({
           </ActionIcon>
         </Group>
       </Group>
-      <ScrollArea
-        style={{ flex: 1, minHeight: 0 }}
-        offsetScrollbars
-        type="always"
-        scrollbarSize={10}
-        data-visual-scroll
-        data-testid="meeting-summary-scroll"
-        viewportProps={summaryViewportProps}
-        styles={{
-          viewport: {
-            paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
-          },
-        }}
-      >
-        <Stack gap="sm">{summaryBody}</Stack>
-      </ScrollArea>
+      {scrollable ? (
+        <ScrollArea
+          style={{ flex: 1, minHeight: 0 }}
+          offsetScrollbars
+          type="always"
+          scrollbarSize={10}
+          data-visual-scroll
+          data-testid="meeting-summary-scroll"
+          viewportProps={summaryViewportProps}
+          styles={{
+            viewport: {
+              paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
+            },
+          }}
+        >
+          {summaryContent}
+        </ScrollArea>
+      ) : (
+        summaryContent
+      )}
     </Surface>
   );
 }

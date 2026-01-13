@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import MeetingTimeline, { MEETING_TIMELINE_FILTERS } from "./MeetingTimeline";
-import type { MeetingEvent } from "../types/meetingTimeline";
+import type { MeetingEvent } from "../../types/meetingTimeline";
 
 const events: MeetingEvent[] = [
   {
