@@ -37,6 +37,15 @@ describe("startProcessingSnippet", () => {
           fastFinalizationEnabled: true,
           interjectionEnabled: false,
           interjectionMinSpeakerSeconds: 0.3,
+          noiseGate: {
+            enabled: false,
+            windowMs: 20,
+            peakDbfs: -45,
+            minActiveWindows: 2,
+            minPeakAboveNoiseDb: 15,
+            applyToFast: true,
+            applyToSlow: true,
+          },
         },
         premiumTranscription: {
           enabled: false,

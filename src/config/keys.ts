@@ -14,6 +14,13 @@ export const CONFIG_KEYS = {
     interjectionEnabled: "transcription.interjection.enabled",
     interjectionMinSpeakerSeconds:
       "transcription.interjection.minSpeakerSeconds",
+    noiseGateEnabled: "transcription.noiseGate.enabled",
+    noiseGateWindowMs: "transcription.noiseGate.windowMs",
+    noiseGatePeakDbfs: "transcription.noiseGate.peakDbfs",
+    noiseGateMinActiveWindows: "transcription.noiseGate.minActiveWindows",
+    noiseGateMinPeakAboveNoiseDb: "transcription.noiseGate.minPeakAboveNoiseDb",
+    noiseGateApplyToFast: "transcription.noiseGate.applyToFast",
+    noiseGateApplyToSlow: "transcription.noiseGate.applyToSlow",
   },
   models: {
     notes: "models.notes",

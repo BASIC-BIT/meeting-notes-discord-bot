@@ -81,6 +81,15 @@ const buildRuntimeConfig = (
       fastFinalizationEnabled: false,
       interjectionEnabled: false,
       interjectionMinSpeakerSeconds: 1,
+      noiseGate: {
+        enabled: true,
+        windowMs: 20,
+        peakDbfs: -45,
+        minActiveWindows: 2,
+        minPeakAboveNoiseDb: 15,
+        applyToFast: true,
+        applyToSlow: true,
+      },
     },
     premiumTranscription: {
       enabled: false,

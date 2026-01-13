@@ -86,6 +86,7 @@
 - Diff output is intentionally minimal (line diff, capped length); LLM output is stripped of code fences to avoid code-block embeds.
 - Meeting duration capped at 2h (`MAXIMUM_MEETING_DURATION`).
 - Auto-record will end meeting if channel empties.
+- Noise gate can suppress very quiet snippets; forced transcriptions bypass it.
 - Prompt fragments live in `prompts/_fragments` and are composed via `extends` in front matter. `prompts:pull` skips prompts that use `extends` unless `--force` is passed.
 - **Current outbound network rules (ECS service SG)**: temporarily allowing all egress (UDP/TCP any port) for Discord voice debugging. Previously it was limited to TCP 443 and DNS (53) only. Remember to tighten this once voice is stable and update this note.
 - Avoid `in`/`instanceof`/`typeof` hedging for core platform APIs; we target a known Node/SDK set. Prefer simple, direct calls with minimal branching.

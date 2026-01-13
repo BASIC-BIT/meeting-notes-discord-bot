@@ -116,6 +116,15 @@ export type MeetingRuntimeConfig = {
     fastFinalizationEnabled: boolean;
     interjectionEnabled: boolean;
     interjectionMinSpeakerSeconds: number;
+    noiseGate: {
+      enabled: boolean;
+      windowMs: number;
+      peakDbfs: number;
+      minActiveWindows: number;
+      minPeakAboveNoiseDb: number;
+      applyToFast: boolean;
+      applyToSlow: boolean;
+    };
   };
   premiumTranscription: {
     enabled: boolean;
