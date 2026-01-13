@@ -12,42 +12,29 @@ import {
   Grid,
   Group,
   Loader,
-  Modal,
-  ScrollArea,
   Stack,
   Text,
-  Textarea,
-  TextInput,
   ThemeIcon,
   useComputedColorScheme,
   useMantineTheme,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import {
-  IconArchive,
-  IconArchiveOff,
-  IconCopy,
-  IconDownload,
   IconFilter,
   IconMicrophone,
-  IconNote,
   IconPencil,
-  IconThumbDown,
-  IconThumbUp,
   IconUsers,
 } from "@tabler/icons-react";
 import MeetingTimeline, {
   MEETING_TIMELINE_FILTERS,
 } from "../../../components/MeetingTimeline";
-import MarkdownBody from "../../../components/MarkdownBody";
 import Surface from "../../../components/Surface";
 import { trpc } from "../../../services/trpc";
-import { uiOverlays, uiSpacing } from "../../../uiTokens";
+import { uiOverlays } from "../../../uiTokens";
 import {
   endLiveMeeting,
   fetchLiveMeetingStatus,
 } from "../../../services/liveMeetingControl";
-import { formatDateTimeLabel } from "../../../utils/meetingLibrary";
 import {
   MEETING_STATUS,
   type MeetingStatus,
@@ -57,6 +44,9 @@ import type {
   MeetingEventType,
 } from "../../../../types/meetingTimeline";
 import { useMeetingDetail } from "../hooks/useMeetingDetail";
+import MeetingDetailHeader from "./MeetingDetailHeader";
+import MeetingDetailModals from "./MeetingDetailModals";
+import { MeetingSummaryPanel } from "./MeetingSummaryPanel";
 
 const resolveRenameDraft = (meeting: {
   meetingName?: string;
@@ -133,10 +123,6 @@ type MeetingDetailDrawerProps = {
 
 type ViewportTestIdProps = HTMLAttributes<HTMLDivElement> & {
   "data-testid": string;
-};
-
-const summaryViewportProps: ViewportTestIdProps = {
-  "data-testid": "meeting-summary-scroll-viewport",
 };
 
 const timelineViewportProps: ViewportTestIdProps = {
@@ -526,87 +512,17 @@ export default function MeetingDetailDrawer({
     </Surface>
   ) : null;
 
-  const summaryBody = meeting ? (
-    <>
-      <MarkdownBody content={meeting.summary} compact dimmed />
-      <Divider my="sm" />
-      <MarkdownBody content={meeting.notes} />
-    </>
-  ) : null;
-
   const summarySection = meeting ? (
-    <Surface
-      p="md"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        flex: 1,
-        minHeight: 0,
-      }}
-    >
-      <Group
-        gap="sm"
-        mb="xs"
-        justify="space-between"
-        align="center"
-        wrap="wrap"
-      >
-        <Group gap="xs">
-          <ThemeIcon variant="light" color="brand">
-            <IconNote size={16} />
-          </ThemeIcon>
-          <Text fw={600}>Summary</Text>
-        </Group>
-        <Group gap="xs" align="center" wrap="wrap">
-          <Text size="xs" c="dimmed">
-            Was this summary helpful?
-          </Text>
-          <ActionIcon
-            variant={summaryFeedback === "up" ? "light" : "subtle"}
-            color={summaryFeedback === "up" ? "teal" : "gray"}
-            onClick={handleSummaryFeedbackUp}
-            disabled={feedbackMutation.isPending}
-            aria-label="Mark summary helpful"
-          >
-            <IconThumbUp size={14} />
-          </ActionIcon>
-          <ActionIcon
-            variant={summaryFeedback === "down" ? "light" : "subtle"}
-            color={summaryFeedback === "down" ? "red" : "gray"}
-            onClick={handleSummaryFeedbackDown}
-            disabled={feedbackMutation.isPending}
-            aria-label="Mark summary needs work"
-          >
-            <IconThumbDown size={14} />
-          </ActionIcon>
-          <ActionIcon
-            variant="subtle"
-            color="gray"
-            onClick={handleCopySummary}
-            disabled={!canCopySummary}
-            aria-label="Copy summary as Markdown"
-          >
-            <IconCopy size={14} />
-          </ActionIcon>
-        </Group>
-      </Group>
-      <ScrollArea
-        style={{ flex: 1, minHeight: 0 }}
-        offsetScrollbars
-        type="always"
-        scrollbarSize={10}
-        data-visual-scroll
-        data-testid="meeting-summary-scroll"
-        viewportProps={summaryViewportProps}
-        styles={{
-          viewport: {
-            paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
-          },
-        }}
-      >
-        <Stack gap="sm">{summaryBody}</Stack>
-      </ScrollArea>
-    </Surface>
+    <MeetingSummaryPanel
+      summary={meeting.summary}
+      notes={meeting.notes}
+      summaryFeedback={summaryFeedback}
+      feedbackPending={feedbackMutation.isPending}
+      copyDisabled={!canCopySummary}
+      onFeedbackUp={handleSummaryFeedbackUp}
+      onFeedbackDown={handleSummaryFeedbackDown}
+      onCopySummary={handleCopySummary}
+    />
   ) : null;
 
   const attendeesSection = meeting ? (
@@ -693,214 +609,49 @@ export default function MeetingDetailDrawer({
             </Center>
           ) : meeting ? (
             <>
-              <Modal
-                opened={feedbackModalOpen}
-                onClose={() => setFeedbackModalOpen(false)}
-                title="Summary feedback"
-                centered
-              >
-                <Stack gap="md">
-                  <Textarea
-                    label="What could be better? (optional)"
-                    placeholder="Add detail that helps improve the summary."
-                    value={feedbackDraft}
-                    onChange={(event) =>
-                      setFeedbackDraft(event.currentTarget.value)
-                    }
-                    minRows={4}
-                    maxLength={1000}
-                  />
-                  <Group justify="flex-end">
-                    <Button
-                      variant="default"
-                      onClick={() => setFeedbackModalOpen(false)}
-                      disabled={feedbackMutation.isPending}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      color="red"
-                      onClick={handleSummaryFeedbackSubmit}
-                      loading={feedbackMutation.isPending}
-                    >
-                      Send feedback
-                    </Button>
-                  </Group>
-                </Stack>
-              </Modal>
-              <Modal
-                opened={endMeetingModalOpen}
-                onClose={() => setEndMeetingModalOpen(false)}
-                title="End live meeting"
-                centered
-              >
-                <Stack gap="md">
-                  <Text size="sm" c="dimmed">
-                    This will stop recording and begin processing notes. Are you
-                    sure you want to end the meeting?
-                  </Text>
-                  <Group justify="flex-end">
-                    <Button
-                      variant="default"
-                      onClick={() => setEndMeetingModalOpen(false)}
-                      disabled={endMeetingLoading}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      color="red"
-                      onClick={handleConfirmEndMeeting}
-                      loading={endMeetingLoading}
-                    >
-                      End meeting
-                    </Button>
-                  </Group>
-                </Stack>
-              </Modal>
-              <Modal
-                opened={archiveModalOpen}
-                onClose={() => {
+              <MeetingDetailModals
+                feedbackModalOpen={feedbackModalOpen}
+                feedbackDraft={feedbackDraft}
+                onFeedbackDraftChange={setFeedbackDraft}
+                onFeedbackModalClose={() => setFeedbackModalOpen(false)}
+                onFeedbackSubmit={handleSummaryFeedbackSubmit}
+                feedbackSubmitting={feedbackMutation.isPending}
+                endMeetingModalOpen={endMeetingModalOpen}
+                onEndMeetingModalClose={() => setEndMeetingModalOpen(false)}
+                onConfirmEndMeeting={handleConfirmEndMeeting}
+                endMeetingLoading={endMeetingLoading}
+                archiveModalOpen={archiveModalOpen}
+                archiveNextState={archiveNextState}
+                onArchiveModalClose={() => {
                   setArchiveModalOpen(false);
                   setArchiveNextState(null);
                 }}
-                title={
-                  archiveNextState ? "Archive meeting" : "Unarchive meeting"
-                }
-                centered
-              >
-                <Stack gap="md">
-                  <Text size="sm" c="dimmed">
-                    {archiveNextState
-                      ? "Archived meetings move to the Archived view. You can unarchive anytime."
-                      : "This meeting will move back to the active list."}
-                  </Text>
-                  <Group justify="flex-end">
-                    <Button
-                      variant="default"
-                      onClick={() => {
-                        setArchiveModalOpen(false);
-                        setArchiveNextState(null);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      color={archiveNextState ? "red" : "brand"}
-                      onClick={handleArchiveConfirm}
-                      loading={archiveMutation.isPending}
-                      data-testid="meeting-archive-confirm"
-                    >
-                      {archiveNextState
-                        ? "Archive meeting"
-                        : "Unarchive meeting"}
-                    </Button>
-                  </Group>
-                </Stack>
-              </Modal>
-              <Modal
-                opened={renameModalOpen}
-                onClose={() => setRenameModalOpen(false)}
-                title="Rename meeting"
-                centered
-              >
-                <Stack gap="md">
-                  <TextInput
-                    label="Meeting name"
-                    description="5 words or fewer, letters and numbers only."
-                    value={renameDraft}
-                    onChange={(event) =>
-                      setRenameDraft(event.currentTarget.value)
-                    }
-                    error={renameError ?? undefined}
-                    data-testid="meeting-rename-input"
-                  />
-                  <Group justify="flex-end">
-                    <Button
-                      variant="default"
-                      onClick={() => setRenameModalOpen(false)}
-                      disabled={renameMutation.isPending}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={handleRenameSave}
-                      loading={renameMutation.isPending}
-                    >
-                      Save name
-                    </Button>
-                  </Group>
-                </Stack>
-              </Modal>
+                onArchiveConfirm={handleArchiveConfirm}
+                archivePending={archiveMutation.isPending}
+                renameModalOpen={renameModalOpen}
+                renameDraft={renameDraft}
+                renameError={renameError}
+                onRenameDraftChange={setRenameDraft}
+                onRenameModalClose={() => setRenameModalOpen(false)}
+                onRenameSave={handleRenameSave}
+                renamePending={renameMutation.isPending}
+              />
               <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
-                <Stack gap={4}>
-                  <Group justify="flex-end" align="center" wrap="wrap">
-                    {displayStatus === MEETING_STATUS.IN_PROGRESS &&
-                    canManageSelectedGuild ? (
-                      <Button
-                        color="red"
-                        variant="light"
-                        loading={endMeetingPreflightLoading}
-                        onClick={preflightEndMeeting}
-                      >
-                        End meeting
-                      </Button>
-                    ) : null}
-                    <Button
-                      variant="light"
-                      leftSection={<IconDownload size={16} />}
-                      onClick={handleDownload}
-                      data-testid="meeting-download"
-                    >
-                      Download
-                    </Button>
-                    <Button
-                      variant="subtle"
-                      leftSection={
-                        meeting.archivedAt ? (
-                          <IconArchiveOff size={16} />
-                        ) : (
-                          <IconArchive size={16} />
-                        )
-                      }
-                      onClick={() => {
-                        setArchiveNextState(!meeting.archivedAt);
-                        setArchiveModalOpen(true);
-                      }}
-                      loading={archiveMutation.isPending}
-                      data-testid={
-                        meeting.archivedAt
-                          ? "meeting-unarchive"
-                          : "meeting-archive"
-                      }
-                    >
-                      {meeting.archivedAt ? "Unarchive" : "Archive"}
-                    </Button>
-                    <Button
-                      variant={fullScreen ? "outline" : "light"}
-                      leftSection={<IconFilter size={16} />}
-                      onClick={handleToggleFullScreen}
-                      data-testid="meeting-fullscreen-toggle"
-                    >
-                      {fullScreen ? "Exit fullscreen" : "Open fullscreen"}
-                    </Button>
-                  </Group>
-                  <Text size="sm" c="dimmed">
-                    {meeting.dateLabel} | {meeting.durationLabel} |{" "}
-                    {meeting.channel}
-                  </Text>
-                  {meeting.archivedAt ? (
-                    <Text size="xs" c="dimmed">
-                      Archived on {formatDateTimeLabel(meeting.archivedAt)}
-                    </Text>
-                  ) : null}
-                  <Group gap="xs" wrap="wrap">
-                    {meeting.tags.map((tag) => (
-                      <Badge key={tag} variant="light" color="gray">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </Group>
-                </Stack>
+                <MeetingDetailHeader
+                  meeting={meeting}
+                  displayStatus={displayStatus}
+                  canManageSelectedGuild={canManageSelectedGuild}
+                  endMeetingPreflightLoading={endMeetingPreflightLoading}
+                  archivePending={archiveMutation.isPending}
+                  fullScreen={fullScreen}
+                  onEndMeeting={preflightEndMeeting}
+                  onDownload={handleDownload}
+                  onArchiveToggle={() => {
+                    setArchiveNextState(!meeting.archivedAt);
+                    setArchiveModalOpen(true);
+                  }}
+                  onToggleFullScreen={handleToggleFullScreen}
+                />
 
                 {fullScreen ? (
                   <Grid
