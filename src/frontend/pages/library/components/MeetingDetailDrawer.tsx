@@ -42,7 +42,7 @@ import MeetingTimeline, {
 import MarkdownBody from "../../../components/MarkdownBody";
 import Surface from "../../../components/Surface";
 import { trpc } from "../../../services/trpc";
-import { uiOverlays } from "../../../uiTokens";
+import { uiOverlays, uiSpacing } from "../../../uiTokens";
 import {
   endLiveMeeting,
   fetchLiveMeetingStatus,
@@ -537,16 +537,12 @@ export default function MeetingDetailDrawer({
   const summarySection = meeting ? (
     <Surface
       p="md"
-      style={
-        fullScreen
-          ? undefined
-          : {
-              display: "flex",
-              flexDirection: "column",
-              flex: 1,
-              minHeight: 0,
-            }
-      }
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+      }}
     >
       <Group
         gap="sm"
@@ -594,19 +590,22 @@ export default function MeetingDetailDrawer({
           </ActionIcon>
         </Group>
       </Group>
-      {fullScreen ? (
-        summaryBody
-      ) : (
-        <ScrollArea
-          style={{ flex: 1, minHeight: 0 }}
-          offsetScrollbars
-          data-visual-scroll
-          data-testid="meeting-summary-scroll"
-          viewportProps={summaryViewportProps}
-        >
-          <Stack gap="sm">{summaryBody}</Stack>
-        </ScrollArea>
-      )}
+      <ScrollArea
+        style={{ flex: 1, minHeight: 0 }}
+        offsetScrollbars
+        type="always"
+        scrollbarSize={10}
+        data-visual-scroll
+        data-testid="meeting-summary-scroll"
+        viewportProps={summaryViewportProps}
+        styles={{
+          viewport: {
+            paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
+          },
+        }}
+      >
+        <Stack gap="sm">{summaryBody}</Stack>
+      </ScrollArea>
     </Surface>
   ) : null;
 
@@ -906,8 +905,9 @@ export default function MeetingDetailDrawer({
                 {fullScreen ? (
                   <Grid
                     gutter="lg"
-                    style={{ flex: 1, minHeight: 0 }}
+                    style={{ flex: 1, minHeight: 0, height: "100%" }}
                     align="stretch"
+                    styles={{ inner: { height: "100%" } }}
                   >
                     <Grid.Col
                       span={{ base: 12, lg: 5 }}
@@ -915,19 +915,14 @@ export default function MeetingDetailDrawer({
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,
+                        height: "100%",
                       }}
                     >
-                      <ScrollArea
-                        style={{ flex: 1, minHeight: 0 }}
-                        offsetScrollbars
-                        data-visual-scroll
-                      >
-                        <Stack gap="md">
-                          {audioSection}
-                          {summarySection}
-                          {attendeesSection}
-                        </Stack>
-                      </ScrollArea>
+                      <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
+                        {audioSection}
+                        {summarySection}
+                        {attendeesSection}
+                      </Stack>
                     </Grid.Col>
                     <Grid.Col
                       span={{ base: 12, lg: 7 }}
@@ -935,6 +930,7 @@ export default function MeetingDetailDrawer({
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,
+                        height: "100%",
                       }}
                     >
                       <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>

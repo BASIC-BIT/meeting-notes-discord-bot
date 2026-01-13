@@ -28,6 +28,7 @@ import type {
   MeetingEvent,
   MeetingEventType,
 } from "../../types/meetingTimeline";
+import { uiSpacing } from "../uiTokens";
 
 export const MEETING_TIMELINE_FILTERS: Array<{
   value: MeetingEventType;
@@ -129,10 +130,17 @@ export default function MeetingTimeline({
       </Group>
       <ScrollArea
         {...scrollAreaProps}
+        type="always"
         offsetScrollbars
+        scrollbarSize={10}
         viewportRef={viewportRef}
         viewportProps={viewportProps}
         data-visual-scroll
+        styles={{
+          viewport: {
+            paddingRight: `var(--mantine-spacing-${uiSpacing.scrollAreaGutter})`,
+          },
+        }}
       >
         {visibleEvents.length === 0 ? (
           <Center py="xl">
