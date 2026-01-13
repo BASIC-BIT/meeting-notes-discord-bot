@@ -55,8 +55,14 @@ export function MeetingSummaryPanel({
   onCopySummary,
   style,
 }: MeetingSummaryPanelProps) {
-  const panelFlex = scrollable ? 1 : "0 0 auto";
-  const panelMinHeight = scrollable ? 0 : undefined;
+  const panelStyle: CSSProperties = scrollable
+    ? {
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+      }
+    : {};
   const summaryBody = (
     <>
       <MarkdownBody content={summary} compact dimmed />
@@ -94,10 +100,7 @@ export function MeetingSummaryPanel({
     <Surface
       p="md"
       style={{
-        display: "flex",
-        flexDirection: "column",
-        flex: panelFlex,
-        minHeight: panelMinHeight,
+        ...panelStyle,
         ...style,
       }}
     >
