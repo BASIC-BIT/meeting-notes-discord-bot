@@ -561,9 +561,8 @@ export default function MeetingDetailDrawer({
                 {fullScreen ? (
                   <Grid
                     gutter="lg"
-                    style={{ flex: 1, minHeight: 0, height: "100%" }}
+                    style={{ flex: 1, minHeight: 0 }}
                     align="stretch"
-                    styles={{ inner: { height: "100%" } }}
                   >
                     <Grid.Col
                       span={{ base: 12, lg: 5 }}
@@ -571,7 +570,6 @@ export default function MeetingDetailDrawer({
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,
-                        height: "100%",
                       }}
                     >
                       <ScrollArea
@@ -600,7 +598,6 @@ export default function MeetingDetailDrawer({
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,
-                        height: "100%",
                       }}
                     >
                       <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>
