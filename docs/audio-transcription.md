@@ -46,7 +46,7 @@ Pricing checklist:
 
 ## Config keys
 
-All values are set via the config system and can be overridden at the global or server level.
+All values are set via the config system. For the noise gate, only `enabled`, `applyToFast`, and `applyToSlow` support server overrides. The numeric thresholds remain global-only.
 
 - `transcription.fastSilenceMs`
 - `transcription.slowSilenceMs`

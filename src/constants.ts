@@ -34,6 +34,7 @@ export const NOISE_GATE_WINDOW_MS = 20;
 export const NOISE_GATE_PEAK_DBFS = -45;
 export const NOISE_GATE_MIN_ACTIVE_WINDOWS = 2;
 export const NOISE_GATE_MIN_PEAK_ABOVE_NOISE_DB = 15;
+// Fixed percentile to keep the noise gate stable while defaults are tuned.
 export const NOISE_GATE_NOISE_FLOOR_PERCENTILE = 0.2;
 export const NOISE_GATE_APPLY_TO_FAST = true;
 export const NOISE_GATE_APPLY_TO_SLOW = true;

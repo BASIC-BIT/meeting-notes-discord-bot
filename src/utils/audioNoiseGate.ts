@@ -20,11 +20,11 @@ export type NoiseGateMetrics = {
   thresholdDbfs: number;
 };
 
-const INT16_MAX = 32768;
+const INT16_FULL_SCALE = 32768;
 
 function toDbfs(peak: number): number {
   if (peak <= 0) return Number.NEGATIVE_INFINITY;
-  return 20 * Math.log10(peak / INT16_MAX);
+  return 20 * Math.log10(peak / INT16_FULL_SCALE);
 }
 
 function percentile(values: number[], fraction: number): number {
