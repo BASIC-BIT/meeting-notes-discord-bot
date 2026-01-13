@@ -6,6 +6,9 @@
     {
       "path": "../meeting-notes-discord-bot-chat-tts",
     },
+    {
+      "path": "../basic-prompts",
+    },
   ],
   "settings": {
     "chatgpt.commentCodeLensEnabled": true,

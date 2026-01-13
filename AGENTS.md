@@ -68,8 +68,10 @@
 ## Frontend
 
 - Vite + React 19 lives in `src/frontend/`; production build is static assets in `build/frontend/` served via S3/CloudFront (see deploy workflow). Use `yarn frontend:dev` for local HMR.
-- Storybook lives in `.storybook/` for component development. Start it with `yarn storybook` (port 6006 by default).
+- Storybook lives in `.storybook/` for component development. Start it with `yarn storybook` (port 6006 by default, no auto-open). Use `yarn storybook:open` when you want the browser to open automatically.
 - To capture component screenshots, run `yarn test-storybook` while Storybook is running. Screenshots are written to `test/storybook/screenshots`.
+- When making UI changes, run Storybook and capture screenshots with `yarn test-storybook` before finishing. If the UI change is not covered by a story, add or update a story first.
+- Always run Storybook screenshot capture and do a VLM review for any UI change before responding with final UI edits.
 - When making UI changes, use the VLM to review the Storybook screenshots so you can verify the component changes without scanning the full page.
 - When making UI changes, review Playwright visual snapshots in `test/e2e/visual.spec.ts-snapshots` with the VLM to understand existing UI flows. It is OK to update snapshots with `yarn test:visual:update` or use the Playwright MCP during UI work.
 
@@ -100,6 +102,7 @@
 - Playwright mock mode: ensure only the mock API (port 3001) and frontend dev server (port 5173) are running. If ports are occupied, stop them first (`Get-NetTCPConnection -LocalPort 3001,5173 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ }`). Clear `VITE_API_BASE_URL` (for example via `.env.local`) so the frontend uses the mock server.
 - Comment hygiene: don’t leave transient or change-log style comments (e.g., “SDK v3 exposes transformToString”). Use comments only to clarify non-obvious logic, constraints, or intent.
 - Writing style: do not use em dashes in copy/docs/comments; prefer commas, parentheses, or hyphens.
+- GitHub prose: prefix any PR comments, PR descriptions, issue text, or other GitHub prose with `[AGENT]`.
 - Documentation accuracy: after changes that affect behavior, config, prompts, infra, or user flows, review and update `AGENTS.md`, `.github/copilot-instructions.md`, `README.md`, and any related `docs/` or prompt files to keep them accurate and high signal. Keep the copilot instructions high level to reduce drift.
 - README should stay high signal for users, avoid listing research outcomes like query parameter details. Put rationale or research notes in planning documentation files instead.
 - Backwards compatibility: ask the user whether changes need to preserve compatibility for URLs, API contracts, stored data, or behavior. If unsure, ask before implementing and favor simplicity for early-stage tradeoffs.
