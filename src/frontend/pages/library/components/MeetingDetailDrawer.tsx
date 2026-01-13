@@ -7,7 +7,6 @@ import {
   Box,
   Button,
   Center,
-  Divider,
   Drawer,
   Grid,
   Group,
@@ -19,12 +18,7 @@ import {
   useMantineTheme,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import {
-  IconFilter,
-  IconMicrophone,
-  IconPencil,
-  IconUsers,
-} from "@tabler/icons-react";
+import { IconFilter, IconPencil, IconUsers } from "@tabler/icons-react";
 import MeetingTimeline, {
   MEETING_TIMELINE_FILTERS,
 } from "../../../components/MeetingTimeline";
@@ -39,14 +33,13 @@ import {
   MEETING_STATUS,
   type MeetingStatus,
 } from "../../../../types/meetingLifecycle";
-import type {
-  MeetingEvent,
-  MeetingEventType,
-} from "../../../../types/meetingTimeline";
+import type { MeetingEventType } from "../../../../types/meetingTimeline";
 import { useMeetingDetail } from "../hooks/useMeetingDetail";
 import MeetingDetailHeader from "./MeetingDetailHeader";
 import MeetingDetailModals from "./MeetingDetailModals";
+import MeetingAudioPanel from "./MeetingAudioPanel";
 import { MeetingSummaryPanel } from "./MeetingSummaryPanel";
+import { downloadMeetingExport } from "./meetingExport";
 
 const resolveRenameDraft = (meeting: {
   meetingName?: string;
@@ -60,10 +53,6 @@ const resolveRenameDraft = (meeting: {
   }
   return "";
 };
-
-const normalizeOptionalString = (
-  value: string | null | undefined,
-): string | undefined => (value == null ? undefined : value);
 
 const renderDetailStatusBadge = (status?: MeetingStatus) => {
   switch (status) {
@@ -82,33 +71,6 @@ const renderDetailStatusBadge = (status?: MeetingStatus) => {
     default:
       return null;
   }
-};
-
-type MeetingExport = {
-  meeting: {
-    id: string;
-    meetingId: string;
-    channelId: string;
-    timestamp: string;
-    duration: number;
-    tags: string[];
-    notes: string;
-    notesChannelId?: string;
-    notesMessageId?: string;
-    transcript: string;
-    audioUrl?: string;
-    archivedAt?: string;
-    attendees: string[];
-    events: MeetingEvent[];
-    title: string;
-    meetingName?: string;
-    summary: string;
-    summaryLabel?: string;
-    summarySentence?: string;
-    dateLabel: string;
-    durationLabel: string;
-    channel: string;
-  };
 };
 
 type MeetingDetailDrawerProps = {
@@ -446,70 +408,11 @@ export default function MeetingDetailDrawer({
 
   const handleDownload = () => {
     if (!detail || !meeting) return;
-    const payload: MeetingExport = {
-      meeting: {
-        id: detail.id,
-        meetingId: detail.meetingId,
-        channelId: detail.channelId,
-        timestamp: detail.timestamp,
-        duration: detail.duration,
-        tags: detail.tags ?? [],
-        notes: detail.notes ?? "",
-        notesChannelId: normalizeOptionalString(detail.notesChannelId),
-        notesMessageId: normalizeOptionalString(detail.notesMessageId),
-        transcript: detail.transcript ?? "",
-        audioUrl: normalizeOptionalString(detail.audioUrl),
-        archivedAt: normalizeOptionalString(detail.archivedAt),
-        attendees: detail.attendees ?? [],
-        events: detail.events ?? [],
-        title: meeting.title,
-        meetingName: meeting.meetingName,
-        summary: meeting.summary,
-        summarySentence: normalizeOptionalString(detail.summarySentence),
-        summaryLabel: normalizeOptionalString(detail.summaryLabel),
-        dateLabel: meeting.dateLabel,
-        durationLabel: meeting.durationLabel,
-        channel: meeting.channel,
-      },
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${meeting.title.replace(/[^\w-]+/g, "_") || "meeting"}-${meeting.dateLabel.replace(/\s+/g, "_")}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadMeetingExport(detail, meeting);
   };
 
   const audioSection = meeting ? (
-    <Surface p="md" tone="soft">
-      <Group gap="sm" align="center" wrap="wrap">
-        <ThemeIcon variant="light" color="cyan">
-          <IconMicrophone size={16} />
-        </ThemeIcon>
-        <Stack gap={0}>
-          <Text fw={600}>Audio</Text>
-          <Text size="sm" c="dimmed">
-            Playback for the full recording.
-          </Text>
-        </Stack>
-      </Group>
-      <Divider my="sm" />
-      {meeting.audioUrl ? (
-        <audio
-          controls
-          preload="metadata"
-          style={{ width: "100%" }}
-          src={meeting.audioUrl}
-        />
-      ) : (
-        <Text size="sm" c="dimmed">
-          Audio isn't available for this meeting yet.
-        </Text>
-      )}
-    </Surface>
+    <MeetingAudioPanel audioUrl={meeting.audioUrl} />
   ) : null;
 
   const summarySection = meeting ? (
