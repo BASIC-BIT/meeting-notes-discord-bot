@@ -18,6 +18,7 @@ Chronote records voice audio, builds per speaker snippets, and runs transcriptio
 - Slow transcription finalizes after the slow silence threshold or after the max snippet wall.
 - Fast only finalization can skip the slow pass if the latest fast transcript covers the full snippet byte length.
 - Interjection splitting checks for a validated interjection snippet before finalizing other paused snippets.
+- Noise gate checks peak levels in short windows and skips snippets that are very quiet and lack speech-like peaks.
 
 ## Langfuse audio attachments
 
@@ -45,7 +46,7 @@ Pricing checklist:
 
 ## Config keys
 
-All values are set via the config system and can be overridden at the global or server level.
+All values are set via the config system. For the noise gate, only `enabled`, `applyToFast`, and `applyToSlow` support server overrides. The numeric thresholds remain global-only.
 
 - `transcription.fastSilenceMs`
 - `transcription.slowSilenceMs`
@@ -54,6 +55,13 @@ All values are set via the config system and can be overridden at the global or 
 - `transcription.fastFinalization.enabled`
 - `transcription.interjection.enabled`
 - `transcription.interjection.minSpeakerSeconds`
+- `transcription.noiseGate.enabled`
+- `transcription.noiseGate.windowMs`
+- `transcription.noiseGate.peakDbfs`
+- `transcription.noiseGate.minActiveWindows`
+- `transcription.noiseGate.minPeakAboveNoiseDb`
+- `transcription.noiseGate.applyToFast`
+- `transcription.noiseGate.applyToSlow`
 
 ## Interjection behavior
 
@@ -63,6 +71,15 @@ Interjection splitting is guarded to avoid fragmenting snippets on noise.
 - The interjector must produce a snippet that meets `transcription.interjection.minSpeakerSeconds`.
 - Only paused speakers are finalized. Active speakers are not split.
 - Paused snippets are only finalized if their most recent pause began within `transcription.slowSilenceMs` of the interjection start.
+
+## Noise gate behavior
+
+The noise gate is a lightweight, peak-based check to skip clips that are very quiet.
+
+- The gate splits audio into short windows and measures peak dBFS per window.
+- A noise floor is estimated from low percentile windows, then windows above the noise floor plus the configured offset count as active.
+- A snippet is skipped only when the overall peak stays below the configured threshold and there are too few active windows.
+- Forced transcriptions, such as live voice commands, bypass the gate.
 
 ## Cleanup behavior
 

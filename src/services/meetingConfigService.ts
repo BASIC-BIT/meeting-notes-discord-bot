@@ -69,6 +69,41 @@ export async function resolveMeetingRuntimeConfig(input: {
           CONFIG_KEYS.transcription.interjectionMinSpeakerSeconds,
         ),
       ),
+      noiseGate: {
+        enabled: Boolean(
+          requireValue(snapshot, CONFIG_KEYS.transcription.noiseGateEnabled),
+        ),
+        windowMs: Number(
+          requireValue(snapshot, CONFIG_KEYS.transcription.noiseGateWindowMs),
+        ),
+        peakDbfs: Number(
+          requireValue(snapshot, CONFIG_KEYS.transcription.noiseGatePeakDbfs),
+        ),
+        minActiveWindows: Number(
+          requireValue(
+            snapshot,
+            CONFIG_KEYS.transcription.noiseGateMinActiveWindows,
+          ),
+        ),
+        minPeakAboveNoiseDb: Number(
+          requireValue(
+            snapshot,
+            CONFIG_KEYS.transcription.noiseGateMinPeakAboveNoiseDb,
+          ),
+        ),
+        applyToFast: Boolean(
+          requireValue(
+            snapshot,
+            CONFIG_KEYS.transcription.noiseGateApplyToFast,
+          ),
+        ),
+        applyToSlow: Boolean(
+          requireValue(
+            snapshot,
+            CONFIG_KEYS.transcription.noiseGateApplyToSlow,
+          ),
+        ),
+      },
     },
     premiumTranscription: {
       enabled: Boolean(

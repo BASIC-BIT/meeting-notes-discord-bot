@@ -5,6 +5,13 @@ import {
   FRAME_SIZE,
   MAX_SNIPPET_LENGTH,
   MINIMUM_TRANSCRIPTION_LENGTH,
+  NOISE_GATE_APPLY_TO_FAST,
+  NOISE_GATE_APPLY_TO_SLOW,
+  NOISE_GATE_ENABLED,
+  NOISE_GATE_MIN_ACTIVE_WINDOWS,
+  NOISE_GATE_MIN_PEAK_ABOVE_NOISE_DB,
+  NOISE_GATE_PEAK_DBFS,
+  NOISE_GATE_WINDOW_MS,
   RECORD_SAMPLE_RATE,
   SILENCE_THRESHOLD,
   TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE,
@@ -37,6 +44,7 @@ import {
   ensureMeetingTempDirSync,
   getMeetingTempDir,
 } from "./services/tempFileService";
+import { evaluateNoiseGate } from "./utils/audioNoiseGate";
 
 const TRANSCRIPTION_HEADER =
   `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
@@ -236,6 +244,79 @@ function getAudioBytes(audio: AudioSnippet): number {
   return audio.chunks.reduce((acc, cur) => acc + cur.length, 0);
 }
 
+type NoiseGateMode = "fast" | "slow";
+
+const DEFAULT_TRANSCRIPTION_TIMING = {
+  fastSilenceMs: FAST_SILENCE_THRESHOLD,
+  slowSilenceMs: SILENCE_THRESHOLD,
+  minSnippetSeconds: MINIMUM_TRANSCRIPTION_LENGTH,
+  maxSnippetMs: MAX_SNIPPET_LENGTH,
+  fastFinalizationEnabled: false,
+  interjectionEnabled: false,
+  interjectionMinSpeakerSeconds: MINIMUM_TRANSCRIPTION_LENGTH,
+};
+
+const DEFAULT_NOISE_GATE_CONFIG = {
+  enabled: NOISE_GATE_ENABLED,
+  windowMs: NOISE_GATE_WINDOW_MS,
+  peakDbfs: NOISE_GATE_PEAK_DBFS,
+  minActiveWindows: NOISE_GATE_MIN_ACTIVE_WINDOWS,
+  minPeakAboveNoiseDb: NOISE_GATE_MIN_PEAK_ABOVE_NOISE_DB,
+  applyToFast: NOISE_GATE_APPLY_TO_FAST,
+  applyToSlow: NOISE_GATE_APPLY_TO_SLOW,
+};
+
+function formatDbfs(value: number): string {
+  if (!Number.isFinite(value)) return "silence";
+  return value.toFixed(1);
+}
+
+function shouldSkipByNoiseGate(
+  meeting: MeetingData,
+  snippet: AudioSnippet,
+  mode: NoiseGateMode,
+): boolean {
+  const runtimeConfig = meeting.runtimeConfig;
+  const noiseGate = runtimeConfig
+    ? runtimeConfig.transcription.noiseGate
+    : DEFAULT_NOISE_GATE_CONFIG;
+  if (!noiseGate.enabled) return false;
+  if (mode === "fast" && !noiseGate.applyToFast) return false;
+  if (mode === "slow" && !noiseGate.applyToSlow) return false;
+  if (snippet.chunks.length === 0) return false;
+
+  const buffer = Buffer.concat(snippet.chunks, getAudioBytes(snippet));
+  const result = evaluateNoiseGate(buffer, noiseGate, {
+    sampleRate: RECORD_SAMPLE_RATE,
+    channels: CHANNELS,
+    bytesPerSample: BYTES_PER_SAMPLE,
+  });
+  if (result.shouldTranscribe) return false;
+
+  const speakerLabel = resolveSpeakerLabel(meeting, snippet.userId);
+  const logParts = [
+    "Noise gate suppressed snippet:",
+    "guildId=" + meeting.guildId,
+    "channelId=" + meeting.channelId,
+    "meetingId=" + meeting.meetingId,
+    "userId=" + snippet.userId,
+    "speaker=" + speakerLabel,
+    "mode=" + mode,
+    "peakDbfs=" + formatDbfs(result.metrics.peakDbfs),
+    "noiseFloorDbfs=" + formatDbfs(result.metrics.noiseFloorDbfs),
+    "activeWindows=" +
+      result.metrics.activeWindowCount +
+      "/" +
+      result.metrics.totalWindows,
+    "thresholdDbfs=" + result.metrics.thresholdDbfs,
+    "minActiveWindows=" + result.metrics.minActiveWindows,
+    "minPeakAboveNoiseDb=" + result.metrics.minPeakAboveNoiseDb,
+  ];
+  console.log(logParts.join(" "));
+
+  return true;
+}
+
 function cloneSnippet(snippet: AudioSnippet): AudioSnippet {
   return {
     ...snippet,
@@ -244,20 +325,19 @@ function cloneSnippet(snippet: AudioSnippet): AudioSnippet {
 }
 
 function getTranscriptionTiming(meeting: MeetingData) {
-  const runtime = meeting.runtimeConfig;
+  const runtimeConfig = meeting.runtimeConfig;
+  if (!runtimeConfig) {
+    return { ...DEFAULT_TRANSCRIPTION_TIMING };
+  }
+  const transcription = runtimeConfig.transcription;
   return {
-    fastSilenceMs:
-      runtime?.transcription.fastSilenceMs ?? FAST_SILENCE_THRESHOLD,
-    slowSilenceMs: runtime?.transcription.slowSilenceMs ?? SILENCE_THRESHOLD,
-    minSnippetSeconds:
-      runtime?.transcription.minSnippetSeconds ?? MINIMUM_TRANSCRIPTION_LENGTH,
-    maxSnippetMs: runtime?.transcription.maxSnippetMs ?? MAX_SNIPPET_LENGTH,
-    fastFinalizationEnabled:
-      runtime?.transcription.fastFinalizationEnabled ?? false,
-    interjectionEnabled: runtime?.transcription.interjectionEnabled ?? false,
-    interjectionMinSpeakerSeconds:
-      runtime?.transcription.interjectionMinSpeakerSeconds ??
-      MINIMUM_TRANSCRIPTION_LENGTH,
+    fastSilenceMs: transcription.fastSilenceMs,
+    slowSilenceMs: transcription.slowSilenceMs,
+    minSnippetSeconds: transcription.minSnippetSeconds,
+    maxSnippetMs: transcription.maxSnippetMs,
+    fastFinalizationEnabled: transcription.fastFinalizationEnabled,
+    interjectionEnabled: transcription.interjectionEnabled,
+    interjectionMinSpeakerSeconds: transcription.interjectionMinSpeakerSeconds,
   };
 }
 
@@ -418,6 +498,9 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
 
   const snapshot = cloneSnippet(snippet);
   const snapshotBytes = getAudioBytes(snapshot);
+  if (shouldSkipByNoiseGate(meeting, snapshot, "fast")) {
+    return;
+  }
   void transcribeSnippet(meeting, snapshot, {
     tempSuffix: `fast-${revision}`,
   })
@@ -527,60 +610,65 @@ export function startProcessingSnippet(
     hasAudio &&
     (duration > minSnippetSeconds || options.forceTranscribe)
   ) {
-    promises.push(
-      transcribeSnippet(meeting, snippet)
-        .then(async (transcription) => {
-          audioFileData.slowTranscript = transcription;
-          audioFileData.transcript = transcription;
-          if (!options.skipLiveVoice) {
-            void maybeRespondLive(meeting, {
-              userId: snippet.userId,
-              text: transcription,
-              timestamp: snippet.timestamp,
-            });
-          }
-
-          const premium = meeting.runtimeConfig?.premiumTranscription;
-          if (
-            premium?.enabled &&
-            transcription.trim().length > 0 &&
-            audioFileData.fastTranscripts &&
-            audioFileData.fastTranscripts.length > 0
-          ) {
-            try {
-              const coalesced = await coalesceTranscription(meeting, {
-                slowTranscript: transcription,
-                fastTranscripts: audioFileData.fastTranscripts,
+    if (
+      options.forceTranscribe ||
+      !shouldSkipByNoiseGate(meeting, snippet, "slow")
+    ) {
+      promises.push(
+        transcribeSnippet(meeting, snippet)
+          .then(async (transcription) => {
+            audioFileData.slowTranscript = transcription;
+            audioFileData.transcript = transcription;
+            if (!options.skipLiveVoice) {
+              void maybeRespondLive(meeting, {
+                userId: snippet.userId,
+                text: transcription,
+                timestamp: snippet.timestamp,
               });
-              if (coalesced && coalesced.trim().length > 0) {
-                audioFileData.coalescedTranscript = coalesced;
-                audioFileData.coalesceMeta = {
-                  model: getModelChoice(
-                    "transcriptionCoalesce",
-                    buildModelOverrides(meeting.runtimeConfig?.modelChoices),
-                  ).model,
-                  usedFastRevisions: audioFileData.fastTranscripts.map(
-                    (entry) => entry.revision,
-                  ),
-                  createdAt: nowIso(),
-                };
-                audioFileData.transcript = coalesced;
-              }
-            } catch (error) {
-              console.error(
-                `Failed to coalesce transcription for user ${snippet.userId}:`,
-                error,
-              );
             }
-          }
-        })
-        .catch((error) => {
-          console.error(
-            `Failed to transcribe snippet for user ${snippet.userId}:`,
-            error,
-          );
-        }),
-    );
+
+            const premium = meeting.runtimeConfig?.premiumTranscription;
+            if (
+              premium?.enabled &&
+              transcription.trim().length > 0 &&
+              audioFileData.fastTranscripts &&
+              audioFileData.fastTranscripts.length > 0
+            ) {
+              try {
+                const coalesced = await coalesceTranscription(meeting, {
+                  slowTranscript: transcription,
+                  fastTranscripts: audioFileData.fastTranscripts,
+                });
+                if (coalesced && coalesced.trim().length > 0) {
+                  audioFileData.coalescedTranscript = coalesced;
+                  audioFileData.coalesceMeta = {
+                    model: getModelChoice(
+                      "transcriptionCoalesce",
+                      buildModelOverrides(meeting.runtimeConfig?.modelChoices),
+                    ).model,
+                    usedFastRevisions: audioFileData.fastTranscripts.map(
+                      (entry) => entry.revision,
+                    ),
+                    createdAt: nowIso(),
+                  };
+                  audioFileData.transcript = coalesced;
+                }
+              } catch (error) {
+                console.error(
+                  `Failed to coalesce transcription for user ${snippet.userId}:`,
+                  error,
+                );
+              }
+            }
+          })
+          .catch((error) => {
+            console.error(
+              `Failed to transcribe snippet for user ${snippet.userId}:`,
+              error,
+            );
+          }),
+      );
+    }
   } else {
     const participant = meeting.participants?.get(snippet.userId);
     const speakerLabel = participant
