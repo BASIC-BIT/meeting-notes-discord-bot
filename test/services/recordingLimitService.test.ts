@@ -59,20 +59,18 @@ function tier(
   value: Tier,
   source: "default" | "forced" | "manual_comp" = "default",
 ) {
-  jest
-    .mocked(getGuildLimits)
-    .mockResolvedValue({
-      limits: getLimitsForTier(value),
-      subscription: {
-        tier: value,
-        status: "active",
-        source,
-        billingSource: source === "default" ? "free" : source,
-        stripeTier: null,
-        grantTier: source === "manual_comp" && value !== "free" ? value : null,
-        activeGrant: null,
-      },
-    });
+  jest.mocked(getGuildLimits).mockResolvedValue({
+    limits: getLimitsForTier(value),
+    subscription: {
+      tier: value,
+      status: "active",
+      source,
+      billingSource: source === "default" ? "free" : source,
+      stripeTier: null,
+      grantTier: source === "manual_comp" && value !== "free" ? value : null,
+      activeGrant: null,
+    },
+  });
 }
 beforeEach(() => {
   jest.clearAllMocks();

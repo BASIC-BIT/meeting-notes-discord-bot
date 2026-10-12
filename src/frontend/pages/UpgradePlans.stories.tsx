@@ -377,6 +377,7 @@ export const LegacyBillingLimit: Story = {
     await expect(
       within(canvas.getByTestId("billing-current-plan")).getByText("Free", {
         exact: true,
+        selector: "p[data-size=lg]",
       }),
     ).toBeVisible();
   },
