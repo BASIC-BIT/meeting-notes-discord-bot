@@ -11,6 +11,7 @@ import {
   VoiceConnectionStatus,
 } from "@discordjs/voice";
 import Davey from "@snazzah/davey";
+import { VoiceOpcodes } from "discord-api-types/voice/v8";
 import prism from "prism-media";
 import controls from "./fixtures/davePublicControls.cjs";
 
@@ -59,7 +60,7 @@ function networkAt(code = NetworkingStatusCode.SelectingProtocol) {
 
 function installDave(network) {
   network.onWsPacket({
-    op: 4,
+    op: VoiceOpcodes.SessionDescription,
     d: {
       mode: "aead_aes256_gcm_rtpsize",
       secret_key: Array(32).fill(1),
@@ -72,7 +73,10 @@ function installDave(network) {
 function activate(network, transitionId = 1) {
   const dave = network.state.dave;
   if (dave.session.status === Davey.SessionStatus.INACTIVE) {
-    network.onWsBinary({ op: 25, payload: controls.EXTERNAL_SENDER });
+    network.onWsBinary({
+      op: VoiceOpcodes.DaveMlsExternalSender,
+      payload: controls.EXTERNAL_SENDER,
+    });
   }
   const { commit } = dave.session.processProposals(
     Davey.ProposalsOperationType.APPEND,
@@ -81,8 +85,14 @@ function activate(network, transitionId = 1) {
   );
   const prefix = Buffer.alloc(2);
   prefix.writeUInt16BE(transitionId);
-  network.onWsBinary({ op: 29, payload: Buffer.concat([prefix, commit]) });
-  network.onWsPacket({ op: 22, d: { transition_id: transitionId } });
+  network.onWsBinary({
+    op: VoiceOpcodes.DaveMlsAnnounceCommitTransition,
+    payload: Buffer.concat([prefix, commit]),
+  });
+  network.onWsPacket({
+    op: VoiceOpcodes.DaveExecuteTransition,
+    d: { transition_id: transitionId },
+  });
   expect(dave.session.ready).toBe(true);
 }
 
@@ -91,7 +101,9 @@ test("attributes initial key package to its wrapper before networking installs i
   const dave = network.createDaveSession(1);
   try {
     expect(network.state.dave).toBeUndefined();
-    expect(network.state.ws.sent.map(({ op }) => op)).toEqual([26]);
+    expect(network.state.ws.sent.map(({ op }) => op)).toEqual([
+      VoiceOpcodes.DaveMlsKeyPackage,
+    ]);
     expect(dave.resetDiagnostics).toEqual({
       reason: "initial",
       atMs: expect.any(Number),
@@ -122,7 +134,10 @@ test.each([
     );
     const invalid = Buffer.from([0, 7]);
     expect(dave[method](invalid)).toEqual({ transitionId: 7, success: false });
-    expect(ws.sent.map(({ op }) => op)).toEqual([31, 26]);
+    expect(ws.sent.map(({ op }) => op)).toEqual([
+      VoiceOpcodes.DaveMlsInvalidCommitWelcome,
+      VoiceOpcodes.DaveMlsKeyPackage,
+    ]);
     expect(ws.sent[0].d).toEqual({ transition_id: 7 });
     expect(emitted[0].id).toBe(7);
     expect(emitted[1].payload).toBe(ws.sent[1].payload);
@@ -137,7 +152,10 @@ test.each([
     const episode = dave.resetDiagnostics;
     dave.recoverFromInvalidTransition(8, "unknown");
     expect(dave.resetDiagnostics).toBe(episode);
-    expect(ws.sent.map(({ op }) => op)).toEqual([31, 26]);
+    expect(ws.sent.map(({ op }) => op)).toEqual([
+      VoiceOpcodes.DaveMlsInvalidCommitWelcome,
+      VoiceOpcodes.DaveMlsKeyPackage,
+    ]);
   },
 );
 
@@ -188,8 +206,16 @@ test("records accepted epoch and direct reinit but ignores epochs and no-native 
 });
 
 test.each([
-  [NetworkingStatusCode.SelectingProtocol, "send-returned", [31, 26]],
-  [NetworkingStatusCode.Ready, "send-returned", [31, 26]],
+  [
+    NetworkingStatusCode.SelectingProtocol,
+    "send-returned",
+    [VoiceOpcodes.DaveMlsInvalidCommitWelcome, VoiceOpcodes.DaveMlsKeyPackage],
+  ],
+  [
+    NetworkingStatusCode.Ready,
+    "send-returned",
+    [VoiceOpcodes.DaveMlsInvalidCommitWelcome, VoiceOpcodes.DaveMlsKeyPackage],
+  ],
   [NetworkingStatusCode.Resuming, "skipped-resuming", []],
   [NetworkingStatusCode.OpeningWs, "skipped-other-state", []],
   [NetworkingStatusCode.Closed, "skipped-other-state", []],
@@ -211,7 +237,14 @@ test.each([
     network.onDaveKeyPackage(Buffer.alloc(0));
     network.onDaveInvalidateTransition(7);
     expect(ws.sent.map(({ op }) => op)).toEqual(
-      ops.length ? [31, 26, 26, 31] : [],
+      ops.length
+        ? [
+            VoiceOpcodes.DaveMlsInvalidCommitWelcome,
+            VoiceOpcodes.DaveMlsKeyPackage,
+            VoiceOpcodes.DaveMlsKeyPackage,
+            VoiceOpcodes.DaveMlsInvalidCommitWelcome,
+          ]
+        : [],
     );
   },
 );
@@ -317,7 +350,7 @@ test("native activation and resume recovery retain the latest episode without re
     });
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(ws.sent).toEqual([]);
-    network.onWsPacket({ op: 9, d: {} });
+    network.onWsPacket({ op: VoiceOpcodes.Resumed, d: {} });
     expect(network.state.code).toBe(NetworkingStatusCode.Ready);
     expect(dave.session.ready).toBe(false);
     expect(dave.reinitializing).toBe(true);
