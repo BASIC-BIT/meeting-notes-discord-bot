@@ -183,3 +183,14 @@ describe("analytics", () => {
     );
   });
 });
+
+test("redacts recording-limit URL values before automatic capture", () => {
+  const nested = encodeURIComponent(
+    "https://chronote.gg/upgrade/select-server?limitType=untrusted-value&limitSurface=also-untrusted",
+  );
+  const redacted = redactShareIds(
+    `https://example.com/auth?redirect=${nested}`,
+  );
+  expect(decodeURIComponent(redacted)).not.toContain("untrusted-value");
+  expect(decodeURIComponent(redacted)).not.toContain("also-untrusted");
+});

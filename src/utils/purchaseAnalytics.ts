@@ -24,3 +24,48 @@ export function resolveAnalyticsEnvironment(origin: string) {
   // Preview/custom hosts must not silently enter production reports.
   return "unknown";
 }
+
+export const RECORDING_LIMIT_TYPES = [
+  "weekly_recording",
+  "meeting_duration",
+] as const;
+export const RECORDING_LIMIT_SURFACES = [
+  "manual_start",
+  "auto_start",
+  "duration_stop",
+  "weekly_after_meeting",
+  "weekly_warning",
+  "mcp_start",
+] as const;
+export type RecordingLimitContext =
+  | { limitType: "meeting_duration"; limitSurface: "duration_stop" }
+  | {
+      limitType: "weekly_recording";
+      limitSurface: Exclude<
+        (typeof RECORDING_LIMIT_SURFACES)[number],
+        "duration_stop"
+      >;
+    };
+
+type LimitContextInput = { limitType?: string; limitSurface?: string };
+export function resolveRecordingLimitContext(
+  input: LimitContextInput,
+): RecordingLimitContext | undefined {
+  if (
+    input.limitType === "meeting_duration" &&
+    input.limitSurface === "duration_stop"
+  )
+    return { limitType: "meeting_duration", limitSurface: "duration_stop" };
+  if (input.limitType !== "weekly_recording") return undefined;
+  const surface = RECORDING_LIMIT_SURFACES.find(
+    (value) => value === input.limitSurface,
+  );
+  if (!surface || surface === "duration_stop") return undefined;
+  return { limitType: "weekly_recording", limitSurface: surface };
+}
+export function recordingLimitAnalytics(input: LimitContextInput) {
+  const context = resolveRecordingLimitContext(input);
+  return context
+    ? { limit_type: context.limitType, limit_surface: context.limitSurface }
+    : {};
+}

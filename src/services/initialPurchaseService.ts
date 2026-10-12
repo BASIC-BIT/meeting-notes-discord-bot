@@ -12,7 +12,10 @@ import type { PurchaseAttempt } from "../types/purchase";
 import type { StripeClient } from "../types/stripe";
 import { BillingActionError } from "./billingActionError";
 import { captureEvent } from "./analyticsService";
-import { resolvePurchaseSource } from "../utils/purchaseAnalytics";
+import {
+  resolvePurchaseSource,
+  recordingLimitAnalytics,
+} from "../utils/purchaseAnalytics";
 
 const pending = () =>
   new BillingActionError(
@@ -281,6 +284,10 @@ function captureNewCheckout(input: PurchaseInput, attempt: PurchaseAttempt) {
         surface: "billing",
         event_version: 1,
         billing_kind: "new_subscription",
+        ...recordingLimitAnalytics({
+          limitType: String(metadata?.recording_limit_type ?? ""),
+          limitSurface: String(metadata?.recording_limit_surface ?? ""),
+        }),
       },
     });
   }
