@@ -128,7 +128,9 @@ subscription pointers exclude a server from initial-purchase eligibility.
 (delivered, failed, suppressed), `notice_operation` (send, edit, suppress) and a
 fixed reason. Accepted Discord sends/edits count as delivered. They do not prove
 someone read the message. Ambiguous delivery is failed/unknown and prevents a
-blind resend for that recording. MCP refusal records pressure only.
+blind resend for that recording. MCP refusal records pressure only. A deleted duration message (Discord Unknown
+Message) permits one fresh combined weekly notice. Other failed edits do not
+create a second message.
 
 Auto-start notices share a server/type/outcome receipt for 15 minutes. A definite
 Discord rejection releases only its own reservation; ambiguous failure retains
@@ -203,8 +205,12 @@ Only cohorts at least seven days old enter the seven-day conversion rate.
 Younger cohorts show pending counts. Repeat with a 24-hour window for an early
 diagnostic, with its own mature denominator. Break down by limit type/surface,
 current/target tier, notice delivery and action eligibility. Delivery breakdowns
-use the first notice result after the qualifying entry and before the next
-encounter, not the latest server notice. An edited combined notice may relate
+use matching notice outcomes after the qualifying entry and before the next
+matching encounter: delivered if any accepted send/edit exists, otherwise
+failed if a failure exists, then suppressed or unknown. An Unknown Message edit
+followed by a successful replacement is delivered, with a failed edit as a
+separate diagnostic. Closely overlapping attempts without a unique temporal
+match remain unknown; do not use the latest server notice as a substitute. An edited combined notice may relate
 to both pressure points; do not count it as a second sent message.
 
 A pre-authentication `upgrade_arrived` can lack a verified guild. Use

@@ -273,13 +273,21 @@ export async function deliverRecordingLimitNotice<T>(
       error instanceof DiscordAPIError &&
       error.status >= 400 &&
       error.status < 500;
+    const messageMissing =
+      error instanceof DiscordAPIError &&
+      error.status === 404 &&
+      error.code === 10008;
     noticeResult(
       notice,
       "failed",
       kind,
-      definite ? "discord_rejected" : "delivery_unknown",
+      messageMissing
+        ? "message_missing"
+        : definite
+          ? "discord_rejected"
+          : "delivery_unknown",
     );
-    return { delivery: "failed" as const, definite };
+    return { delivery: "failed" as const, definite, messageMissing };
   }
 }
 async function claimAutoNotice(
@@ -338,9 +346,10 @@ export async function notifyRecordingLimit(
       () => existing.edit(notice.payload),
       "edit",
     );
-    if (result.delivery === "failed" && state)
-      state.deliveryUnknown = !result.definite;
-    return existing;
+    if (result.delivery === "delivered") return existing;
+    if (state) state.deliveryUnknown = !result.definite;
+    if (!result.messageMissing) return undefined;
+    if (state) state.message = undefined;
   }
   const result = await deliverRecordingLimitNotice(notice, () =>
     channel.send(notice.payload),

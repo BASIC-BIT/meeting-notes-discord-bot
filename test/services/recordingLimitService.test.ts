@@ -327,3 +327,84 @@ test("a near warning is suppressed after a delivered duration notice", async () 
     }),
   );
 });
+
+test("a deleted duration notice gets one fresh combined weekly notice", async () => {
+  const oldMessage = {
+    edit: jest
+      .fn()
+      .mockRejectedValue(
+        new DiscordAPIError(
+          { message: "Unknown Message", code: 10008 },
+          10008,
+          404,
+          "PATCH",
+          "https://discord.test",
+          {},
+        ),
+      ),
+  };
+  const replacement = { edit: jest.fn() };
+  const send = jest.fn().mockResolvedValue(replacement);
+  const state: RecordingLimitState = {
+    message: oldMessage,
+    durationContent: "Session ended at 90 minutes.",
+  };
+  const result = await notifyRecordingLimit(
+    {
+      ...input,
+      limitSurface: "weekly_after_meeting",
+      outcome: "exhausted_after_meeting",
+    },
+    { send },
+    state,
+  );
+  expect(oldMessage.edit).toHaveBeenCalledTimes(1);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(send.mock.calls[0][0].content).toContain(state.durationContent);
+  expect(send.mock.calls[0][0].content).toContain(input.message);
+  expect(send.mock.calls[0][0].allowedMentions).toEqual({ parse: [] });
+  expect(result).toBe(replacement);
+  expect(state.message).toBe(replacement);
+  expect(captureEvent).toHaveBeenCalledWith(
+    "recording_limit_notice_result",
+    expect.objectContaining({
+      properties: expect.objectContaining({
+        notice_operation: "send",
+        delivery: "delivered",
+      }),
+    }),
+  );
+});
+test.each([
+  new Error("lost edit response"),
+  new DiscordAPIError(
+    { message: "Missing access", code: 50001 },
+    50001,
+    403,
+    "PATCH",
+    "https://discord.test",
+    {},
+  ),
+])(
+  "an edit failure without a missing message never creates a duplicate notice: %s",
+  async (error) => {
+    const oldMessage = { edit: jest.fn().mockRejectedValue(error) };
+    const send = jest.fn();
+    const state: RecordingLimitState = {
+      message: oldMessage,
+      durationContent: "Session ended.",
+    };
+    await notifyRecordingLimit(
+      {
+        ...input,
+        limitSurface: "weekly_after_meeting",
+        outcome: "exhausted_after_meeting",
+      },
+      { send },
+      state,
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(state.message).toBe(oldMessage);
+    expect(state.deliveryUnknown).toBe(!(error instanceof DiscordAPIError));
+  },
+);
