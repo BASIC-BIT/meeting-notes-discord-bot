@@ -153,12 +153,12 @@ after Sandbox event-row acceptance, then retain their exact query/filter setting
 and IDs in chronote-ops. Native groups are not currently configured. Use
 ordered same-guild HogQL cohorts rather than person funnels for these views:
 
-| View                      | Entry cohort                                                                                                                            | Ordered outcome within seven days                                                                                                                                                           |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Weekly initial purchase   | First weekly encounter per guild in the cohort period, purchase_path=initial_purchase, outcome blocked_start or exhausted_after_meeting | Delivered upgrade notice, matching guild upgrade arrival/readiness, checkout creation, then billing_entitlement_saved with billing_kind=initial_purchase and paid active access             |
-| Duration initial purchase | First duration encounter per guild, purchase_path=initial_purchase, outcome=ended_session                                               | Same ordered stages, including a delivered upgrade notice                                                                                                                                   |
-| Near-limit exploration    | First weekly encounter per guild with outcome=near_limit and purchase_path=initial_purchase                                             | Same stages, kept separate from reached limits                                                                                                                                              |
-| Existing billing          | Encounter with purchase_path=existing_billing                                                                                           | billing_entry_arrived, then a later paid plan_change that increases the relevant recording allowance; report temporal association because provider portal actor/source is not the new entry |
+| View                      | Entry cohort                                                                                                                            | Ordered outcome within seven days                                                                                                                                                                                            |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Weekly initial purchase   | First weekly encounter per guild in the cohort period, purchase_path=initial_purchase, outcome blocked_start or exhausted_after_meeting | Delivered upgrade notice, matching guild resolved upgrade entry, checkout creation, then billing_entitlement_saved with billing_kind=initial_purchase and paid active access                                                 |
+| Duration initial purchase | First duration encounter per guild, purchase_path=initial_purchase, outcome=ended_session                                               | Same ordered stages, including a delivered upgrade notice                                                                                                                                                                    |
+| Near-limit exploration    | First weekly encounter per guild with outcome=near_limit and purchase_path=initial_purchase                                             | Same stages, kept separate from reached limits                                                                                                                                                                               |
+| Existing billing          | Encounter with purchase_path=existing_billing                                                                                           | Delivered manage_billing notice, billing_entry_arrived, then a later paid plan_change that increases the relevant recording allowance; report temporal association because provider portal actor/source is not the new entry |
 
 Keep failed/suppressed notices in every eligible encounter denominator. Conversion
 requires a delivered upgrade notice after the encounter, followed by the ordered
@@ -206,6 +206,11 @@ current/target tier, notice delivery and action eligibility. Delivery breakdowns
 use the first notice result after the qualifying entry and before the next
 encounter, not the latest server notice. An edited combined notice may relate
 to both pressure points; do not count it as a second sent message.
+
+A pre-authentication `upgrade_arrived` can lack a verified guild. Use
+`upgrade_ready` as the resolved purchase-entry stage in the guild view and label
+it as a ready entry. Do not report unjoinable pre-authentication arrivals as
+known same-server arrivals.
 
 For buying friction, use a separate person funnel from resolved upgrade_ready
 to plan click, checkout created and initial paid access, holding guild constant
