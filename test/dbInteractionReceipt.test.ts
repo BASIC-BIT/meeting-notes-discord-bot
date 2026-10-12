@@ -2,9 +2,14 @@ import {
   DynamoDBClient,
   GetItemCommand,
   PutItemCommand,
+  DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
-import { getInteractionReceipt, tryCreateInteractionReceipt } from "../src/db";
+import {
+  getInteractionReceipt,
+  tryCreateInteractionReceipt,
+  releaseInteractionReceipt,
+} from "../src/db";
 
 const send = jest.spyOn(DynamoDBClient.prototype, "send");
 beforeEach(() => send.mockReset());
@@ -74,4 +79,24 @@ test("storage failures propagate to the optional-offer fallback", async () => {
   await expect(tryCreateInteractionReceipt(receipt, 1791201600)).rejects.toBe(
     error,
   );
+});
+
+test("releases only the failed delivery's own receipt", async () => {
+  send.mockResolvedValueOnce({} as never);
+  await expect(releaseInteractionReceipt(receipt)).resolves.toBe(true);
+  expect(send.mock.calls[0][0]).toBeInstanceOf(DeleteItemCommand);
+  const command = send.mock.calls[0][0] as DeleteItemCommand;
+  expect(command.input.ConditionExpression).toBe(
+    "createdAt = :createdAt AND expiresAt = :expiresAt",
+  );
+  expect(command.input.ExpressionAttributeValues).toEqual(
+    marshall({
+      ":createdAt": receipt.createdAt,
+      ":expiresAt": receipt.expiresAt,
+    }),
+  );
+  send.mockRejectedValueOnce({
+    name: "ConditionalCheckFailedException",
+  } as never);
+  await expect(releaseInteractionReceipt(receipt)).resolves.toBe(false);
 });

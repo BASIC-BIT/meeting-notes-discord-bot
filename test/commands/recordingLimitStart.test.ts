@@ -1,0 +1,140 @@
+jest.mock("../../src/meetings", () => ({
+  hasMeeting: jest.fn(() => false),
+  getMeeting: jest.fn(),
+  deleteMeeting: jest.fn(),
+  initializeMeeting: jest.fn(),
+}));
+jest.mock("../../src/commands/endMeeting", () => ({
+  handleEndMeetingOther: jest.fn(),
+}));
+jest.mock("../../src/services/activeMeetingLeaseService", () => ({
+  getActiveMeetingLeaseForGuild: jest.fn(async () => undefined),
+}));
+jest.mock("../../src/services/subscriptionService", () => ({
+  ...jest.requireActual("../../src/services/subscriptionService"),
+  getGuildLimits: jest.fn(),
+}));
+jest.mock("../../src/services/meetingUsageService", () => ({
+  getRollingUsageForGuild: jest.fn(async () => ({
+    usedSeconds: 240 * 60,
+    meetings: [],
+    windowStartIso: "2026-10-01T00:00:00Z",
+  })),
+  getRollingWindowMs: jest.fn(() => 7 * 86400000),
+  getNextAvailableAt: jest.fn(() => "2026-10-13T00:00:00Z"),
+}));
+jest.mock("../../src/services/recordingLimitService", () => ({
+  ...jest.requireActual("../../src/services/recordingLimitService"),
+  encounterRecordingLimit: jest.fn(),
+  notifyRecordingLimit: jest.fn(),
+}));
+jest.mock("../../src/utils/permissions", () => ({
+  checkBotPermissions: jest.fn(() => ({ success: true })),
+  canBotSendMessages: jest.fn(() => true),
+}));
+import {
+  startManualMeetingFromChannels,
+  handleAutoStartMeeting,
+} from "../../src/commands/startMeeting";
+import {
+  encounterRecordingLimit,
+  notifyRecordingLimit,
+} from "../../src/services/recordingLimitService";
+import {
+  getGuildLimits,
+  getLimitsForTier,
+} from "../../src/services/subscriptionService";
+import { initializeMeeting } from "../../src/meetings";
+import type {
+  Client,
+  Guild,
+  User,
+  TextChannel,
+  VoiceBasedChannel,
+} from "discord.js";
+const guild = {
+  id: "guild-1",
+  members: { cache: new Map([["bot-1", { id: "bot-1" }]]) },
+} as unknown as Guild;
+const textChannel = { send: jest.fn() } as unknown as TextChannel;
+const voiceChannel = { id: "voice-1", guild } as VoiceBasedChannel;
+const client = { user: { id: "bot-1" } } as Client;
+const creator = { id: "actor-1" } as User;
+beforeEach(() => {
+  jest.clearAllMocks();
+  jest.mocked(getGuildLimits).mockResolvedValue({
+    limits: getLimitsForTier("free"),
+    subscription: {
+      tier: "free",
+      status: "active",
+      source: "default",
+      billingSource: "free",
+      stripeTier: null,
+      grantTier: null,
+      activeGrant: null,
+    },
+  });
+  jest.mocked(encounterRecordingLimit).mockImplementation(async (input) => ({
+    input,
+    currentTier: "free",
+    action: {
+      kind: "upgrade",
+      label: "View Basic",
+      url: "https://chronote.test/upgrade",
+      purchasePath: "initial_purchase",
+      eligibility: "higher_allowance",
+      targetTier: "basic",
+      benefit: "More time",
+    },
+    payload: { content: input.message, allowedMentions: { parse: [] } },
+  }));
+});
+test.each(["manual_command", "mcp"] as const)(
+  "%s refusal captures the shared encounter without starting a recording",
+  async (startReason) => {
+    const result = await startManualMeetingFromChannels({
+      client,
+      guild,
+      textChannel,
+      voiceChannel,
+      creator,
+      startReason,
+      startTriggeredByUserId: creator.id,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Unexpected recording");
+    expect(result.recordingLimitNotice).toBeDefined();
+    expect(result.error).toContain("Try again after");
+    expect(encounterRecordingLimit).toHaveBeenCalledTimes(1);
+    expect(encounterRecordingLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limitType: "weekly_recording",
+        limitSurface: startReason === "mcp" ? "mcp_start" : "manual_start",
+        outcome: "blocked_start",
+        guildId: "guild-1",
+        userId: "actor-1",
+        limitMinutes: 240,
+        usedMinutes: 240,
+      }),
+    );
+    expect(textChannel.send).not.toHaveBeenCalled();
+    expect(initializeMeeting).not.toHaveBeenCalled();
+  },
+);
+test("auto refusal passes a real trigger to the shared delivery policy", async () => {
+  await expect(
+    handleAutoStartMeeting(client, voiceChannel, textChannel, {
+      startTriggeredByUserId: creator.id,
+    }),
+  ).resolves.toBe(false);
+  expect(notifyRecordingLimit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      limitSurface: "auto_start",
+      outcome: "blocked_start",
+      userId: "actor-1",
+      usedMinutes: 240,
+    }),
+    textChannel,
+  );
+  expect(initializeMeeting).not.toHaveBeenCalled();
+});

@@ -1,3 +1,8 @@
+import { notifyRecordingLimit } from "../../src/services/recordingLimitService";
+import { getRollingUsageForGuild } from "../../src/services/meetingUsageService";
+jest.mock("../../src/services/recordingLimitService", () => ({
+  notifyRecordingLimit: jest.fn(),
+}));
 import type { ButtonInteraction, Client } from "discord.js";
 import type { MeetingData } from "../../src/types/meeting-data";
 import { Collection } from "discord.js";
@@ -234,77 +239,117 @@ describe("handleEndMeetingOther", () => {
     });
   });
 
-  it("flushes active snippets before disconnecting the voice connection", async () => {
-    const events: string[] = [];
-    mockedStartProcessingSnippet.mockImplementation(() => {
-      events.push("flush");
-    });
-    mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
-    mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
-    mockedBuildMixedAudio.mockResolvedValue(undefined);
-    mockedCloseOutputFile.mockResolvedValue(undefined);
-    mockedWaitForAudioOnlyFinishProcessing.mockResolvedValue(undefined);
-    mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
-    mockedGetGuildLimits.mockResolvedValue({ limits: {} } as never);
-    mockedUpdateMeetingStatusService.mockResolvedValue(undefined);
+  it.each([
+    { used: 240, outcome: "exhausted_after_meeting", fails: false },
+    { used: 200, outcome: "near_limit", fails: false },
+    { used: 240, outcome: "exhausted_after_meeting", fails: true },
+  ])(
+    "flushes and saves despite a $outcome notice (failure=$fails)",
+    async ({ used, outcome, fails }) => {
+      const events: string[] = [];
+      mockedStartProcessingSnippet.mockImplementation(() => {
+        events.push("flush");
+      });
+      mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) =>
+        fn(),
+      );
+      mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
+      mockedBuildMixedAudio.mockResolvedValue(undefined);
+      mockedCloseOutputFile.mockResolvedValue(undefined);
+      mockedWaitForAudioOnlyFinishProcessing.mockResolvedValue(undefined);
+      mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
+      mockedGetGuildLimits.mockResolvedValue({ limits: {} } as never);
+      mockedUpdateMeetingStatusService.mockResolvedValue(undefined);
 
-    const connection = {
-      disconnect: jest.fn(() => {
-        events.push("disconnect");
-      }),
-      destroy: jest.fn(() => {
-        events.push("destroy");
-      }),
-    };
+      const connection = {
+        disconnect: jest.fn(() => {
+          events.push("disconnect");
+        }),
+        destroy: jest.fn(() => {
+          events.push("destroy");
+        }),
+      };
 
-    const meeting = {
-      guildId: "guild-1",
-      channelId: "text-1",
-      meetingId: "meeting-1",
-      voiceChannel: { id: "voice-1", name: "Voice" },
-      textChannel: {
-        send: jest.fn(),
-        messages: { fetch: jest.fn() },
-      },
-      connection,
-      chatLog: [],
-      audioData: {
-        audioFiles: [],
-        currentSnippets: new Map([
-          [
-            "user-1",
-            {
-              userId: "user-1",
-              timestamp: Date.now(),
-              chunks: [Buffer.from("test")],
-              fastRevision: 0,
-              fastTranscribed: false,
-            },
-          ],
-        ]),
-        outputFileName: "recording.mp3",
-      },
-      startTime: new Date("2025-01-01T00:00:00.000Z"),
-      endTime: undefined,
-      finishing: false,
-      finished: false,
-      transcribeMeeting: false,
-      generateNotes: false,
-      isAutoRecording: false,
-      creator: { id: "user-1" },
-      guild: { id: "guild-1", name: "Guild", members: { cache: new Map() } },
-      ttsQueue: { stopAndClear: jest.fn() },
-      setFinished: jest.fn(),
-    } as unknown as MeetingData;
+      const meeting = {
+        guildId: "guild-1",
+        channelId: "text-1",
+        meetingId: "meeting-1",
+        voiceChannel: { id: "voice-1", name: "Voice" },
+        textChannel: {
+          send: jest.fn(),
+          messages: { fetch: jest.fn() },
+        },
+        connection,
+        chatLog: [],
+        audioData: {
+          audioFiles: [],
+          currentSnippets: new Map([
+            [
+              "user-1",
+              {
+                userId: "user-1",
+                timestamp: Date.now(),
+                chunks: [Buffer.from("test")],
+                fastRevision: 0,
+                fastTranscribed: false,
+              },
+            ],
+          ]),
+          outputFileName: "recording.mp3",
+        },
+        startTime: new Date("2025-01-01T00:00:00.000Z"),
+        endTime: undefined,
+        finishing: false,
+        finished: false,
+        transcribeMeeting: false,
+        generateNotes: false,
+        isAutoRecording: false,
+        creator: { id: "user-1" },
+        guild: { id: "guild-1", name: "Guild", members: { cache: new Map() } },
+        ttsQueue: { stopAndClear: jest.fn() },
+        setFinished: jest.fn(),
+      } as unknown as MeetingData;
 
-    await handleEndMeetingOther({} as Client, meeting);
+      mockedGetGuildLimits.mockResolvedValue({
+        limits: { maxMeetingMinutesRolling: 240 },
+        subscription: { tier: "free" },
+      } as never);
+      jest
+        .mocked(getRollingUsageForGuild)
+        .mockResolvedValue({
+          usedSeconds: used * 60,
+          meetings: [],
+          windowStartIso: "2026-10-01T00:00:00Z",
+        });
+      if (fails)
+        jest
+          .mocked(notifyRecordingLimit)
+          .mockRejectedValueOnce(new Error("test notice failure"));
+      else jest.mocked(notifyRecordingLimit).mockResolvedValueOnce(undefined);
+      await handleEndMeetingOther({} as Client, meeting);
 
-    expect(events.indexOf("flush")).toBeGreaterThanOrEqual(0);
-    expect(events.indexOf("flush")).toBeLessThan(events.indexOf("disconnect"));
-    expect(events.indexOf("disconnect")).toBeLessThan(
-      events.indexOf("destroy"),
-    );
-  });
+      expect(notifyRecordingLimit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome,
+          limitMinutes: 240,
+          usedMinutes: used,
+          userId: "user-1",
+        }),
+        meeting.textChannel,
+        meeting.recordingLimitNotice,
+      );
+      expect(mockedSaveMeetingHistoryToDatabase).toHaveBeenCalledWith(meeting);
+      expect(mockedCleanupMeetingTempDir).toHaveBeenCalledWith(meeting);
+      expect(mockedReleaseMeetingLeaseForMeeting).toHaveBeenCalledWith(meeting);
+      expect(events.indexOf("flush")).toBeGreaterThanOrEqual(0);
+      expect(events.indexOf("flush")).toBeLessThan(
+        events.indexOf("disconnect"),
+      );
+      expect(events.indexOf("disconnect")).toBeLessThan(
+        events.indexOf("destroy"),
+      );
+    },
+  );
 
   it("skips auto-record cancellation evaluation when a dismissed auto-record meeting already crossed completion thresholds", async () => {
     const { autoRecordJoinSuppressionService } = jest.requireMock(
