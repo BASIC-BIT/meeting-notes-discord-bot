@@ -30,6 +30,7 @@ jest.mock("../../src/frontend/services/analytics", () => ({
 describe("upgrade pages", () => {
   beforeEach(() => {
     resetFrontendMocks();
+    setRouteParams({ serverId: "g1" });
     jest.mocked(track).mockClear();
   });
 
@@ -90,6 +91,159 @@ describe("upgrade pages", () => {
       ).toHaveLength(1);
     },
   );
+
+  test("recording context survives Discord sign-in and canceled checkout", () => {
+    authState.state = "unauthenticated";
+    setRouteSearch({
+      serverId: "g1",
+      source: "discord_limit",
+      limitType: "weekly_recording",
+      limitSurface: "manual_start",
+      canceled: true,
+    });
+    renderWithMantine(<Upgrade />);
+    const href = screen
+      .getByRole("link", { name: "Connect Discord" })
+      .getAttribute("href")!;
+    const redirect = new URL(href, "https://chronote.test").searchParams.get(
+      "redirect",
+    )!;
+    const params = new URL(redirect).searchParams;
+    expect(params.get("limitType")).toBe("weekly_recording");
+    expect(params.get("limitSurface")).toBe("manual_start");
+    expect(params.get("canceled")).toBe("true");
+    expect(track).toHaveBeenCalledWith(
+      "upgrade_arrived",
+      expect.objectContaining({
+        source: "discord_limit",
+        limit_type: "weekly_recording",
+        limit_surface: "manual_start",
+      }),
+    );
+    expect(
+      screen.getByText("Compare weekly recording time for this server."),
+    ).toBeVisible();
+  });
+  test("billing records one resolved entry with Discord limit context", () => {
+    guildState.selectedGuildId = "g1";
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
+    setRouteSearch({
+      source: "discord_limit",
+      limitType: "weekly_recording",
+      limitSurface: "weekly_after_meeting",
+    });
+    setBillingQuery({
+      data: {
+        billingEnabled: true,
+        tier: "basic",
+        status: "active",
+        hasStripeBilling: true,
+        canManageBillingPortal: true,
+        usage: null,
+      },
+    });
+    const view = renderWithMantine(<Billing />);
+    view.rerender(
+      <MantineProvider>
+        <Billing />
+      </MantineProvider>,
+    );
+    expect(
+      jest
+        .mocked(track)
+        .mock.calls.filter(([event]) => event === "billing_entry_arrived"),
+    ).toEqual([
+      [
+        "billing_entry_arrived",
+        expect.objectContaining({
+          guild_id: "g1",
+          source: "discord_limit",
+          limit_type: "weekly_recording",
+          limit_surface: "weekly_after_meeting",
+        }),
+      ],
+    ]);
+    expect(
+      screen.getByText("Compare weekly recording time for this server."),
+    ).toBeVisible();
+    expect(track).not.toHaveBeenCalledWith("upgrade_ready", expect.anything());
+  });
+  test("billing waits for route/context agreement before attributing a limit entry", () => {
+    guildState.selectedGuildId = "server-a";
+    guildState.guilds = [
+      { id: "server-a", name: "A", canManage: true },
+      { id: "server-b", name: "B", canManage: true },
+    ];
+    setRouteParams({ serverId: "server-b" });
+    setRouteSearch({
+      source: "discord_limit",
+      limitType: "weekly_recording",
+      limitSurface: "manual_start",
+    });
+    setBillingQuery({
+      data: { billingEnabled: true, tier: "basic", status: "active" },
+    });
+    const view = renderWithMantine(<Billing />);
+    expect(track).not.toHaveBeenCalledWith(
+      "billing_entry_arrived",
+      expect.anything(),
+    );
+    guildState.selectedGuildId = "server-b";
+    setBillingQuery({
+      data: { billingEnabled: true, tier: "free", status: "free" },
+    });
+    view.rerender(
+      <MantineProvider>
+        <Billing />
+      </MantineProvider>,
+    );
+    expect(
+      jest
+        .mocked(track)
+        .mock.calls.filter(([event]) => event === "billing_entry_arrived"),
+    ).toEqual([
+      [
+        "billing_entry_arrived",
+        expect.objectContaining({
+          guild_id: "server-b",
+          current_tier: "free",
+          source: "discord_limit",
+        }),
+      ],
+    ]);
+  });
+
+  test("duration context describes the two-hour ceiling without claiming Free includes it", () => {
+    authState.state = "unauthenticated";
+    setRouteSearch({
+      source: "discord_limit",
+      limitType: "meeting_duration",
+      limitSurface: "duration_stop",
+    });
+    renderWithMantine(<Upgrade />);
+    expect(
+      screen.getByText(/No plan allows a meeting longer than two hours/),
+    ).toBeVisible();
+    expect(screen.queryByText(/All plans have a two-hour maximum/)).toBeNull();
+  });
+
+  test("invalid limit context never reaches structured analytics or sign-in", () => {
+    authState.state = "unauthenticated";
+    setRouteSearch({
+      source: "discord_limit",
+      limitType: "private input",
+      limitSurface: "manual_start",
+    });
+    renderWithMantine(<Upgrade />);
+    expect(track).toHaveBeenCalledWith(
+      "upgrade_arrived",
+      expect.not.objectContaining({ limit_type: expect.anything() }),
+    );
+    const href = screen
+      .getByRole("link", { name: "Connect Discord" })
+      .getAttribute("href")!;
+    expect(decodeURIComponent(href)).not.toContain("limitType=");
+  });
 
   test("promo landing navigates to upgrade server select with promo", () => {
     authState.state = "authenticated";
@@ -156,6 +310,7 @@ describe("billing promo input", () => {
 
   test("prefills promo code from search params", () => {
     authState.state = "authenticated";
+    setRouteParams({ serverId: "guild-1" });
     guildState.selectedGuildId = "guild-1";
     guildState.guilds = [{ id: "guild-1", name: "Team One", canManage: true }];
     setRouteSearch({ promo: "SAVE20" });

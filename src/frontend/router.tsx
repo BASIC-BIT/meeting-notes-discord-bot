@@ -8,7 +8,11 @@ import {
   Router,
 } from "@tanstack/react-router";
 import { z } from "zod";
-import { PURCHASE_SOURCES } from "../utils/purchaseAnalytics";
+import {
+  PURCHASE_SOURCES,
+  RECORDING_LIMIT_TYPES,
+  RECORDING_LIMIT_SURFACES,
+} from "../utils/purchaseAnalytics";
 import MarketingLayout from "./layouts/MarketingLayout";
 
 const PortalLayout = lazyRouteComponent(() => import("./layouts/PortalLayout"));
@@ -95,6 +99,11 @@ const portalMeetingSearchSchema = z.object({
   fullScreen: optionalBooleanParam,
 }).parse;
 
+const recordingLimitSearch = {
+  limitType: z.enum(RECORDING_LIMIT_TYPES).optional().catch(undefined),
+  limitSurface: z.enum(RECORDING_LIMIT_SURFACES).optional().catch(undefined),
+};
+
 const homeRoute = new Route({
   getParentRoute: () => marketingRoute,
   path: "/",
@@ -118,6 +127,7 @@ const upgradeRoute = new Route({
   path: "upgrade",
   component: Upgrade,
   validateSearch: z.object({
+    ...recordingLimitSearch,
     source: z.enum(PURCHASE_SOURCES).catch("unknown").optional(),
     promo: z.string().optional(),
     serverId: optionalStringParam,
@@ -138,6 +148,7 @@ const upgradeSelectRoute = new Route({
   path: "upgrade/select-server",
   component: UpgradeServerSelect,
   validateSearch: z.object({
+    ...recordingLimitSearch,
     source: z.enum(PURCHASE_SOURCES).catch("unknown").optional(),
     promo: z.string().optional(),
     serverId: optionalStringParam,
@@ -158,6 +169,7 @@ const upgradeSuccessRoute = new Route({
   path: "upgrade/success",
   component: UpgradeSuccess,
   validateSearch: z.object({
+    ...recordingLimitSearch,
     source: z.enum(PURCHASE_SOURCES).catch("unknown").optional(),
     promo: z.string().optional(),
     serverId: optionalStringParam,
@@ -285,7 +297,11 @@ const portalBillingRoute = new Route({
   getParentRoute: () => portalServerRoute,
   path: "billing",
   component: Billing,
-  validateSearch: z.object({ promo: z.string().optional() }).parse,
+  validateSearch: z.object({
+    promo: z.string().optional(),
+    source: z.enum(PURCHASE_SOURCES).catch("unknown").optional(),
+    ...recordingLimitSearch,
+  }).parse,
 });
 
 const portalSettingsRoute = new Route({

@@ -16,7 +16,13 @@ import { config } from "../../services/configService";
 import { requireManageGuild } from "../permissions";
 import { authedProcedure, manageGuildProcedure, router } from "../trpc";
 import type { BillingInterval, PaidTier } from "../../types/pricing";
-import { PURCHASE_SOURCES } from "../../utils/purchaseAnalytics";
+import {
+  PURCHASE_SOURCES,
+  RECORDING_LIMIT_TYPES,
+  RECORDING_LIMIT_SURFACES,
+  resolveRecordingLimitContext,
+  recordingLimitAnalytics,
+} from "../../utils/purchaseAnalytics";
 import { captureEvent } from "../../services/analyticsService";
 
 const me = authedProcedure
@@ -52,6 +58,11 @@ const checkout = manageGuildProcedure
       interval: z.enum(["month", "year"]).default("month"),
       promotionCode: z.string().optional(),
       source: z.enum(PURCHASE_SOURCES).catch("unknown").default("direct"),
+      limitType: z.enum(RECORDING_LIMIT_TYPES).optional().catch(undefined),
+      limitSurface: z
+        .enum(RECORDING_LIMIT_SURFACES)
+        .optional()
+        .catch(undefined),
       analyticsDisabled: z.boolean().optional(),
     }),
   )
@@ -72,6 +83,7 @@ const checkout = manageGuildProcedure
             reason: "billing_disabled",
             surface: "billing",
             source: input.source,
+            ...recordingLimitAnalytics(input),
             event_version: 1,
           },
         });
@@ -129,6 +141,7 @@ const checkout = manageGuildProcedure
         tier: input.tier as PaidTier,
         interval: input.interval as BillingInterval,
         source: input.source,
+        ...resolveRecordingLimitContext(input),
         analyticsAllowed,
       });
       return { url };
@@ -142,6 +155,7 @@ const checkout = manageGuildProcedure
               err instanceof BillingActionError ? "transition_guarded" : reason,
             surface: "billing",
             source: input.source,
+            ...recordingLimitAnalytics(input),
             tier: input.tier,
             interval: input.interval,
             event_version: 1,

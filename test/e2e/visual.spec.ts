@@ -1,3 +1,4 @@
+import { useFreeBilling } from "./billingMocks";
 import type { Page } from "@playwright/test";
 import type { Locator } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -185,6 +186,50 @@ test.describe("visual regression", () => {
       }
     });
   };
+
+  for (const viewport of marketingViewports.slice(0, 2)) {
+    test(`recording-limit pages ${viewport.name} @visual`, async ({ page }) => {
+      await useFreeBilling(page);
+      await page.setViewportSize(viewport);
+      const context =
+        "source=discord_limit&limitType=weekly_recording&limitSurface=manual_start";
+      await page.goto(
+        `/upgrade/select-server?serverId=${mockGuilds.ddm.id}&${context}&visual=1`,
+      );
+      await expect(
+        page.getByText("Compare weekly recording time for this server."),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Continue with Basic" }),
+      ).toBeEnabled();
+      await expectVisualScreenshot(
+        page,
+        `upgrade-limit-${viewport.name}`,
+        "full",
+      );
+      const billingMode = viewport.name === "mobile" ? "viewport" : "full";
+      await page.goto(
+        withVisualMode(
+          `/portal/server/${mockGuilds.ddm.id}/billing?${context}`,
+          billingMode,
+        ),
+      );
+      await expect(
+        page.getByText("Compare weekly recording time for this server."),
+      ).toBeVisible();
+      await expect(page.getByTestId("billing-plan-basic")).toBeVisible();
+      await expectVisualScreenshot(
+        page,
+        `billing-limit-${viewport.name}`,
+        billingMode,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+    });
+  }
 
   test("home page @visual", async ({ homePage, page }) => {
     for (const mode of visualModes) {

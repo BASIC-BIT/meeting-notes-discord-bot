@@ -15,6 +15,7 @@ import {
   guildState,
   renderWithMantine,
   resetFrontendMocks,
+  setRouteParams,
 } from "./testUtils";
 import {
   billingCheckoutMutation,
@@ -40,6 +41,7 @@ describe.each([
 ] as const)("%s billing action errors", (_name, Page) => {
   beforeEach(() => {
     resetFrontendMocks();
+    setRouteParams({ serverId: "g1" });
     notifications.clean();
     jest.spyOn(console, "error").mockImplementation(() => undefined);
     authState.state = "authenticated";

@@ -1,3 +1,7 @@
+jest.mock("../services/recordingLimitService", () => ({
+  notifyRecordingLimit: jest.fn(),
+}));
+import { notifyRecordingLimit } from "../services/recordingLimitService";
 jest.mock("@discordjs/voice", () => ({
   NoSubscriberBehavior: { Pause: "pause" },
   createAudioPlayer: jest.fn(() => ({ state: { status: "idle" } })),
@@ -146,6 +150,40 @@ describe("initializeMeeting", () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it("ends at the captured cap before awaiting upgrade eligibility", async () => {
+    jest.useFakeTimers();
+    jest.mocked(notifyRecordingLimit).mockReturnValue(new Promise(() => {}));
+    const options = buildMeetingOptions();
+    const onTimeout = jest.fn(() => {
+      expect(notifyRecordingLimit).not.toHaveBeenCalled();
+    });
+    const meeting = await initializeMeeting({
+      ...options,
+      transcribeMeeting: false,
+      generateNotes: false,
+      maxMeetingDurationMs: 90 * 60000,
+      maxMeetingDurationPretty: "90 minutes",
+      onTimeout,
+    });
+    jest.advanceTimersByTime(90 * 60000);
+    expect(onTimeout).toHaveBeenCalledWith(meeting);
+    expect(meeting.endReason).toBe("timeout");
+    expect(notifyRecordingLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limitType: "meeting_duration",
+        limitSurface: "duration_stop",
+        outcome: "ended_session",
+        limitMinutes: 90,
+        userId: "creator-1",
+      }),
+      options.textChannel,
+      meeting.recordingLimitNotice,
+    );
+    expect(meeting.recordingLimitNotice?.pending).toBeDefined();
+    expect(options.textChannel.send).not.toHaveBeenCalled();
+    deleteMeeting(meeting.guildId);
   });
 
   it("does not create capture or recording plumbing for TTS-only sessions", async () => {

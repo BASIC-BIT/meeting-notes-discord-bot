@@ -797,3 +797,46 @@ test.each([
   ).rejects.toThrow("already in progress");
   expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
 });
+
+test("recording-limit context survives checkout and remains frozen across retries", async () => {
+  const { stripe, client } = fixture();
+  stripe.checkout.sessions.create.mockRejectedValueOnce(
+    new Error("lost response"),
+  );
+  const request = {
+    stripe: client,
+    user: { id: "payer" },
+    guildId,
+    priceId: "price_basic",
+    source: "discord_limit" as const,
+    limitType: "weekly_recording" as const,
+    limitSurface: "manual_start" as const,
+  };
+  await expect(createCheckoutSession(request)).rejects.toThrow("lost response");
+  const frozen = getMockStore().purchaseAttempts.get(guildId)?.checkout;
+  expect(frozen?.metadata).toMatchObject({
+    recording_limit_type: "weekly_recording",
+    recording_limit_surface: "manual_start",
+  });
+  expect(frozen?.success_url).toContain("limitType=weekly_recording");
+  expect(frozen?.cancel_url).toContain("limitSurface=manual_start");
+  await expect(
+    createCheckoutSession({
+      ...request,
+      limitType: "meeting_duration" as const,
+      limitSurface: "duration_stop" as const,
+    }),
+  ).resolves.toContain("checkout.stripe.com");
+  expect(stripe.checkout.sessions.create.mock.calls[1]).toEqual(
+    stripe.checkout.sessions.create.mock.calls[0],
+  );
+  expect(captureEvent).toHaveBeenCalledWith(
+    "billing_checkout_created",
+    expect.objectContaining({
+      properties: expect.objectContaining({
+        limit_type: "weekly_recording",
+        limit_surface: "manual_start",
+      }),
+    }),
+  );
+});

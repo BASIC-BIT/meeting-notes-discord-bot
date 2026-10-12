@@ -285,6 +285,8 @@ describe("billing webhook routes", () => {
           discord_id: "payer-1",
           purchase_source: "discord_notes",
           promo_code: "PRIVATE",
+          recording_limit_type: "weekly_recording",
+          recording_limit_surface: "manual_start",
         },
       };
       const { server, baseUrl } = createServer(
@@ -311,6 +313,8 @@ describe("billing webhook routes", () => {
               tier: "basic",
               interval: "month",
               promo_present: true,
+              limit_type: "weekly_recording",
+              limit_surface: "manual_start",
             }),
           }),
         );

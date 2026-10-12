@@ -1,3 +1,4 @@
+import type { RecordingLimitState } from "../services/recordingLimitService";
 import { AudioPlayer, VoiceConnection } from "@discordjs/voice";
 import {
   ButtonInteraction,
@@ -120,6 +121,7 @@ export interface MeetingData {
   delivery?: MeetingDelivery;
   processing?: MeetingProcessingOutcome;
   historySaved?: boolean;
+  recordingLimitNotice?: RecordingLimitState;
   messagesToDelete?: string[];
   leaseOwnerInstanceId?: string;
   leaseHeartbeatTimer?: ReturnType<typeof setInterval>;

@@ -11,7 +11,10 @@ import { recordPaymentTransaction } from "../services/billingService";
 import { config } from "../services/configService";
 import { resolveGuildSubscription } from "../services/subscriptionService";
 import { captureEvent } from "../services/analyticsService";
-import { resolvePurchaseSource } from "../utils/purchaseAnalytics";
+import {
+  resolvePurchaseSource,
+  recordingLimitAnalytics,
+} from "../utils/purchaseAnalytics";
 import { resolveTierFromPrice } from "../services/pricingService";
 import { getStripeWebhookRepository } from "../repositories/stripeWebhookRepository";
 import type {
@@ -252,6 +255,16 @@ async function capturePaidInvoiceOnce(
         event_version: 1,
         tier,
         billing_kind: billingKind,
+        ...recordingLimitAnalytics({
+          limitType:
+            readMetadataValue(subscription.metadata, "recording_limit_type") ||
+            undefined,
+          limitSurface:
+            readMetadataValue(
+              subscription.metadata,
+              "recording_limit_surface",
+            ) || undefined,
+        }),
         source: resolvePurchaseSource(
           readMetadataValue(subscription.metadata, "purchase_source") ||
             "unknown",

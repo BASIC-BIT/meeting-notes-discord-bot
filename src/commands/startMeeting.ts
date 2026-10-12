@@ -33,7 +33,12 @@ import { handleEndMeetingOther } from "./endMeeting";
 import { saveMeetingStartToDatabase } from "./saveMeetingHistory";
 import { parseTags } from "../utils/tags";
 import { getGuildLimits } from "../services/subscriptionService";
-import { buildUpgradePrompt } from "../utils/upgradePrompt";
+import {
+  encounterRecordingLimit,
+  deliverRecordingLimitNotice,
+  notifyRecordingLimit,
+  type RecordingLimitNotice,
+} from "../services/recordingLimitService";
 import { resolveMeetingVoiceSettings } from "../services/meetingVoiceSettingsService";
 import { config } from "../services/configService";
 import {
@@ -83,7 +88,7 @@ type StartManualMeetingFromChannelsOptions = {
 
 type StartManualMeetingFromChannelsResult =
   | { ok: true; meeting: MeetingData; liveMeetingUrl: string | null }
-  | { ok: false; error: string; upgradePrompt?: boolean };
+  | { ok: false; error: string; recordingLimitNotice?: RecordingLimitNotice };
 
 const buildLiveMeetingUrl = (guildId: string, meetingId: string) => {
   const base = config.frontend.siteUrl?.replace(/\/$/, "");
@@ -209,7 +214,11 @@ const notifyAutoRecordPermissionFailure = async (options: {
 async function getLimitNotice(
   guildId: string,
   limits: GuildLimits,
-): Promise<string | null> {
+): Promise<{
+  message: string;
+  limitMinutes: number;
+  usedMinutes: number;
+} | null> {
   if (!limits.maxMeetingMinutesRolling) return null;
   const usage = await getRollingUsageForGuild(guildId);
   const limitSeconds = limits.maxMeetingMinutesRolling * 60;
@@ -221,7 +230,11 @@ async function getLimitNotice(
     getRollingWindowMs(),
     limitSeconds,
   );
-  return buildLimitReachedMessage(nextAvailableAtIso);
+  return {
+    message: buildLimitReachedMessage(nextAvailableAtIso),
+    limitMinutes: limits.maxMeetingMinutesRolling,
+    usedMinutes: usage.usedSeconds / 60,
+  };
 }
 
 const getMeetingRequestOptions = (interaction: StartMeetingInteraction) => {
@@ -355,7 +368,23 @@ export async function startManualMeetingFromChannels({
   const { limits, subscription } = await getGuildLimits(guildId);
   const limitNotice = await getLimitNotice(guildId, limits);
   if (limitNotice) {
-    return { ok: false, error: limitNotice, upgradePrompt: true };
+    const recordingLimitNotice = await encounterRecordingLimit({
+      ...limitNotice,
+      guildId,
+      userId: startTriggeredByUserId,
+      limitType: "weekly_recording",
+      limitSurface:
+        startReason === MEETING_START_REASONS.MCP
+          ? "mcp_start"
+          : "manual_start",
+      outcome: "blocked_start",
+      resolved: { limits, subscription },
+    });
+    return {
+      ok: false,
+      error: recordingLimitNotice.payload.content,
+      recordingLimitNotice,
+    };
   }
 
   const botMember = resolveBotMember(guild);
@@ -567,16 +596,29 @@ export async function handleRequestStartMeeting(
     startTriggeredByUserId: interaction.user.id,
   });
   if (!startResult.ok) {
-    if (startResult.upgradePrompt) {
+    if (startResult.recordingLimitNotice) {
+      const notice = startResult.recordingLimitNotice;
       if (options?.deferredEphemeralReply) {
-        const upgradePrompt = buildUpgradePrompt(startResult.error);
-        await interaction.editReply({
-          components: upgradePrompt.components,
-          content: upgradePrompt.content,
-        });
-        return;
+        await deliverRecordingLimitNotice(
+          notice,
+          () =>
+            interaction.editReply({
+              content: notice.payload.content,
+              components: notice.payload.components,
+              allowedMentions: notice.payload.allowedMentions,
+            }),
+          "edit",
+        );
+      } else {
+        await deliverRecordingLimitNotice(notice, () =>
+          interaction.reply({
+            content: notice.payload.content,
+            components: notice.payload.components,
+            allowedMentions: notice.payload.allowedMentions,
+            ephemeral: true,
+          }),
+        );
       }
-      await interaction.reply(buildUpgradePrompt(startResult.error));
       return;
     }
     await replyStartMeetingError(interaction, startResult.error, options);
@@ -655,7 +697,18 @@ export async function handleAutoStartMeeting(
   const { limits, subscription } = await getGuildLimits(guildId);
   const limitNotice = await getLimitNotice(guildId, limits);
   if (limitNotice) {
-    await textChannel.send(limitNotice);
+    await notifyRecordingLimit(
+      {
+        ...limitNotice,
+        guildId,
+        userId: options?.startTriggeredByUserId,
+        limitType: "weekly_recording",
+        limitSurface: "auto_start",
+        outcome: "blocked_start",
+        resolved: { limits, subscription },
+      },
+      textChannel,
+    );
     return false;
   }
 

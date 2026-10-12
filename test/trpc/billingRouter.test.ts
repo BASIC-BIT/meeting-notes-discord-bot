@@ -174,3 +174,31 @@ test("unexpected provider details remain hidden", async () => {
     message: "Unable to create checkout session",
   });
 });
+
+test.each([
+  [{ limitType: "weekly_recording", limitSurface: "auto_start" }, true],
+  [{ limitType: "private-value", limitSurface: "auto_start" }, false],
+  [{ limitType: "weekly_recording", limitSurface: "duration_stop" }, false],
+])(
+  "validates recording context before provider work %j",
+  async (context, valid) => {
+    jest
+      .mocked(createCheckoutSession)
+      .mockResolvedValue("https://checkout.stripe.com/test");
+    await caller().checkout({
+      serverId: "111111111111111111",
+      tier: "basic",
+      ...context,
+    });
+    const request = jest.mocked(createCheckoutSession).mock.calls[0][0];
+    if (valid)
+      expect(request).toMatchObject({
+        limitType: "weekly_recording",
+        limitSurface: "auto_start",
+      });
+    else {
+      expect(request).not.toHaveProperty("limitType");
+      expect(request).not.toHaveProperty("limitSurface");
+    }
+  },
+);

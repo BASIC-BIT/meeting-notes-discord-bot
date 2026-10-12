@@ -1,3 +1,4 @@
+import { notifyRecordingLimit } from "./services/recordingLimitService";
 import { MeetingData, MeetingSetup } from "./types/meeting-data";
 import {
   ButtonInteraction,
@@ -567,11 +568,23 @@ export async function initializeMeeting(
     const durationPretty =
       maxMeetingDurationPretty ?? MAXIMUM_MEETING_DURATION_PRETTY;
     meeting.timeoutTimer = setTimeout(() => {
-      textChannel.send(
-        `Ending ${isAutoRecording ? "auto-recorded " : ""}meeting due to maximum meeting time of ${durationPretty} having been reached.`,
-      );
+      const state: NonNullable<MeetingData["recordingLimitNotice"]> = {};
+      meeting.recordingLimitNotice = state;
       meeting.endReason = MEETING_END_REASONS.TIMEOUT;
       onTimeout(meeting);
+      state.pending = notifyRecordingLimit(
+        {
+          guildId: meeting.guildId,
+          userId: resolveMeetingActorId(meeting),
+          limitType: "meeting_duration",
+          limitSurface: "duration_stop",
+          outcome: "ended_session",
+          limitMinutes: durationLimitMs / 60000,
+          message: `Recording stopped at the ${durationPretty} limit for this meeting. Your recording will finish processing as usual.`,
+        },
+        textChannel,
+        state,
+      ).catch(() => undefined);
     }, durationLimitMs);
   }
 

@@ -36,9 +36,13 @@ const SHARE_ID_PATTERN = /\/share\/(meeting|ask)\/[^/?#]+\/[^/?#]+/g;
 function isPrivateQueryKey(key: string): boolean {
   try {
     // Encoded return URLs add a second encoding layer to query keys.
-    return ["promo", "promotioncode", "source"].includes(
-      decodeURIComponent(decodeURIComponent(key)).toLowerCase(),
-    );
+    return [
+      "promo",
+      "promotioncode",
+      "source",
+      "limittype",
+      "limitsurface",
+    ].includes(decodeURIComponent(decodeURIComponent(key)).toLowerCase());
   } catch {
     return false;
   }

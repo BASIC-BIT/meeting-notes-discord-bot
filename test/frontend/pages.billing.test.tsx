@@ -1,7 +1,11 @@
 import React from "react";
 import { beforeEach, describe, expect, test } from "@jest/globals";
 import { screen, within } from "@testing-library/react";
-import { renderWithMantine, resetFrontendMocks } from "./testUtils";
+import {
+  renderWithMantine,
+  resetFrontendMocks,
+  setRouteParams,
+} from "./testUtils";
 import { guildState } from "./testUtils";
 import { setBillingQuery, setPricingQuery } from "./mocks/trpc";
 import Billing from "../../src/frontend/pages/Billing";
@@ -9,6 +13,7 @@ import Billing from "../../src/frontend/pages/Billing";
 describe("Billing page", () => {
   beforeEach(() => {
     resetFrontendMocks();
+    setRouteParams({ serverId: "g1" });
     setPricingQuery({ data: { plans: [] } });
   });
 
@@ -19,6 +24,28 @@ describe("Billing page", () => {
     expect(
       screen.getByText(/Select a server to view billing/i),
     ).toBeInTheDocument();
+  });
+
+  test("a Free server with existing Stripe billing retains its management action", () => {
+    guildState.selectedGuildId = "g1";
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
+    setBillingQuery({
+      data: {
+        billingEnabled: true,
+        tier: "free",
+        status: "canceled",
+        hasStripeBilling: true,
+        canManageBillingPortal: true,
+        usage: null,
+      },
+    });
+    renderWithMantine(<Billing />);
+    expect(screen.getByTestId("billing-manage")).toBeVisible();
+    expect(
+      within(screen.getByTestId("billing-current-plan")).getByText("Free", {
+        exact: true,
+      }),
+    ).toBeVisible();
   });
 
   test("renders disabled billing state", () => {

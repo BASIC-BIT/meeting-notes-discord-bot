@@ -442,6 +442,29 @@ export async function tryCreateInteractionReceipt(
   }
 }
 
+export async function releaseInteractionReceipt(
+  receipt: InteractionReceipt,
+): Promise<boolean> {
+  try {
+    await dynamoDbClient.send(
+      new DeleteItemCommand({
+        TableName: tableName("InteractionReceiptTable"),
+        Key: marshall({ interactionId: receipt.interactionId }),
+        ConditionExpression:
+          "createdAt = :createdAt AND expiresAt = :expiresAt",
+        ExpressionAttributeValues: marshall({
+          ":createdAt": receipt.createdAt,
+          ":expiresAt": receipt.expiresAt,
+        }),
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (isConditionalCheckFailed(error)) return false;
+    throw error;
+  }
+}
+
 export async function tryAcquireActiveMeetingLease(
   lease: ActiveMeetingLease,
   nowEpochSeconds: number,

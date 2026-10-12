@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import RecordingPlanContext from "../components/RecordingPlanContext";
+import {
+  resolveRecordingLimitContext,
+  recordingLimitAnalytics,
+  resolvePurchaseSource,
+} from "../../utils/purchaseAnalytics";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   Badge,
@@ -20,7 +26,7 @@ import {
 } from "@mantine/core";
 import { IconCheck, IconCreditCard } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
-import { useSearch } from "@tanstack/react-router";
+import { useParams, useSearch } from "@tanstack/react-router";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
@@ -248,7 +254,7 @@ const BillingPaidPanel = ({
   <Surface p="xl" data-testid="billing-current-plan">
     {(() => {
       const isComped = data.billingSource === "manual_comp";
-      const planName = data.tier === "pro" ? "Pro" : "Basic";
+      const planName = formatStatusLabel(data.tier);
       const expiryLine = data.activeGrant?.expiresAt
         ? `Comp runs through ${new Date(
             data.activeGrant.expiresAt,
@@ -541,6 +547,18 @@ export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
   const [interval, setInterval] = useState<BillingInterval>("month");
   const search = useSearch({ from: "/portal/server/$serverId/billing" });
+  const source =
+    search.source === undefined
+      ? "portal_billing"
+      : resolvePurchaseSource(search.source);
+  const limitContext = useMemo(
+    () => resolveRecordingLimitContext(search),
+    [search.limitType, search.limitSurface],
+  );
+  const arrivedServers = useRef(new Set<string>());
+  const { serverId: routeServerId } = useParams({
+    from: "/portal/server/$serverId/billing",
+  });
   const [promoCode, setPromoCode] = useState(() => search.promo ?? "");
   const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
   const billingQuery = trpc.billing.me.useQuery(
@@ -559,7 +577,10 @@ export function Billing() {
     [guilds, selectedGuildId],
   );
   const data = billingQuery.data ?? null;
-  const loading = billingQuery.isLoading || guildLoading;
+  const loading =
+    billingQuery.isLoading ||
+    guildLoading ||
+    Boolean(selectedGuildId && selectedGuildId !== routeServerId);
   const error = billingQuery.error ? "Unable to load billing status." : null;
   const paidPlans = pricingQuery.data?.plans ?? [];
   const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
@@ -575,9 +596,28 @@ export function Billing() {
     }
   }, [isFreeTier]);
 
+  useEffect(() => {
+    if (
+      loading ||
+      error ||
+      !data ||
+      !selectedGuildId ||
+      arrivedServers.current.has(selectedGuildId)
+    )
+      return;
+    arrivedServers.current.add(selectedGuildId);
+    track("billing_entry_arrived", {
+      guild_id: selectedGuildId,
+      source,
+      ...recordingLimitAnalytics(limitContext ?? {}),
+      current_tier: data.tier,
+      event_version: 1,
+    });
+  }, [loading, error, data, selectedGuildId, source, limitContext]);
+
   const handleCheckout = async (tier: PaidTier) => {
     try {
-      if (!selectedGuildId) return;
+      if (!selectedGuildId || selectedGuildId !== routeServerId) return;
       const plan = resolvePaidPlan(planLookup, tier, interval);
       if (!plan) {
         notifications.show({
@@ -592,7 +632,8 @@ export function Billing() {
         guild_id: selectedGuildId,
         tier,
         interval,
-        source: "portal_billing",
+        source,
+        ...recordingLimitAnalytics(limitContext ?? {}),
         promo_present: Boolean(promotionCode),
         event_version: 1,
       });
@@ -601,7 +642,8 @@ export function Billing() {
         tier,
         interval,
         promotionCode: promotionCode.length ? promotionCode : undefined,
-        source: "portal_billing",
+        source,
+        ...limitContext,
         ...(isDoNotTrackEnabled() ? { analyticsDisabled: true } : {}),
       });
       window.location.href = body.url;
@@ -613,7 +655,7 @@ export function Billing() {
 
   const handlePortal = async () => {
     try {
-      if (!selectedGuildId) return;
+      if (!selectedGuildId || selectedGuildId !== routeServerId) return;
       const body = await portalMutation.mutateAsync({
         serverId: selectedGuildId,
       });
@@ -645,7 +687,8 @@ export function Billing() {
 
   return (
     <BillingShell>
-      {isFreeTier ? (
+      <RecordingPlanContext context={limitContext} />
+      {isFreeTier && !data.hasStripeBilling ? (
         <BillingFreePanel serverName={serverName} usage={data.usage} />
       ) : (
         <BillingPaidPanel

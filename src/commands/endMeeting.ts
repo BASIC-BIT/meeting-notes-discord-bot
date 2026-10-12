@@ -24,7 +24,7 @@ import {
   uploadMeetingArtifacts,
   type UploadMeetingArtifactsResult,
 } from "../services/uploadService";
-import { buildUpgradeTextOnly } from "../utils/upgradePrompt";
+import { notifyRecordingLimit } from "../services/recordingLimitService";
 import { getGuildLimits } from "../services/subscriptionService";
 import { stopThinkingCueLoop } from "../audio/soundCues";
 import { canUserEndMeeting } from "../utils/meetingPermissions";
@@ -584,9 +584,15 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
     await runMeetingEndStep(meeting, "save-meeting-history", () =>
       saveMeetingHistoryToDatabase(meeting),
     );
-    await runMeetingEndStep(meeting, "minutes-limit-notice", () =>
+    // Notice delivery can outlive finalization without retaining the recording lease.
+    void runMeetingEndStep(meeting, "minutes-limit-notice", () =>
       maybeSendMinutesLimitNotice(meeting),
-    );
+    ).catch((error) => {
+      console.warn("Recording-limit notice failed", {
+        guildId: meeting.guildId,
+        error,
+      });
+    });
 
     meeting.setFinished();
     meeting.finished = true;
@@ -799,7 +805,8 @@ async function markMeetingProcessing(meeting: MeetingData) {
 }
 
 async function maybeSendMinutesLimitNotice(meeting: MeetingData) {
-  const { limits } = await getGuildLimits(meeting.guildId);
+  const resolved = await getGuildLimits(meeting.guildId);
+  const { limits } = resolved;
   if (!limits.maxMeetingMinutesRolling) return;
 
   const usage = await getRollingUsageForGuild(meeting.guildId);
@@ -824,21 +831,39 @@ async function maybeSendMinutesLimitNotice(meeting: MeetingData) {
           Date.parse(nextAvailableAtIso) / 1000,
         )}:R>.`
       : "You can record again once older meetings roll out of the window.";
-    await meeting.textChannel.send(
-      buildUpgradeTextOnly(
-        `You've reached the weekly minutes limit for this plan. ${nextLabel}`,
-        "discord_limit",
-      ),
+    await notifyRecordingLimit(
+      {
+        guildId: meeting.guildId,
+        userId: resolveMeetingActorId(meeting),
+        limitType: "weekly_recording",
+        limitSurface: "weekly_after_meeting",
+        outcome: "exhausted_after_meeting",
+        limitMinutes: limits.maxMeetingMinutesRolling,
+        usedMinutes: usage.usedSeconds / 60,
+        message: `This server has used its rolling-week recording allowance. ${nextLabel}`,
+        resolved,
+      },
+      meeting.textChannel,
+      meeting.recordingLimitNotice,
     );
     return;
   }
 
   if (remainingMinutes <= thresholdMinutes) {
-    await meeting.textChannel.send(
-      buildUpgradeTextOnly(
-        `Heads up: about ${remainingMinutes} minute(s) left in the weekly free-tier window.`,
-        "discord_limit",
-      ),
+    await notifyRecordingLimit(
+      {
+        guildId: meeting.guildId,
+        userId: resolveMeetingActorId(meeting),
+        limitType: "weekly_recording",
+        limitSurface: "weekly_warning",
+        outcome: "near_limit",
+        limitMinutes: limits.maxMeetingMinutesRolling,
+        usedMinutes: usage.usedSeconds / 60,
+        message: `About ${remainingMinutes} ${remainingMinutes === 1 ? "minute remains" : "minutes remain"} in this server's rolling-week recording allowance.`,
+        resolved,
+      },
+      meeting.textChannel,
+      meeting.recordingLimitNotice,
     );
   }
 }

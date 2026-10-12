@@ -15,6 +15,8 @@ import type { StripeClient, StripeSubscription } from "../types/stripe";
 import type { PublicEntitlementGrant } from "./entitlementService";
 import {
   resolvePurchaseSource,
+  resolveRecordingLimitContext,
+  type RecordingLimitContext,
   type PurchaseSource,
 } from "../utils/purchaseAnalytics";
 
@@ -283,6 +285,8 @@ export async function createCheckoutSession(params: {
   tier?: PaidTier;
   interval?: BillingInterval;
   source?: PurchaseSource;
+  limitType?: RecordingLimitContext["limitType"];
+  limitSurface?: RecordingLimitContext["limitSurface"];
   analyticsAllowed?: boolean;
 }): Promise<string> {
   const {
@@ -299,6 +303,7 @@ export async function createCheckoutSession(params: {
     analyticsAllowed = true,
   } = params;
   const source = resolvePurchaseSource(sourceInput);
+  const limitContext = resolveRecordingLimitContext(params);
   const checkoutPriceId = priceId || config.stripe.priceBasic;
   if (!checkoutPriceId?.startsWith("price_")) {
     throw new Error("Stripe price not configured");
@@ -310,6 +315,7 @@ export async function createCheckoutSession(params: {
     plan: tier,
     interval,
     source,
+    ...limitContext,
   });
   const cancelUrl = appendQueryParams(config.stripe.cancelUrl, {
     promo: promoValue || undefined,
@@ -317,6 +323,7 @@ export async function createCheckoutSession(params: {
     plan: tier,
     interval,
     source,
+    ...limitContext,
   });
   const expected = await getSubscriptionRepository().get(guildId);
   const confirmationUrl = await createExistingSubscriptionConfirmation({
@@ -335,6 +342,12 @@ export async function createCheckoutSession(params: {
     discord_username: user.username ?? "",
     guild_id: guildId,
     purchase_source: source,
+    ...(limitContext
+      ? {
+          recording_limit_type: limitContext.limitType,
+          recording_limit_surface: limitContext.limitSurface,
+        }
+      : {}),
     ...(analyticsAllowed ? {} : { analytics_opt_out: "true" }),
     ...(tier ? { purchase_tier: tier } : {}),
     ...(interval ? { purchase_interval: interval } : {}),
