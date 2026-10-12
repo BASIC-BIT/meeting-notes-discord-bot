@@ -11,7 +11,7 @@ export default function RecordingPlanContext({
     <Alert color="blue" title="Recording time">
       {context.limitType === "weekly_recording"
         ? "Compare weekly recording time for this server."
-        : "Compare the maximum length of a meeting for this server. All plans have a two-hour maximum per meeting."}
+        : "Compare the maximum length of a meeting for this server. No plan allows a meeting longer than two hours."}
     </Alert>
   );
 }

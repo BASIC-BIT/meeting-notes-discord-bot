@@ -153,20 +153,51 @@ after Sandbox event-row acceptance, then retain their exact query/filter setting
 and IDs in chronote-ops. Native groups are not currently configured. Use
 ordered same-guild HogQL cohorts rather than person funnels for these views:
 
-| View                      | Entry cohort                                                                                                                            | Ordered outcome within seven days                                                                                                                     |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Weekly initial purchase   | First weekly encounter per guild in the cohort period, purchase_path=initial_purchase, outcome blocked_start or exhausted_after_meeting | Matching guild upgrade arrival/readiness, checkout creation, then billing_entitlement_saved with billing_kind=initial_purchase and paid active access |
-| Duration initial purchase | First duration encounter per guild, purchase_path=initial_purchase, outcome=ended_session                                               | Same ordered purchase stages                                                                                                                          |
-| Near-limit exploration    | First weekly encounter per guild with outcome=near_limit and purchase_path=initial_purchase                                             | Same stages, kept separate from reached limits                                                                                                        |
-| Existing billing          | Encounter with purchase_path=existing_billing                                                                                           | billing_entry_arrived, then a later paid plan_change; report temporal association because provider portal actor/source is not the new entry           |
+| View                      | Entry cohort                                                                                                                            | Ordered outcome within seven days                                                                                                                                                           |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Weekly initial purchase   | First weekly encounter per guild in the cohort period, purchase_path=initial_purchase, outcome blocked_start or exhausted_after_meeting | Delivered upgrade notice, matching guild upgrade arrival/readiness, checkout creation, then billing_entitlement_saved with billing_kind=initial_purchase and paid active access             |
+| Duration initial purchase | First duration encounter per guild, purchase_path=initial_purchase, outcome=ended_session                                               | Same ordered stages, including a delivered upgrade notice                                                                                                                                   |
+| Near-limit exploration    | First weekly encounter per guild with outcome=near_limit and purchase_path=initial_purchase                                             | Same stages, kept separate from reached limits                                                                                                                                              |
+| Existing billing          | Encounter with purchase_path=existing_billing                                                                                           | billing_entry_arrived, then a later paid plan_change that increases the relevant recording allowance; report temporal association because provider portal actor/source is not the new entry |
 
-Keep failed/suppressed notices in every eligible encounter denominator. Show
-notice delivery as a diagnostic beside it. Count unique guilds once per entry
+Keep failed/suppressed notices in every eligible encounter denominator. Conversion
+requires a delivered upgrade notice after the encounter, followed by the ordered
+purchase stages for the same guild and limit category. Show failed/suppressed
+delivery as a diagnostic beside that funnel. Count unique guilds once per entry
 cohort, resolve the earliest qualifying ordered timestamp for each stage, keep
 same-guild equality throughout, and restrict paid completion to a canonical
 invoice with saved active entitlement. Different organizers/payers can complete
 a server journey. Never join through a third identifier or infer a native
 Discord link click from an arrival.
+
+Expansion requires the paid tier's allowance for the entry's limit category to
+exceed the captured `limit_minutes`. Changing only the billing period, renewing,
+or upgrading Basic to Pro for a two-hour duration ceiling does not qualify.
+Classify unavailable allowance comparisons as unknown, not expansion.
+
+Saved-query acceptance must use these synthetic sequences before publishing
+views. `E` means an eligible encounter, `D` a delivered upgrade notice, `A` a
+resolved entry, `C` a created initial checkout, and `P` confirmed initial paid
+access. All ordered stages must fall inside the stated conversion window.
+
+| Synthetic sequence                                            | Expected result                                                            |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Actor 1 E/D in guild A, actor 2 A/C/P in guild A              | One converted server, potentially no same-person conversion                |
+| Actor 1 E/D in guild A, actor 1 A/C/P in guild B              | No converted server for guild A                                            |
+| Repeated eligible E in guild A, followed by ordered D/A/C/P   | One cohort server and at most one conversion                               |
+| Eligible E, failed or suppressed notice, then A/C/P without D | In denominator, zero completed notice-to-purchase journeys                 |
+| E, D/send, then a combined D/edit with two pressure facts     | One sent notice; separate encounter facts; at most one conversion per view |
+| Forged limit-category arrival A/C/P without E                 | No encounter cohort entry                                                  |
+| Existing Stripe-pointer E or existing-billing purchase        | Excluded from initial-purchase denominator; separate management view       |
+| E/D/A/C followed only by a renewal invoice                    | No initial conversion                                                      |
+| Basic weekly E, billing entry, paid Pro plan_change           | Expansion when its weekly allowance exceeds the captured cap               |
+| Basic duration E, billing entry, paid Pro plan_change         | No duration expansion, both tiers have the same session ceiling            |
+| Billing entry followed by an annual switch at the same tier   | No recording-allowance expansion                                           |
+| Entry younger than seven days at readout                      | Pending; excluded from mature seven-day rate                               |
+| Paid completion precedes delivery or exceeds seven days       | No completed seven-day ordered journey                                     |
+
+These are acceptance cases for the saved HogQL implementation, not a claim that
+queries or live insights have already been created or run.
 
 Only cohorts at least seven days old enter the seven-day conversion rate.
 Younger cohorts show pending counts. Repeat with a 24-hour window for an early

@@ -336,7 +336,7 @@ export const DurationLimitSignedOut: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText(/All plans have a two-hour maximum/),
+      await canvas.findByText(/No plan allows a meeting longer than two hours/),
     ).toBeVisible();
     const href = canvas
       .getByRole("link", { name: "Connect Discord" })
@@ -370,9 +370,13 @@ export const LegacyBillingLimit: Story = {
     path: "/portal/server/example/billing?source=discord_limit&limitType=weekly_recording&limitSurface=manual_start",
   },
   play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
     await expect(
-      await within(canvasElement).findByRole("button", {
-        name: "Manage billing",
+      await canvas.findByRole("button", { name: "Manage billing" }),
+    ).toBeVisible();
+    await expect(
+      within(canvas.getByTestId("billing-current-plan")).getByText("Free", {
+        exact: true,
       }),
     ).toBeVisible();
   },

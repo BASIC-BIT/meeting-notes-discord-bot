@@ -26,7 +26,7 @@ import {
 } from "@mantine/core";
 import { IconCheck, IconCreditCard } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
-import { useSearch } from "@tanstack/react-router";
+import { useParams, useSearch } from "@tanstack/react-router";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
@@ -254,7 +254,7 @@ const BillingPaidPanel = ({
   <Surface p="xl" data-testid="billing-current-plan">
     {(() => {
       const isComped = data.billingSource === "manual_comp";
-      const planName = data.tier === "pro" ? "Pro" : "Basic";
+      const planName = formatStatusLabel(data.tier);
       const expiryLine = data.activeGrant?.expiresAt
         ? `Comp runs through ${new Date(
             data.activeGrant.expiresAt,
@@ -556,6 +556,9 @@ export function Billing() {
     [search.limitType, search.limitSurface],
   );
   const arrivedServers = useRef(new Set<string>());
+  const { serverId: routeServerId } = useParams({
+    from: "/portal/server/$serverId/billing",
+  });
   const [promoCode, setPromoCode] = useState(() => search.promo ?? "");
   const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
   const billingQuery = trpc.billing.me.useQuery(
@@ -574,7 +577,10 @@ export function Billing() {
     [guilds, selectedGuildId],
   );
   const data = billingQuery.data ?? null;
-  const loading = billingQuery.isLoading || guildLoading;
+  const loading =
+    billingQuery.isLoading ||
+    guildLoading ||
+    Boolean(selectedGuildId && selectedGuildId !== routeServerId);
   const error = billingQuery.error ? "Unable to load billing status." : null;
   const paidPlans = pricingQuery.data?.plans ?? [];
   const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
@@ -611,7 +617,7 @@ export function Billing() {
 
   const handleCheckout = async (tier: PaidTier) => {
     try {
-      if (!selectedGuildId) return;
+      if (!selectedGuildId || selectedGuildId !== routeServerId) return;
       const plan = resolvePaidPlan(planLookup, tier, interval);
       if (!plan) {
         notifications.show({
@@ -649,7 +655,7 @@ export function Billing() {
 
   const handlePortal = async () => {
     try {
-      if (!selectedGuildId) return;
+      if (!selectedGuildId || selectedGuildId !== routeServerId) return;
       const body = await portalMutation.mutateAsync({
         serverId: selectedGuildId,
       });

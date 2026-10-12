@@ -30,6 +30,7 @@ jest.mock("../../src/frontend/services/analytics", () => ({
 describe("upgrade pages", () => {
   beforeEach(() => {
     resetFrontendMocks();
+    setRouteParams({ serverId: "g1" });
     jest.mocked(track).mockClear();
   });
 
@@ -167,6 +168,65 @@ describe("upgrade pages", () => {
     ).toBeVisible();
     expect(track).not.toHaveBeenCalledWith("upgrade_ready", expect.anything());
   });
+  test("billing waits for route/context agreement before attributing a limit entry", () => {
+    guildState.selectedGuildId = "server-a";
+    guildState.guilds = [
+      { id: "server-a", name: "A", canManage: true },
+      { id: "server-b", name: "B", canManage: true },
+    ];
+    setRouteParams({ serverId: "server-b" });
+    setRouteSearch({
+      source: "discord_limit",
+      limitType: "weekly_recording",
+      limitSurface: "manual_start",
+    });
+    setBillingQuery({
+      data: { billingEnabled: true, tier: "basic", status: "active" },
+    });
+    const view = renderWithMantine(<Billing />);
+    expect(track).not.toHaveBeenCalledWith(
+      "billing_entry_arrived",
+      expect.anything(),
+    );
+    guildState.selectedGuildId = "server-b";
+    setBillingQuery({
+      data: { billingEnabled: true, tier: "free", status: "free" },
+    });
+    view.rerender(
+      <MantineProvider>
+        <Billing />
+      </MantineProvider>,
+    );
+    expect(
+      jest
+        .mocked(track)
+        .mock.calls.filter(([event]) => event === "billing_entry_arrived"),
+    ).toEqual([
+      [
+        "billing_entry_arrived",
+        expect.objectContaining({
+          guild_id: "server-b",
+          current_tier: "free",
+          source: "discord_limit",
+        }),
+      ],
+    ]);
+  });
+
+  test("duration context describes the two-hour ceiling without claiming Free includes it", () => {
+    authState.state = "unauthenticated";
+    setRouteSearch({
+      source: "discord_limit",
+      limitType: "meeting_duration",
+      limitSurface: "duration_stop",
+    });
+    renderWithMantine(<Upgrade />);
+    expect(
+      screen.getByText(/No plan allows a meeting longer than two hours/),
+    ).toBeVisible();
+    expect(screen.queryByText(/All plans have a two-hour maximum/)).toBeNull();
+  });
+
   test("invalid limit context never reaches structured analytics or sign-in", () => {
     authState.state = "unauthenticated";
     setRouteSearch({
@@ -250,6 +310,7 @@ describe("billing promo input", () => {
 
   test("prefills promo code from search params", () => {
     authState.state = "authenticated";
+    setRouteParams({ serverId: "guild-1" });
     guildState.selectedGuildId = "guild-1";
     guildState.guilds = [{ id: "guild-1", name: "Team One", canManage: true }];
     setRouteSearch({ promo: "SAVE20" });

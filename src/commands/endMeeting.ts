@@ -584,9 +584,15 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
     await runMeetingEndStep(meeting, "save-meeting-history", () =>
       saveMeetingHistoryToDatabase(meeting),
     );
-    await runMeetingEndStep(meeting, "minutes-limit-notice", () =>
+    // Notice delivery can outlive finalization without retaining the recording lease.
+    void runMeetingEndStep(meeting, "minutes-limit-notice", () =>
       maybeSendMinutesLimitNotice(meeting),
-    );
+    ).catch((error) => {
+      console.warn("Recording-limit notice failed", {
+        guildId: meeting.guildId,
+        error,
+      });
+    });
 
     meeting.setFinished();
     meeting.finished = true;

@@ -243,9 +243,15 @@ describe("handleEndMeetingOther", () => {
     { used: 240, outcome: "exhausted_after_meeting", fails: false },
     { used: 200, outcome: "near_limit", fails: false },
     { used: 240, outcome: "exhausted_after_meeting", fails: true },
+    {
+      used: 240,
+      outcome: "exhausted_after_meeting",
+      fails: false,
+      pending: true,
+    },
   ])(
     "flushes and saves despite a $outcome notice (failure=$fails)",
-    async ({ used, outcome, fails }) => {
+    async ({ used, outcome, fails, pending }) => {
       const events: string[] = [];
       mockedStartProcessingSnippet.mockImplementation(() => {
         events.push("flush");
@@ -314,14 +320,16 @@ describe("handleEndMeetingOther", () => {
         limits: { maxMeetingMinutesRolling: 240 },
         subscription: { tier: "free" },
       } as never);
-      jest
-        .mocked(getRollingUsageForGuild)
-        .mockResolvedValue({
-          usedSeconds: used * 60,
-          meetings: [],
-          windowStartIso: "2026-10-01T00:00:00Z",
-        });
-      if (fails)
+      jest.mocked(getRollingUsageForGuild).mockResolvedValue({
+        usedSeconds: used * 60,
+        meetings: [],
+        windowStartIso: "2026-10-01T00:00:00Z",
+      });
+      if (pending)
+        jest
+          .mocked(notifyRecordingLimit)
+          .mockReturnValueOnce(new Promise(() => {}));
+      else if (fails)
         jest
           .mocked(notifyRecordingLimit)
           .mockRejectedValueOnce(new Error("test notice failure"));
@@ -338,6 +346,8 @@ describe("handleEndMeetingOther", () => {
         meeting.textChannel,
         meeting.recordingLimitNotice,
       );
+      expect(meeting.setFinished).toHaveBeenCalled();
+      expect(deleteMeeting).toHaveBeenCalledWith(meeting.guildId);
       expect(mockedSaveMeetingHistoryToDatabase).toHaveBeenCalledWith(meeting);
       expect(mockedCleanupMeetingTempDir).toHaveBeenCalledWith(meeting);
       expect(mockedReleaseMeetingLeaseForMeeting).toHaveBeenCalledWith(meeting);

@@ -1,7 +1,11 @@
 import React from "react";
 import { beforeEach, describe, expect, test } from "@jest/globals";
 import { screen, within } from "@testing-library/react";
-import { renderWithMantine, resetFrontendMocks } from "./testUtils";
+import {
+  renderWithMantine,
+  resetFrontendMocks,
+  setRouteParams,
+} from "./testUtils";
 import { guildState } from "./testUtils";
 import { setBillingQuery, setPricingQuery } from "./mocks/trpc";
 import Billing from "../../src/frontend/pages/Billing";
@@ -9,6 +13,7 @@ import Billing from "../../src/frontend/pages/Billing";
 describe("Billing page", () => {
   beforeEach(() => {
     resetFrontendMocks();
+    setRouteParams({ serverId: "g1" });
     setPricingQuery({ data: { plans: [] } });
   });
 
@@ -36,6 +41,11 @@ describe("Billing page", () => {
     });
     renderWithMantine(<Billing />);
     expect(screen.getByTestId("billing-manage")).toBeVisible();
+    expect(
+      within(screen.getByTestId("billing-current-plan")).getByText("Free", {
+        exact: true,
+      }),
+    ).toBeVisible();
   });
 
   test("renders disabled billing state", () => {
