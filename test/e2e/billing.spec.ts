@@ -8,7 +8,7 @@ test("purchase billing selector defaults monthly and changes totals in both dire
 }) => {
   await useFreeBilling(page);
   await page.goto(
-    `/upgrade/select-server?serverId=${mockGuilds.ddm.id}&promo=SAVE20&source=discord_notes`,
+    `/upgrade/select-server?serverId=${mockGuilds.ddm.id}&promo=SAVE20&source=discord_limit&limitType=weekly_recording&limitSurface=manual_start`,
   );
   const period = page.getByRole("radiogroup", { name: "Billing period" });
   await expect(period.getByRole("radio", { name: "Monthly" })).toBeChecked();
@@ -24,7 +24,9 @@ test("purchase billing selector defaults monthly and changes totals in both dire
   expect(search).toMatchObject({
     serverId: mockGuilds.ddm.id,
     promo: "SAVE20",
-    source: "discord_notes",
+    source: "discord_limit",
+    limitType: "weekly_recording",
+    limitSurface: "manual_start",
     interval: "year",
   });
   await period.getByText("Monthly", { exact: true }).click();
@@ -110,7 +112,7 @@ for (const tier of ["basic", "pro"] as const) {
       });
     });
     await page.goto(
-      `/upgrade/select-server?serverId=${mockGuilds.ddm.id}&plan=${tier === "basic" ? "pro" : "basic"}&interval=year&promo=SAVE20&canceled=true&source=discord_notes`,
+      `/upgrade/select-server?serverId=${mockGuilds.ddm.id}&plan=${tier === "basic" ? "pro" : "basic"}&interval=year&promo=SAVE20&canceled=true&source=discord_limit&limitType=weekly_recording&limitSurface=manual_start`,
     );
     const action = page.getByRole("button", {
       name: `Continue with ${tier === "basic" ? "Basic" : "Pro"}`,
@@ -124,7 +126,9 @@ for (const tier of ["basic", "pro"] as const) {
         tier,
         interval: "year",
         promotionCode: "SAVE20",
-        source: "discord_notes",
+        source: "discord_limit",
+        limitType: "weekly_recording",
+        limitSurface: "manual_start",
       },
     });
   });
@@ -180,7 +184,7 @@ test("purchase recovers unavailable server without dropping intent", async ({
 }) => {
   await useFreeBilling(page);
   await page.goto(
-    "/upgrade?serverId=unavailable&plan=pro&interval=year&promo=SAVE20&canceled=true",
+    "/upgrade?serverId=unavailable&plan=pro&interval=year&promo=SAVE20&canceled=true&source=discord_limit&limitType=weekly_recording&limitSurface=auto_start",
   );
   expect(new URL(page.url()).pathname).toBe("/upgrade");
   await expect(page.getByText("That server is unavailable")).toBeVisible();
@@ -202,6 +206,9 @@ test("purchase recovers unavailable server without dropping intent", async ({
     interval: "year",
     promo: "SAVE20",
     canceled: true,
+    source: "discord_limit",
+    limitType: "weekly_recording",
+    limitSurface: "auto_start",
   });
 });
 

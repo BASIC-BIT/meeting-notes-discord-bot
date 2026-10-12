@@ -34,8 +34,8 @@ function previewBilling(
     activeGrant: null,
     nextBillingDate: null,
     stripeCustomerId: null,
-    hasStripeBilling: tier !== "free",
-    canManageBillingPortal: tier !== "free",
+    hasStripeBilling: tier !== "free" || billingSource === "stripe",
+    canManageBillingPortal: tier !== "free" || billingSource === "stripe",
     upgradeUrl: null,
     portalUrl: null,
     billingEnabled: true,
@@ -314,4 +314,66 @@ export const BillingFree: Story = {
 };
 export const BillingPaid: Story = {
   args: { path: "/portal/server/example/billing", tier: "basic" },
+};
+
+export const WeeklyLimit: Story = {
+  args: {
+    path: "/upgrade/select-server?serverId=example&plan=basic&source=discord_limit&limitType=weekly_recording&limitSurface=manual_start",
+  },
+  play: async ({ canvasElement }) => {
+    await expect(
+      await within(canvasElement).findByText(
+        "Compare weekly recording time for this server.",
+      ),
+    ).toBeVisible();
+  },
+};
+export const DurationLimitSignedOut: Story = {
+  args: {
+    signedIn: false,
+    path: "/upgrade/select-server?serverId=example&plan=basic&source=discord_limit&limitType=meeting_duration&limitSurface=duration_stop",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText(/All plans have a two-hour maximum/),
+    ).toBeVisible();
+    const href = canvas
+      .getByRole("link", { name: "Connect Discord" })
+      .getAttribute("href")!;
+    const redirect = new URL(href, window.location.origin).searchParams.get(
+      "redirect",
+    )!;
+    await expect(new URL(redirect).searchParams.get("limitSurface")).toBe(
+      "duration_stop",
+    );
+  },
+};
+export const BillingLimit: Story = {
+  args: {
+    tier: "basic",
+    path: "/portal/server/example/billing?source=discord_limit&limitType=weekly_recording&limitSurface=weekly_after_meeting",
+  },
+  play: async ({ canvasElement }) => {
+    await expect(
+      await within(canvasElement).findByText(
+        "Compare weekly recording time for this server.",
+      ),
+    ).toBeVisible();
+  },
+};
+
+export const LegacyBillingLimit: Story = {
+  args: {
+    tier: "free",
+    billingSource: "stripe",
+    path: "/portal/server/example/billing?source=discord_limit&limitType=weekly_recording&limitSurface=manual_start",
+  },
+  play: async ({ canvasElement }) => {
+    await expect(
+      await within(canvasElement).findByRole("button", {
+        name: "Manage billing",
+      }),
+    ).toBeVisible();
+  },
 };

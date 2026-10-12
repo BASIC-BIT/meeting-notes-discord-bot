@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import RecordingPlanContext from "../components/RecordingPlanContext";
+import {
+  resolveRecordingLimitContext,
+  recordingLimitAnalytics,
+  resolvePurchaseSource,
+} from "../../utils/purchaseAnalytics";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   Badge,
@@ -541,6 +547,15 @@ export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
   const [interval, setInterval] = useState<BillingInterval>("month");
   const search = useSearch({ from: "/portal/server/$serverId/billing" });
+  const source =
+    search.source === undefined
+      ? "portal_billing"
+      : resolvePurchaseSource(search.source);
+  const limitContext = useMemo(
+    () => resolveRecordingLimitContext(search),
+    [search.limitType, search.limitSurface],
+  );
+  const arrivedServers = useRef(new Set<string>());
   const [promoCode, setPromoCode] = useState(() => search.promo ?? "");
   const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
   const billingQuery = trpc.billing.me.useQuery(
@@ -575,6 +590,25 @@ export function Billing() {
     }
   }, [isFreeTier]);
 
+  useEffect(() => {
+    if (
+      loading ||
+      error ||
+      !data ||
+      !selectedGuildId ||
+      arrivedServers.current.has(selectedGuildId)
+    )
+      return;
+    arrivedServers.current.add(selectedGuildId);
+    track("billing_entry_arrived", {
+      guild_id: selectedGuildId,
+      source,
+      ...recordingLimitAnalytics(limitContext ?? {}),
+      current_tier: data.tier,
+      event_version: 1,
+    });
+  }, [loading, error, data, selectedGuildId, source, limitContext]);
+
   const handleCheckout = async (tier: PaidTier) => {
     try {
       if (!selectedGuildId) return;
@@ -592,7 +626,8 @@ export function Billing() {
         guild_id: selectedGuildId,
         tier,
         interval,
-        source: "portal_billing",
+        source,
+        ...recordingLimitAnalytics(limitContext ?? {}),
         promo_present: Boolean(promotionCode),
         event_version: 1,
       });
@@ -601,7 +636,8 @@ export function Billing() {
         tier,
         interval,
         promotionCode: promotionCode.length ? promotionCode : undefined,
-        source: "portal_billing",
+        source,
+        ...limitContext,
         ...(isDoNotTrackEnabled() ? { analyticsDisabled: true } : {}),
       });
       window.location.href = body.url;
@@ -645,7 +681,8 @@ export function Billing() {
 
   return (
     <BillingShell>
-      {isFreeTier ? (
+      <RecordingPlanContext context={limitContext} />
+      {isFreeTier && !data.hasStripeBilling ? (
         <BillingFreePanel serverName={serverName} usage={data.usage} />
       ) : (
         <BillingPaidPanel

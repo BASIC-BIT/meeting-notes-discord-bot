@@ -1,3 +1,4 @@
+import RecordingPlanContext from "../components/RecordingPlanContext";
 import {
   Alert,
   Avatar,
@@ -17,7 +18,11 @@ import { IconArrowRight } from "@tabler/icons-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { track, isDoNotTrackEnabled } from "../services/analytics";
-import { resolvePurchaseSource } from "../../utils/purchaseAnalytics";
+import {
+  resolvePurchaseSource,
+  resolveRecordingLimitContext,
+  recordingLimitAnalytics,
+} from "../../utils/purchaseAnalytics";
 import PricingCard from "../components/PricingCard";
 import ServerPicker from "../components/ServerPicker";
 import Surface from "../components/Surface";
@@ -79,6 +84,10 @@ export default function UpgradeServerSelect({
   const [promoCode, setPromoCode] = useState(search.promo?.trim() ?? "");
   const interval = search.interval ?? "month";
   const source = resolvePurchaseSource(search.source);
+  const limitContext = useMemo(
+    () => resolveRecordingLimitContext(search),
+    [search.limitType, search.limitSurface],
+  );
   const eligibleGuilds = useMemo(
     () => guilds.filter((guild) => guild.canManage),
     [guilds],
@@ -190,13 +199,15 @@ export default function UpgradeServerSelect({
     arrived.current = true;
     track("upgrade_arrived", {
       source,
+      ...recordingLimitAnalytics(limitContext ?? {}),
       event_version: 1,
       canceled: Boolean(search.canceled),
     });
-  }, [source, search.canceled]);
+  }, [source, search.canceled, limitContext]);
   useEffect(() => {
     const properties = {
       source,
+      ...recordingLimitAnalytics(limitContext ?? {}),
       guild_id: serverReady ? selectedServerId : undefined,
       tier: requestedPlan,
       interval,
@@ -218,6 +229,7 @@ export default function UpgradeServerSelect({
       track("upgrade_ready", properties);
     }
   }, [
+    limitContext,
     blockedReason,
     source,
     serverReady,
@@ -246,6 +258,8 @@ export default function UpgradeServerSelect({
 
   const intent = {
     ...search,
+    limitType: limitContext?.limitType,
+    limitSurface: limitContext?.limitSurface,
     source,
     serverId: selectedServerId ?? undefined,
     interval,
@@ -255,6 +269,10 @@ export default function UpgradeServerSelect({
   if (intent.serverId) params.set("serverId", intent.serverId);
   if (intent.plan) params.set("plan", intent.plan);
   params.set("source", source);
+  if (limitContext) {
+    params.set("limitType", limitContext.limitType);
+    params.set("limitSurface", limitContext.limitSurface);
+  }
   params.set("interval", intent.interval);
   if (intent.promo) params.set("promo", intent.promo);
   if (intent.canceled) params.set("canceled", "true");
@@ -263,6 +281,7 @@ export default function UpgradeServerSelect({
   const handleAuthStarted = () =>
     track("upgrade_auth_started", {
       source,
+      ...recordingLimitAnalytics(limitContext ?? {}),
       event_version: 1,
       promo_present: Boolean(intent.promo),
     });
@@ -290,6 +309,7 @@ export default function UpgradeServerSelect({
         tier,
         interval,
         source,
+        ...recordingLimitAnalytics(limitContext ?? {}),
         promo_present: Boolean(intent.promo),
         event_version: 1,
       });
@@ -299,6 +319,7 @@ export default function UpgradeServerSelect({
         interval,
         promotionCode: intent.promo,
         source,
+        ...limitContext,
         ...(isDoNotTrackEnabled() ? { analyticsDisabled: true } : {}),
       });
       window.location.href = body.url;
@@ -348,6 +369,7 @@ export default function UpgradeServerSelect({
         >
           Record longer meetings.
         </Title>
+        <RecordingPlanContext context={limitContext} />
         {search.canceled && (
           <Alert color="gray" title="Checkout canceled">
             Your plan options are still here when you are ready to continue.

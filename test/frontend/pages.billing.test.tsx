@@ -21,6 +21,23 @@ describe("Billing page", () => {
     ).toBeInTheDocument();
   });
 
+  test("a Free server with existing Stripe billing retains its management action", () => {
+    guildState.selectedGuildId = "g1";
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
+    setBillingQuery({
+      data: {
+        billingEnabled: true,
+        tier: "free",
+        status: "canceled",
+        hasStripeBilling: true,
+        canManageBillingPortal: true,
+        usage: null,
+      },
+    });
+    renderWithMantine(<Billing />);
+    expect(screen.getByTestId("billing-manage")).toBeVisible();
+  });
+
   test("renders disabled billing state", () => {
     guildState.selectedGuildId = "g1";
     guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];

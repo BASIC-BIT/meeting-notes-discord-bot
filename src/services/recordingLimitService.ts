@@ -112,7 +112,7 @@ function benefitFor(tier: PaidTier, input: RecordingLimitInput) {
   const name = tier === "basic" ? "Basic" : "Pro";
   const minutes = allowance(getLimitsForTier(tier), input.limitType);
   if (input.limitType === "meeting_duration")
-    return `${name} allows meetings up to ${formatMinutes(minutes)}. Ask a server manager to review plans for future recordings.`;
+    return `${name} allows meetings up to ${formatMinutes(minutes)}.`;
   return minutes === Infinity
     ? "Pro has no weekly recording cap. The two-hour limit per meeting still applies."
     : `${name} includes ${formatMinutes(minutes)} per rolling week for everyone in this server.`;

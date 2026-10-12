@@ -7,6 +7,13 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Recording limits and plan links (October 12)
+
+- Recording-limit messages explain when recording can resume and link to the plan options for that server. Servers with existing billing get **Manage plan**. No plan removes the two-hour maximum per meeting.
+- Auto-record refusals share a 15-minute notice cooldown. Explicit recording requests still receive a reply. When a recording reaches both limits, Chronote combines the duration and weekly explanation into one notice.
+- We are adding content-free recording-limit encounters, allowance and used minutes, notice delivery outcomes and billing-page entries to product analytics. Fixed limit categories can follow a purchase through sign-in and checkout. We compare later purchases for the same server, including when the organizer and purchaser differ. This measures association, not proof that a notice caused a purchase.
+- Browser Do Not Track continues to suppress browser and synchronous checkout analytics. It also suppresses later billing outcomes for new subscriptions started with it. It cannot reach the bot. See the updated [Privacy Policy](/legal/privacy/).
+
 ### A clearer upgrade and first-recording flow
 
 - Compare Free, Basic and Pro on the upgrade page. **Continue with Basic** or **Continue with Pro** takes the chosen plan directly to billing confirmation for the named server.

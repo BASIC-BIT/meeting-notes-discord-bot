@@ -91,6 +91,100 @@ describe("upgrade pages", () => {
     },
   );
 
+  test("recording context survives Discord sign-in and canceled checkout", () => {
+    authState.state = "unauthenticated";
+    setRouteSearch({
+      serverId: "g1",
+      source: "discord_limit",
+      limitType: "weekly_recording",
+      limitSurface: "manual_start",
+      canceled: true,
+    });
+    renderWithMantine(<Upgrade />);
+    const href = screen
+      .getByRole("link", { name: "Connect Discord" })
+      .getAttribute("href")!;
+    const redirect = new URL(href, "https://chronote.test").searchParams.get(
+      "redirect",
+    )!;
+    const params = new URL(redirect).searchParams;
+    expect(params.get("limitType")).toBe("weekly_recording");
+    expect(params.get("limitSurface")).toBe("manual_start");
+    expect(params.get("canceled")).toBe("true");
+    expect(track).toHaveBeenCalledWith(
+      "upgrade_arrived",
+      expect.objectContaining({
+        source: "discord_limit",
+        limit_type: "weekly_recording",
+        limit_surface: "manual_start",
+      }),
+    );
+    expect(
+      screen.getByText("Compare weekly recording time for this server."),
+    ).toBeVisible();
+  });
+  test("billing records one resolved entry with Discord limit context", () => {
+    guildState.selectedGuildId = "g1";
+    guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
+    setRouteSearch({
+      source: "discord_limit",
+      limitType: "weekly_recording",
+      limitSurface: "weekly_after_meeting",
+    });
+    setBillingQuery({
+      data: {
+        billingEnabled: true,
+        tier: "basic",
+        status: "active",
+        hasStripeBilling: true,
+        canManageBillingPortal: true,
+        usage: null,
+      },
+    });
+    const view = renderWithMantine(<Billing />);
+    view.rerender(
+      <MantineProvider>
+        <Billing />
+      </MantineProvider>,
+    );
+    expect(
+      jest
+        .mocked(track)
+        .mock.calls.filter(([event]) => event === "billing_entry_arrived"),
+    ).toEqual([
+      [
+        "billing_entry_arrived",
+        expect.objectContaining({
+          guild_id: "g1",
+          source: "discord_limit",
+          limit_type: "weekly_recording",
+          limit_surface: "weekly_after_meeting",
+        }),
+      ],
+    ]);
+    expect(
+      screen.getByText("Compare weekly recording time for this server."),
+    ).toBeVisible();
+    expect(track).not.toHaveBeenCalledWith("upgrade_ready", expect.anything());
+  });
+  test("invalid limit context never reaches structured analytics or sign-in", () => {
+    authState.state = "unauthenticated";
+    setRouteSearch({
+      source: "discord_limit",
+      limitType: "private input",
+      limitSurface: "manual_start",
+    });
+    renderWithMantine(<Upgrade />);
+    expect(track).toHaveBeenCalledWith(
+      "upgrade_arrived",
+      expect.not.objectContaining({ limit_type: expect.anything() }),
+    );
+    const href = screen
+      .getByRole("link", { name: "Connect Discord" })
+      .getAttribute("href")!;
+    expect(decodeURIComponent(href)).not.toContain("limitType=");
+  });
+
   test("promo landing navigates to upgrade server select with promo", () => {
     authState.state = "authenticated";
     setRouteParams({ code: "SAVE20" });
