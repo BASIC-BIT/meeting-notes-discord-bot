@@ -600,6 +600,7 @@ const updatePersonalRecordingProcessingProgress = async (
   instanceId: string,
 ) => {
   const segments = await listPersonalRecordingUploadSegments(job.uploadId);
+  assertPersonalProcessingActive(job);
   Object.assign(job, summarizeRecordingSegmentProgress(segments));
   const updated = await updateClaimedPersonalMediaUploadJobProgress({
     ...personalMediaClaimForJob(job, instanceId),
@@ -657,6 +658,7 @@ const processPersonalRecordingSegment = async (
 
   let processingSegment = segment;
   try {
+    assertPersonalProcessingActive(job);
     processingSegment = await markPersonalRecordingUploadSegmentProcessing(
       segment,
       personalMediaClaimForJob(job, instanceId),
@@ -1014,6 +1016,7 @@ async function writeClaimedHistory(
   history: MeetingHistory,
   instanceId: string,
   terminalJob?: PersonalMediaUploadJobRecord,
+  onDurable?: () => void,
 ) {
   assertPersonalProcessingActive(job);
   if (
@@ -1024,6 +1027,8 @@ async function writeClaimedHistory(
     ))
   )
     throw new Error("Personal history claim lost");
+  if (terminalJob) onDurable?.();
+  assertPersonalProcessingActive(job);
   try {
     await writeMeetingUserIndexForMeetingService(history);
   } catch (error) {
@@ -1066,7 +1071,10 @@ const writeProcessingMeeting = async (
 export async function createPersonalMediaProcessingMeeting(
   job: PersonalMediaUploadJobRecord,
   instanceId: string,
+  signal?: AbortSignal,
 ) {
+  job = { ...job };
+  if (signal) processingSignals.set(job, signal);
   const identity = await writeProcessingMeeting(job, instanceId);
   const next = {
     ...job,
@@ -1075,6 +1083,7 @@ export async function createPersonalMediaProcessingMeeting(
     channelId_timestamp: identity.channelIdTimestamp,
     updatedAt: new Date().toISOString(),
   };
+  assertPersonalProcessingActive(job);
   if (!(await updateClaimedPersonalMediaUploadJobRecord(next, instanceId)))
     throw new Error("Personal processing claim lost");
   return next;
@@ -1137,26 +1146,33 @@ const markPersonalMediaUploadComplete = async (
   completedAt: string,
   instanceId: string,
   history: MeetingHistory,
+  onDurable?: () => void,
 ) =>
-  writeClaimedHistory(job, history, instanceId, {
-    ...job,
-    status: "complete",
-    meetingGuildId: identity.guildId,
-    meetingId: identity.meetingId,
-    channelId_timestamp: identity.channelIdTimestamp,
-    durationSeconds: result.durationSeconds,
-    segmentCount: result.segmentCount ?? job.segmentCount,
-    uploadedSegmentCount:
-      result.uploadedSegmentCount ?? job.uploadedSegmentCount,
-    processedSegmentCount:
-      result.processedSegmentCount ?? job.processedSegmentCount,
-    errorMessage: undefined,
-    retryable: undefined,
-    claimExpiresAt: undefined,
-    processingOwnerInstanceId: undefined,
-    completedAt,
-    updatedAt: completedAt,
-  });
+  writeClaimedHistory(
+    job,
+    history,
+    instanceId,
+    {
+      ...job,
+      status: "complete",
+      meetingGuildId: identity.guildId,
+      meetingId: identity.meetingId,
+      channelId_timestamp: identity.channelIdTimestamp,
+      durationSeconds: result.durationSeconds,
+      segmentCount: result.segmentCount ?? job.segmentCount,
+      uploadedSegmentCount:
+        result.uploadedSegmentCount ?? job.uploadedSegmentCount,
+      processedSegmentCount:
+        result.processedSegmentCount ?? job.processedSegmentCount,
+      errorMessage: undefined,
+      retryable: undefined,
+      claimExpiresAt: undefined,
+      processingOwnerInstanceId: undefined,
+      completedAt,
+      updatedAt: completedAt,
+    },
+    onDurable,
+  );
 
 const markPersonalMediaUploadFailed = async (
   job: PersonalMediaUploadJobRecord,
@@ -1166,6 +1182,7 @@ const markPersonalMediaUploadFailed = async (
   const now = new Date().toISOString();
   const attempts = job.attempts ?? 1;
   const retryable = attempts < PERSONAL_MEDIA_UPLOAD_MAX_PROCESSING_ATTEMPTS;
+  assertPersonalProcessingActive(job);
   const updated = await updateClaimedPersonalMediaUploadJobRecord(
     {
       ...job,
@@ -1293,8 +1310,8 @@ export async function processPersonalMediaUpload(
         completedAt,
         instanceId,
         meetingHistory,
+        onDurable,
       );
-      onDurable?.();
       assertPersonalProcessingActive(job);
       try {
         await maybeAutoExportCompletedMeeting(meetingHistory);
@@ -1318,6 +1335,7 @@ export async function processPersonalMediaUpload(
           job.uploadId,
           error,
           personalMediaClaimForJob(job, instanceId),
+          processingSignals.get(job),
         );
       }
       const resolvedError = result

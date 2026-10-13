@@ -8,6 +8,7 @@ import {
   markPersonalMediaUploadComplete,
   markPersonalRecordingUploadSegmentProcessed,
   markPersonalRecordingUploadSegmentProcessing,
+  markPersonalRecordingUploadSegmentsFailed,
   markPersonalRecordingSegmentUploadComplete,
   PersonalMediaUploadError,
   resolvePersonalMediaKind,
@@ -176,6 +177,40 @@ describe("personalMediaUploadService", () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it("does not fail segments when fenced during the failure-path list read", async () => {
+    let release!: () => void;
+    let enter!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    segmentRepository.listByUpload.mockImplementationOnce(async () => {
+      enter();
+      await held;
+      return [{ status: "processing" } as PersonalRecordingSegmentRecord];
+    });
+    const controller = new AbortController();
+    const failure = markPersonalRecordingUploadSegmentsFailed(
+      "synthetic-upload",
+      new Error("provider failed"),
+      {
+        uploadId: "synthetic-upload",
+        instanceId: "worker",
+        attempt: 1,
+        claimId: "still-valid-claim",
+        nowEpochSeconds: 100,
+      },
+      controller.signal,
+    );
+    await started;
+    controller.abort(new Error("synthetic fence"));
+    release();
+    await expect(failure).rejects.toThrow("synthetic fence");
+    expect(uploadRepository.writeSegment).not.toHaveBeenCalled();
   });
 
   it("creates an owner-scoped signed upload intent for audio", async () => {

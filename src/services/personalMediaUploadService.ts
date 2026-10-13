@@ -899,12 +899,14 @@ export async function markPersonalRecordingUploadSegmentsFailed(
   uploadId: string,
   error: unknown,
   claim: PersonalMediaClaim,
+  signal?: AbortSignal,
 ) {
   const repository = getPersonalRecordingSegmentRepository();
   const now = new Date().toISOString();
   const errorMessage =
     error instanceof Error ? error.message : "Processing failed.";
   const segments = await repository.listByUpload(uploadId);
+  signal?.throwIfAborted();
   await Promise.all(
     segments
       .filter((segment) => segment.status === "processing")

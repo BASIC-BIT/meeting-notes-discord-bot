@@ -1,3 +1,4 @@
+/** @jest-environment node */
 import { jest } from "@jest/globals";
 import type {
   PersonalMediaUploadJobRecord,
@@ -28,6 +29,25 @@ import { TRANSCRIPTION_FAILURE_PLACEHOLDER } from "../../constants";
 import type { MeetingSummaries } from "../meetingSummaryService";
 import { resolveMeetingNameFromSummary } from "../meetingNameService";
 import { recordPersonalUploadTerminal } from "../../observability/personalUploadTrace";
+import { writeMeetingUserIndexForMeetingService } from "../meetingUserIndexService";
+import { processPersonalMediaUploadJob } from "../personalMediaUploadWorkerService";
+import {
+  createRuntimeLifecycle,
+  installRuntimeLifecycle,
+} from "../runtimeLifecycleService";
+import { createRuntimeProtectionService } from "../runtimeProtectionService";
+import { getRuntimeInstanceId } from "../runtimeInstanceService";
+import { getDeploymentControlRepository } from "../../db";
+import { getRuntimeWorkAdmissionCheckpoints } from "../runtimeWorkAdmissionService";
+import { PERSONAL_MEDIA_UPLOAD_WORKER_CLAIM_RENEWAL_MS } from "../../constants";
+import type { PersonalMediaUploadRepository } from "../../repositories/personalMediaUploadRepository";
+import { getMockStore } from "../../repositories/mockStore";
+
+let mockWorkerJob: PersonalMediaUploadJobRecord | undefined;
+const mockWorkerClaim = jest.fn<PersonalMediaUploadRepository["claim"]>();
+const mockWorkerRenew = jest.fn<PersonalMediaUploadRepository["renewClaim"]>(
+  async () => mockWorkerJob?.status === "processing",
+);
 
 jest.mock("../../observability/personalUploadTrace", () => ({
   withPersonalUploadProcessingTrace: (
@@ -135,17 +155,22 @@ jest.mock("../meetingUserIndexService", () => ({
 }));
 jest.mock("../../repositories/personalMediaUploadRepository", () => ({
   getPersonalMediaUploadRepository: () => ({
+    claim: mockWorkerClaim,
+    renewClaim: mockWorkerRenew,
+    get: async () => mockWorkerJob,
     writeHistory: async (
       history: import("../../types/db").MeetingHistory,
       claim: import("../../types/db").PersonalMediaClaim,
       terminal?: PersonalMediaUploadJobRecord,
     ) => {
       await writeMeetingHistoryService(history);
-      if (terminal)
+      if (terminal) {
+        if (mockWorkerJob) mockWorkerJob = terminal;
         return updateClaimedPersonalMediaUploadJobRecord(
           terminal,
           claim.instanceId,
         );
+      }
       return true;
     },
   }),
@@ -296,12 +321,32 @@ const replaceSegment = (next: PersonalRecordingSegmentRecord) => {
   return next;
 };
 
+function heldOperation() {
+  let release!: () => void;
+  let enter!: () => void;
+  const started = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    started,
+    release,
+    wait: async () => {
+      enter();
+      await waiting;
+    },
+  };
+}
+
 describe("personalMediaUploadProcessingService", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUploadedObjects.clear();
     mockConcatLists.length = 0;
     recordingSegments = [];
+    mockWorkerJob = undefined;
     mockTranscribe.mockResolvedValue({ text: "segment transcript" });
     mockChatComplete.mockResolvedValue({
       choices: [{ message: { content: "Generated notes" } }],
@@ -486,6 +531,202 @@ describe("personalMediaUploadProcessingService", () => {
         }
       },
     );
+  });
+
+  it("fences initialization after a held index while the durable claim remains valid", async () => {
+    const held = heldOperation();
+    jest
+      .mocked(writeMeetingUserIndexForMeetingService)
+      .mockImplementationOnce(held.wait);
+    const controller = new AbortController();
+    const initialization = createPersonalMediaProcessingMeeting(
+      buildJob(),
+      "instance-1",
+      controller.signal,
+    );
+    await held.started;
+    controller.abort(new Error("synthetic fence"));
+    held.release();
+    await expect(initialization).rejects.toThrow("synthetic fence");
+    expect(updateClaimedPersonalMediaUploadJobRecord).not.toHaveBeenCalled();
+  });
+
+  it.each(["download", "list"] as const)(
+    "fences canonical writes after a held %s with a valid claim",
+    async (boundary) => {
+      recordingSegments = [buildSegment(0)];
+      const held = heldOperation();
+      if (boundary === "download") {
+        const download = jest
+          .mocked(downloadObjectToFile)
+          .getMockImplementation()!;
+        jest
+          .mocked(downloadObjectToFile)
+          .mockImplementationOnce(async (...args) => {
+            await held.wait();
+            return download(...args);
+          });
+      } else {
+        jest
+          .mocked(listPersonalRecordingUploadSegments)
+          .mockImplementationOnce(async () => recordingSegments)
+          .mockImplementationOnce(async () => {
+            await held.wait();
+            return recordingSegments;
+          });
+      }
+      const controller = new AbortController();
+      const processing = processPersonalMediaUpload(
+        buildDesktopJob(),
+        "instance-1",
+        controller.signal,
+      );
+      await held.started;
+      controller.abort(new Error("synthetic fence"));
+      held.release();
+      await expect(processing).rejects.toThrow("synthetic fence");
+      expect(
+        markPersonalRecordingUploadSegmentProcessing,
+      ).toHaveBeenCalledTimes(boundary === "download" ? 0 : 1);
+      expect(
+        updateClaimedPersonalMediaUploadJobProgress,
+      ).not.toHaveBeenCalled();
+      expect(updateClaimedPersonalMediaUploadJobRecord).not.toHaveBeenCalled();
+      expect(writeMeetingHistoryService).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps ancillary work counted during held indexing despite a delayed false renewal", async () => {
+    jest.useFakeTimers({ now: 100_000 });
+    getMockStore().deploymentControlRecords.clear();
+    const identity = {
+      kind: "local" as const,
+      instanceId: getRuntimeInstanceId(),
+      localId: "terminal-index-fixture",
+      protocolVersion: 1 as const,
+    };
+    const repository = getDeploymentControlRepository();
+    await repository.initializeControl({
+      pk: "ENV",
+      sk: "CONTROL",
+      recordType: "control",
+      runtimeEnvironment: "local",
+      protocolVersion: 1,
+      coordinatorToken: "fixture",
+      coordinatorEpoch: 1,
+      coordinatorExpiresAt: 1000,
+      servingGeneration: 0,
+      servingMembers: {},
+    });
+    const lifecycle = createRuntimeLifecycle({
+      identity,
+      repository,
+      protection: createRuntimeProtectionService({
+        identity,
+        onUnsafe: jest.fn(() => undefined),
+      }),
+      probeReadiness: async () => ({
+        gatewayReady: true,
+        cacheReady: true,
+        dependenciesReady: true,
+      }),
+      checkpointAndFence: jest.fn(async () => undefined),
+    });
+    installRuntimeLifecycle(lifecycle);
+    await lifecycle.start();
+    await repository.promote({
+      candidateRuntimeMode: "all",
+      coordinatorToken: "fixture",
+      coordinatorEpoch: 1,
+      expectedServingGeneration: 0,
+      expectedServingMembers: [],
+      candidate: identity,
+      proposedGeneration: 1,
+      now: 100,
+    });
+    await lifecycle.getRuntimeAdmissionContext();
+    mockWorkerClaim.mockImplementationOnce(async (input) => {
+      mockWorkerJob = {
+        ...buildJob(),
+        status: "processing",
+        processingClaimId: input.claimId,
+        processingOwnerInstanceId: input.instanceId,
+      };
+      return mockWorkerJob;
+    });
+    const held = heldOperation();
+    const provider = heldOperation();
+    let finishRenewal!: (value: boolean) => void;
+    mockTranscribe.mockImplementationOnce(async () => {
+      await provider.wait();
+      return { text: "synthetic transcript" };
+    });
+    mockWorkerRenew.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishRenewal = resolve;
+        }),
+    );
+    jest
+      .mocked(writeMeetingUserIndexForMeetingService)
+      .mockImplementationOnce(async () => undefined)
+      .mockImplementationOnce(held.wait);
+    try {
+      const processing = processPersonalMediaUploadJob(buildJob());
+      await provider.started;
+      await jest.advanceTimersByTimeAsync(
+        PERSONAL_MEDIA_UPLOAD_WORKER_CLAIM_RENEWAL_MS + 1,
+      );
+      provider.release();
+      await held.started;
+      expect(mockWorkerJob?.status).toBe("complete");
+      expect(lifecycle.getWorkCounts()).toMatchObject({
+        personal_processing: 0,
+        ancillary_delivery: 1,
+      });
+      await jest.advanceTimersByTimeAsync(
+        PERSONAL_MEDIA_UPLOAD_WORKER_CLAIM_RENEWAL_MS + 1,
+      );
+      finishRenewal(false);
+      await Promise.resolve();
+      expect(mockWorkerRenew).toHaveBeenCalledTimes(1);
+      expect(getRuntimeWorkAdmissionCheckpoints()).toMatchObject([
+        { domain: "ancillary", fenced: false },
+      ]);
+      held.release();
+      provider.release();
+      await processing;
+      expect(lifecycle.getWorkCounts().ancillary_delivery).toBe(0);
+      expect(getRuntimeWorkAdmissionCheckpoints()).toHaveLength(0);
+    } finally {
+      held.release();
+      lifecycle.stop();
+      jest.useRealTimers();
+    }
+  });
+
+  it("acknowledges terminal disposition before awaiting ancillary indexing", async () => {
+    const held = heldOperation();
+    jest
+      .mocked(writeMeetingUserIndexForMeetingService)
+      .mockImplementationOnce(held.wait);
+    const durable = jest.fn();
+    const processing = processPersonalMediaUpload(
+      buildJob(),
+      "instance-1",
+      undefined,
+      durable,
+    );
+    await held.started;
+    const acknowledgedWhileHeld = durable.mock.calls.length;
+    expect(updateClaimedPersonalMediaUploadJobRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "complete" }),
+      "instance-1",
+    );
+    held.release();
+    await processing;
+    expect(acknowledgedWhileHeld).toBe(1);
+    expect(durable).toHaveBeenCalledTimes(1);
   });
 
   it("fences a provider result returned after processing ownership is lost", async () => {

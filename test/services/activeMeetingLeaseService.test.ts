@@ -42,7 +42,10 @@ jest.mock("../../src/db", () => ({
   transitionMeetingHistory: jest.fn(),
 }));
 
-import { beginRuntimeWork } from "../../src/services/runtimeLifecycleService";
+import {
+  beginRuntimeWork,
+  getRuntimeAdmissionContext,
+} from "../../src/services/runtimeLifecycleService";
 jest.mock("../../src/services/runtimeLifecycleService", () => ({
   beginRuntimeWork: jest.fn(() => ({
     settle: jest.fn(),
@@ -127,6 +130,55 @@ describe("activeMeetingLeaseService", () => {
       throw new Error("fixture admission failed");
     return { reservation: admitted.reservation, getMeetingHistory };
   }
+
+  test("a control fenced during admission lookup cannot reserve or prepare voice", async () => {
+    const context = await getRuntimeAdmissionContext();
+    let release!: () => void;
+    let enter!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    jest.mocked(getRuntimeAdmissionContext).mockImplementationOnce(async () => {
+      enter();
+      await held;
+      return context;
+    });
+    const reserveSession = jest.fn(async () => ({ kind: "admitted" as const }));
+    jest
+      .mocked(getDeploymentControlRepository)
+      .mockReturnValue({ reserveSession } as unknown as ReturnType<
+        typeof getDeploymentControlRepository
+      >);
+    const controller = new AbortController();
+    const acquisition = tryAcquireMeetingLease({
+      guildId: randomUUID(),
+      meetingId: randomUUID(),
+      voiceChannelId: "voice",
+      textChannelId: "text",
+      isAutoRecording: false,
+      sessionMode: "tts_only",
+      reservedAt: Date.now(),
+      startSignal: controller.signal,
+      assertStartAllowed: async () => controller.signal.throwIfAborted(),
+    });
+    await started;
+    controller.abort(new Error("control claim lost"));
+    release();
+    expect(await acquisition).toEqual({
+      kind: "blocked",
+      reason: "not_serving",
+    });
+    expect(reserveSession).not.toHaveBeenCalled();
+    const { prepareOwnedVoiceSession } =
+      await import("../../src/services/guildVoiceOperationService");
+    expect(prepareOwnedVoiceSession).not.toHaveBeenCalled();
+    expect(
+      jest.mocked(beginRuntimeWork).mock.results[0].value.settle,
+    ).toHaveBeenCalledTimes(1);
+  });
 
   test("remoteStopKeepsRenewingBeyondLease", async () => {
     const { reservation } = await recordingReservation();

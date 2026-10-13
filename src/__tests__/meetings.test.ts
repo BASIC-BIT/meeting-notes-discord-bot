@@ -1,3 +1,4 @@
+/** @jest-environment node */
 jest.mock("../services/recordingLimitService", () => ({
   notifyRecordingLimit: jest.fn(),
 }));
@@ -45,6 +46,7 @@ import {
   unwindSessionInitialization,
 } from "../services/activeMeetingLeaseService";
 import { notifyRecordingLimit } from "../services/recordingLimitService";
+import { joinOwnedVoiceSession } from "../services/guildVoiceOperationService";
 jest.mock("@discordjs/voice", () => ({
   NoSubscriberBehavior: { Pause: "pause" },
   createAudioPlayer: jest.fn(() => ({ state: { status: "idle" } })),
@@ -292,6 +294,63 @@ describe("initializeMeeting", () => {
     ).rejects.toThrow("not_serving");
     expect(joinVoiceChannel).not.toHaveBeenCalled();
   });
+  it.each(["reservation", "voice"] as const)(
+    "a control fenced during held %s cannot begin capture",
+    async (boundary) => {
+      let release!: () => void;
+      let enter!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      if (boundary === "reservation") {
+        const reserve = jest
+          .mocked(tryAcquireMeetingLease)
+          .getMockImplementation()!;
+        jest
+          .mocked(tryAcquireMeetingLease)
+          .mockImplementationOnce(async (input) => {
+            enter();
+            await held;
+            return reserve(input);
+          });
+      } else {
+        const join = jest
+          .mocked(joinOwnedVoiceSession)
+          .getMockImplementation()!;
+        jest
+          .mocked(joinOwnedVoiceSession)
+          .mockImplementationOnce(async (...args) => {
+            enter();
+            await held;
+            return join(...args);
+          });
+      }
+      const controller = new AbortController();
+      const initialization = initializeMeeting({
+        ...buildMeetingOptions(),
+        transcribeMeeting: true,
+        generateNotes: true,
+        startSignal: controller.signal,
+      });
+      await started;
+      controller.abort(new Error("control claim lost"));
+      release();
+      await expect(initialization).rejects.toThrow("control claim lost");
+      expect(openOutputFile).not.toHaveBeenCalled();
+      expect(subscribeToUserVoice).not.toHaveBeenCalled();
+      if (boundary === "reservation")
+        expect(joinOwnedVoiceSession).not.toHaveBeenCalled();
+      else
+        expect(
+          jest.mocked(joinOwnedVoiceSession).mock.calls[0][1].signal.aborted,
+        ).toBe(true);
+      expect(unwindSessionInitialization).toHaveBeenCalled();
+    },
+  );
+
   it("unwinds the owned reservation if initialization fails after joining", async () => {
     jest
       .mocked(subscribeToUserVoice)

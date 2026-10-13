@@ -70,6 +70,8 @@ type StartMeetingOptions = {
 };
 
 type StartManualMeetingFromChannelsOptions = {
+  assertStartAllowed?: () => Promise<void>;
+  startSignal?: AbortSignal;
   client: Client;
   guild: Guild;
   voiceChannel: VoiceBasedChannel;
@@ -344,6 +346,8 @@ const resolveMemberVoiceChannel = (member: GuildMember): VoiceChannelResult => {
 };
 
 export async function startManualMeetingFromChannels({
+  assertStartAllowed,
+  startSignal,
   client,
   guild,
   voiceChannel,
@@ -409,7 +413,11 @@ export async function startManualMeetingFromChannels({
   } = await resolveMeetingVoiceSettings(guildId, voiceChannel.id, limits);
 
   const meetingId = randomUUID();
+  await assertStartAllowed?.();
+  startSignal?.throwIfAborted();
   const meeting = await initializeMeeting({
+    assertStartAllowed,
+    startSignal,
     meetingId,
     voiceChannel,
     textChannel,

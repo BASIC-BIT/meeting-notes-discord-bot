@@ -114,6 +114,7 @@ async function runUploadJob(
     const processingJob = await createPersonalMediaProcessingMeeting(
       claimed,
       instanceId,
+      work.signal,
     );
     work.signal.throwIfAborted();
     await processPersonalMediaUpload(

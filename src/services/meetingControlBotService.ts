@@ -221,6 +221,7 @@ const executeStartMeeting = async (
   userId: string,
   input: StartMeetingCommandInput,
   assertOwned: () => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<MeetingControlCommandResult> => {
   const state = await resolveUserVoiceState(client, userId, input);
   const guild = state.guild;
@@ -238,6 +239,8 @@ const executeStartMeeting = async (
   const creator = await client.users.fetch(userId);
   await assertOwned();
   const startResult = await startManualMeetingFromChannels({
+    assertStartAllowed: assertOwned,
+    startSignal: signal,
     client,
     guild,
     voiceChannel,
@@ -509,6 +512,7 @@ export async function executeMeetingControlCommand(
   client: Client,
   command: MeetingControlCommand,
   assertOwned: () => Promise<void> = async () => undefined,
+  signal?: AbortSignal,
 ): Promise<MeetingControlCommandResult> {
   await assertOwned();
   switch (command.commandType) {
@@ -518,6 +522,7 @@ export async function executeMeetingControlCommand(
         command.userId,
         command.input as StartMeetingCommandInput,
         assertOwned,
+        signal,
       );
     case MEETING_CONTROL_COMMAND_TYPES.STOP_MEETING:
       return executeStopMeeting(

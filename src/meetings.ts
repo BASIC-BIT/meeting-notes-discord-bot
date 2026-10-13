@@ -117,6 +117,8 @@ export interface MeetingInitOptions {
   meetingId?: string;
   reservedAt?: number;
   suppressionCheck?: { channelId: string; expectedVersion?: number };
+  assertStartAllowed?: () => Promise<void>;
+  startSignal?: AbortSignal;
   sessionMode?: "meeting" | "tts_only";
   captureAudio?: boolean;
   recordBotAudio?: boolean;
@@ -356,6 +358,8 @@ async function initializeNewMeeting(
   const meetingId = options.meetingId;
   const timestamp = new Date(reservedAt).toISOString();
   const shared = {
+    assertStartAllowed: options.assertStartAllowed,
+    startSignal: options.startSignal,
     guildId: options.guild.id,
     meetingId,
     voiceChannelId: options.voiceChannel.id,
@@ -408,12 +412,14 @@ async function initializeNewMeeting(
   const initialization: { meeting?: MeetingData; cleanup: Array<() => void> } =
     { cleanup: [] };
   try {
+    options.startSignal?.throwIfAborted();
     const meeting = await initializeReservedMeeting({
       ...options,
       meetingId,
       reservation: admission.reservation,
       initialization,
     });
+    options.startSignal?.throwIfAborted();
     await saveMeetingStartToDatabase(meeting);
     return meeting;
   } catch (error) {
@@ -486,7 +492,10 @@ async function initializeReservedMeeting(
       : MEETING_START_REASONS.MANUAL_COMMAND);
   const canCaptureAudio = captureAudio && sessionMode === "meeting";
 
-  const signal = getReservationSignal(options.reservation);
+  const reservationSignal = getReservationSignal(options.reservation);
+  const signal = options.startSignal
+    ? AbortSignal.any([reservationSignal, options.startSignal])
+    : reservationSignal;
   signal.throwIfAborted();
   // The reservation and its heartbeat exist before the SDK can issue a join.
   let connection;
@@ -505,6 +514,7 @@ async function initializeReservedMeeting(
     );
   }
 
+  signal.throwIfAborted();
   const receiver = connection.receiver;
   const attendance: Set<string> = new Set<string>();
   const liveVoiceEnabled =

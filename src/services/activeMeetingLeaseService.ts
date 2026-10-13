@@ -36,6 +36,8 @@ const ACTIVE_MEETING_HEARTBEAT_MS = 10_000;
 const ACTIVE_MEETING_TTL_GRACE_SECONDS = 120;
 
 export type AcquireMeetingLeaseInput = {
+  assertStartAllowed?: () => Promise<void>;
+  startSignal?: AbortSignal;
   guildId: string;
   meetingId: string;
   voiceChannelId: string;
@@ -249,17 +251,24 @@ async function acquireReservation(
     suppression: input.suppression,
   };
   let result;
+  let attempted = false;
   try {
     if (await observeReservationSuppression(request)) {
       workHandle.settle();
       return { kind: "blocked", reason: "suppressed" };
     }
     for (let attempt = 0; attempt < 3; attempt++) {
+      await input.assertStartAllowed?.();
+      input.startSignal?.throwIfAborted();
+      attempted = true;
       result = await getDeploymentControlRepository().reserveSession(request);
       if (result.kind === "admitted" || result.reason !== "unavailable") break;
     }
   } catch {
-    result = { kind: "blocked" as const, reason: "unavailable" as const };
+    result = {
+      kind: "blocked" as const,
+      reason: attempted ? ("unavailable" as const) : ("not_serving" as const),
+    };
   }
   if (!result) throw new Error("Reservation retry loop produced no result");
   if (result.kind === "blocked") {

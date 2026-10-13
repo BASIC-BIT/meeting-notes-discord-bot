@@ -123,6 +123,7 @@ async function runCommand(
       client,
       claimed,
       assertOwned,
+      work.signal,
     );
     work.signal.throwIfAborted();
     const committed = await repository.completeCommand({
