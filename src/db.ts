@@ -1669,7 +1669,9 @@ export async function deleteConfigOverride(
 
 export async function listConfigOverrides(
   scopeId: string,
+  signal?: AbortSignal,
 ): Promise<ConfigOverrideRecord[]> {
+  signal?.throwIfAborted();
   const params = {
     TableName: tableName("ConfigOverridesTable"),
     KeyConditionExpression: "scopeId = :scopeId",
@@ -1678,7 +1680,8 @@ export async function listConfigOverrides(
     }),
   };
   const command = new QueryCommand(params);
-  const result = await dynamoDbClient.send(command);
+  const result = await dynamoDbClient.send(command, { abortSignal: signal });
+  signal?.throwIfAborted();
   if (result.Items) {
     return result.Items.map((item) => unmarshall(item) as ConfigOverrideRecord);
   }
@@ -1928,7 +1931,9 @@ export async function getRecentMeetingsForChannel(
   guildId: string,
   channelId: string,
   limit: number = 5,
+  signal?: AbortSignal,
 ): Promise<MeetingHistory[]> {
+  signal?.throwIfAborted();
   const params = {
     TableName: tableName("MeetingHistoryTable"),
     KeyConditionExpression:
@@ -1941,7 +1946,8 @@ export async function getRecentMeetingsForChannel(
     Limit: limit,
   };
   const command = new QueryCommand(params);
-  const result = await dynamoDbClient.send(command);
+  const result = await dynamoDbClient.send(command, { abortSignal: signal });
+  signal?.throwIfAborted();
   if (result.Items) {
     return result.Items.map((item) => unmarshall(item) as MeetingHistory);
   }
@@ -1951,7 +1957,9 @@ export async function getRecentMeetingsForChannel(
 export async function getRecentMeetingsForGuild(
   guildId: string,
   limit: number = 10,
+  signal?: AbortSignal,
 ): Promise<MeetingHistory[]> {
+  signal?.throwIfAborted();
   const params = {
     TableName: tableName("MeetingHistoryTable"),
     IndexName: "GuildTimestampIndex",
@@ -1963,7 +1971,8 @@ export async function getRecentMeetingsForGuild(
     Limit: limit,
   };
   const command = new QueryCommand(params);
-  const result = await dynamoDbClient.send(command);
+  const result = await dynamoDbClient.send(command, { abortSignal: signal });
+  signal?.throwIfAborted();
   if (result.Items) {
     return result.Items.map((item) => unmarshall(item) as MeetingHistory);
   }

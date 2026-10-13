@@ -607,3 +607,147 @@ test("mock history read honors optional cancellation and preserves ordinary read
     history,
   );
 });
+
+test("producer session verifies new bytes only and recovery still detects old corruption", async () => {
+  const f = fixture();
+  const producer = f.service.createProducerSession();
+  let previous;
+  for (let sequence = 0; sequence < 12; sequence++) {
+    const result = await producer.flush({
+      ...input,
+      previous,
+      artifacts: [{ ...segment, sequence }],
+    });
+    if (result.kind !== "committed")
+      throw new Error("Expected committed checkpoint");
+    previous = result.checkpoint;
+  }
+  expect(
+    f.read.mock.calls.filter(([key]) => key.includes("/audio/")).length,
+  ).toBe(24);
+  const saved = await f.service.read(previous!);
+  f.objects.set(saved.manifest.artifacts[0].object.key, Buffer.from("corrupt"));
+  const recovered = await f.service.read(previous!);
+  expect(recovered.missing).toHaveLength(1);
+  expect(recovered.verified).toHaveLength(11);
+});
+
+test("producer session refuses a changed pointer and cannot adopt later ownership", async () => {
+  const f = fixture();
+  const producer = f.service.createProducerSession();
+  const first = await producer.flush(input);
+  if (first.kind !== "committed") throw new Error("Expected commit");
+  expect(
+    (
+      await producer.flush({
+        ...input,
+        artifacts: [{ ...segment, sequence: 1 }],
+      })
+    ).kind,
+  ).toBe("stale_owner");
+  const row = f.histories.get(history.guildId)![0];
+  row.executionVersion = 2;
+  row.ownerInstanceId = "recovery";
+  const next = await producer.flush({
+    ...input,
+    previous: first.checkpoint,
+    capture: { ...capture, executionVersion: 2, ownerInstanceId: "recovery" },
+    artifacts: [],
+  });
+  expect(next.kind).toBe("stale_owner");
+});
+
+test("producer late text retains complete capture and refuses changed end facts or owner", async () => {
+  const f = fixture();
+  const producer = f.service.createProducerSession();
+  const complete = {
+    kind: "complete" as const,
+    startedAt: capture.captureStartedAt!,
+    endedAt: "2026-01-01T00:00:03.000Z",
+  };
+  const first = await producer.flush({ ...input, captureState: complete });
+  if (first.kind !== "committed") throw new Error("Expected capture commit");
+  const text = Buffer.from("completed usable text");
+  const artifact = {
+    kind: "transcription" as const,
+    sourceId: "transcription",
+    sequence: 0,
+    contentType: "application/json",
+    bytes: text,
+    checksumSha256: digest(text),
+    coverage: { kind: "unknown" as const },
+  };
+  const second = await producer.flush({
+    ...input,
+    previous: first.checkpoint,
+    captureState: complete,
+    artifacts: [artifact],
+  });
+  if (second.kind !== "committed") throw new Error("Expected late text commit");
+  expect(
+    (await f.service.read(second.checkpoint)).manifest.captureState,
+  ).toEqual(complete);
+  expect(second.checkpoint.capture).toEqual(first.checkpoint.capture);
+  expect(
+    (
+      await producer.flush({
+        ...input,
+        previous: second.checkpoint,
+        captureState: { ...complete, endedAt: "2026-01-01T00:00:04.000Z" },
+        artifacts: [],
+      })
+    ).kind,
+  ).toBe("preservation_failed");
+  const controller = new AbortController();
+  controller.abort();
+  expect(
+    (
+      await producer.flush({
+        ...input,
+        previous: second.checkpoint,
+        artifacts: [],
+        signal: controller.signal,
+      })
+    ).kind,
+  ).toBe("preservation_failed");
+  const row = f.histories.get(history.guildId)![0];
+  row.ownerInstanceId = "recovery";
+  row.executionVersion = 2;
+  expect(
+    (
+      await producer.flush({
+        ...input,
+        previous: second.checkpoint,
+        artifacts: [{ ...artifact, sequence: 1 }],
+      })
+    ).kind,
+  ).toBe("stale_owner");
+  expect(row.checkpoint).toEqual(second.checkpoint);
+});
+
+test("ambiguous producer acknowledgement never advances its verified reference session", async () => {
+  const f = fixture();
+  const producer = f.service.createProducerSession();
+  const controller = new AbortController();
+  const apply = f.repository.transitionMeetingHistory.bind(f.repository);
+  const transition = jest
+    .spyOn(f.repository, "transitionMeetingHistory")
+    .mockImplementationOnce(async (request) => {
+      const result = await apply(request);
+      controller.abort();
+      return result;
+    });
+  expect(
+    (await producer.flush({ ...input, signal: controller.signal })).kind,
+  ).toBe("preservation_failed");
+  transition.mockRestore();
+  const actual = (await f.repository.getMeetingHistory(history))!.checkpoint!;
+  // Reopening the uncertain pointer must fully reverify old artifacts, never trust the lost ACK.
+  const count = f.read.mock.calls.length;
+  expect(
+    (await producer.flush({ ...input, previous: actual, artifacts: [] })).kind,
+  ).toBe("committed");
+  expect(
+    f.read.mock.calls.slice(count).some(([key]) => key.includes("/audio/")),
+  ).toBe(true);
+});

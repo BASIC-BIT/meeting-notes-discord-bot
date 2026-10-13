@@ -39,7 +39,11 @@ export type MeetingHistoryRepository = {
   listRecentByGuild: (
     guildId: string,
     limit?: number,
-    options?: { archivedOnly?: boolean; includeArchived?: boolean },
+    options?: {
+      archivedOnly?: boolean;
+      includeArchived?: boolean;
+      signal?: AbortSignal;
+    },
   ) => Promise<MeetingHistory[]>;
   listByGuildTimestampRange: (
     guildId: string,
@@ -52,7 +56,11 @@ export type MeetingHistoryRepository = {
     guildId: string,
     channelId: string,
     limit?: number,
-    options?: { archivedOnly?: boolean; includeArchived?: boolean },
+    options?: {
+      archivedOnly?: boolean;
+      includeArchived?: boolean;
+      signal?: AbortSignal;
+    },
   ) => Promise<MeetingHistory[]>;
   updateNotes: (params: {
     guildId: string;
@@ -128,7 +136,11 @@ const realRepository: MeetingHistoryRepository = {
   write: writeMeetingHistory,
   get: getMeetingHistoryRecord,
   listRecentByGuild: async (guildId, limit, options) => {
-    const meetings = await getRecentMeetingsForGuild(guildId, limit);
+    const meetings = await getRecentMeetingsForGuild(
+      guildId,
+      limit,
+      options?.signal,
+    );
     const active = meetings.filter(
       (meeting) => meeting.status !== MEETING_STATUS.CANCELLED,
     );
@@ -157,6 +169,7 @@ const realRepository: MeetingHistoryRepository = {
       guildId,
       channelId,
       limit,
+      options?.signal,
     );
     const active = meetings.filter(
       (meeting) => meeting.status !== MEETING_STATUS.CANCELLED,
@@ -216,6 +229,7 @@ const mockRepository: MeetingHistoryRepository = {
     );
   },
   async listRecentByGuild(guildId, limit = 10, options) {
+    options?.signal?.throwIfAborted();
     const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
     const active = [...items].filter(
       (item) => item.status !== MEETING_STATUS.CANCELLED,
@@ -225,6 +239,7 @@ const mockRepository: MeetingHistoryRepository = {
       .slice(0, limit);
   },
   async listRecentByChannel(guildId, channelId, limit = 5, options) {
+    options?.signal?.throwIfAborted();
     const items = getMockStore().meetingHistoryByGuild.get(guildId) ?? [];
     const active = items
       .filter((item) => item.channelId === channelId)

@@ -1,4 +1,6 @@
+import type { RecordingCheckpointCapture } from "../services/recordingCheckpointCapture";
 import type {
+  CaptureCoverage,
   RecordingCheckpoint,
   RecordingCaptureState,
 } from "./recordingCheckpoint";
@@ -47,6 +49,16 @@ export type LiveVoiceThinkingCueState = {
 export interface MeetingData {
   reservation?: SessionReservation;
   recordingCheckpoint?: RecordingCheckpoint;
+  recordingCapture?: RecordingCheckpointCapture;
+  recordingContentTask?: Promise<void>;
+  recordingPreservationTask?: Promise<boolean>;
+  recordingPreservationFailure?: {
+    reason: "storage_preservation" | "ownership_lost";
+    stoppedAt: string;
+    preservation: "pending" | "confirmed" | "unconfirmed";
+    coverage?: CaptureCoverage;
+    lastConfirmedCheckpoint?: RecordingCheckpoint;
+  };
   recordingCaptureState?: RecordingCaptureState;
   meetingId: string;
   sessionMode?: VoiceSessionMode;

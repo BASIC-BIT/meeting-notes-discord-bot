@@ -1,3 +1,4 @@
+/** @jest-environment node */
 jest.mock("../../src/services/notesService", () => ({ getNotes: jest.fn() }));
 import { getNotes } from "../../src/services/notesService";
 import { notifyRecordingLimit } from "../../src/services/recordingLimitService";
@@ -61,6 +62,7 @@ jest.mock("../../src/services/analyticsService", () => ({
 }));
 
 jest.mock("../../src/audio", () => ({
+  stopRecordingCapture: jest.fn(),
   buildMixedAudio: jest.fn(),
   cleanupSpeakerTracks: jest.fn(),
   closeOutputFile: jest.fn(),
@@ -377,12 +379,14 @@ describe("handleEndMeetingOther", () => {
         usedSeconds: used * 60,
         meetings: [],
         windowStartIso: "2026-10-01T00:00:00Z",
+        windowEndIso: "2026-10-02T00:00:00Z",
+        nextAvailableAtIso: null,
       });
       let finishNotice: (() => void) | undefined;
       if (pending)
         jest.mocked(notifyRecordingLimit).mockReturnValueOnce(
           new Promise((resolve) => {
-            finishNotice = resolve;
+            finishNotice = () => resolve(undefined);
           }),
         );
       else if (fails)
@@ -1492,11 +1496,13 @@ it("held ancillary delivery remains counted until completion", async () => {
     usedSeconds: 14400,
     meetings: [],
     windowStartIso: "2026-10-01T00:00:00Z",
+    windowEndIso: "2026-10-02T00:00:00Z",
+    nextAvailableAtIso: null,
   });
   let finish!: () => void;
   jest.mocked(notifyRecordingLimit).mockReturnValueOnce(
     new Promise((resolve) => {
-      finish = resolve;
+      finish = () => resolve(undefined);
     }),
   );
   const meeting = finalizationFixture();
@@ -1778,4 +1784,140 @@ it("late actual notes-provider result cannot publish after fencing", async () =>
   expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
   expect(updateMeetingSummaryMessage).not.toHaveBeenCalled();
   expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+});
+it("aiDoesNotPrecedeDurableCapture", async () => {
+  jest.clearAllMocks();
+  mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
+  jest
+    .mocked(transitionOwnedMeetingHistoryService)
+    .mockResolvedValue(undefined);
+  let acknowledge!: (confirmed: boolean) => void;
+  const meeting = finalizationFixture();
+  meeting.transcribeMeeting = true;
+  meeting.generateNotes = true;
+  meeting.recordingCapture = {
+    fence: jest.fn(),
+    finish: jest.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          acknowledge = resolve;
+        }),
+    ),
+  } as unknown as NonNullable<MeetingData["recordingCapture"]>;
+  const task = runEndMeetingFlow({ client: {} as Client, meeting });
+  const failed = expect(task).rejects.toThrow(
+    "Durable capture preservation failed",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(meeting.recordingCapture.finish).toHaveBeenCalledTimes(1);
+  expect(runTranscriptionFinalPass).not.toHaveBeenCalled();
+  expect(getNotes).not.toHaveBeenCalled();
+  expect(ensureMeetingNotes).not.toHaveBeenCalled();
+  expect(updateMeetingProcessingMessage).not.toHaveBeenCalled();
+  acknowledge(false);
+  await failed;
+  expect(runTranscriptionFinalPass).not.toHaveBeenCalled();
+  expect(ensureMeetingNotes).not.toHaveBeenCalled();
+  expect(meeting.setFinished).not.toHaveBeenCalled();
+  expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+  expect(mockedCleanupMeetingTempDir).not.toHaveBeenCalled();
+});
+
+it("actual finalization fence cancels held text storage while retaining tail and original authority", async () => {
+  const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
+  const { NodeHttpHandler } = await import("@smithy/node-http-handler");
+  const { createRecordingCheckpointCapture } =
+    await import("../../src/services/recordingCheckpointCapture");
+  const { createHash } = await import("node:crypto");
+  const fs = jest.requireActual<typeof import("node:fs")>("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const directory = fs.mkdtempSync(path.join(tmpdir(), "fenced-text-"));
+  const controller = new AbortController();
+  const handler = new NodeHttpHandler();
+  const client = new S3Client({
+    endpoint: "http://127.0.0.1:1",
+    region: "local",
+    forcePathStyle: true,
+    credentials: { accessKeyId: "dummy", secretAccessKey: "dummy" },
+    requestHandler: handler,
+    maxAttempts: 1,
+  });
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let settled = false;
+  let watchdogFired = false;
+  jest
+    .spyOn(handler, "handle")
+    .mockImplementation(async (_request, options) => {
+      try {
+        return await new Promise<never>((_resolve, reject) => {
+          const signal = options!.abortSignal!;
+          const abort = () => {
+            clearTimeout(watchdog);
+            signal.onabort = null;
+            reject(
+              Object.assign(new Error("generated fenced text"), {
+                name: "AbortError",
+              }),
+            );
+          };
+          const watchdog = setTimeout(() => {
+            watchdogFired = true;
+            abort();
+          }, 1000);
+          signal.onabort = abort;
+          entered();
+        });
+      } finally {
+        settled = true;
+      }
+    });
+  const meeting = finalizationFixture();
+  meeting.ownershipSignal = controller.signal;
+  meeting.recordingCapture = createRecordingCheckpointCapture({
+    directory,
+    startedAt: 0,
+    signal: controller.signal,
+    stopCapture: jest.fn(),
+    commit: async (artifacts, signal) => {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: "generated",
+          Key: "generated-text",
+          Body: artifacts[0].bytes,
+        }),
+        { abortSignal: signal },
+      );
+      return true;
+    },
+  });
+  try {
+    const bytes = Buffer.from("generated late text");
+    meeting.recordingCapture.queueContent({
+      kind: "transcription",
+      sourceId: "transcription",
+      sequence: 0,
+      bytes,
+      checksumSha256: createHash("sha256").update(bytes).digest("hex"),
+      contentType: "application/json",
+      coverage: { kind: "unknown" },
+    });
+    await ready;
+    fenceMeetingFinalization(meeting);
+    await meeting.recordingCapture.settled();
+    expect(settled).toBe(true);
+    expect(watchdogFired).toBe(false);
+    expect(meeting.recordingCapture.publicationSignal.aborted).toBe(true);
+    expect(controller.signal.aborted).toBe(false);
+    expect(await meeting.recordingCapture.drainContent()).toBe(false);
+    expect(meeting.recordingCapture.pending()).toHaveLength(1);
+    expect(meeting.setFinished).not.toHaveBeenCalled();
+    meeting.recordingCapture.releaseSettledBuffers();
+  } finally {
+    client.destroy();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

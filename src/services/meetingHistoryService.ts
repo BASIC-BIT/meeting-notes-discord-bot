@@ -40,7 +40,11 @@ export async function getMeetingHistoryService(
 export async function listRecentMeetingsForGuildService(
   guildId: string,
   limit?: number,
-  options?: { archivedOnly?: boolean; includeArchived?: boolean },
+  options?: {
+    archivedOnly?: boolean;
+    includeArchived?: boolean;
+    signal?: AbortSignal;
+  },
 ) {
   return getMeetingHistoryRepository().listRecentByGuild(
     guildId,
@@ -83,11 +87,13 @@ export async function listRecentMeetingsForChannelService(
   guildId: string,
   channelId: string,
   limit?: number,
+  signal?: AbortSignal,
 ) {
   return getMeetingHistoryRepository().listRecentByChannel(
     guildId,
     channelId,
     limit,
+    signal ? { signal } : undefined,
   );
 }
 

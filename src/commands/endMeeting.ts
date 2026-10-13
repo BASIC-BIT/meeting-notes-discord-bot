@@ -1,3 +1,8 @@
+import {
+  checkpointRecordingContext,
+  checkpointCompletedTranscription,
+} from "../services/recordingContentService";
+import { stopRecordingCapture } from "../audio";
 import { ButtonInteraction, Client, EmbedBuilder } from "discord.js";
 import { randomUUID } from "node:crypto";
 import { beginRuntimeWorkClaim } from "../services/runtimeWorkAdmissionService";
@@ -321,6 +326,8 @@ export function fenceMeetingFinalization(meeting: MeetingData): void {
 }
 
 function stopFinalizationCapture(meeting: MeetingData): void {
+  stopRecordingCapture(meeting, "interrupted");
+  meeting.recordingCapture?.fence();
   meeting.finishing = true;
   meeting.captureAudio = false;
   meeting.recordBotAudio = false;
@@ -421,7 +428,11 @@ async function finalizeRecording(
   }
 
   meeting.finishing = true;
+  stopRecordingCapture(meeting);
   meeting.endTime = new Date();
+  checkpointRecordingContext(meeting);
+  if (meeting.recordingCapture && !(await meeting.recordingCapture.finish()))
+    throw new Error("Durable capture preservation failed");
   if (!meeting.endReason) {
     meeting.endReason = MEETING_END_REASONS.UNKNOWN;
   }
@@ -555,6 +566,14 @@ async function finalizeRecording(
           },
         );
       }
+
+      await meeting.recordingContentTask;
+      checkpointCompletedTranscription(meeting);
+      if (
+        meeting.recordingCapture &&
+        !(await meeting.recordingCapture.drainContent())
+      )
+        throw new Error("Completed transcript preservation failed");
 
       const finalPassResult = await runMeetingEndStep(
         meeting,

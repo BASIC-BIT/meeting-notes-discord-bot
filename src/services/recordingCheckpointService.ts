@@ -286,8 +286,14 @@ export function createRecordingCheckpointService(
     repository: getDeploymentControlRepository(),
     objects: { upload: uploadObjectToS3, read: fetchObjectBytesFromS3 },
   },
+  producerSession = false,
 ) {
   const { repository, objects } = dependencies;
+  let acknowledged:
+    | { checkpoint: RecordingCheckpoint; manifest: RecordingManifest }
+    | undefined;
+  let pinnedCapture: RecordingCaptureProvenance | undefined;
+  let publishing = false;
   async function verifiedBytes(
     reference: CheckpointObject,
     signal?: AbortSignal,
@@ -396,7 +402,21 @@ export function createRecordingCheckpointService(
     input.signal?.throwIfAborted();
     validateCaptureHistory(row, capture);
     assertCompleteCapturePreserved(state, row?.capture);
-    const verified = await verifyArtifacts(artifacts, input.signal);
+    const retained =
+      producerSession &&
+      acknowledged &&
+      sameCheckpoint(acknowledged.checkpoint, input.previous)
+        ? acknowledged.manifest.artifacts
+        : [];
+    const retainedIds = new Set(retained.map(identity));
+    const additions = artifacts.filter(
+      (item) => !retainedIds.has(identity(item)),
+    );
+    const checked = await verifyArtifacts(additions, input.signal);
+    const verified = {
+      verified: [...retained, ...checked.verified],
+      missing: checked.missing,
+    };
     const coverage = confirmedCoverage(capture, verified.verified, state);
     if (!sameCheckpoint(row?.checkpoint, input.previous))
       return { kind: "stale_owner", coverage };
@@ -466,9 +486,38 @@ export function createRecordingCheckpointService(
     input.signal?.throwIfAborted();
     if (proof && Date.now() >= proof.preservation.deadlineEpochMs)
       throw new Error("Preservation deadline elapsed");
+    if (result === "applied" && producerSession) {
+      acknowledged = {
+        checkpoint,
+        manifest: {
+          artifactFolder: checkpoint.artifactFolder,
+          schemaVersion: 1,
+          revision: checkpoint.revision,
+          capture,
+          captureState: state,
+          coverage,
+          artifacts,
+        },
+      };
+    }
     return result === "applied"
       ? { kind: "committed", checkpoint, coverage }
       : { kind: "stale_owner", coverage };
+  }
+  async function readForProducer(
+    checkpoint: RecordingCheckpoint,
+    signal?: AbortSignal,
+  ) {
+    if (
+      !producerSession ||
+      !acknowledged ||
+      !sameCheckpoint(acknowledged.checkpoint, checkpoint)
+    )
+      return read(checkpoint, signal);
+    const manifest = await loadManifest(checkpoint, signal);
+    if (!isDeepStrictEqual(manifest, acknowledged.manifest))
+      throw new Error("Producer manifest changed");
+    return { manifest, coverage: manifest.coverage, missing: [] };
   }
   async function flushInternal(
     input: CheckpointFlushInput,
@@ -496,9 +545,11 @@ export function createRecordingCheckpointService(
     let coverage = unknownCoverage("verification_failed");
     try {
       if (input.previous) {
-        const saved = await read(input.previous, input.signal);
+        const saved = await readForProducer(input.previous, input.signal);
         previous = saved.manifest;
         coverage = saved.coverage;
+        if (producerSession && saved.missing.length)
+          return { kind: "preservation_failed", coverage };
       }
     } catch {
       return { kind: "preservation_failed", coverage };
@@ -536,7 +587,27 @@ export function createRecordingCheckpointService(
       return { kind: "preservation_failed", coverage };
     }
   }
-  const flush = (input: CheckpointFlushInput) => flushInternal(input);
+  async function flush(
+    input: CheckpointFlushInput,
+  ): Promise<CheckpointAppendResult> {
+    if (!producerSession) return flushInternal(input);
+    if (
+      publishing ||
+      (pinnedCapture && !isDeepStrictEqual(pinnedCapture, input.capture)) ||
+      (acknowledged && !sameCheckpoint(acknowledged.checkpoint, input.previous))
+    )
+      return {
+        kind: "stale_owner",
+        coverage: unknownCoverage("verification_failed"),
+      };
+    pinnedCapture ??= recordingCaptureProvenanceSchema.parse(input.capture);
+    publishing = true;
+    try {
+      return await flushInternal(input);
+    } finally {
+      publishing = false;
+    }
+  }
   async function preserveTerminalRecordingCheckpoint(
     input: TerminalRecordingCheckpointInput,
   ): Promise<CheckpointAppendResult> {
@@ -666,6 +737,9 @@ export function createRecordingCheckpointService(
   }
   return {
     flush,
+    appendArtifactsRecordingCheckpoint: forMeeting,
+    createProducerSession: () =>
+      createRecordingCheckpointService(dependencies, true),
     preserveTerminalRecordingCheckpoint,
     append: (
       input: Omit<CheckpointFlushInput, "artifacts"> & {
@@ -702,5 +776,26 @@ export function preserveTerminalRecordingCheckpoint(
 ): Promise<CheckpointAppendResult> {
   return createRecordingCheckpointService().preserveTerminalRecordingCheckpoint(
     input,
+  );
+}
+
+const producerSessions = new WeakMap<
+  MeetingData,
+  ReturnType<typeof createRecordingCheckpointService>
+>();
+export function appendMeetingCheckpointArtifacts(
+  meeting: MeetingData,
+  artifacts: readonly CheckpointArtifactInput[],
+  signal: AbortSignal,
+) {
+  let session = producerSessions.get(meeting);
+  if (!session) {
+    session = createRecordingCheckpointService().createProducerSession();
+    producerSessions.set(meeting, session);
+  }
+  return session.appendArtifactsRecordingCheckpoint(
+    meeting,
+    [...artifacts],
+    signal,
   );
 }

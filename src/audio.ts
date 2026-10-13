@@ -1,4 +1,11 @@
 import {
+  startRecordingContentCheckpoint,
+  checkpointCompletedTranscription,
+  checkpointRecordingContext,
+} from "./services/recordingContentService";
+import { createRecordingCheckpointCapture } from "./services/recordingCheckpointCapture";
+import { appendMeetingCheckpointArtifacts } from "./services/recordingCheckpointService";
+import {
   BYTES_PER_SAMPLE,
   CHANNELS,
   FAST_SILENCE_THRESHOLD,
@@ -189,10 +196,7 @@ function scheduleResubscribe(
   userId: string,
   reason: string,
 ) {
-  if (meeting.finishing) return;
-  if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
-    return;
-  }
+  if (!isCaptureActive(meeting)) return;
   if (!meeting.voiceChannel.members.has(userId)) {
     return;
   }
@@ -211,10 +215,7 @@ function scheduleResubscribe(
     if (updated) {
       updated.resubscribeTimer = undefined;
     }
-    if (meeting.finishing) return;
-    if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
-      return;
-    }
+    if (!isCaptureActive(meeting)) return;
     void subscribeToUserVoice(meeting, userId);
   }, RESUBSCRIBE_DELAY_MS);
 
@@ -223,9 +224,16 @@ function scheduleResubscribe(
   }
 }
 
+function isCaptureIntakeStopped(meeting: MeetingData): boolean {
+  return (
+    meeting.finishing ||
+    meeting.captureAudio === false ||
+    meeting.ownershipSignal?.aborted === true
+  );
+}
 function isCaptureActive(meeting: MeetingData): boolean {
   return (
-    !meeting.finishing &&
+    !isCaptureIntakeStopped(meeting) &&
     meeting.connection.state.status !== VoiceConnectionStatus.Destroyed
   );
 }
@@ -531,6 +539,7 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
       }
       audioFileData.fastTranscripts.push(entry);
       audioFileData.transcript = transcription;
+      checkpointCompletedTranscription(meeting);
       snippet.fastTranscribed = true;
       snippet.lastFastTranscriptBytes = snapshotBytes;
       void maybeRespondLive(meeting, {
@@ -644,6 +653,7 @@ export function startProcessingSnippet(
             audioFileData.transcriptionFailed = false;
             audioFileData.slowTranscript = transcription;
             audioFileData.transcript = transcription;
+            checkpointCompletedTranscription(meeting);
             if (!options.skipLiveVoice) {
               void maybeRespondLive(meeting, {
                 userId: snippet.userId,
@@ -713,6 +723,7 @@ export function startProcessingSnippet(
 
   audioFileData.processingPromise = Promise.all(promises).then(() => {
     audioFileData.processing = false;
+    checkpointCompletedTranscription(meeting);
   });
 
   meeting.audioData.currentSnippets.delete(userId); // Remove snippet after processing
@@ -812,10 +823,7 @@ export async function subscribeToUserVoice(
   meeting: MeetingData,
   userId: string,
 ) {
-  if (meeting.finishing) return;
-  if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
-    return;
-  }
+  if (!isCaptureActive(meeting)) return;
 
   clearVoiceSubscription(meeting, userId);
 
@@ -842,6 +850,7 @@ export async function subscribeToUserVoice(
 
   subscriptions.set(userId, subscriptionState);
   meeting.captureStartedAt ??= new Date();
+  ensureRecordingCheckpointCapture(meeting);
 
   // Prevent decoder errors (often caused by malformed or partial packets) from crashing the process.
   opusDecoder.on("error", (err: Error) => {
@@ -892,7 +901,13 @@ export async function subscribeToUserVoice(
     scheduleResubscribe(meeting, userId, "opus-stream-end");
   });
 
-  decodedStream.on("data", (chunk) => {
+  decodedStream.on("data", (chunk: Buffer) => {
+    if (!isCaptureActive(meeting) || meeting.ownershipSignal?.aborted) return;
+    if (
+      meeting.recordingCapture &&
+      !meeting.recordingCapture.push(`user:${userId}`, chunk)
+    )
+      return;
     subscriptionState.lastPcmAt = Date.now();
     subscriptionState.consecutiveNoPcmEvents = 0;
     subscriptionState.lastNoPcmAt = undefined;
@@ -924,11 +939,16 @@ export async function subscribeToUserVoice(
 }
 
 export function userStartTalking(meeting: MeetingData, userId: string) {
+  if (isCaptureIntakeStopped(meeting)) return;
   markSpeakerStart(meeting, userId);
   clearSnippetTimer(meeting, userId);
 }
 
 export function userStopTalking(meeting: MeetingData, userId: string) {
+  if (isCaptureIntakeStopped(meeting)) return;
+  finishSpeakerTurn(meeting, userId);
+}
+function finishSpeakerTurn(meeting: MeetingData, userId: string) {
   markSpeakerEnd(meeting, userId);
   const pending = meeting.liveVoiceCommandPending;
   if (pending && pending.expiresAt > Date.now() && pending.userId === userId) {
@@ -1279,4 +1299,109 @@ export function unsubscribeToVoiceUponLeaving(
   userId: string,
 ) {
   clearVoiceSubscription(meeting, userId);
+}
+
+/** Called only after actual receiver attachment, never from reservation time. */
+export function ensureRecordingCheckpointCapture(meeting: MeetingData): void {
+  if (
+    meeting.recordingCapture ||
+    !meeting.captureStartedAt ||
+    !meeting.reservation ||
+    meeting.reservation.sessionMode !== "meeting" ||
+    !meeting.ownershipSignal ||
+    meeting.ownershipSignal.aborted
+  )
+    return;
+  meeting.recordingCaptureState = {
+    kind: "capturing",
+    startedAt: meeting.captureStartedAt.toISOString(),
+  };
+  meeting.recordingCapture = createRecordingCheckpointCapture({
+    directory: path.join(ensureMeetingTempDirSync(meeting), "checkpoints"),
+    startedAt: meeting.captureStartedAt.getTime(),
+    signal: meeting.ownershipSignal,
+    commit: async (artifacts, signal) => {
+      if (artifacts.some((artifact) => artifact.kind === "audio"))
+        checkpointRecordingContext(meeting);
+      return (
+        (await appendMeetingCheckpointArtifacts(meeting, artifacts, signal))
+          .kind === "committed"
+      );
+    },
+    stopCapture: (reason) => {
+      stopRecordingCapture(meeting, "interrupted");
+      const state = meeting.recordingCaptureState;
+      const stoppedAt =
+        (state?.kind === "complete" || state?.kind === "interrupted"
+          ? state.endedAt
+          : null) ?? new Date().toISOString();
+      const handoff: NonNullable<MeetingData["recordingPreservationFailure"]> =
+        {
+          reason,
+          stoppedAt,
+          preservation: "pending",
+          lastConfirmedCheckpoint: meeting.recordingCheckpoint,
+        };
+      meeting.recordingPreservationFailure = handoff;
+      meeting.recordingPreservationTask = Promise.resolve()
+        .then(async () => {
+          await meeting.recordingCapture?.settled();
+          const signal = AbortSignal.any([
+            meeting.ownershipSignal!,
+            AbortSignal.timeout(5000),
+          ]);
+          const result = await appendMeetingCheckpointArtifacts(
+            meeting,
+            meeting.recordingCapture?.pending().map((item) => item.artifact) ??
+              [],
+            signal,
+          );
+          handoff.coverage = result.coverage;
+          handoff.preservation =
+            result.kind === "committed" ? "confirmed" : "unconfirmed";
+          return result.kind === "committed";
+        })
+        .catch(() => {
+          handoff.preservation = "unconfirmed";
+          return false;
+        });
+      if (reason === "storage_preservation") {
+        try {
+          void meeting.textChannel
+            .send(
+              "Recording stopped because audio could not be safely saved. Some recent audio may be unavailable.",
+            )
+            .catch(() => {});
+        } catch {
+          /* Notification is independent of capture preservation. */
+        }
+      }
+    },
+  });
+  startRecordingContentCheckpoint(meeting);
+}
+
+/** Synchronous receiver detachment precedes messaging, storage and expensive finalization. */
+export function stopRecordingCapture(
+  meeting: MeetingData,
+  disposition: "complete" | "interrupted" = "complete",
+) {
+  meeting.captureAudio = false;
+  meeting.recordBotAudio = false;
+  for (const id of getVoiceSubscriptions(meeting).keys())
+    clearVoiceSubscription(meeting, id);
+  meeting.ttsQueue?.stopAndClear();
+  if (
+    meeting.recordingCaptureState?.kind === "complete" ||
+    meeting.recordingCaptureState?.kind === "interrupted"
+  )
+    return;
+  const endedAt = new Date().toISOString();
+  const startedAt = meeting.captureStartedAt?.toISOString() ?? null;
+  meeting.recordingCaptureState =
+    disposition === "complete" && startedAt
+      ? { kind: "complete", startedAt, endedAt }
+      : disposition === "complete"
+        ? { kind: "not_started" }
+        : { kind: "interrupted", startedAt, endedAt, detectedAt: endedAt };
 }

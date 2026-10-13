@@ -1,3 +1,5 @@
+import { checkpointCompletedTranscription } from "./services/recordingContentService";
+import { createCheckpointPlaybackTap } from "./services/recordingCheckpointPlayback";
 import {
   AudioPlayer,
   AudioPlayerStatus,
@@ -120,6 +122,7 @@ async function playTtsItem(
   item: TtsQueueTtsItem,
   onPlaybackStart: () => void,
   onPlaybackEnd: () => void,
+  isCurrent: () => boolean,
 ): Promise<void> {
   const modelChoice = getModelChoice(
     "liveVoiceTts",
@@ -144,6 +147,10 @@ async function playTtsItem(
     response_format: "pcm",
   });
 
+  if (!isCurrent()) {
+    await speechResponse.body?.cancel();
+    return;
+  }
   if (!speechResponse.body) {
     console.warn("No audio body returned from TTS.");
     return;
@@ -167,39 +174,69 @@ async function playTtsItem(
   command.audioFilters(audioFilters);
   const resampledPcm = command.pipe() as Readable;
 
-  resampledPcm.on("data", (chunk: Buffer) => {
-    if (
-      meeting.recordBotAudio !== false &&
-      meeting.audioData.audioPassThrough
-    ) {
-      meeting.audioData.audioPassThrough.write(chunk, (err) => {
-        if (err) {
-          console.error("Error writing TTS chunk to recording:", err);
-        }
-      });
-    }
-  });
-
-  const resource = createOpusResource(resampledPcm);
+  const tap =
+    meeting.recordBotAudio === false
+      ? undefined
+      : createCheckpointPlaybackTap({
+          push: (chunk, observedAt) => {
+            if (
+              meeting.recordBotAudio === false ||
+              meeting.ownershipSignal?.aborted
+            )
+              return false;
+            if (
+              meeting.recordingCapture &&
+              !meeting.recordingCapture.push(
+                `bot:${item.userId}`,
+                chunk,
+                observedAt,
+              )
+            )
+              return false;
+            meeting.audioData.audioPassThrough?.write(chunk, (error) => {
+              if (error) meeting.audioData.captureIncomplete = true;
+            });
+            return true;
+          },
+          stop: () => {
+            meeting.recordingCapture?.interrupt();
+            player.stop(true);
+          },
+        });
+  const resource = createOpusResource(
+    tap ? resampledPcm.pipe(tap.stream) : resampledPcm,
+  );
+  tap?.attach(resource);
 
   const start = Date.now();
-  await waitForIdleIfPlaying(player);
-  item.onBeforePlay?.(meeting);
-  onPlaybackStart();
-  player.play(resource);
-  await waitForIdle(player);
-  onPlaybackEnd();
+  let fullyPlayed: boolean;
+  try {
+    await waitForIdleIfPlaying(player);
+    if (!isCurrent()) return;
+    item.onBeforePlay?.(meeting);
+    onPlaybackStart();
+    player.play(resource);
+    await waitForIdle(player);
+    fullyPlayed = isCurrent() && (tap?.complete() ?? true);
+  } finally {
+    tap?.dispose();
+    resource.playStream.destroy();
+    resampledPcm.destroy();
+    command.kill("SIGTERM");
+    onPlaybackEnd();
+  }
 
   const entry: AudioFileData = {
     userId: item.userId,
     timestamp: start,
-    transcript: item.text,
+    transcript: fullyPlayed ? item.text : undefined,
     processing: false,
     audioOnlyProcessing: false,
     source: item.source === "chat_tts" ? "chat_tts" : "bot",
     messageId: item.messageId,
   };
   meeting.audioData.audioFiles.push(entry);
+  checkpointCompletedTranscription(meeting);
 
   if (item.source === "chat_tts") {
     chatTtsSpoken.inc();
@@ -240,6 +277,7 @@ export function createTtsQueue(
   const queue: TtsQueueItem[] = [];
   let playing = false;
   let preparing = false;
+  let generation = 0;
 
   const playNext = async () => {
     if (playing || preparing || queue.length === 0) return;
@@ -262,6 +300,7 @@ export function createTtsQueue(
     }
 
     preparing = true;
+    const currentGeneration = generation;
     try {
       await playTtsItem(
         meeting,
@@ -273,6 +312,8 @@ export function createTtsQueue(
         () => {
           playing = false;
         },
+        () =>
+          generation === currentGeneration && !meeting.ownershipSignal?.aborted,
       );
     } catch (error) {
       console.error("Failed to stream TTS to Discord:", error);
@@ -325,6 +366,7 @@ export function createTtsQueue(
   };
 
   const stopAndClear = () => {
+    generation++;
     queue.length = 0;
     player.stop(true);
   };

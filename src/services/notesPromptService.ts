@@ -192,8 +192,8 @@ const truncateChatToFit = (chat: string, maxChars: number): string => {
   return header + tail;
 };
 
-const formatChatLogForPrompt = (
-  meeting: MeetingData,
+export const formatChatLogForPrompt = (
+  meeting: Pick<MeetingData, "chatLog" | "runtimeConfig">,
   maxLength: number = MAX_CHAT_LOG_PROMPT_LENGTH,
 ): string | undefined => {
   const chatLog = meeting.chatLog;

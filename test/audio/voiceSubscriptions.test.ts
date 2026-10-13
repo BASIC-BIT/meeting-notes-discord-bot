@@ -1,3 +1,18 @@
+/** @jest-environment node */
+jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import * as tempFiles from "../../src/services/tempFileService";
+import * as checkpoints from "../../src/services/recordingCheckpointService";
+import { checkpointRecordingContext } from "../../src/services/recordingContentService";
+import { createMockDeploymentControlRepository } from "../../src/repositories/deploymentControlRepository";
+import { history } from "../deployment/controlFixtures";
+jest.mock("../../src/services/recordingContentService", () => ({
+  startRecordingContentCheckpoint: jest.fn(),
+  checkpointRecordingContext: jest.fn(),
+  checkpointCompletedTranscription: jest.fn(),
+}));
 import { PassThrough, TransformCallback } from "node:stream";
 import { VoiceConnectionStatus } from "@discordjs/voice";
 import {
@@ -71,7 +86,7 @@ function createMeeting(streams: PassThrough[]) {
     generateNotes: true,
     participants: new Map(),
     isAutoRecording: false,
-  } as MeetingData;
+  } as unknown as MeetingData;
   return { meeting, receiver };
 }
 
@@ -278,4 +293,173 @@ describe("voice subscriptions", () => {
       warn.mockRestore();
     }
   });
+});
+
+describe("actual capture preservation cutoff handoff", () => {
+  test.each([true, false])(
+    "notice failure cannot block stopped capture and confirmed=%s handoff",
+    async (storageRecovers) => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date("2026-01-01T00:00:02Z"));
+      const directory = mkdtempSync(path.join(tmpdir(), "capture-cutoff-"));
+      const temp = jest
+        .spyOn(tempFiles, "ensureMeetingTempDirSync")
+        .mockReturnValue(directory);
+      const row = { ...history, status: "in_progress" as const };
+      const repo = createMockDeploymentControlRepository(
+        new Map(),
+        new Map([[history.guildId, [row]]]),
+      );
+      const objects = new Map<string, Buffer>();
+      const service = checkpoints
+        .createRecordingCheckpointService({
+          repository: repo,
+          objects: {
+            upload: async (key, bytes) => {
+              objects.set(key, Buffer.from(bytes));
+              return key;
+            },
+            read: async (key) => objects.get(key),
+          },
+        })
+        .createProducerSession();
+      let attempts = 0;
+      const append = jest
+        .spyOn(checkpoints, "appendMeetingCheckpointArtifacts")
+        .mockImplementation(async (meeting, artifacts, signal) => {
+          if (++attempts <= 3 || !storageRecovers)
+            return {
+              kind: "preservation_failed",
+              coverage: {
+                kind: "unknown",
+                reason: "verification_failed",
+                detectedAt: new Date().toISOString(),
+              },
+            };
+          return service.appendArtifactsRecordingCheckpoint(
+            meeting,
+            [...artifacts],
+            signal,
+          );
+        });
+      const streams: PassThrough[] = [];
+      const { meeting, receiver } = createMeeting(streams);
+      const owner = new AbortController();
+      Object.assign(meeting, {
+        guildId: history.guildId,
+        channelId: history.channelId,
+        meetingId: history.meetingId,
+        ownershipSignal: owner.signal,
+        textChannel: {
+          send: jest.fn().mockRejectedValue(new Error("notice unavailable")),
+        },
+        reservation: {
+          sessionMode: "meeting",
+          guildId: history.guildId,
+          meetingId: history.meetingId,
+          ownerInstanceId: "old",
+          executionVersion: 1,
+          reservedAt: Date.parse(history.timestamp),
+          historyKey: {
+            guildId: history.guildId,
+            channelId_timestamp: history.channelId_timestamp,
+          },
+          workHandle: { settle: jest.fn(), transition: jest.fn() },
+        },
+      });
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await subscribeToUserVoice(meeting, "user-1");
+        streams[0].write(Buffer.alloc(3840));
+        await jest.advanceTimersByTimeAsync(60000);
+        await meeting.recordingPreservationTask;
+        expect(receiver.subscriptions.size).toBe(0);
+        const subscriptionsBefore = receiver.subscribe.mock.calls.length;
+        await subscribeToUserVoice(meeting, "user-1");
+        expect(receiver.subscribe).toHaveBeenCalledTimes(subscriptionsBefore);
+        expect(meeting.recordingPreservationFailure).toMatchObject({
+          reason: "storage_preservation",
+          preservation: storageRecovers ? "confirmed" : "unconfirmed",
+        });
+        expect(meeting.recordingCaptureState).toMatchObject({
+          kind: "interrupted",
+          endedAt: "2026-01-01T00:01:02.000Z",
+        });
+        expect(meeting.reservation?.workHandle.settle).not.toHaveBeenCalled();
+        expect(owner.signal.aborted).toBe(false);
+        expect(
+          meeting.recordingCapture
+            ?.pending()
+            .every((item) => existsSync(item.file)),
+        ).toBe(true);
+        if (storageRecovers) {
+          expect(
+            (await service.read(row.checkpoint!)).manifest.captureState.kind,
+          ).toBe("interrupted");
+        } else expect(row.checkpoint).toBeUndefined();
+        meeting.recordingCapture?.releaseSettledBuffers();
+      } finally {
+        temp.mockRestore();
+        append.mockRestore();
+        warn.mockRestore();
+        rmSync(directory, { recursive: true, force: true });
+        jest.useRealTimers();
+      }
+    },
+  );
+});
+
+test("receiver PCM commit serializes its synchronous context checkpoint", async () => {
+  jest.useFakeTimers();
+  const directory = mkdtempSync(path.join(tmpdir(), "capture-reentrant-"));
+  const temp = jest
+    .spyOn(tempFiles, "ensureMeetingTempDirSync")
+    .mockReturnValue(directory);
+  const append = jest
+    .spyOn(checkpoints, "appendMeetingCheckpointArtifacts")
+    .mockResolvedValue({
+      kind: "preservation_failed",
+      coverage: {
+        kind: "unknown",
+        reason: "verification_failed",
+        detectedAt: new Date().toISOString(),
+      },
+    });
+  let sequence = 0;
+  jest.mocked(checkpointRecordingContext).mockImplementation((meeting) => {
+    meeting.recordingCapture!.queueContent({
+      kind: "context",
+      sourceId: "context",
+      sequence: sequence++,
+      bytes: Buffer.from("{}"),
+      checksumSha256: "a".repeat(64),
+      contentType: "application/json",
+      coverage: { kind: "unknown" },
+    });
+  });
+  const streams: PassThrough[] = [];
+  const { meeting } = createMeeting(streams);
+  Object.assign(meeting, {
+    ownershipSignal: new AbortController().signal,
+    reservation: { sessionMode: "meeting" },
+  });
+  try {
+    await subscribeToUserVoice(meeting, "user-1");
+    streams[0].write(Buffer.alloc(3840));
+    await jest.advanceTimersByTimeAsync(30000);
+    await meeting.recordingCapture!.settled();
+    expect(append).toHaveBeenCalledTimes(1);
+    expect(
+      meeting.recordingCapture!.pending().map(({ artifact }) => artifact.kind),
+    ).toEqual(["audio", "context"]);
+  } finally {
+    meeting.recordingCapture!.fence();
+    await meeting.recordingCapture!.settled();
+    meeting.recordingCapture!.releaseSettledBuffers();
+    jest.mocked(checkpointRecordingContext).mockReset();
+    temp.mockRestore();
+    append.mockRestore();
+    rmSync(directory, { recursive: true, force: true });
+    jest.useRealTimers();
+  }
 });
