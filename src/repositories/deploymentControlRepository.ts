@@ -1,7 +1,13 @@
 import {
+  recordingCheckpointSchema,
+  recoveryDispositionSchema,
+} from "../types/recordingCheckpoint";
+import {
   DynamoDBClient,
   GetItemCommand,
   PutItemCommand,
+  QueryCommand,
+  type QueryCommandOutput,
   TransactWriteItemsCommand,
   UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
@@ -12,6 +18,7 @@ import { planLocalBootstrap } from "../services/runtimeLocalBootstrapPlan";
 import type { ActiveMeetingLease, MeetingHistory } from "../types/db";
 import {
   buildHistoryTransition,
+  buildTerminalCheckpointTransition,
   buildInitialMeetingHistoryPut,
   buildPromotionTransaction,
   buildRuntimeAdmissionChecks,
@@ -144,6 +151,7 @@ export type DeploymentControlRepository = {
     input: HistoryTransition,
   ): Promise<ConditionalResult>;
   getMeetingHistory(key: HistoryKey): Promise<MeetingHistory | undefined>;
+  listPendingRecordingRecoveries(guildId: string): Promise<MeetingHistory[]>;
 };
 
 export function createDynamoDeploymentControlRepository(
@@ -370,10 +378,40 @@ export function createDynamoDeploymentControlRepository(
       ),
     transitionMeetingHistory: (input) =>
       conditional(() =>
-        client.send(
-          new UpdateItemCommand(buildHistoryTransition(input, tables)),
-        ),
+        input.terminalPreservation
+          ? client.send(
+              new TransactWriteItemsCommand(
+                buildTerminalCheckpointTransition(input, tables),
+              ),
+              { abortSignal: input.signal },
+            )
+          : client.send(
+              new UpdateItemCommand(buildHistoryTransition(input, tables)),
+              { abortSignal: input.signal },
+            ),
       ),
+    async listPendingRecordingRecoveries(guildId) {
+      const rows: MeetingHistory[] = [];
+      let cursor: QueryCommandOutput["LastEvaluatedKey"];
+      do {
+        const page = await client.send(
+          new QueryCommand({
+            TableName: tables.meetingHistory,
+            ConsistentRead: true,
+            KeyConditionExpression: "guildId = :guild",
+            ExpressionAttributeValues: marshall({ ":guild": guildId }),
+            ExclusiveStartKey: cursor,
+          }),
+        );
+        rows.push(
+          ...(page.Items ?? [])
+            .map((item) => unmarshall(item) as MeetingHistory)
+            .filter(isPendingRecordingRecovery),
+        );
+        cursor = page.LastEvaluatedKey;
+      } while (cursor);
+      return rows;
+    },
     async getMeetingHistory(key) {
       const result = await client.send(
         new GetItemCommand({
@@ -836,17 +874,21 @@ export function createMockDeploymentControlRepository(
       return "applied";
     },
     async transitionMeetingHistory(input) {
+      input.signal?.throwIfAborted();
       buildHistoryTransition(input, {
         deploymentControl: "mock",
         meetingHistory: "mock",
       });
       const row = getHistory(input.key);
+      if (!terminalPreservationAllowed(input, records, leases)) return "stale";
       if (
         !row ||
         row.meetingId !== input.expectedMeetingId ||
         row.ownerInstanceId !== input.expectedOwnerInstanceId ||
         row.executionVersion !== input.expectedExecutionVersion ||
-        row.status !== input.expectedStatus
+        row.status !== input.expectedStatus ||
+        (input.expectedCheckpointRevision !== undefined &&
+          (row.checkpoint?.revision ?? 0) !== input.expectedCheckpointRevision)
       )
         return "stale";
       for (const [field, value] of Object.entries(input.patch))
@@ -854,9 +896,48 @@ export function createMockDeploymentControlRepository(
           Object.assign(row, { [field]: structuredClone(value) });
       return "applied";
     },
+    async listPendingRecordingRecoveries(guildId) {
+      return structuredClone(
+        (histories.get(guildId) ?? []).filter(isPendingRecordingRecovery),
+      );
+    },
     async getMeetingHistory(key) {
       const row = getHistory(key);
       return row ? structuredClone(row) : undefined;
     },
   };
+}
+
+/** A candidate is not a claim or permission to join voice. Legacy rows are untouched. */
+export function isPendingRecordingRecovery(row: MeetingHistory): boolean {
+  const recovery = recoveryDispositionSchema.safeParse(row.recovery);
+  const checkpoint = recordingCheckpointSchema.safeParse(row.checkpoint);
+  if (!recovery.success || !checkpoint.success) return false;
+  return (
+    ["interrupted", "failed"].includes(row.status ?? "") &&
+    recovery.data.disposition === "pending" &&
+    recovery.data.attempt < recovery.data.retry.maxAttempts &&
+    recovery.data.executionVersion === row.executionVersion &&
+    row.ownerInstanceId !== undefined &&
+    checkpoint.data.capture.meetingId === row.meetingId &&
+    checkpoint.data.capture.guildId === row.guildId &&
+    checkpoint.data.capture.channelId_timestamp === row.channelId_timestamp
+  );
+}
+
+function terminalPreservationAllowed(
+  input: HistoryTransition,
+  records: Map<string, DeploymentControlRecord>,
+  leases: Map<string, ActiveMeetingLease>,
+) {
+  const proof = input.terminalPreservation;
+  return (
+    !proof ||
+    (leases.get(proof.ownership.guildId)?.sessionMode === "meeting" &&
+      mockWorkAdmissionAllowed(
+        { kind: "session", ownership: proof.ownership, now: proof.now },
+        records,
+        leases,
+      ))
+  );
 }

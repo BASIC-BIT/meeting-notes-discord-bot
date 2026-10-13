@@ -53,3 +53,7 @@ export type AutoRecordRule = {
   mode: "channel" | "all";
   channelId: string;
 };
+
+/** Missing metadata on old rows remains unknown, never inferred from lifecycle status. */
+export type { RecordingCaptureState } from "./recordingCheckpoint";
+export type { RecoveryDisposition as RecordingRecoveryState } from "./recordingCheckpoint";

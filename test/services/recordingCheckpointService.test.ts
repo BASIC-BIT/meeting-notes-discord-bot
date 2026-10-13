@@ -1,0 +1,552 @@
+/** @jest-environment node */
+
+jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
+import { recoveryDispositionSchema } from "../../src/types/recordingCheckpoint";
+import { createHash } from "node:crypto";
+import { createMockDeploymentControlRepository } from "../../src/repositories/deploymentControlRepository";
+import {
+  type RecordingCheckpointMeeting,
+  createRecordingCheckpointService,
+} from "../../src/services/recordingCheckpointService";
+import { history } from "../deployment/controlFixtures";
+import type { RecordingCaptureProvenance } from "../../src/types/recordingCheckpoint";
+
+const capture: RecordingCaptureProvenance = {
+  guildId: history.guildId,
+  channelId: history.channelId,
+  channelId_timestamp: history.channelId_timestamp,
+  meetingId: history.meetingId,
+  ownerInstanceId: "old",
+  executionVersion: 1,
+  reservedAt: history.timestamp,
+  requested: { transcribeMeeting: true, generateNotes: true },
+  captureStartedAt: "2026-01-01T00:00:02.000Z",
+};
+const bytes = Buffer.alloc(96000);
+const digest = (value: Uint8Array) =>
+  createHash("sha256").update(value).digest("hex");
+const segment = {
+  kind: "audio" as const,
+  format: { encoding: "pcm_s16le" as const, sampleRate: 48000, channels: 1 },
+  sourceId: "speaker",
+  sequence: 0,
+  coverage: {
+    kind: "known" as const,
+    intervals: [{ sourceId: "speaker", startOffsetMs: 0, durationMs: 1000 }],
+  },
+  contentType: "audio/ogg",
+  bytes,
+  checksumSha256: digest(bytes),
+};
+function fixture() {
+  const histories = new Map([[history.guildId, [{ ...history }]]]);
+  const repository = createMockDeploymentControlRepository(
+    new Map(),
+    histories,
+  );
+  const objects = new Map<string, Buffer>();
+  const upload = jest.fn(
+    async (
+      key: string,
+      body: string | Uint8Array,
+    ): Promise<string | undefined> => {
+      if (!objects.has(key)) objects.set(key, Buffer.from(body));
+      return key;
+    },
+  );
+  const read = jest.fn(async (key: string) => objects.get(key));
+  const service = createRecordingCheckpointService({
+    repository,
+    objects: { upload, read },
+  });
+  return { service, repository, objects, upload, read, histories };
+}
+const input = {
+  capture,
+  expectedStatus: "starting" as const,
+  previous: undefined,
+  artifacts: [segment],
+};
+
+test("uploadBeforeManifestPublish", async () => {
+  const f = fixture();
+  f.upload.mockImplementationOnce(async () => undefined);
+  await expect(f.service.flush(input)).resolves.toMatchObject({
+    kind: "preservation_failed",
+  });
+  expect(
+    (await f.repository.getMeetingHistory(history))?.checkpoint,
+  ).toBeUndefined();
+});
+test("duplicateSegmentIsIdempotent", async () => {
+  const f = fixture();
+  const first = await f.service.flush(input);
+  expect(first.kind).toBe("committed");
+  if (first.kind !== "committed") throw new Error("fixture commit failed");
+  const second = await f.service.flush({
+    ...input,
+    previous: first.checkpoint,
+  });
+  expect(second).toEqual(first);
+  const verified = await f.service.read(first.checkpoint);
+  expect(verified.manifest.artifacts).toHaveLength(1);
+  expect(first.checkpoint.capture.captureStartedAt).toBe(
+    capture.captureStartedAt,
+  );
+});
+test("checksumMismatchIsRejected", async () => {
+  const f = fixture();
+  await expect(
+    f.service.flush({
+      ...input,
+      artifacts: [{ ...segment, checksumSha256: "0".repeat(64) }],
+    }),
+  ).rejects.toThrow("checksum");
+  expect(f.upload).not.toHaveBeenCalled();
+});
+test("staleOwnerCannotPublishManifest", async () => {
+  const f = fixture();
+  const row = f.histories.get(history.guildId)![0];
+  row.ownerInstanceId = "recovery";
+  row.executionVersion = 2;
+  expect((await f.service.flush(input)).kind).toBe("stale_owner");
+  expect(row.checkpoint).toBeUndefined();
+});
+test("confirmedCoverageExcludesMissingObjects", async () => {
+  const f = fixture();
+  const result = await f.service.flush(input);
+  if (result.kind !== "committed") throw new Error("fixture commit failed");
+  const verified = await f.service.read(result.checkpoint);
+  f.objects.delete(verified.manifest.artifacts[0].object.key);
+  const missing = await f.service.read(result.checkpoint);
+  expect(missing.audioCoverage).toEqual({ kind: "known", intervals: [] });
+  expect(missing.missing).toHaveLength(1);
+});
+test("durableTranscriptionReferenceIsVerified independently of surviving audio and recovery owner", async () => {
+  const f = fixture();
+  const result = await f.service.flush({
+    ...input,
+    artifacts: [
+      segment,
+      { ...segment, kind: "transcription", contentType: "application/json" },
+    ],
+  });
+  if (result.kind !== "committed") throw new Error("fixture commit failed");
+  const verified = await f.service.read(result.checkpoint);
+  f.objects.delete(verified.manifest.artifacts[0].object.key);
+  const row = f.histories.get(history.guildId)![0];
+  row.ownerInstanceId = "recovery";
+  row.executionVersion = 2;
+  const recovered = await f.service.read(result.checkpoint);
+  expect(recovered.verified.map((item) => item.kind)).toEqual([
+    "transcription",
+  ]);
+  expect(recovered.manifest.capture.executionVersion).toBe(1);
+  f.objects.set(recovered.verified[0].object.key, Buffer.from("corrupt"));
+  expect((await f.service.read(result.checkpoint)).verified).toHaveLength(0);
+});
+test("unknown coverage remains unknown and invalid intervals cannot publish", async () => {
+  const f = fixture();
+  const result = await f.service.flush({
+    ...input,
+    capture: { ...capture, captureStartedAt: null },
+    artifacts: [{ ...segment, coverage: { kind: "unknown" } }],
+  });
+  if (result.kind !== "committed") throw new Error("fixture commit failed");
+  expect((await f.service.read(result.checkpoint)).audioCoverage).toEqual({
+    kind: "unknown",
+  });
+  await expect(
+    f.service.flush({
+      ...input,
+      artifacts: [
+        {
+          ...segment,
+          coverage: {
+            kind: "known",
+            intervals: [
+              { sourceId: "speaker", startOffsetMs: -1, durationMs: 1 },
+            ],
+          },
+        },
+      ],
+    }),
+  ).rejects.toThrow();
+});
+
+test("conflicting segment checksum or interval cannot replace a committed identity", async () => {
+  const f = fixture();
+  const first = await f.service.flush(input);
+  if (first.kind !== "committed") throw new Error("fixture commit failed");
+  const other = Buffer.alloc(96000, 1);
+  for (const replacement of [
+    { ...segment, bytes: other, checksumSha256: digest(other) },
+    {
+      ...segment,
+      coverage: {
+        kind: "known" as const,
+        intervals: [
+          { sourceId: "speaker", startOffsetMs: 1, durationMs: 1000 },
+        ],
+      },
+    },
+  ])
+    await expect(
+      f.service.flush({
+        ...input,
+        previous: first.checkpoint,
+        artifacts: [replacement],
+      }),
+    ).rejects.toThrow("Conflicting");
+  expect(
+    (await f.service.read(first.checkpoint)).manifest.artifacts,
+  ).toHaveLength(1);
+});
+test("manifest upload failure leaves canonical pointer unpublished", async () => {
+  const f = fixture();
+  f.upload.mockImplementation(async (key, body) => {
+    if (key.includes("/manifests/")) return undefined;
+    f.objects.set(key, Buffer.from(body));
+    return key;
+  });
+  await expect(f.service.flush(input)).resolves.toMatchObject({
+    kind: "preservation_failed",
+  });
+  expect(
+    (await f.repository.getMeetingHistory(history))?.checkpoint,
+  ).toBeUndefined();
+  expect(f.objects.size).toBe(1);
+});
+test("aborting after upload prevents manifest publication", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  f.upload.mockImplementation(async (key, body) => {
+    f.objects.set(key, Buffer.from(body));
+    controller.abort();
+    return key;
+  });
+  await expect(
+    f.service.flush({ ...input, signal: controller.signal }),
+  ).resolves.toMatchObject({ kind: "preservation_failed" });
+  expect(
+    (await f.repository.getMeetingHistory(history))?.checkpoint,
+  ).toBeUndefined();
+});
+test("context is independently verified and text retains its own source coverage", async () => {
+  const f = fixture();
+  const contextBytes = Buffer.from(
+    JSON.stringify({ serverContext: "generated context", participants: [] }),
+  );
+  const result = await f.service.flush({
+    ...input,
+    artifacts: [
+      segment,
+      { ...segment, kind: "transcription", contentType: "text/plain" },
+      {
+        ...segment,
+        kind: "context",
+        contentType: "application/json",
+        bytes: contextBytes,
+        checksumSha256: digest(contextBytes),
+        coverage: { kind: "unknown" },
+      },
+    ],
+  });
+  if (result.kind !== "committed") throw new Error("fixture commit failed");
+  const first = await f.service.read(result.checkpoint);
+  f.objects.delete(first.manifest.artifacts[0].object.key);
+  const surviving = await f.service.read(result.checkpoint);
+  expect(surviving.verified.map((artifact) => artifact.kind)).toEqual([
+    "transcription",
+    "context",
+  ]);
+  expect(surviving.verified[0].coverage).toEqual(segment.coverage);
+  expect(
+    await f.service.readVerifiedObject(surviving.verified[1].object),
+  ).toEqual(contextBytes);
+});
+test("saved prefix remains readable when configured prefix changes", async () => {
+  const f = fixture();
+  const result = await f.service.flush(input);
+  if (result.kind !== "committed") throw new Error("fixture commit failed");
+  const { config } = await import("../../src/services/configService");
+  const descriptor = Object.getOwnPropertyDescriptor(
+    config.storage,
+    "transcriptPrefix",
+  );
+  Object.defineProperty(config.storage, "transcriptPrefix", {
+    configurable: true,
+    get: () => "new-prefix/",
+  });
+  try {
+    expect((await f.service.read(result.checkpoint)).verified).toHaveLength(1);
+    const appended = await f.service.append({
+      ...input,
+      previous: result.checkpoint,
+      artifact: { ...segment, sequence: 1 },
+    });
+    expect(appended.kind).toBe("committed");
+    if (appended.kind === "committed")
+      expect(appended.checkpoint.artifactFolder).toBe(
+        result.checkpoint.artifactFolder,
+      );
+  } finally {
+    if (descriptor)
+      Object.defineProperty(config.storage, "transcriptPrefix", descriptor);
+  }
+});
+test("capture identity, settings and reserved folder cannot be rewritten", async () => {
+  const f = fixture();
+  await expect(
+    f.service.flush({
+      ...input,
+      capture: {
+        ...capture,
+        requested: { transcribeMeeting: false, generateNotes: true },
+      },
+    }),
+  ).rejects.toThrow("settings");
+  await expect(
+    f.service.flush({
+      ...input,
+      capture: { ...capture, reservedAt: "2026-02-01T00:00:00Z" },
+    }),
+  ).rejects.toThrow("history");
+  const first = await f.service.flush(input);
+  if (first.kind !== "committed") throw new Error("fixture commit failed");
+  await expect(
+    f.service.flush({
+      ...input,
+      previous: first.checkpoint,
+      capture: { ...capture, executionVersion: 2 },
+    }),
+  ).rejects.toThrow("capture changed");
+  await expect(
+    f.service.flush({
+      ...input,
+      previous: first.checkpoint,
+      expectedStatus: "complete",
+    }),
+  ).resolves.toMatchObject({ kind: "stale_owner" });
+});
+test("corrupt manifest cannot provide text or audio proof", async () => {
+  const f = fixture();
+  const result = await f.service.flush(input);
+  if (result.kind !== "committed") throw new Error("fixture commit failed");
+  f.objects.set(
+    result.checkpoint.manifest.key,
+    Buffer.from("corrupt manifest"),
+  );
+  await expect(f.service.read(result.checkpoint)).rejects.toThrow("preserved");
+});
+
+test("verified coverage unions confirmed source intervals and records actual last confirmation", async () => {
+  const f = fixture();
+  const first = await f.service.flush(input);
+  if (first.kind !== "committed") throw new Error("fixture commit failed");
+  expect(first.coverage).toEqual({
+    kind: "verified",
+    intervals: segment.coverage.intervals,
+    savedDurationMs: 1000,
+    lastConfirmedCaptureAt: "2026-01-01T00:00:03.000Z",
+  });
+  const otherSource = {
+    ...segment,
+    sourceId: "second",
+    coverage: {
+      kind: "known" as const,
+      intervals: [{ sourceId: "second", startOffsetMs: 500, durationMs: 1000 }],
+    },
+  };
+  const second = await f.service.append({
+    ...input,
+    previous: first.checkpoint,
+    artifact: otherSource,
+  });
+  if (second.kind !== "committed") throw new Error("fixture append failed");
+  expect(second.coverage).toMatchObject({
+    kind: "verified",
+    savedDurationMs: 1500,
+    lastConfirmedCaptureAt: "2026-01-01T00:00:03.500Z",
+  });
+});
+test("unknown coverage has detection reason and never fabricates zero duration or stop time", async () => {
+  const f = fixture();
+  const result = await f.service.flush({
+    ...input,
+    capture: { ...capture, captureStartedAt: null },
+  });
+  expect(result.coverage).toMatchObject({
+    kind: "unknown",
+    reason: "capture_start_unknown",
+    detectedAt: expect.any(String),
+  });
+  expect(result.coverage).not.toHaveProperty("savedDurationMs");
+  expect(result.coverage).not.toHaveProperty("stoppedAt");
+});
+test("manifest records actual capture disposition separately from processing", async () => {
+  const f = fixture();
+  const state = {
+    kind: "complete" as const,
+    startedAt: capture.captureStartedAt!,
+    endedAt: "2026-01-01T00:00:03.000Z",
+  };
+  const result = await f.service.flush({ ...input, captureState: state });
+  if (result.kind !== "committed") throw new Error("fixture commit failed");
+  const saved = await f.service.read(result.checkpoint);
+  expect(saved.manifest.captureState).toEqual(state);
+  expect(saved.coverage).toMatchObject({ stoppedAt: state.endedAt });
+});
+
+function meetingFixture(): RecordingCheckpointMeeting {
+  return {
+    meetingId: history.meetingId,
+    guildId: history.guildId,
+    channelId: history.channelId,
+    ownershipSignal: new AbortController().signal,
+    captureStartedAt: new Date(capture.captureStartedAt!),
+    transcribeMeeting: true,
+    generateNotes: true,
+    reservation: {
+      guildId: history.guildId,
+      meetingId: history.meetingId,
+      ownerInstanceId: "old",
+      executionVersion: 1,
+      voiceOperationAttemptId: "voice",
+      reservedAt: Date.parse(history.timestamp),
+      sessionMode: "meeting",
+      historyKey: {
+        guildId: history.guildId,
+        channelId_timestamp: history.channelId_timestamp,
+      },
+      workHandle: {
+        settle: jest.fn(),
+        transition: jest.fn(),
+        beginOwnedControl: () => ({ settle: jest.fn() }),
+      },
+    },
+  };
+}
+const liveSegment = {
+  sourceId: segment.sourceId,
+  sequence: 0,
+  startOffsetMs: 0,
+  durationMs: 1000,
+  format: segment.format,
+  bytes,
+  checksumSha256: digest(bytes),
+};
+test("named live adapter binds actual reservation and absent capture state cannot fabricate terminal capture", async () => {
+  const f = fixture();
+  const meeting = meetingFixture();
+  const result = await f.service.appendRecordingCheckpoint(
+    meeting,
+    liveSegment,
+  );
+  expect(result.kind).toBe("committed");
+  if (result.kind !== "committed") throw new Error("fixture commit failed");
+  expect(result.checkpoint.capture.captureStartedAt).toBe(
+    meeting.captureStartedAt?.toISOString(),
+  );
+  expect(
+    (await f.service.read(result.checkpoint)).manifest.captureState,
+  ).toEqual({ kind: "unknown" });
+  expect(result.coverage).not.toHaveProperty("stoppedAt");
+  expect(meeting.recordingCheckpoint).toEqual(result.checkpoint);
+});
+test("named live adapter refuses absent reservation, TTS and later recovery ownership", async () => {
+  const f = fixture();
+  const meeting = meetingFixture();
+  await expect(
+    f.service.appendRecordingCheckpoint(
+      { ...meeting, reservation: undefined },
+      liveSegment,
+    ),
+  ).resolves.toMatchObject({ kind: "preservation_failed" });
+  const reservation = meeting.reservation!;
+  await expect(
+    f.service.appendRecordingCheckpoint(
+      {
+        ...meeting,
+        reservation: {
+          ...reservation,
+          sessionMode: "tts_only",
+          historyKey: undefined,
+        },
+      },
+      liveSegment,
+    ),
+  ).resolves.toMatchObject({ kind: "preservation_failed" });
+  f.histories.get(history.guildId)![0].executionVersion = 2;
+  await expect(
+    f.service.appendRecordingCheckpoint(meeting, liveSegment),
+  ).resolves.toMatchObject({ kind: "stale_owner" });
+  expect(f.upload).not.toHaveBeenCalled();
+});
+test("named live adapter passes actual owner cancellation through held preservation", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  const meeting = { ...meetingFixture(), ownershipSignal: controller.signal };
+  f.upload.mockImplementation(async (key, body) => {
+    f.objects.set(key, Buffer.from(body));
+    controller.abort();
+    return key;
+  });
+  await expect(
+    f.service.appendRecordingCheckpoint(meeting, liveSegment),
+  ).resolves.toMatchObject({ kind: "preservation_failed" });
+  expect(meeting.recordingCheckpoint).toBeUndefined();
+  expect(
+    (await f.repository.getMeetingHistory(history))?.checkpoint,
+  ).toBeUndefined();
+});
+test("named flush without actual capture start reports unknown without reservation-time substitution", async () => {
+  const f = fixture();
+  const meeting = { ...meetingFixture(), captureStartedAt: undefined };
+  const coverage = await f.service.flushRecordingCheckpoint(meeting, {
+    signal: new AbortController().signal,
+  });
+  expect(coverage).toMatchObject({
+    kind: "unknown",
+    reason: "capture_start_unknown",
+  });
+  expect(coverage).not.toHaveProperty("savedDurationMs");
+  expect(coverage).not.toHaveProperty("stoppedAt");
+  expect(meeting.recordingCheckpoint?.capture.captureStartedAt).toBeNull();
+});
+test("recovery disposition requires bounded attempts/version/stage and preserves reconciliation", () => {
+  const state = {
+    disposition: "needs_reconciliation",
+    attempt: 2,
+    executionVersion: 1,
+    stage: "verification",
+    retry: { maxAttempts: 2, nextAttemptAt: null },
+    reason: "retry_exhausted",
+  };
+  expect(recoveryDispositionSchema.parse(state)).toEqual(state);
+  expect(
+    recoveryDispositionSchema.safeParse({ ...state, attempt: 3 }).success,
+  ).toBe(false);
+  expect(
+    recoveryDispositionSchema.safeParse({ disposition: "pending" }).success,
+  ).toBe(false);
+});
+
+test("aborted publication acknowledgment cannot report committed", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  const transition = f.repository.transitionMeetingHistory.bind(f.repository);
+  jest
+    .spyOn(f.repository, "transitionMeetingHistory")
+    .mockImplementation(async (request) => {
+      const result = await transition(request);
+      controller.abort();
+      return result;
+    });
+  const result = await f.service.flush({ ...input, signal: controller.signal });
+  expect(result.kind).toBe("preservation_failed");
+  // The write may have landed. Callers must retain work for reconciliation.
+  expect(
+    (await f.repository.getMeetingHistory(history))?.checkpoint,
+  ).toBeDefined();
+});

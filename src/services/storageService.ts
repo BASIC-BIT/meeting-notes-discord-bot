@@ -57,12 +57,18 @@ const buildMockUploadPost = (
   },
 });
 
+export type StorageWriteOptions = { signal?: AbortSignal; immutable?: boolean };
+
 export async function uploadObjectToS3(
   key: string,
   body: string | Uint8Array | Buffer,
   contentType: string,
+  options: StorageWriteOptions = {},
 ): Promise<string | undefined> {
+  if (options.signal?.aborted) return undefined;
   if (config.mock.enabled) {
+    if (options.immutable && getMockStore().objectsByKey.has(key))
+      return undefined;
     getMockStore().objectsByKey.set(
       key,
       typeof body === "string" ? body : Buffer.from(body),
@@ -90,11 +96,14 @@ export async function uploadObjectToS3(
         Body: body,
         ContentType: contentType,
         ContentLength: contentLength,
+        ...(options.immutable ? { IfNoneMatch: "*" } : {}),
       }),
+      { abortSignal: options.signal },
     );
     return key;
   } catch (error) {
-    console.error("Failed to upload object to S3", error);
+    if (!options.immutable)
+      console.error("Failed to upload object to S3", error);
     return undefined;
   }
 }
@@ -307,5 +316,35 @@ export async function downloadObjectToFile(
   } catch (error) {
     console.error("Failed to download object from S3", error);
     return false;
+  }
+}
+
+/** Bytes are verified by checkpoint callers. Existing text/file error behavior is unchanged. */
+export async function fetchObjectBytesFromS3(
+  key: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array | undefined> {
+  signal?.throwIfAborted();
+  if (config.mock.enabled) {
+    const value = getMockStore().objectsByKey.get(key);
+    return value === undefined ? undefined : Buffer.from(value);
+  }
+  if (!config.storage.transcriptBucket) return undefined;
+  try {
+    const response = await s3Client.send(
+      new GetObjectCommand({
+        Bucket: config.storage.transcriptBucket,
+        Key: key,
+      }),
+      { abortSignal: signal },
+    );
+    const bytes = await response.Body?.transformToByteArray();
+    signal?.throwIfAborted();
+    return bytes;
+  } catch (error) {
+    if (isMissingKeyError(error)) return undefined;
+    throw new StoredObjectMetadataError("Failed to read checkpoint object", {
+      cause: error,
+    });
   }
 }

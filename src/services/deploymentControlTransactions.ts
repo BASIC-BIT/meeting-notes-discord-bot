@@ -683,7 +683,7 @@ export function buildInitialMeetingHistoryPut(
 export function buildHistoryTransition(
   input: HistoryTransition,
   tables: ControlTableNames,
-): UpdateItemCommandInput {
+): UpdateItemCommandInput & { UpdateExpression: string } {
   validateHistoryTransition(input);
   const names: Record<string, string> = { "#status": "status" };
   const values = marshall({
@@ -704,13 +704,67 @@ export function buildHistoryTransition(
     );
     updates.push(`#field${index} = :value${index}`);
   });
+  let checkpointCondition = "";
+  if (input.expectedCheckpointRevision !== undefined) {
+    names["#checkpoint"] = "checkpoint";
+    if (input.expectedCheckpointRevision === 0) {
+      checkpointCondition = " AND attribute_not_exists(#checkpoint)";
+    } else {
+      names["#revision"] = "revision";
+      Object.assign(
+        values,
+        marshall({ ":checkpointRevision": input.expectedCheckpointRevision }),
+      );
+      checkpointCondition = " AND #checkpoint.#revision = :checkpointRevision";
+    }
+  }
   return {
     TableName: tables.meetingHistory,
     Key: marshall(input.key),
     ConditionExpression:
-      "meetingId = :meeting AND ownerInstanceId = :owner AND executionVersion = :version AND #status = :prior",
+      "meetingId = :meeting AND ownerInstanceId = :owner AND executionVersion = :version AND #status = :prior" +
+      checkpointCondition,
     UpdateExpression: `SET ${updates.join(", ")}`,
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: values,
+  };
+}
+
+/** Failed-session preservation continues the original lease, including after promotion. */
+export function buildTerminalCheckpointTransition(
+  input: HistoryTransition,
+  tables: ControlTableNames,
+): TransactWriteItemsCommandInput {
+  const update = buildHistoryTransition(input, tables);
+  const proof = input.terminalPreservation;
+  if (!proof || !tables.activeMeeting)
+    throw new Error("Terminal preservation requires its active lease table");
+  const checks = buildWorkAdmissionChecks(
+    { kind: "session", ownership: proof.ownership, now: proof.now },
+    tables,
+  ).map((item) => {
+    if (!item.ConditionCheck) throw new Error("Expected owned lease check");
+    return {
+      ConditionCheck: {
+        ...item.ConditionCheck,
+        ConditionExpression: `${item.ConditionCheck.ConditionExpression} AND sessionMode = :sessionMode`,
+        ExpressionAttributeValues: {
+          ...item.ConditionCheck.ExpressionAttributeValues,
+          ":sessionMode": { S: "meeting" },
+        },
+      },
+    };
+  });
+  return {
+    TransactItems: [
+      ...checks,
+      {
+        Update: {
+          ...update,
+          TableName: tables.meetingHistory,
+          Key: marshall(input.key),
+        },
+      },
+    ],
   };
 }

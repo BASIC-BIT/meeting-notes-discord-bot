@@ -1,6 +1,13 @@
 /** @jest-environment node */
 
+jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
+
 import { afterEach, describe, expect, jest, test } from "@jest/globals";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -9,6 +16,7 @@ import { MOCK_STORAGE_UPLOAD_PATH } from "../../src/constants";
 import { resetMockStore } from "../../src/repositories/mockStore";
 import { config } from "../../src/services/configService";
 import {
+  fetchObjectBytesFromS3,
   downloadObjectToFile,
   getSignedUploadPost,
   getStoredObjectMetadata,
@@ -138,5 +146,89 @@ describe("storageService upload POST signing", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+  test("checkpoint immutability preserves the first mock object while ordinary writes still replace it", async () => {
+    Object.defineProperty(config.mock, "enabled", {
+      get: () => true,
+      configurable: true,
+    });
+    await uploadObjectToS3("checkpoint", "original", "text/plain", {
+      immutable: true,
+    });
+    await expect(
+      uploadObjectToS3("checkpoint", "replacement", "text/plain", {
+        immutable: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(
+      Buffer.from((await fetchObjectBytesFromS3("checkpoint"))!).toString(),
+    ).toBe("original");
+    await uploadObjectToS3("checkpoint", "ordinary", "text/plain");
+    expect(
+      Buffer.from((await fetchObjectBytesFromS3("checkpoint"))!).toString(),
+    ).toBe("ordinary");
+  });
+  test("checkpoint upload uses existing SDK immutable condition and actual AbortSignal", async () => {
+    Object.defineProperty(config.mock, "enabled", {
+      get: () => false,
+      configurable: true,
+    });
+    Object.defineProperty(config.storage, "transcriptBucket", {
+      get: () => "test-bucket",
+      configurable: true,
+    });
+    const send = jest
+      .spyOn(S3Client.prototype, "send")
+      .mockImplementation(async () => ({}));
+    const controller = new AbortController();
+    await expect(
+      uploadObjectToS3("checkpoint", Buffer.from("generated"), "audio/ogg", {
+        immutable: true,
+        signal: controller.signal,
+      }),
+    ).resolves.toBe("checkpoint");
+    expect(send).toHaveBeenCalledWith(expect.any(PutObjectCommand), {
+      abortSignal: controller.signal,
+    });
+    expect(send.mock.calls[0][0].input).toMatchObject({ IfNoneMatch: "*" });
+    controller.abort();
+    await expect(
+      uploadObjectToS3("checkpoint2", "generated", "text/plain", {
+        signal: controller.signal,
+      }),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  test("storage read passes actual signal and ordinary upload failures still return undefined", async () => {
+    Object.defineProperty(config.mock, "enabled", {
+      get: () => false,
+      configurable: true,
+    });
+    Object.defineProperty(config.storage, "transcriptBucket", {
+      get: () => "test-bucket",
+      configurable: true,
+    });
+    const send = jest
+      .spyOn(S3Client.prototype, "send")
+      .mockImplementation(async () => ({
+        Body: { transformToByteArray: async () => Buffer.from("generated") },
+      }));
+    const signal = new AbortController().signal;
+    expect(await fetchObjectBytesFromS3("checkpoint", signal)).toEqual(
+      Buffer.from("generated"),
+    );
+    expect(send).toHaveBeenCalledWith(expect.any(GetObjectCommand), {
+      abortSignal: signal,
+    });
+    send.mockImplementation(async () => {
+      throw new Error("synthetic unavailable");
+    });
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      uploadObjectToS3("ordinary", "generated", "text/plain"),
+    ).resolves.toBeUndefined();
+    await expect(fetchObjectBytesFromS3("checkpoint")).rejects.toThrow(
+      "Failed to read checkpoint",
+    );
   });
 });

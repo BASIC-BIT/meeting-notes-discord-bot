@@ -1,3 +1,7 @@
+import type {
+  RecordingCheckpoint,
+  RecordingCaptureState,
+} from "./recordingCheckpoint";
 import type { RecordingLimitState } from "../services/recordingLimitService";
 import type { SessionReservation } from "./deploymentControl";
 import { AudioPlayer, VoiceConnection } from "@discordjs/voice";
@@ -42,6 +46,8 @@ export type LiveVoiceThinkingCueState = {
 
 export interface MeetingData {
   reservation?: SessionReservation;
+  recordingCheckpoint?: RecordingCheckpoint;
+  recordingCaptureState?: RecordingCaptureState;
   meetingId: string;
   sessionMode?: VoiceSessionMode;
   captureAudio?: boolean;

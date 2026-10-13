@@ -1,7 +1,10 @@
+import type { RecordingCheckpoint } from "./recordingCheckpoint";
 import { Participant } from "./participants";
 import type { MeetingDelivery } from "./meetingDelivery";
 import type { MeetingProcessingOutcome } from "./meetingProcessing";
 import type {
+  RecordingCaptureState,
+  RecordingRecoveryState,
   AutoRecordRule,
   MeetingEndReason,
   MeetingStartReason,
@@ -437,6 +440,9 @@ export interface OnboardingState {
 
 // Meeting History Type
 export interface MeetingHistory {
+  checkpoint?: RecordingCheckpoint;
+  capture?: RecordingCaptureState;
+  recovery?: RecordingRecoveryState;
   ownerInstanceId?: string;
   executionVersion?: number;
   guildId: string; // Partition key

@@ -1,3 +1,8 @@
+import {
+  recordingCheckpointSchema,
+  recordingCaptureStateSchema,
+  recoveryDispositionSchema,
+} from "./recordingCheckpoint";
 import { z } from "zod";
 import type { ActiveMeetingLease, MeetingHistory } from "./db";
 import { MEETING_STATUS, type MeetingStatus } from "./meetingLifecycle";
@@ -428,6 +433,9 @@ export type HistoryKey = Pick<
   "guildId" | "channelId_timestamp"
 >;
 export const HISTORY_TRANSITION_FIELDS = [
+  "checkpoint",
+  "capture",
+  "recovery",
   "status",
   "duration",
   "endReason",
@@ -454,7 +462,15 @@ export const HISTORY_TRANSITION_FIELDS = [
   "notesLastEditedAt",
   "notesHistory",
 ] as const;
+export type TerminalCheckpointPreservation = {
+  kind: "terminal_preservation";
+  ownership: SessionOwnership & { sessionMode: "meeting" };
+  now: number;
+};
 export type HistoryTransition = {
+  terminalPreservation?: TerminalCheckpointPreservation;
+  signal?: AbortSignal;
+  expectedCheckpointRevision?: number;
   key: HistoryKey;
   expectedMeetingId: string;
   expectedOwnerInstanceId: string;
@@ -486,7 +502,72 @@ export function validateHistoryTransition(input: HistoryTransition): void {
   }
   if (!Object.values(input.patch).some((value) => value !== undefined))
     throw new Error("History transition patch is empty");
+  validateCheckpointTransition(input);
+  if (input.patch.capture)
+    recordingCaptureStateSchema.parse(input.patch.capture);
+  if (input.patch.recovery)
+    recoveryDispositionSchema.parse(input.patch.recovery);
+  if (input.terminalPreservation) validateTerminalCheckpointPreservation(input);
   const target = input.patch.status;
   if (target && !legalTransitions[input.expectedStatus].includes(target))
     throw new Error("Illegal history status transition");
+}
+
+function validateTerminalCheckpointPreservation(input: HistoryTransition) {
+  const proof = input.terminalPreservation;
+  if (!proof || proof.kind !== "terminal_preservation")
+    throw new Error("Terminal preservation authority required");
+  z.number().int().nonnegative().parse(input.expectedCheckpointRevision);
+  const owner = proof.ownership;
+  if (
+    !["failed", "interrupted"].includes(input.expectedStatus) ||
+    !input.signal ||
+    Object.keys(input.patch).some(
+      (field) => !["checkpoint", "capture", "recovery"].includes(field),
+    )
+  )
+    throw new Error("Terminal preservation is metadata only");
+  id.parse(owner.voiceOperationAttemptId);
+  epochSecond.parse(proof.now);
+  if (
+    owner.guildId !== input.key.guildId ||
+    owner.meetingId !== input.expectedMeetingId ||
+    owner.ownerInstanceId !== input.expectedOwnerInstanceId ||
+    owner.executionVersion !== input.expectedExecutionVersion ||
+    owner.sessionMode !== "meeting"
+  )
+    throw new Error("Terminal preservation owner mismatch");
+  if (
+    input.patch.recovery &&
+    (!["pending", "needs_reconciliation"].includes(
+      input.patch.recovery.disposition,
+    ) ||
+      input.patch.recovery.executionVersion !== input.expectedExecutionVersion)
+  )
+    throw new Error("Terminal preservation cannot complete recovery");
+}
+
+function validateCheckpointTransition(input: HistoryTransition) {
+  if (input.patch.checkpoint) {
+    if (
+      !input.terminalPreservation &&
+      !["starting", "in_progress", "processing"].includes(input.expectedStatus)
+    )
+      throw new Error("Terminal capture cannot publish checkpoints");
+    const checkpoint = recordingCheckpointSchema.parse(input.patch.checkpoint);
+    const expectedRevision = z
+      .number()
+      .int()
+      .nonnegative()
+      .parse(input.expectedCheckpointRevision);
+    if (
+      checkpoint.revision !== expectedRevision + 1 ||
+      checkpoint.capture.meetingId !== input.expectedMeetingId ||
+      checkpoint.capture.ownerInstanceId !== input.expectedOwnerInstanceId ||
+      checkpoint.capture.executionVersion !== input.expectedExecutionVersion ||
+      checkpoint.capture.guildId !== input.key.guildId ||
+      checkpoint.capture.channelId_timestamp !== input.key.channelId_timestamp
+    )
+      throw new Error("Checkpoint capture ownership or revision mismatch");
+  }
 }
