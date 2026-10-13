@@ -11,7 +11,7 @@ import type {
 import type { MeetingEvent } from "../../types/meetingTimeline";
 import { MEETING_STATUS } from "../../types/meetingLifecycle";
 
-type LiveStreamStatus =
+export type LiveStreamStatus =
   "connecting" | "live" | "processing" | "complete" | "cancelled" | "error";
 
 const toStreamStatus = (status: LiveMeetingStatus): LiveStreamStatus => {
@@ -37,7 +37,7 @@ export function useLiveMeetingStream({
   const [attendees, setAttendees] = useState<string[]>([]);
   const [status, setStatus] = useState<LiveStreamStatus>("connecting");
   const [retryKey, setRetryKey] = useState(0);
-  const seenRef = useRef<Set<string>>(new Set());
+  const identityRef = useRef("");
 
   const retry = useCallback(() => {
     setRetryKey((current) => current + 1);
@@ -47,11 +47,14 @@ export function useLiveMeetingStream({
     if (!enabled) return;
     if (!guildId || !meetingId) return;
 
-    setMeeting(null);
-    setEvents([]);
-    setAttendees([]);
+    const identity = `${guildId}:${meetingId}`;
+    if (identityRef.current !== identity) {
+      setMeeting(null);
+      setEvents([]);
+      setAttendees([]);
+      identityRef.current = identity;
+    }
     setStatus("connecting");
-    seenRef.current = new Set();
 
     const url = buildApiUrl(`/api/live/${guildId}/${meetingId}/stream`);
     const source = new EventSource(url, { withCredentials: true });
@@ -61,20 +64,21 @@ export function useLiveMeetingStream({
       setMeeting(payload.meeting);
       setEvents(payload.events);
       setAttendees(payload.meeting.attendees ?? []);
-      seenRef.current = new Set(payload.events.map((entry) => entry.id));
       setStatus(toStreamStatus(payload.meeting.status));
     });
 
     source.addEventListener("events", (event) => {
       const payload = JSON.parse(event.data) as LiveMeetingEventsPayload;
-      const next = payload.events.filter((entry) => {
-        if (seenRef.current.has(entry.id)) return false;
-        seenRef.current.add(entry.id);
-        return true;
+      setEvents((current) => {
+        const byId = new Map(current.map((entry) => [entry.id, entry]));
+        for (const id of payload.removedEventIds ?? []) byId.delete(id);
+        for (const entry of payload.events) byId.set(entry.id, entry);
+        return [...byId.values()].sort((left, right) =>
+          left.offsetSeconds !== undefined && right.offsetSeconds !== undefined
+            ? left.offsetSeconds - right.offsetSeconds
+            : 0,
+        );
       });
-      if (next.length > 0) {
-        setEvents((current) => [...current, ...next]);
-      }
     });
 
     source.addEventListener("attendees", (event) => {
