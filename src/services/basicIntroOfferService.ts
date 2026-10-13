@@ -646,33 +646,49 @@ export async function getProviderSubscriptionDetails(
   let discountedUnitAmount: number | null = null;
   if (discount && typeof discount !== "string") {
     const source = discount.source.coupon;
-    const coupon =
-      typeof source === "string"
-        ? await stripe.coupons.retrieve(source)
-        : source;
+    let coupon = typeof source === "string" ? null : source;
+    const couponId = typeof source === "string" ? source : source?.id;
+    if (coupon?.deleted) return { status: "unavailable" };
+    if (!coupon || !coupon.applies_to) {
+      if (!couponId) return { status: "unavailable" };
+      try {
+        // applies_to is expandable, and omission on the subscription expansion
+        // cannot prove that the coupon is unrestricted.
+        coupon = await stripe.coupons.retrieve(couponId, {
+          expand: ["applies_to"],
+        });
+      } catch {
+        return { status: "unavailable" };
+      }
+    }
+    if (!coupon || coupon.id !== couponId) return { status: "unavailable" };
+    const productId =
+      typeof price.product === "string" ? price.product : price.product?.id;
+    if (coupon.applies_to && !productId) return { status: "unavailable" };
     if (
-      !coupon ||
-      coupon.deleted ||
-      (coupon.amount_off !== null && coupon.currency !== price.currency)
-    )
-      return { status: "unavailable" };
-    discountDetails = {
-      percentOff: coupon.percent_off,
-      amountOff: coupon.amount_off,
-      durationMonths: coupon.duration_in_months,
-      endsAt:
-        discount.end === null
-          ? null
-          : new Date(discount.end * 1000).toISOString(),
-      introductory: discount.id === intro?.id,
-    };
-    discountedUnitAmount = Math.max(
-      0,
-      Math.round(
-        unitAmount * (1 - (coupon.percent_off ?? 0) / 100) -
-          (coupon.amount_off ?? 0),
-      ),
-    );
+      !coupon.applies_to ||
+      (productId && coupon.applies_to.products.includes(productId))
+    ) {
+      if (coupon.amount_off !== null && coupon.currency !== price.currency)
+        return { status: "unavailable" };
+      discountDetails = {
+        percentOff: coupon.percent_off,
+        amountOff: coupon.amount_off,
+        durationMonths: coupon.duration_in_months,
+        endsAt:
+          discount.end === null
+            ? null
+            : new Date(discount.end * 1000).toISOString(),
+        introductory: discount.id === intro?.id,
+      };
+      discountedUnitAmount = Math.max(
+        0,
+        Math.round(
+          unitAmount * (1 - (coupon.percent_off ?? 0) / 100) -
+            (coupon.amount_off ?? 0),
+        ),
+      );
+    }
   }
   return {
     status: "available",
@@ -681,11 +697,9 @@ export async function getProviderSubscriptionDetails(
     unitAmount: unitAmount,
     discountedUnitAmount,
     interval: interval === "month" ? "month" : "year",
-    renewalAt:
-      subscription.cancel_at_period_end ||
-      ["canceled", "incomplete_expired"].includes(subscription.status)
-        ? null
-        : new Date(item.current_period_end * 1000).toISOString(),
+    renewalAt: ["canceled", "incomplete_expired"].includes(subscription.status)
+      ? null
+      : new Date(item.current_period_end * 1000).toISOString(),
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
     discount: discountDetails,
     firstYearPayment: await getAnnualIntroFirstYearPayment(

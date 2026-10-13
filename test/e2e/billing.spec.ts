@@ -521,6 +521,17 @@ for (const interval of ["month", "year"] as const) {
         ? "$6/month for your first 3 months, then $10/month"
         : "$60 upfront for your first year, then $100/year",
     );
+    await expect(page.getByTestId("basic-intro-terms")).toContainText(
+      "all subscriptions on your billing account",
+    );
+    await expect(page.getByTestId("basic-intro-terms")).toContainText(
+      "Payment methods and cancellation remain available.",
+    );
+    await expect(page.getByTestId("basic-intro-terms")).toContainText(
+      interval === "month"
+        ? "During the 3-month discount"
+        : "Once the first invoice is finalized",
+    );
     await page.getByRole("button", { name: "Continue with Basic" }).click();
     await expect(
       page.getByRole("button", { name: "Retry checkout" }),
@@ -598,7 +609,7 @@ test("basic intro Billing shows actual monthly discount and cancellation", async
     "Current price: $6/month",
   );
   await expect(page.getByTestId("subscription-details")).toContainText(
-    "Cancels on",
+    `Cancels on ${new Date(monthlySubscriber.renewalAt!).toLocaleDateString()}. No automatic renewal.`,
   );
   await expect(page.getByTestId("subscription-details")).not.toContainText(
     "Next renewal",
@@ -615,6 +626,9 @@ test("basic intro unavailable quotes block signup and legacy billing stays manag
   await expect(
     page.getByRole("button", { name: "Refresh offers" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Continue with Pro" }),
+  ).toBeEnabled();
 });
 
 test("purchase recovers unavailable server without dropping intent", async ({

@@ -217,6 +217,17 @@ test.describe("visual regression", () => {
                 ? "$6/month for your first 3 months, then $10/month"
                 : "$60 upfront for your first year, then $100/year",
             );
+            await expect(page.getByTestId("basic-intro-terms")).toContainText(
+              "all subscriptions on your billing account",
+            );
+            await expect(page.getByTestId("basic-intro-terms")).toContainText(
+              "Payment methods and cancellation remain available.",
+            );
+            await expect(page.getByTestId("basic-intro-terms")).toContainText(
+              interval === "month"
+                ? "During the 3-month discount"
+                : "Once the first invoice is finalized",
+            );
             const heights = await selector
               .locator("label")
               .evaluateAll((labels) =>

@@ -25,6 +25,12 @@ export default function BasicIntroTerms({
           : "Billed monthly."}{" "}
         Renews automatically unless canceled. Tax may apply.
       </Text>
+      <Text size="xs" c="var(--mantine-color-text)">
+        {offer.id === "basic_annual_intro_v1"
+          ? "While the first-invoice discount is active, plan and billing-period changes are restricted across all subscriptions on your billing account. Once the first invoice is finalized, this annual offer does not restrict plan changes for the rest of the year."
+          : "During the 3-month discount, plan and billing-period changes are restricted across all subscriptions on your billing account."}{" "}
+        Payment methods and cancellation remain available.
+      </Text>
       {offer.enrollmentEndsAt ? (
         <Text size="xs" c="var(--mantine-color-text)">
           Enroll by {new Date(offer.enrollmentEndsAt).toLocaleDateString()}.

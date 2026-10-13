@@ -71,6 +71,10 @@ it("shows actual monthly discount and account restriction without inventing an e
 });
 it("keeps cancellation honest and does not call it a renewal", () => {
   show({ ...annual, cancelAtPeriodEnd: true });
-  expect(screen.getByText(/Cancels on/)).toBeVisible();
+  expect(
+    screen.getByText(
+      `Cancels on ${new Date(annual.renewalAt!).toLocaleDateString()}. No automatic renewal.`,
+    ),
+  ).toBeVisible();
   expect(screen.queryByText(/Next renewal/)).not.toBeInTheDocument();
 });

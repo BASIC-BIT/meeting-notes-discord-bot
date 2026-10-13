@@ -489,10 +489,30 @@ export const LegacyBillingLimit: Story = {
   },
 };
 
+async function expectAccountTerms(
+  canvasElement: HTMLElement,
+  interval: "month" | "year",
+) {
+  const canvas = within(canvasElement);
+  const terms = await canvas.findByTestId("basic-intro-terms");
+  await expect(terms).toHaveTextContent(
+    "all subscriptions on your billing account",
+  );
+  await expect(terms).toHaveTextContent(
+    "Payment methods and cancellation remain available.",
+  );
+  await expect(terms).toHaveTextContent(
+    interval === "month"
+      ? "During the 3-month discount"
+      : "Once the first invoice is finalized",
+  );
+}
+
 const saleTags = ["basic-intro"];
 export const IntroMonthly: Story = {
   tags: saleTags,
   args: { introStatus: "available" },
+  play: async ({ canvasElement }) => expectAccountTerms(canvasElement, "month"),
 };
 export const IntroMonthlyLight: Story = {
   ...IntroMonthly,
@@ -504,6 +524,7 @@ export const IntroAnnual: Story = {
     introStatus: "available",
     path: "/upgrade/select-server?serverId=example&interval=year",
   },
+  play: async ({ canvasElement }) => expectAccountTerms(canvasElement, "year"),
 };
 export const IntroProAnnual: Story = {
   ...IntroAnnual,
@@ -596,6 +617,7 @@ export const IntroPromotionChosen: Story = {
 export const IntroHome: Story = {
   tags: saleTags,
   args: { introStatus: "available", path: "/" },
+  play: async ({ canvasElement }) => expectAccountTerms(canvasElement, "month"),
 };
 export const IntroHomeAnnual: Story = {
   ...IntroHome,
@@ -603,11 +625,13 @@ export const IntroHomeAnnual: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByText("Annual"));
     await expect(await canvas.findByText("$60 upfront")).toBeVisible();
+    await expectAccountTerms(canvasElement, "year");
   },
 };
 export const IntroBillingFree: Story = {
   tags: saleTags,
   args: { introStatus: "available", path: "/portal/server/example/billing" },
+  play: async ({ canvasElement }) => expectAccountTerms(canvasElement, "month"),
 };
 export const IntroBillingAnnual: Story = {
   tags: saleTags,
@@ -615,6 +639,7 @@ export const IntroBillingAnnual: Story = {
     introStatus: "available",
     path: "/portal/server/example/billing?interval=year",
   },
+  play: async ({ canvasElement }) => expectAccountTerms(canvasElement, "year"),
 };
 export const IntroMonthlySubscriber: Story = {
   tags: saleTags,

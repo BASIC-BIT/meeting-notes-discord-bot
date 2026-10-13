@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import UpgradeServerSelect from "./UpgradeServerSelect";
+import * as checkoutAttemptHook from "../hooks/useCheckoutAttempt";
 
 const mockSearch = jest.fn();
 const mockBillingQuery = jest.fn();
@@ -113,6 +114,12 @@ it("shows verified monthly terms and protects the quoted offer at checkout", asy
   expect(
     screen.getByText("$6/month for your first 3 months, then $10/month"),
   ).toBeVisible();
+  expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
+    "During the 3-month discount, plan and billing-period changes are restricted across all subscriptions on your billing account.",
+  );
+  expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
+    "Payment methods and cancellation remain available.",
+  );
   await userEvent.click(button("Basic"));
   expect(screen.getByText("40% off")).toBeVisible();
   expect(screen.getByLabelText("Regular price")).toHaveTextContent("$10 / mo");
@@ -166,6 +173,15 @@ it("uses only the selected annual quote and actual upfront terms", async () => {
     screen.getByText("$60 upfront for your first year, then $100/year"),
   ).toBeVisible();
   expect(screen.queryByText(/months free/)).not.toBeInTheDocument();
+  expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
+    "all subscriptions on your billing account",
+  );
+  expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
+    "Once the first invoice is finalized, this annual offer does not restrict plan changes for the rest of the year.",
+  );
+  expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
+    "Payment methods and cancellation remain available.",
+  );
   await userEvent.click(button("Basic"));
   expect(mockCheckout).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -183,7 +199,47 @@ it.each([
   expect(button("Basic")).toBeDisabled();
   expect(screen.getByRole("button", { name: "Refresh offers" })).toBeVisible();
   expect(button("Pro")).toBeEnabled();
+  expect(
+    mockTrack.mock.calls.filter(([event]) => event === "upgrade_ready"),
+  ).toHaveLength(0);
 });
+it.each([
+  { status: "unavailable" },
+  { ...monthlyOffer, priceId: "stale-price" },
+])(
+  "keeps requested Pro ready when only Basic offer is blocked",
+  (introOffer) => {
+    mockSearch.mockReturnValue({ plan: "pro" });
+    mockBillingQuery.mockReturnValue({ data: { ...freeBilling, introOffer } });
+    renderSelector();
+    expect(button("Pro")).toBeEnabled();
+    expect(mockTrack).toHaveBeenCalledWith(
+      "upgrade_ready",
+      expect.objectContaining({ tier: "pro", offer: "none" }),
+    );
+  },
+);
+it("retained failed checkout does not emit readiness while its purchase actions are disabled", () => {
+  jest.spyOn(checkoutAttemptHook, "useCheckoutAttempt").mockReturnValue({
+    attempt: {
+      identity: "retained-failure",
+      request: { serverId: "s1", tier: "basic", interval: "month" },
+      offer: { status: "inactive" },
+    },
+    refreshing: false,
+    begin: jest.fn(),
+    isCurrent: jest.fn(),
+    refresh: jest.fn(),
+  });
+  renderSelector();
+  expect(screen.getByRole("button", { name: "Retry checkout" })).toBeEnabled();
+  expect(button("Basic")).toBeDisabled();
+  expect(button("Pro")).toBeDisabled();
+  expect(
+    mockTrack.mock.calls.filter(([event]) => event === "upgrade_ready"),
+  ).toHaveLength(0);
+});
+afterEach(() => jest.restoreAllMocks());
 it("makes the promotion an explicit alternative while preserving the code", async () => {
   mockSearch.mockReturnValue({ promo: "SAVE20", offerChoice: "promotion" });
   mockBillingQuery.mockReturnValue({

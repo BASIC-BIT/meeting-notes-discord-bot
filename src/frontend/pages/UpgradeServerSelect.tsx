@@ -180,6 +180,14 @@ export default function UpgradeServerSelect({
     !checkoutAttempt.refreshing &&
     !busy;
 
+  const basicActionEnabled =
+    purchaseReady &&
+    Boolean(basicPlan) &&
+    basicTierEligible &&
+    !offerBlocked &&
+    !failedCheckout;
+  const proActionEnabled = purchaseReady && Boolean(proPlan) && !failedCheckout;
+
   const arrived = useRef(false);
   const readyStates = useRef(new Set<string>());
   const lastBlocked = useRef<string | undefined>(undefined);
@@ -244,9 +252,7 @@ export default function UpgradeServerSelect({
     lastBlocked.current = blockedReason;
     const key = `${selectedServerId}:${requestedPlan}:${interval}:${source}:${displayedOffer}`;
     if (
-      purchaseReady &&
-      requestedTierEligible &&
-      requestedPrice &&
+      (requestedPlan === "basic" ? basicActionEnabled : proActionEnabled) &&
       !readyStates.current.has(key)
     ) {
       readyStates.current.add(key);
@@ -264,9 +270,8 @@ export default function UpgradeServerSelect({
     requestedPlan,
     interval,
     promoCode,
-    purchaseReady,
-    requestedPrice,
-    requestedTierEligible,
+    basicActionEnabled,
+    proActionEnabled,
     displayedOffer,
   ]);
 
@@ -321,13 +326,10 @@ export default function UpgradeServerSelect({
   };
   const handleCheckout = async (tier: PaidTier) => {
     if (
-      !purchaseReady ||
       !selectedServerId ||
-      !resolvePaidPlan(planLookup, tier, interval)
+      !(tier === "basic" ? basicActionEnabled : proActionEnabled)
     )
       return;
-    if (tier === "basic" && (!basicTierEligible || offerBlocked)) return;
-    if (failedCheckout) return;
     // The clicked tier travels with the request, never through a state update.
     await navigate({
       replace: true,
@@ -666,13 +668,7 @@ export default function UpgradeServerSelect({
                   ? "Current plan"
                   : "Continue with Basic"
               }
-              ctaDisabled={
-                !purchaseReady ||
-                !basicPlan ||
-                !basicTierEligible ||
-                offerBlocked ||
-                Boolean(failedCheckout)
-              }
+              ctaDisabled={!basicActionEnabled}
               ctaProps={{
                 variant: "filled",
                 onClick: () => void handleCheckout("basic"),
@@ -688,9 +684,7 @@ export default function UpgradeServerSelect({
               badge={currentTier === "pro" ? "Current plan" : undefined}
               billingLabel={billingLabelForInterval(interval)}
               cta="Continue with Pro"
-              ctaDisabled={
-                !purchaseReady || !proPlan || Boolean(failedCheckout)
-              }
+              ctaDisabled={!proActionEnabled}
               ctaProps={{
                 variant: "outline",
                 onClick: () => void handleCheckout("pro"),

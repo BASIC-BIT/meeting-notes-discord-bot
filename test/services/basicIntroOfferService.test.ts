@@ -20,9 +20,14 @@ it("keeps the introductory offer inactive with no environment configuration", ()
 import {
   getBasicIntroOffer,
   getGuildBasicIntroOffer,
+  getProviderSubscriptionDetails,
 } from "../../src/services/basicIntroOfferService";
 import type { StripeClient } from "../../src/types/stripe";
 import type { PaidPlan } from "../../src/types/pricing";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MantineProvider } from "@mantine/core";
+import SubscriptionDetails from "../../src/frontend/components/SubscriptionDetails";
 
 const now = Date.parse("2026-10-12T12:00:00Z");
 const settings = {
@@ -707,6 +712,150 @@ describe("existing native introductory discount", () => {
       },
       planChangesRestricted: true,
     });
+  });
+
+  test.each(["applicable", "inapplicable", "unrestricted"])(
+    "displays only a natively %s product discount",
+    async (applicability) => {
+      const f = subscriberFixture();
+      Object.assign(f.subscription, { metadata: {} });
+      Object.assign(f.price, {
+        id: "price_pro",
+        product: "prod_pro",
+        unit_amount: 2400,
+      });
+      if (applicability === "unrestricted")
+        Reflect.deleteProperty(f.coupon, "applies_to");
+      else
+        f.coupon.applies_to.products = [
+          applicability === "applicable" ? "prod_pro" : "prod_basic",
+        ];
+      const result = await getProviderSubscriptionDetails(
+        f.request.stripe,
+        await f.request.stripe.subscriptions.retrieve("sub_intro"),
+      );
+      expect(result).toMatchObject({
+        status: "available",
+        unitAmount: 2400,
+        discountedUnitAmount: applicability === "inapplicable" ? null : 1440,
+        discount:
+          applicability === "inapplicable"
+            ? null
+            : expect.objectContaining({ percentOff: 40 }),
+      });
+      if (applicability === "unrestricted")
+        expect(f.stripe.coupons.retrieve).toHaveBeenCalledWith("coupon_intro", {
+          expand: ["applies_to"],
+        });
+    },
+  );
+
+  test("inapplicable amount-off coupon does not obscure the native price in another currency", async () => {
+    const f = subscriberFixture();
+    Object.assign(f.price, {
+      id: "price_pro",
+      product: "prod_pro",
+      unit_amount: 2400,
+    });
+    Object.assign(f.coupon, {
+      percent_off: null,
+      amount_off: 400,
+      currency: "eur",
+    });
+    const result = await getBillingSnapshot({
+      stripe: f.request.stripe,
+      guildId: f.request.guildId,
+    });
+    expect(result.subscriptionDetails).toMatchObject({
+      status: "available",
+      unitAmount: 2400,
+      discountedUnitAmount: null,
+      discount: null,
+    });
+  });
+
+  test.each(["string coupon", "expanded product", "missing product"])(
+    "resolves native applicability with %s",
+    async (representation) => {
+      const f = subscriberFixture();
+      if (representation === "string coupon")
+        Object.assign(f.discount.source, { coupon: "coupon_intro" });
+      if (representation === "expanded product")
+        Object.assign(f.price, {
+          product: { id: "prod_basic", object: "product" },
+        });
+      if (representation === "missing product")
+        Reflect.deleteProperty(f.price, "product");
+      const result = await getBillingSnapshot({
+        stripe: f.request.stripe,
+        guildId: f.request.guildId,
+      });
+      expect(result.subscriptionDetails).toMatchObject(
+        representation === "missing product"
+          ? { status: "unavailable" }
+          : { status: "available", discountedUnitAmount: 600 },
+      );
+      if (representation === "string coupon")
+        expect(f.stripe.coupons.retrieve).toHaveBeenCalledWith("coupon_intro", {
+          expand: ["applies_to"],
+        });
+    },
+  );
+
+  test.each(["resolved", "failed", "mismatched"])(
+    "retrieves omitted coupon applicability before display: %s",
+    async (outcome) => {
+      const f = subscriberFixture();
+      const omitted = { ...f.coupon };
+      Reflect.deleteProperty(omitted, "applies_to");
+      Object.assign(f.discount.source, { coupon: omitted });
+      if (outcome === "failed")
+        f.stripe.coupons.retrieve.mockRejectedValue(
+          new Error("eligibility unavailable"),
+        );
+      if (outcome === "mismatched") f.coupon.id = "wrong-coupon";
+      const result = await getBillingSnapshot({
+        stripe: f.request.stripe,
+        guildId: f.request.guildId,
+      });
+      expect(result.subscriptionDetails).toMatchObject(
+        outcome === "resolved"
+          ? { status: "available", discountedUnitAmount: 600 }
+          : { status: "unavailable" },
+      );
+      expect(f.stripe.coupons.retrieve).toHaveBeenCalledWith("coupon_intro", {
+        expand: ["applies_to"],
+      });
+    },
+  );
+
+  test("known native cancellation period survives the snapshot and actual display", async () => {
+    const f = subscriberFixture();
+    Object.assign(f.subscription, { cancel_at_period_end: true });
+    const snapshot = await getBillingSnapshot({
+      stripe: f.request.stripe,
+      guildId: f.request.guildId,
+    });
+    expect(snapshot.subscriptionDetails).toMatchObject({
+      cancelAtPeriodEnd: true,
+      renewalAt: "2026-11-12T12:00:00.000Z",
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        {},
+        createElement(SubscriptionDetails, {
+          details: snapshot.subscriptionDetails,
+        }),
+      ),
+    );
+    expect(html).toContain("Cancels on");
+    expect(html).toContain(
+      new Date("2026-11-12T12:00:00.000Z").toLocaleDateString(),
+    );
+    expect(html).toContain("No automatic renewal.");
+    expect(html).not.toContain("Next renewal:");
+    expect(html).not.toContain("has not supplied the end date");
   });
 
   test.each(["disabled", "rotated"])(
