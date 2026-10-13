@@ -1,4 +1,5 @@
 import type { PurchaseAttempt, PurchaseIncident } from "../types/purchase";
+import type { DeploymentControlRecord } from "../types/deploymentControl";
 import type { AuthedProfile } from "../trpc/context";
 import type {
   AutoRecordSettings,
@@ -38,6 +39,7 @@ import type {
 } from "./types";
 
 type MockStore = {
+  deploymentControlRecords: Map<string, DeploymentControlRecord>;
   purchaseAttempts: Map<string, PurchaseAttempt>;
   purchaseIncidents: Map<string, PurchaseIncident>;
   user: AuthedProfile;
@@ -923,6 +925,7 @@ function buildDefaultStore(): MockStore {
     paymentTransactions,
     stripeWebhookEvents,
     purchaseAttempts: new Map(),
+    deploymentControlRecords: new Map(),
     purchaseIncidents: new Map(),
     onboardingStates,
     meetingHistoryByGuild,

@@ -53,6 +53,12 @@ import {
 } from "./types/db";
 import type { MeetingStatus } from "./types/meetingLifecycle";
 import { trimNotesForHistory } from "./utils/notesHistory";
+import {
+  createDynamoDeploymentControlRepository,
+  createMockDeploymentControlRepository,
+} from "./repositories/deploymentControlRepository";
+import { getMockStore } from "./repositories/mockStore";
+import type { HistoryTransition } from "./types/deploymentControl";
 
 const MEETING_USER_INDEX_WRITE_BATCH_SIZE = 25;
 const PERSONAL_MEDIA_UPLOAD_STATUS_UPDATED_AT_INDEX = "StatusUpdatedAtIndex";
@@ -72,6 +78,24 @@ const dynamoDbClient = new DynamoDBClient(
 
 const tablePrefix = config.database.tablePrefix ?? "";
 const tableName = (name: string) => `${tablePrefix}${name}`;
+export function getDeploymentControlRepository() {
+  if (config.mock.enabled) {
+    const store = getMockStore();
+    return createMockDeploymentControlRepository(
+      store.deploymentControlRecords,
+      store.meetingHistoryByGuild,
+    );
+  }
+  return createDynamoDeploymentControlRepository(dynamoDbClient, {
+    deploymentControl: tableName("DeploymentControlTable"),
+    meetingHistory: tableName("MeetingHistoryTable"),
+  });
+}
+
+export const createInitialMeetingHistory = (history: MeetingHistory) =>
+  getDeploymentControlRepository().createInitialMeetingHistory(history);
+export const transitionMeetingHistory = (input: HistoryTransition) =>
+  getDeploymentControlRepository().transitionMeetingHistory(input);
 const isConditionalCheckFailed = (error: unknown) =>
   (error as { name?: string }).name === "ConditionalCheckFailedException";
 

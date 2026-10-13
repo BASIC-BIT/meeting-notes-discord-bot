@@ -421,6 +421,8 @@ export interface OnboardingState {
 
 // Meeting History Type
 export interface MeetingHistory {
+  ownerInstanceId?: string;
+  executionVersion?: number;
   guildId: string; // Partition key
   channelId_timestamp: string; // Sort key (channelId#ISO-timestamp)
   meetingId: string; // Unique meeting identifier
