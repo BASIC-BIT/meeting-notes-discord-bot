@@ -359,6 +359,13 @@ class ConfigService {
   };
 
   readonly stripe = {
+    basicIntroOffer: {
+      couponId: process.env.STRIPE_BASIC_INTRO_COUPON_ID || "",
+      startsAt: process.env.STRIPE_BASIC_INTRO_STARTS_AT || "",
+      enrollmentEndsAt: process.env.STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT || "",
+      portalConfigurationId:
+        process.env.STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID || "",
+    },
     subscriptionTransitionsEnabled:
       process.env.STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED === "true",
     secretKey: process.env.STRIPE_SECRET_KEY || "",

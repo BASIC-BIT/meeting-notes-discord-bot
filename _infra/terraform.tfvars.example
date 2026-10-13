@@ -140,3 +140,9 @@ ANALYTICS_PROXY_CNAME_TARGET=""              # CNAME target PostHog issues for t
 # - ${project_name}-${environment}/stripe-webhook-secret
 # - ${project_name}-${environment}/langfuse-public-key
 # - ${project_name}-${environment}/langfuse-secret-key
+
+# Inert until existing native Stripe objects and enrollment dates are approved.
+STRIPE_BASIC_INTRO_COUPON_ID=""
+STRIPE_BASIC_INTRO_STARTS_AT=""
+STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT=""
+STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID=""

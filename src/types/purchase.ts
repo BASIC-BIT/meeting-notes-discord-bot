@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import type { IntroOfferChoice } from "./pricing";
 export type PurchaseAttempt = {
   guildId: string;
   attemptId: string;
@@ -6,6 +7,7 @@ export type PurchaseAttempt = {
   payerId: string;
   mode: "live" | "test";
   fingerprint: string;
+  offerChoice?: IntroOfferChoice;
   analyticsOptOut?: boolean;
   createdAt: number;
   state: "preparing" | "open" | "completed" | "expired" | "needs_review";

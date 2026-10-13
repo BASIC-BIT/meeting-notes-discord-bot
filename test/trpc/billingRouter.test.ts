@@ -18,6 +18,7 @@ jest.mock("../../src/services/billingService", () => ({
   ...jest.requireActual("../../src/services/billingService"),
   createCheckoutSession: jest.fn(),
   createPortalSession: jest.fn(),
+  resolvePromotionCodeId: jest.fn(async () => "promo_other"),
 }));
 jest.mock("../../src/services/stripeClient", () => ({
   getStripeClient: () => ({}),
@@ -202,3 +203,41 @@ test.each([
     }
   },
 );
+
+// These tests catch missed router choice propagation and stale offer expectations.
+test("checkout forwards expected offer and explicit promotion choice to the shared boundary", async () => {
+  jest
+    .mocked(createCheckoutSession)
+    .mockResolvedValue("https://checkout.stripe.com/test");
+  await caller().checkout({
+    serverId: "111111111111111111",
+    tier: "basic",
+    expectedOffer: "none",
+    offerChoice: "promotion",
+    promotionCode: "OTHER",
+  });
+  expect(createCheckoutSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      expectedOffer: "none",
+      offerChoice: "promotion",
+      promotionCode: "OTHER",
+    }),
+  );
+});
+
+test("checkout defaults offer choice to automatic", async () => {
+  jest
+    .mocked(createCheckoutSession)
+    .mockResolvedValue("https://checkout.stripe.com/test");
+  await caller().checkout({
+    serverId: "111111111111111111",
+    tier: "basic",
+    expectedOffer: "basic_intro_v1",
+  });
+  expect(createCheckoutSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      expectedOffer: "basic_intro_v1",
+      offerChoice: "automatic",
+    }),
+  );
+});

@@ -394,6 +394,30 @@ variable "STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED" {
   default     = false
 }
 
+variable "STRIPE_BASIC_INTRO_COUPON_ID" {
+  description = "Existing native 40-percent three-month Basic intro coupon ID; empty disables new enrollment"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_BASIC_INTRO_STARTS_AT" {
+  description = "Basic intro enrollment start as ISO timestamp; empty leaves the offer inactive"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT" {
+  description = "Basic intro enrollment cutoff as ISO timestamp; no deadline is selected by default"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID" {
+  description = "Existing safe portal configuration for introductory subscribers; disables plan updates"
+  type        = string
+  default     = ""
+}
+
 variable "STRIPE_PRICE_BASIC" {
   description = "Optional fallback Stripe price ID for basic plan"
   type        = string
@@ -1890,6 +1914,22 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "STRIPE_CANCEL_URL"
           value = var.STRIPE_CANCEL_URL
+        },
+        {
+          name  = "STRIPE_BASIC_INTRO_COUPON_ID"
+          value = var.STRIPE_BASIC_INTRO_COUPON_ID
+        },
+        {
+          name  = "STRIPE_BASIC_INTRO_STARTS_AT"
+          value = var.STRIPE_BASIC_INTRO_STARTS_AT
+        },
+        {
+          name  = "STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT"
+          value = var.STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT
+        },
+        {
+          name  = "STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID"
+          value = var.STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID
         },
         {
           name  = "STRIPE_PORTAL_RETURN_URL"

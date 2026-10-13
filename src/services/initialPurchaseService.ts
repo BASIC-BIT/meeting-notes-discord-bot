@@ -9,6 +9,8 @@ import {
 import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
 import type { GuildSubscription } from "../types/db";
 import type { PurchaseAttempt } from "../types/purchase";
+import type { ExpectedIntroOffer, IntroOfferChoice } from "../types/pricing";
+import { prepareBasicIntroCheckout } from "./basicIntroOfferService";
 import type { StripeClient } from "../types/stripe";
 import { BillingActionError } from "./billingActionError";
 import { captureEvent } from "./analyticsService";
@@ -38,6 +40,8 @@ type PurchaseInput = {
   mode: "live" | "test";
   checkout: Stripe.Checkout.SessionCreateParams;
   expected: GuildSubscription | undefined;
+  expectedOffer?: ExpectedIntroOffer;
+  offerChoice?: IntroOfferChoice;
 };
 
 async function save(
@@ -67,23 +71,28 @@ async function mayRetire(input: PurchaseInput, attempt: PurchaseAttempt) {
 
 async function reserve(input: PurchaseInput) {
   const repo = getPurchaseRepository();
-  const fingerprint = createHash("sha256")
-    .update(
-      JSON.stringify({
-        ...input.checkout,
-        metadata: undefined,
-        success_url: undefined,
-        cancel_url: undefined,
-        subscription_data: {
-          ...input.checkout.subscription_data,
-          metadata: undefined,
-        },
-      }),
-    )
-    .digest("hex");
   for (let i = 0; i < 3; i++) {
     const current = await refreshAttempt(input, await repo.get(input.guildId));
-    if (current && !(await mayRetire(input, current))) {
+    const reusable = current && !(await mayRetire(input, current));
+    const checkout = await prepareBasicIntroCheckout({
+      ...input,
+      current: reusable ? current : undefined,
+    });
+    const fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          ...checkout,
+          metadata: undefined,
+          success_url: undefined,
+          cancel_url: undefined,
+          subscription_data: {
+            ...checkout.subscription_data,
+            metadata: undefined,
+          },
+        }),
+      )
+      .digest("hex");
+    if (current && reusable) {
       if (
         current.mode !== input.mode ||
         current.payerId !== input.user.id ||
@@ -105,20 +114,21 @@ async function reserve(input: PurchaseInput) {
       payerId: input.user.id,
       mode: input.mode,
       fingerprint,
+      offerChoice: input.offerChoice ?? "automatic",
       analyticsOptOut: input.checkout.metadata?.analytics_opt_out === "true",
       createdAt: Date.now(),
       state: "preparing",
       checkout: {
-        ...input.checkout,
+        ...checkout,
         expires_at: Math.floor(Date.now() / 1000) + 3600,
         metadata: {
-          ...input.checkout.metadata,
+          ...checkout.metadata,
           purchase_attempt_id: attemptId,
         },
         subscription_data: {
-          ...input.checkout.subscription_data,
+          ...checkout.subscription_data,
           metadata: {
-            ...input.checkout.subscription_data?.metadata,
+            ...checkout.subscription_data?.metadata,
             purchase_attempt_id: attemptId,
           },
         },

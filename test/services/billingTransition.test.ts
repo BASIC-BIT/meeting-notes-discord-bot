@@ -30,6 +30,7 @@ afterAll(() => {
 function fixture() {
   const subscription = {
     id: "sub_existing",
+    livemode: false,
     status: "active",
     customer: "cus_existing",
     metadata: { guild_id: guildId, discord_id: user.id },
@@ -38,7 +39,10 @@ function fixture() {
     },
   };
   const stripe = {
-    subscriptions: { retrieve: jest.fn(async () => subscription) },
+    subscriptions: {
+      retrieve: jest.fn(async () => subscription),
+      list: jest.fn(async () => ({ data: [subscription], has_more: false })),
+    },
     customers: {
       retrieve: jest.fn(async () => ({
         id: "cus_existing",
