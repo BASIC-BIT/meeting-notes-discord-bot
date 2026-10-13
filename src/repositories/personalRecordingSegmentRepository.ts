@@ -4,11 +4,21 @@ import {
   listPersonalRecordingSegments,
   updatePersonalRecordingSegment,
   writePersonalRecordingSegment,
+  transitionPersonalRecordingSegment,
+  preparePersonalRecordingSegment,
 } from "../db";
 import type { PersonalRecordingSegmentRecord } from "../types/db";
 import { getMockStore } from "./mockStore";
 
 export type PersonalRecordingSegmentRepository = {
+  prepare: (
+    segment: PersonalRecordingSegmentRecord,
+    expectedStatus: "pending_upload" | "failed" | undefined,
+  ) => Promise<boolean>;
+  transition: (
+    segment: PersonalRecordingSegmentRecord,
+    expectedStatus: PersonalRecordingSegmentRecord["status"],
+  ) => Promise<boolean>;
   write: (segment: PersonalRecordingSegmentRecord) => Promise<void>;
   get: (
     uploadId: string,
@@ -19,6 +29,8 @@ export type PersonalRecordingSegmentRepository = {
 };
 
 const realRepository: PersonalRecordingSegmentRepository = {
+  prepare: preparePersonalRecordingSegment,
+  transition: transitionPersonalRecordingSegment,
   write: writePersonalRecordingSegment,
   get: getPersonalRecordingSegment,
   listByUpload: listPersonalRecordingSegments,
@@ -36,6 +48,45 @@ const segmentMapForUpload = (uploadId: string) => {
 };
 
 const mockRepository: PersonalRecordingSegmentRepository = {
+  async prepare(segment, expectedStatus) {
+    const job = getMockStore().personalMediaUploadsById.get(segment.uploadId);
+    const current = segmentMapForUpload(segment.uploadId).get(
+      segment.segmentKey,
+    );
+    if (
+      job?.status !== "pending_upload" ||
+      job.ownerUserId !== segment.ownerUserId ||
+      job.processingClaimId
+    )
+      return false;
+    if (
+      expectedStatus
+        ? current?.status !== expectedStatus ||
+          current.ownerUserId !== segment.ownerUserId
+        : Boolean(current)
+    )
+      return false;
+    segmentMapForUpload(segment.uploadId).set(
+      segment.segmentKey,
+      structuredClone(segment),
+    );
+    return true;
+  },
+  async transition(segment, expectedStatus) {
+    const current = segmentMapForUpload(segment.uploadId).get(
+      segment.segmentKey,
+    );
+    if (
+      current?.status !== expectedStatus ||
+      current.ownerUserId !== segment.ownerUserId
+    )
+      return false;
+    segmentMapForUpload(segment.uploadId).set(
+      segment.segmentKey,
+      structuredClone(segment),
+    );
+    return true;
+  },
   async write(segment) {
     segmentMapForUpload(segment.uploadId).set(segment.segmentKey, segment);
   },

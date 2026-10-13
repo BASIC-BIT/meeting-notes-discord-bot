@@ -108,6 +108,53 @@ test("warmRuntimeOwnsNoWork", async () => {
   lifecycle.stop();
 });
 
+test("owned control stays counted after its draining parent settles", async () => {
+  const { lifecycle, repository } = await fixture();
+  await promote(repository);
+  await lifecycle.getRuntimeAdmissionContext();
+  const recording = lifecycle.beginRuntimeWork("recording");
+  await replace(repository);
+  await lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 });
+  const control = recording.beginOwnedControl();
+  expect(Object.keys(control)).toEqual(["settle"]);
+  recording.settle();
+  expect(lifecycle.getWorkCounts().ancillary_delivery).toBe(1);
+  expect(
+    (await lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 })).kind,
+  ).toBe("busy");
+  expect(() => recording.beginOwnedControl()).toThrow();
+  control.settle();
+  control.settle();
+  expect(
+    (await lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 })).kind,
+  ).toBe("retired");
+  lifecycle.stop();
+});
+
+test("pending admission cannot grant existing owner control authority", async () => {
+  const { lifecycle, repository } = await fixture();
+  await promote(repository);
+  await lifecycle.getRuntimeAdmissionContext();
+  const pending = lifecycle.beginRuntimeWork("pending_admission");
+  expect(() => pending.beginOwnedControl()).toThrow();
+  pending.settle();
+  lifecycle.stop();
+});
+
+test("an unsafe session parent cannot grant a control child", async () => {
+  const { lifecycle, repository, protection } = await fixture();
+  await promote(repository);
+  await lifecycle.getRuntimeAdmissionContext();
+  const recording = lifecycle.beginRuntimeWork("recording");
+  await protection.release();
+  expect(() => recording.beginOwnedControl()).toThrow(
+    "Session cannot grant control ownership",
+  );
+  expect(lifecycle.getWorkCounts().ancillary_delivery).toBe(0);
+  recording.settle();
+  lifecycle.stop();
+});
+
 test("readinessRequiresGatewayAndRequiredDependencies", async () => {
   const { lifecycle, repository } = await fixture();
   lifecycle.registerSafetyHandler(undefined);

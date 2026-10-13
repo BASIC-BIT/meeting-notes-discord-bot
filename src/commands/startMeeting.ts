@@ -617,6 +617,7 @@ export async function handleAutoStartMeeting(
   voiceChannel: VoiceBasedChannel,
   textChannel: TextChannel,
   options?: {
+    assertAdmission?: () => Promise<void>;
     tags?: string[];
     liveVoiceEnabled?: boolean;
     liveVoiceCommandsEnabled?: boolean;
@@ -631,6 +632,7 @@ export async function handleAutoStartMeeting(
 ) {
   const guildId = voiceChannel.guild.id;
   const botMember = voiceChannel.guild.members.cache.get(client.user!.id);
+  await options?.assertAdmission?.();
   if (!botMember) {
     await textChannel.send(
       `Cannot start auto-recording - bot not found in server.`,
@@ -656,14 +658,12 @@ export async function handleAutoStartMeeting(
 
   const staleLease = await getActiveMeetingLeaseForGuild(guildId);
   if (staleLease && isLeaseActive(staleLease)) {
-    await textChannel.send(
-      `Cannot start auto-recording in **${voiceChannel.name}** - a meeting is already active in this server.`,
-    );
     return false;
   }
   const { limits, subscription } = await getGuildLimits(guildId);
   const limitNotice = await getLimitNotice(guildId, limits);
   if (limitNotice) {
+    await options?.assertAdmission?.();
     await notifyRecordingLimit(
       {
         ...limitNotice,

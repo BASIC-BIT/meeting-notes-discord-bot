@@ -14,7 +14,6 @@ import {
   markPersonalRecordingUploadSegmentProcessing,
   updateClaimedPersonalMediaUploadJobProgress,
   updateClaimedPersonalMediaUploadJobRecord,
-  updatePersonalMediaUploadJobRecord,
 } from "../personalMediaUploadService";
 import {
   createPersonalMediaProcessingMeeting,
@@ -131,6 +130,27 @@ jest.mock("../meetingHistoryService", () => ({
   writeMeetingHistoryService: jest.fn(async () => undefined),
 }));
 
+jest.mock("../meetingUserIndexService", () => ({
+  writeMeetingUserIndexForMeetingService: jest.fn(async () => undefined),
+}));
+jest.mock("../../repositories/personalMediaUploadRepository", () => ({
+  getPersonalMediaUploadRepository: () => ({
+    writeHistory: async (
+      history: import("../../types/db").MeetingHistory,
+      claim: import("../../types/db").PersonalMediaClaim,
+      terminal?: PersonalMediaUploadJobRecord,
+    ) => {
+      await writeMeetingHistoryService(history);
+      if (terminal)
+        return updateClaimedPersonalMediaUploadJobRecord(
+          terminal,
+          claim.instanceId,
+        );
+      return true;
+    },
+  }),
+}));
+
 jest.mock("../personalMediaUploadService", () => ({
   listPersonalRecordingUploadSegments: jest.fn(async () => []),
   markPersonalRecordingUploadSegmentFailed: jest.fn(
@@ -208,6 +228,23 @@ const buildJob = (): PersonalMediaUploadJobRecord => ({
   uploadId: "upload-1",
   ownerUserId: "user-1",
   status: "queued",
+  attempts: 1,
+  processingClaimId: "synthetic-claim",
+  processingOwnerInstanceId: "instance-1",
+  claimExpiresAt: 2_000_000_000,
+  artifactAttempts: Object.fromEntries(
+    [1, 2, 3].map((attempt) => {
+      const prefix = `personal/user-1/upload-1/attempt-${attempt}/`;
+      return [
+        String(attempt),
+        {
+          prefix,
+          audioS3Key: `${prefix}audio.mp3`,
+          transcriptS3Key: `${prefix}transcript.json`,
+        },
+      ];
+    }),
+  ),
   mediaKind: "audio",
   sourceS3Key: "personal-media-uploads/user-1/upload-1/source.mp3",
   contentType: "audio/mpeg",
@@ -451,6 +488,34 @@ describe("personalMediaUploadProcessingService", () => {
     );
   });
 
+  it("fences a provider result returned after processing ownership is lost", async () => {
+    let resume!: (value: { text: string }) => void;
+    const held = new Promise<{ text: string }>((resolve) => {
+      resume = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    mockTranscribe.mockImplementationOnce(() => {
+      entered();
+      return held;
+    });
+    const controller = new AbortController();
+    const processing = processPersonalMediaUpload(
+      buildJob(),
+      "instance-1",
+      controller.signal,
+    );
+    await started;
+    controller.abort(new Error("synthetic ownership loss"));
+    resume({ text: "late synthetic transcript" });
+    await expect(processing).rejects.toThrow("synthetic ownership loss");
+    expect(writeMeetingHistoryService).not.toHaveBeenCalled();
+    expect(updateClaimedPersonalMediaUploadJobRecord).not.toHaveBeenCalled();
+    expect(uploadObjectToS3).not.toHaveBeenCalled();
+  });
+
   it("reports unavailable segment counts when every progress read fails", async () => {
     jest
       .mocked(listPersonalRecordingUploadSegments)
@@ -478,7 +543,11 @@ describe("personalMediaUploadProcessingService", () => {
     jest
       .mocked(listPersonalRecordingUploadSegments)
       .mockImplementation(async () => {
-        if (mockUploadedObjects.has("personal/user-1/upload-1/transcript.json"))
+        if (
+          mockUploadedObjects.has(
+            "personal/user-1/upload-1/attempt-2/transcript.json",
+          )
+        )
           throw new Error("progress unavailable");
         return recordingSegments;
       });
@@ -513,7 +582,7 @@ describe("personalMediaUploadProcessingService", () => {
             if (
               (!rejected || boundary === "persistent progress") &&
               mockUploadedObjects.has(
-                "personal/user-1/upload-1/transcript.json",
+                "personal/user-1/upload-1/attempt-3/transcript.json",
               )
             ) {
               rejected = true;
@@ -554,7 +623,7 @@ describe("personalMediaUploadProcessingService", () => {
   );
 
   it("persists a personal attendee participant before processing", async () => {
-    await createPersonalMediaProcessingMeeting(buildJob());
+    await createPersonalMediaProcessingMeeting(buildJob(), "instance-1");
 
     expect(writeMeetingHistoryService).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -571,13 +640,14 @@ describe("personalMediaUploadProcessingService", () => {
         ],
       }),
     );
-    expect(updatePersonalMediaUploadJobRecord).toHaveBeenCalledWith(
+    expect(updateClaimedPersonalMediaUploadJobRecord).toHaveBeenCalledWith(
       expect.objectContaining({
         uploadId: "upload-1",
         meetingGuildId: "personal:user-1",
         meetingId: "upload-1",
         channelId_timestamp: "personal#2026-01-06T18:00:00.000Z",
       }),
+      "instance-1",
     );
   });
 
@@ -594,12 +664,12 @@ describe("personalMediaUploadProcessingService", () => {
       expect.objectContaining({
         status: "processed",
         transcriptS3Key:
-          "personal/user-1/upload-1/segments/owner_mic-000000.transcript.json",
+          "personal/user-1/upload-1/attempt-1/segments/owner_mic-000000.transcript.json",
       }),
       expect.objectContaining({
         status: "processed",
         transcriptS3Key:
-          "personal/user-1/upload-1/segments/owner_mic-000001.transcript.json",
+          "personal/user-1/upload-1/attempt-1/segments/owner_mic-000001.transcript.json",
       }),
     ]);
     expect(
@@ -660,7 +730,7 @@ describe("personalMediaUploadProcessingService", () => {
     const processedSegment = {
       ...buildSegment(0, "processed"),
       transcriptS3Key:
-        "personal/user-1/upload-1/segments/owner_mic-000000.transcript.json",
+        "personal/user-1/upload-1/attempt-1/segments/owner_mic-000000.transcript.json",
     };
     recordingSegments = [processedSegment];
     mockUploadedObjects.set(
@@ -691,7 +761,7 @@ describe("personalMediaUploadProcessingService", () => {
       processedSegment.transcriptS3Key,
     );
     expect(uploadObjectToS3).toHaveBeenCalledWith(
-      "personal/user-1/upload-1/transcript.json",
+      "personal/user-1/upload-1/attempt-1/transcript.json",
       expect.stringContaining("cached transcript"),
       "application/json",
     );

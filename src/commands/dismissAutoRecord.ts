@@ -11,7 +11,10 @@ import { resolveConfigEnum } from "../services/unifiedConfigService";
 import { MEETING_END_REASONS } from "../types/meetingLifecycle";
 import type { MeetingData } from "../types/meeting-data";
 import { canUserEndMeeting } from "../utils/meetingPermissions";
-import { handleEndMeetingOther } from "./endMeeting";
+import {
+  handleEndMeetingOther,
+  persistExplicitMeetingStop,
+} from "./endMeeting";
 
 export const DISMISS_AUTORECORD_COMMAND_NAME = "Stop recording";
 
@@ -111,10 +114,6 @@ async function resolveDismissAutoRecordContext(
     return { ok: false, message: "No active recording to stop right now." };
   }
 
-  if (meeting.finishing) {
-    return { ok: false, message: "This meeting is already ending." };
-  }
-
   const invokerId = interaction.user.id;
   if (!meeting.isAutoRecording) {
     return {
@@ -207,6 +206,11 @@ export async function handleDismissAutoRecord(
   }
 
   await interaction.deferReply({ ephemeral: true });
+  await persistExplicitMeetingStop(meeting, MEETING_END_REASONS.DISMISSED);
+  if (meeting.finishing) {
+    await interaction.editReply("This meeting is already ending.");
+    return;
+  }
 
   meeting.endReason = contextResult.context.isAutoRecording
     ? MEETING_END_REASONS.DISMISSED

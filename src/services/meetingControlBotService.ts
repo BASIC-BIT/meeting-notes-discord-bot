@@ -7,6 +7,7 @@ import {
   type VoiceBasedChannel,
   type VoiceState,
 } from "discord.js";
+import { persistExplicitMeetingStop } from "../commands/endMeeting";
 import { getMeeting } from "../meetings";
 import {
   buildManualMeetingStartedMessage,
@@ -219,6 +220,7 @@ const executeStartMeeting = async (
   client: Client,
   userId: string,
   input: StartMeetingCommandInput,
+  assertOwned: () => Promise<void>,
 ): Promise<MeetingControlCommandResult> => {
   const state = await resolveUserVoiceState(client, userId, input);
   const guild = state.guild;
@@ -234,6 +236,7 @@ const executeStartMeeting = async (
   const member = await fetchMember(guild, userId);
   assertMemberCanUseTextChannel(member, textChannel);
   const creator = await client.users.fetch(userId);
+  await assertOwned();
   const startResult = await startManualMeetingFromChannels({
     client,
     guild,
@@ -249,6 +252,7 @@ const executeStartMeeting = async (
     throw new MeetingControlExecutionError(startResult.error);
   }
 
+  await assertOwned();
   const message = await textChannel.send(
     buildManualMeetingStartedMessage(
       startResult.meeting,
@@ -281,6 +285,7 @@ const executeStopLocalMeeting = async (
   userId: string,
   input: StopMeetingCommandInput,
   meeting: MeetingData,
+  assertOwned: () => Promise<void>,
 ): Promise<MeetingControlCommandResult> => {
   if (input.meetingId && meeting.meetingId !== input.meetingId) {
     throw new MeetingControlExecutionError("Meeting not found.");
@@ -294,6 +299,8 @@ const executeStopLocalMeeting = async (
       "You do not have permission to end this meeting.",
     );
   }
+  await assertOwned();
+  await persistExplicitMeetingStop(meeting, MEETING_END_REASONS.MCP);
   if (meeting.finishing || meeting.finished) {
     return {
       status: "stopping",
@@ -301,6 +308,7 @@ const executeStopLocalMeeting = async (
       meetingId: meeting.meetingId,
     };
   }
+  await assertOwned();
   meeting.endReason = MEETING_END_REASONS.MCP;
   meeting.endTriggeredByUserId = userId;
   if (!meeting.onEndMeeting) {
@@ -315,6 +323,7 @@ const executeStopLeasedMeeting = async (
   guildId: string,
   userId: string,
   input: StopMeetingCommandInput,
+  assertOwned: () => Promise<void>,
 ): Promise<MeetingControlCommandResult> => {
   const lease = await getActiveMeetingLeaseForGuild(guildId);
   if (!lease || !isLeaseActive(lease)) {
@@ -329,6 +338,7 @@ const executeStopLeasedMeeting = async (
       "You do not have permission to end this meeting.",
     );
   }
+  await assertOwned();
   const queued = await requestMeetingEndViaLease(
     guildId,
     lease.meetingId,
@@ -345,6 +355,7 @@ const executeStopMeeting = async (
   client: Client,
   userId: string,
   input: StopMeetingCommandInput,
+  assertOwned: () => Promise<void>,
 ): Promise<MeetingControlCommandResult> => {
   const state = input.serverId
     ? undefined
@@ -356,9 +367,16 @@ const executeStopMeeting = async (
   const guild = await getGuildOrThrow(client, guildId);
   const meeting = getMeeting(guildId);
   if (meeting) {
-    return executeStopLocalMeeting(guild, guildId, userId, input, meeting);
+    return executeStopLocalMeeting(
+      guild,
+      guildId,
+      userId,
+      input,
+      meeting,
+      assertOwned,
+    );
   }
-  return executeStopLeasedMeeting(guild, guildId, userId, input);
+  return executeStopLeasedMeeting(guild, guildId, userId, input, assertOwned);
 };
 
 const resolveLiveMeeting = async (
@@ -490,19 +508,23 @@ const executeGetLiveTranscript = async (
 export async function executeMeetingControlCommand(
   client: Client,
   command: MeetingControlCommand,
+  assertOwned: () => Promise<void> = async () => undefined,
 ): Promise<MeetingControlCommandResult> {
+  await assertOwned();
   switch (command.commandType) {
     case MEETING_CONTROL_COMMAND_TYPES.START_MEETING:
       return executeStartMeeting(
         client,
         command.userId,
         command.input as StartMeetingCommandInput,
+        assertOwned,
       );
     case MEETING_CONTROL_COMMAND_TYPES.STOP_MEETING:
       return executeStopMeeting(
         client,
         command.userId,
         command.input as StopMeetingCommandInput,
+        assertOwned,
       );
     case MEETING_CONTROL_COMMAND_TYPES.GET_LIVE_STATUS:
       return executeGetLiveStatus(

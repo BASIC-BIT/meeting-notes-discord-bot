@@ -20,10 +20,10 @@ import {
   TRANSCRIPTION_FINAL_PASS_CHUNK_SECONDS,
   TRANSCRIPTION_FINAL_PASS_MAX_REQUEST_BYTES,
 } from "../constants";
-import {
-  getMeetingHistoryService,
-  writeMeetingHistoryService,
-} from "./meetingHistoryService";
+import { getMeetingHistoryService } from "./meetingHistoryService";
+import { personalMediaClaimForJob } from "../db";
+import { getPersonalMediaUploadRepository } from "../repositories/personalMediaUploadRepository";
+import { writeMeetingUserIndexForMeetingService } from "./meetingUserIndexService";
 import {
   downloadObjectToFile,
   fetchJsonFromS3,
@@ -51,7 +51,6 @@ import {
   markPersonalRecordingUploadSegmentsFailed,
   updateClaimedPersonalMediaUploadJobProgress,
   updateClaimedPersonalMediaUploadJobRecord,
-  updatePersonalMediaUploadJobRecord,
 } from "./personalMediaUploadService";
 import { buildPersonalMeetingGuildId } from "../utils/meetingOwnership";
 import {
@@ -63,6 +62,12 @@ import {
 const PERSONAL_UPLOAD_CHANNEL_ID = "personal";
 const PERSONAL_UPLOAD_CHANNEL_NAME = "Uploaded media";
 const PERSONAL_UPLOAD_SERVER_NAME = "Personal";
+const processingSignals = new WeakMap<
+  PersonalMediaUploadJobRecord,
+  AbortSignal
+>();
+const assertPersonalProcessingActive = (job: PersonalMediaUploadJobRecord) =>
+  processingSignals.get(job)?.throwIfAborted();
 
 type PersonalUploadMeetingIdentity = ReturnType<typeof buildJobMeetingKey>;
 
@@ -390,12 +395,15 @@ const uploadPersonalUploadArtifacts = async (
   audioPath: string,
   transcript: PersonalUploadTranscriptArtifact,
 ) => {
-  const folder = `personal/${job.ownerUserId}/${job.uploadId}/`;
+  const folder = personalArtifactPrefix(job);
+  const audio = await fs.readFile(audioPath);
+  assertPersonalProcessingActive(job);
   const audioS3Key = await uploadObjectToS3(
     `${folder}audio.mp3`,
-    await fs.readFile(audioPath),
+    audio,
     "audio/mpeg",
   );
+  assertPersonalProcessingActive(job);
   const transcriptS3Key = await uploadObjectToS3(
     `${folder}transcript.json`,
     buildTranscriptArtifact(job, transcript),
@@ -408,7 +416,7 @@ const buildRecordingSegmentTranscriptKey = (
   job: PersonalMediaUploadJobRecord,
   segment: PersonalRecordingSegmentRecord,
 ) =>
-  `personal/${job.ownerUserId}/${job.uploadId}/segments/${segment.sourceId}-${String(
+  `${personalArtifactPrefix(job)}segments/${segment.sourceId}-${String(
     segment.sequence,
   ).padStart(6, "0")}.transcript.json`;
 
@@ -593,12 +601,12 @@ const updatePersonalRecordingProcessingProgress = async (
 ) => {
   const segments = await listPersonalRecordingUploadSegments(job.uploadId);
   Object.assign(job, summarizeRecordingSegmentProgress(segments));
-  await updateClaimedPersonalMediaUploadJobProgress({
-    uploadId: job.uploadId,
-    instanceId,
+  const updated = await updateClaimedPersonalMediaUploadJobProgress({
+    ...personalMediaClaimForJob(job, instanceId),
     ...summarizeRecordingSegmentProgress(segments),
     updatedAt: new Date().toISOString(),
   });
+  if (!updated) throw new Error("Personal processing claim lost");
   return segments;
 };
 
@@ -632,6 +640,7 @@ const processPersonalRecordingSegment = async (
   source: PersonalRecordingSourceRecord,
   segment: PersonalRecordingSegmentRecord,
   sourceDir: string,
+  instanceId: string,
 ) => {
   const { audioPath, durationSeconds } =
     await downloadAndNormalizeRecordingSegment(segment, sourceDir);
@@ -648,8 +657,10 @@ const processPersonalRecordingSegment = async (
 
   let processingSegment = segment;
   try {
-    processingSegment =
-      await markPersonalRecordingUploadSegmentProcessing(segment);
+    processingSegment = await markPersonalRecordingUploadSegmentProcessing(
+      segment,
+      personalMediaClaimForJob(job, instanceId),
+    );
     const transcriptionInputs = await resolveTranscriptionInputs(
       audioPath,
       path.dirname(audioPath),
@@ -665,9 +676,11 @@ const processPersonalRecordingSegment = async (
       startedAt: segment.startedAt,
     });
     if (transcription.failedChunks > 0) {
+      assertPersonalProcessingActive(job);
       await markPersonalRecordingUploadSegmentFailed(
         processingSegment,
         new Error("One or more transcription chunks failed."),
+        personalMediaClaimForJob(job, instanceId),
       );
       return {
         audioPath,
@@ -676,6 +689,7 @@ const processPersonalRecordingSegment = async (
         segment: transcriptSegment,
       };
     }
+    assertPersonalProcessingActive(job);
     const transcriptArtifact = buildRecordingSegmentTranscriptArtifact(
       job,
       segment,
@@ -686,9 +700,14 @@ const processPersonalRecordingSegment = async (
       JSON.stringify(transcriptArtifact, null, 2),
       "application/json",
     );
-    await markPersonalRecordingUploadSegmentProcessed(processingSegment, {
-      transcriptS3Key,
-    });
+    assertPersonalProcessingActive(job);
+    await markPersonalRecordingUploadSegmentProcessed(
+      processingSegment,
+      {
+        transcriptS3Key,
+      },
+      personalMediaClaimForJob(job, instanceId),
+    );
     return {
       audioPath,
       durationSeconds,
@@ -696,7 +715,12 @@ const processPersonalRecordingSegment = async (
       segment: transcriptSegment,
     };
   } catch (error) {
-    await markPersonalRecordingUploadSegmentFailed(processingSegment, error);
+    assertPersonalProcessingActive(job);
+    await markPersonalRecordingUploadSegmentFailed(
+      processingSegment,
+      error,
+      personalMediaClaimForJob(job, instanceId),
+    );
     throw error;
   }
 };
@@ -718,7 +742,13 @@ const processPersonalRecordingSegmentSource = async (
   }> = [];
   for (const segment of segments) {
     processedSegments.push(
-      await processPersonalRecordingSegment(job, source, segment, sourceDir),
+      await processPersonalRecordingSegment(
+        job,
+        source,
+        segment,
+        sourceDir,
+        instanceId,
+      ),
     );
     await updatePersonalRecordingProcessingProgress(job, instanceId);
   }
@@ -973,33 +1003,71 @@ const generatePersonalUploadNotes = async (input: {
   );
 };
 
-const writeProcessingMeeting = async (job: PersonalMediaUploadJobRecord) => {
+function personalArtifactPrefix(job: PersonalMediaUploadJobRecord): string {
+  const attempt = job.artifactAttempts?.[String(job.attempts)];
+  if (!attempt) throw new Error("Personal artifact attempt is not registered");
+  return attempt.prefix;
+}
+
+async function writeClaimedHistory(
+  job: PersonalMediaUploadJobRecord,
+  history: MeetingHistory,
+  instanceId: string,
+  terminalJob?: PersonalMediaUploadJobRecord,
+) {
+  assertPersonalProcessingActive(job);
+  if (
+    !(await getPersonalMediaUploadRepository().writeHistory(
+      history,
+      personalMediaClaimForJob(job, instanceId),
+      terminalJob,
+    ))
+  )
+    throw new Error("Personal history claim lost");
+  try {
+    await writeMeetingUserIndexForMeetingService(history);
+  } catch (error) {
+    console.error(
+      "Failed to index personal meeting history",
+      buildProviderFailureObservation(error),
+    );
+  }
+}
+
+const writeProcessingMeeting = async (
+  job: PersonalMediaUploadJobRecord,
+  instanceId: string,
+) => {
   const identity = buildJobMeetingKey(job);
-  await writeMeetingHistoryService({
-    guildId: identity.guildId,
-    channelId_timestamp: identity.channelIdTimestamp,
-    meetingId: identity.meetingId,
-    channelId: PERSONAL_UPLOAD_CHANNEL_ID,
-    timestamp: identity.timestamp,
-    tags: job.tags,
-    participants: buildPersonalUploadParticipants(job),
-    duration: job.durationSeconds ?? 0,
-    transcribeMeeting: true,
-    generateNotes: true,
-    ownershipScope: "personal",
-    ownerUserId: job.ownerUserId,
-    meetingCreatorId: job.ownerUserId,
-    status: MEETING_STATUS.PROCESSING,
-    meetingName: job.title,
-  });
+  await writeClaimedHistory(
+    job,
+    {
+      guildId: identity.guildId,
+      channelId_timestamp: identity.channelIdTimestamp,
+      meetingId: identity.meetingId,
+      channelId: PERSONAL_UPLOAD_CHANNEL_ID,
+      timestamp: identity.timestamp,
+      tags: job.tags,
+      participants: buildPersonalUploadParticipants(job),
+      duration: job.durationSeconds ?? 0,
+      transcribeMeeting: true,
+      generateNotes: true,
+      ownershipScope: "personal",
+      ownerUserId: job.ownerUserId,
+      meetingCreatorId: job.ownerUserId,
+      status: MEETING_STATUS.PROCESSING,
+      meetingName: job.title,
+    },
+    instanceId,
+  );
   return identity;
 };
 
 export async function createPersonalMediaProcessingMeeting(
   job: PersonalMediaUploadJobRecord,
-  instanceId?: string,
+  instanceId: string,
 ) {
-  const identity = await writeProcessingMeeting(job);
+  const identity = await writeProcessingMeeting(job, instanceId);
   const next = {
     ...job,
     meetingGuildId: identity.guildId,
@@ -1007,11 +1075,8 @@ export async function createPersonalMediaProcessingMeeting(
     channelId_timestamp: identity.channelIdTimestamp,
     updatedAt: new Date().toISOString(),
   };
-  if (instanceId) {
-    await updateClaimedPersonalMediaUploadJobRecord(next, instanceId);
-  } else {
-    await updatePersonalMediaUploadJobRecord(next);
-  }
+  if (!(await updateClaimedPersonalMediaUploadJobRecord(next, instanceId)))
+    throw new Error("Personal processing claim lost");
   return next;
 }
 
@@ -1071,29 +1136,27 @@ const markPersonalMediaUploadComplete = async (
   result: PersonalUploadProcessingResult,
   completedAt: string,
   instanceId: string,
+  history: MeetingHistory,
 ) =>
-  updateClaimedPersonalMediaUploadJobRecord(
-    {
-      ...job,
-      status: "complete",
-      meetingGuildId: identity.guildId,
-      meetingId: identity.meetingId,
-      channelId_timestamp: identity.channelIdTimestamp,
-      durationSeconds: result.durationSeconds,
-      segmentCount: result.segmentCount ?? job.segmentCount,
-      uploadedSegmentCount:
-        result.uploadedSegmentCount ?? job.uploadedSegmentCount,
-      processedSegmentCount:
-        result.processedSegmentCount ?? job.processedSegmentCount,
-      errorMessage: undefined,
-      retryable: undefined,
-      claimExpiresAt: undefined,
-      processingOwnerInstanceId: undefined,
-      completedAt,
-      updatedAt: completedAt,
-    },
-    instanceId,
-  );
+  writeClaimedHistory(job, history, instanceId, {
+    ...job,
+    status: "complete",
+    meetingGuildId: identity.guildId,
+    meetingId: identity.meetingId,
+    channelId_timestamp: identity.channelIdTimestamp,
+    durationSeconds: result.durationSeconds,
+    segmentCount: result.segmentCount ?? job.segmentCount,
+    uploadedSegmentCount:
+      result.uploadedSegmentCount ?? job.uploadedSegmentCount,
+    processedSegmentCount:
+      result.processedSegmentCount ?? job.processedSegmentCount,
+    errorMessage: undefined,
+    retryable: undefined,
+    claimExpiresAt: undefined,
+    processingOwnerInstanceId: undefined,
+    completedAt,
+    updatedAt: completedAt,
+  });
 
 const markPersonalMediaUploadFailed = async (
   job: PersonalMediaUploadJobRecord,
@@ -1103,7 +1166,7 @@ const markPersonalMediaUploadFailed = async (
   const now = new Date().toISOString();
   const attempts = job.attempts ?? 1;
   const retryable = attempts < PERSONAL_MEDIA_UPLOAD_MAX_PROCESSING_ATTEMPTS;
-  await updateClaimedPersonalMediaUploadJobRecord(
+  const updated = await updateClaimedPersonalMediaUploadJobRecord(
     {
       ...job,
       status: retryable ? "queued" : "failed",
@@ -1117,11 +1180,13 @@ const markPersonalMediaUploadFailed = async (
     },
     instanceId,
   );
+  if (!updated) throw new Error("Personal processing claim lost");
 };
 
 const writeTerminalFailureMeeting = async (
   job: PersonalMediaUploadJobRecord,
   error: unknown,
+  instanceId: string,
 ) => {
   const attempts = job.attempts ?? 1;
   if (attempts < PERSONAL_MEDIA_UPLOAD_MAX_PROCESSING_ATTEMPTS) return;
@@ -1145,24 +1210,28 @@ const writeTerminalFailureMeeting = async (
           notes: "skipped",
           summary: "skipped",
         } as const);
-  await writeMeetingHistoryService({
-    ...(existing ?? {
-      guildId: identity.guildId,
-      channelId_timestamp: identity.channelIdTimestamp,
-      meetingId: identity.meetingId,
-      channelId: PERSONAL_UPLOAD_CHANNEL_ID,
-      timestamp: identity.timestamp,
-      participants: buildPersonalUploadParticipants(job),
-      duration: job.durationSeconds ?? 0,
-      transcribeMeeting: true,
-      generateNotes: true,
-      ownershipScope: "personal" as const,
-      ownerUserId: job.ownerUserId,
-      meetingCreatorId: job.ownerUserId,
-    }),
-    status: MEETING_STATUS.COMPLETE,
-    processing,
-  });
+  await writeClaimedHistory(
+    job,
+    {
+      ...(existing ?? {
+        guildId: identity.guildId,
+        channelId_timestamp: identity.channelIdTimestamp,
+        meetingId: identity.meetingId,
+        channelId: PERSONAL_UPLOAD_CHANNEL_ID,
+        timestamp: identity.timestamp,
+        participants: buildPersonalUploadParticipants(job),
+        duration: job.durationSeconds ?? 0,
+        transcribeMeeting: true,
+        generateNotes: true,
+        ownershipScope: "personal" as const,
+        ownerUserId: job.ownerUserId,
+        meetingCreatorId: job.ownerUserId,
+      }),
+      status: MEETING_STATUS.COMPLETE,
+      processing,
+    },
+    instanceId,
+  );
 };
 
 const readTerminalSegmentCounts = async (job: PersonalMediaUploadJobRecord) => {
@@ -1189,12 +1258,21 @@ const readTerminalSegmentCounts = async (job: PersonalMediaUploadJobRecord) => {
 export async function processPersonalMediaUpload(
   job: PersonalMediaUploadJobRecord,
   instanceId: string,
+  signal?: AbortSignal,
+  onDurable?: () => void,
 ) {
   // Progress observations belong to this attempt, not the caller's job object.
   job = { ...job };
+  if (signal) processingSignals.set(job, signal);
+  assertPersonalProcessingActive(job);
   await withPersonalUploadProcessingTrace(job, async () => {
     const tempRoot = await ensureTempBaseDir();
-    const workDir = path.join(tempRoot, "personal-upload", job.uploadId);
+    const workDir = path.join(
+      tempRoot,
+      "personal-upload",
+      job.uploadId,
+      `attempt-${job.attempts}`,
+    );
     await fs.mkdir(workDir, { recursive: true });
     let terminalFacts: PersonalUploadTerminalFacts | undefined;
     let result: PersonalUploadProcessingResult | undefined;
@@ -1208,15 +1286,24 @@ export async function processPersonalMediaUpload(
         result,
         completedAt,
       );
-      await writeMeetingHistoryService(meetingHistory);
-      await maybeAutoExportCompletedMeeting(meetingHistory);
       await markPersonalMediaUploadComplete(
         job,
         identity,
         result,
         completedAt,
         instanceId,
+        meetingHistory,
       );
+      onDurable?.();
+      assertPersonalProcessingActive(job);
+      try {
+        await maybeAutoExportCompletedMeeting(meetingHistory);
+      } catch (error) {
+        console.error(
+          "Failed to export completed personal meeting",
+          buildProviderFailureObservation(error),
+        );
+      }
       terminalFacts = {
         processing: result.processing,
         failedChunks: result.failedChunks,
@@ -1225,8 +1312,13 @@ export async function processPersonalMediaUpload(
         jobStatus: "complete",
       };
     } catch (error) {
+      assertPersonalProcessingActive(job);
       if (job.uploadOrigin === "desktop_recording") {
-        await markPersonalRecordingUploadSegmentsFailed(job.uploadId, error);
+        await markPersonalRecordingUploadSegmentsFailed(
+          job.uploadId,
+          error,
+          personalMediaClaimForJob(job, instanceId),
+        );
       }
       const resolvedError = result
         ? new PersonalUploadProcessingError(
@@ -1236,14 +1328,16 @@ export async function processPersonalMediaUpload(
           )
         : error;
       try {
-        await writeTerminalFailureMeeting(job, resolvedError);
+        await writeTerminalFailureMeeting(job, resolvedError, instanceId);
       } catch (historyError) {
         console.error("Failed to finalize personal upload meeting history", {
           uploadId: job.uploadId,
           error: buildProviderFailureObservation(historyError),
         });
+        throw historyError;
       }
       await markPersonalMediaUploadFailed(job, error, instanceId);
+      onDurable?.();
       console.error("Failed to process personal media upload", {
         uploadId: job.uploadId,
         error: buildProviderFailureObservation(error),

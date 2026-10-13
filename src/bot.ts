@@ -1,4 +1,12 @@
 import { waitForGuildInstaller } from "./services/guildInstallerOnboardingService";
+import { randomUUID } from "node:crypto";
+import type { WorkAdmissionAuthority } from "./types/deploymentControl";
+import {
+  beginRuntimeWorkClaim,
+  type RuntimeWorkClaim,
+} from "./services/runtimeWorkAdmissionService";
+import { getActiveMeetingLease, getDeploymentControlRepository } from "./db";
+import { getOwnedSessionReservations } from "./services/activeMeetingLeaseService";
 import { buildOwnedVoiceStrategy } from "./services/guildVoiceOperationService";
 import {
   ButtonInteraction,
@@ -47,6 +55,7 @@ import { parseTags } from "./utils/tags";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
+  persistAutoRecordSuppression,
 } from "./commands/endMeeting";
 import { subscribeToUserVoice, unsubscribeToVoiceUponLeaving } from "./audio";
 import { generateAndSendImage } from "./commands/generateImage";
@@ -132,6 +141,7 @@ import { startMeetingControlCommandWorker } from "./services/meetingControlWorke
 import {
   closeRuntimeAdmission,
   isRuntimeWarm,
+  getRuntimeAdmissionContext,
   whenRuntimeServing,
 } from "./services/runtimeLifecycleService";
 import { autoRecordJoinSuppressionService } from "./services/autoRecordJoinSuppressionService";
@@ -458,22 +468,21 @@ const resolveInteractionKind = (interaction: RepliableInteraction): string => {
 
 const tryClaimInteraction = async (
   interaction: RepliableInteraction,
+  authority: WorkAdmissionAuthority,
 ): Promise<boolean> => {
   try {
     return await claimInteractionReceipt({
       interactionId: interaction.id,
       interactionKind: resolveInteractionKind(interaction),
       guildId: interaction.guildId ?? undefined,
+      authority,
     });
   } catch (error) {
-    console.error(
-      "Failed to claim interaction receipt, continuing without idempotency",
-      {
-        interactionId: interaction.id,
-        error,
-      },
-    );
-    return true;
+    console.error("Failed to claim interaction receipt", {
+      interactionId: interaction.id,
+      error,
+    });
+    throw error;
   }
 };
 
@@ -487,69 +496,86 @@ export async function setupBot() {
   client.once(Events.ClientReady, () => {
     console.log(`Logged in as ${client.user?.tag}!`);
     setDiscordClient(client);
-    whenRuntimeServing(() => startMeetingControlCommandWorker(client));
+    whenRuntimeServing(() => {
+      startMeetingControlCommandWorker(client);
+      void runServingBotWork(async () => {
+        await setupApplicationCommands();
+        await reevaluateOccupiedVoiceChannels();
+      }).catch((error) =>
+        console.error("Serving bot initialization failed", error),
+      );
+    });
 
     client.on("voiceStateUpdate", handleVoiceStateUpdate);
   });
 
   client.on("guildCreate", async (guild) => {
-    await invalidateBotGuildCache("guildCreate");
-    await invalidateGuildCache(guild.id, "guildCreate");
+    if (isRuntimeWarm()) return;
+    await runServingBotWork(async (assertServing) => {
+      await invalidateBotGuildCache("guildCreate");
+      await invalidateGuildCache(guild.id, "guildCreate");
 
-    // Narrowed to recent joins, which drops a create re-emitted for a guild
-    // joined longer ago. See isFreshGuildJoin for the limits of that.
-    if (isFreshGuildJoin(guild)) {
-      captureEvent("server_installed", {
-        guildId: guild.id,
-        properties: { guild_count: client.guilds.cache.size },
-      });
-    }
-
-    if (!config.server.onboardingEnabled) {
-      return;
-    }
-    try {
-      const installer = await waitForGuildInstaller(
-        guild.id,
-        guild.joinedTimestamp,
-      );
-      const dmTarget =
-        installer?.installerId &&
-        (await client.users.fetch(installer.installerId).catch(() => null));
-      const recipient = dmTarget ?? (await guild.fetchOwner());
-      if (recipient) {
-        const targetUser = "user" in recipient ? recipient.user : recipient;
-        const setupUrl = `${config.frontend.siteUrl.replace(/\/$/, "")}/join`;
-        await targetUser.send(
-          [
-            "Thanks for adding Chronote.",
-            "",
-            "To record your first meeting, join a voice channel and run `/startmeeting`. The notes post back to the channel when the meeting ends.",
-            "",
-            `Setup walkthrough: run \`/onboard\` (needs Manage Guild), or see ${setupUrl}`,
-          ].join("\n"),
-        );
+      // Narrowed to recent joins, which drops a create re-emitted for a guild
+      // joined longer ago. See isFreshGuildJoin for the limits of that.
+      if (isFreshGuildJoin(guild)) {
+        captureEvent("server_installed", {
+          guildId: guild.id,
+          properties: { guild_count: client.guilds.cache.size },
+        });
       }
-    } catch (err) {
-      console.warn("Could not DM installer/owner on join", err);
-    }
+
+      if (!config.server.onboardingEnabled) {
+        return;
+      }
+      try {
+        const installer = await waitForGuildInstaller(
+          guild.id,
+          guild.joinedTimestamp,
+        );
+        const dmTarget =
+          installer?.installerId &&
+          (await client.users.fetch(installer.installerId).catch(() => null));
+        const recipient = dmTarget ?? (await guild.fetchOwner());
+        if (recipient) {
+          await assertServing();
+          const targetUser = "user" in recipient ? recipient.user : recipient;
+          const setupUrl = `${config.frontend.siteUrl.replace(/\/$/, "")}/join`;
+          await targetUser.send(
+            [
+              "Thanks for adding Chronote.",
+              "",
+              "To record your first meeting, join a voice channel and run `/startmeeting`. The notes post back to the channel when the meeting ends.",
+              "",
+              `Setup walkthrough: run \`/onboard\` (needs Manage Guild), or see ${setupUrl}`,
+            ].join("\n"),
+          );
+        }
+      } catch (err) {
+        console.warn("Could not DM installer/owner on join", err);
+      }
+    }).catch((error) =>
+      console.warn("Guild onboarding admission closed", error),
+    );
   });
 
   client.on("guildDelete", async (guild) => {
-    const removedAt = new Date().toISOString();
-    try {
-      await removeGuildInstaller(guild.id, removedAt);
-    } catch (error) {
-      console.warn("Could not clear installer on guild removal", error);
-    }
-    await invalidateBotGuildCache("guildDelete");
-    await invalidateGuildCache(guild.id, "guildDelete");
-    // Safe to trust: the gateway flags outages with `unavailable` and
-    // discord.js routes those to guildUnavailable instead of here.
-    captureEvent("server_removed", {
-      guildId: guild.id,
-      properties: { guild_count: client.guilds.cache.size },
-    });
+    if (isRuntimeWarm()) return;
+    await runServingBotWork(async () => {
+      const removedAt = new Date().toISOString();
+      try {
+        await removeGuildInstaller(guild.id, removedAt);
+      } catch (error) {
+        console.warn("Could not clear installer on guild removal", error);
+      }
+      await invalidateBotGuildCache("guildDelete");
+      await invalidateGuildCache(guild.id, "guildDelete");
+      // Safe to trust: the gateway flags outages with `unavailable` and
+      // discord.js routes those to guildUnavailable instead of here.
+      captureEvent("server_removed", {
+        guildId: guild.id,
+        properties: { guild_count: client.guilds.cache.size },
+      });
+    }).catch((error) => console.warn("Guild removal admission closed", error));
   });
 
   client.on("guildUpdate", async (_oldGuild, newGuild) => {
@@ -600,7 +626,7 @@ export async function setupBot() {
   });
 
   client.on("interactionCreate", async (interaction) => {
-    if (config.runtime.ecs && isRuntimeWarm()) return;
+    if (isRuntimeWarm() || !interaction.isRepliable()) return;
     if (isShuttingDown) {
       // Assume another instance has already been spun up to handle traffic, and don't handle it
       console.log(
@@ -608,45 +634,167 @@ export async function setupBot() {
       );
       return;
     }
+    const ownerControl = isOwnerInteraction(interaction);
+    const local = findInteractionSession(interaction, ownerControl);
+    let work: RuntimeWorkClaim;
     try {
-      if (interaction.isRepliable()) {
-        const claimed = await tryClaimInteraction(interaction);
-        if (!claimed) {
-          console.log("Skipping duplicate interaction", {
-            interactionId: interaction.id,
-            interactionKind: resolveInteractionKind(interaction),
-          });
-          return;
-        }
-        await handleInteractionCreate(interaction);
-      }
-    } catch (e) {
-      console.error("Unknown error processing command: ", e);
-      try {
-        if (interaction.isRepliable()) {
-          const sent = await tryReplyToUnacknowledgedInteraction(
-            interaction,
-            "Unknown Error handling request.",
-          );
-          if (!sent) {
-            console.log(
-              "Skipped unknown error reply because interaction is acknowledged",
-              {
-                interactionId: interaction.id,
-                interactionKind: resolveInteractionKind(interaction),
-              },
-            );
-          }
-        }
-      } catch (e2) {
-        console.error("Error replying to interaction about initial error", e2);
-      }
+      work = beginRuntimeWorkClaim(
+        "interaction",
+        interaction.id,
+        local
+          ? {
+              guildId: local.reservation.guildId,
+              meetingId: local.reservation.meetingId,
+            }
+          : undefined,
+      );
+    } catch {
+      return;
     }
+    await work.trackPromise(
+      executeInteractionWork(interaction, ownerControl, Boolean(local), work),
+    );
   });
 
-  setupApplicationCommands();
-
   await client.login(TOKEN);
+}
+
+async function executeInteractionWork(
+  interaction: RepliableInteraction,
+  ownerControl: boolean,
+  local: boolean,
+  work: RuntimeWorkClaim,
+) {
+  let receiptAttempted = false;
+  try {
+    if (interaction.isRepliable()) {
+      if (await isForeignOwnedInteraction(interaction, ownerControl, local))
+        return;
+      const authority = await work.authority();
+      receiptAttempted = true;
+      const claimed = await tryClaimInteraction(interaction, authority);
+      if (!claimed) {
+        console.log("Skipping duplicate interaction", {
+          interactionId: interaction.id,
+          interactionKind: resolveInteractionKind(interaction),
+        });
+        return;
+      }
+      work.claimed();
+      await handleInteractionCreate(interaction);
+    }
+  } catch (e) {
+    if (receiptAttempted) work.fence();
+    console.error("Unknown error processing command: ", e);
+    if (work.signal.aborted) return;
+    try {
+      if (interaction.isRepliable()) {
+        const sent = await tryReplyToUnacknowledgedInteraction(
+          interaction,
+          "Unknown Error handling request.",
+        );
+        if (!sent) {
+          console.log(
+            "Skipped unknown error reply because interaction is acknowledged",
+            {
+              interactionId: interaction.id,
+              interactionKind: resolveInteractionKind(interaction),
+            },
+          );
+        }
+      }
+    } catch (e2) {
+      console.error("Error replying to interaction about initial error", e2);
+    }
+  } finally {
+    work.settle();
+  }
+}
+
+function isOwnerInteraction(interaction: RepliableInteraction): boolean {
+  return (
+    (interaction.isButton() && interaction.customId === "end_meeting") ||
+    (interaction.isUserContextMenuCommand() &&
+      interaction.commandName === DISMISS_AUTORECORD_COMMAND_NAME) ||
+    (interaction.isChatInputCommand() &&
+      ["leave", "say"].includes(interaction.commandName))
+  );
+}
+function findInteractionSession(
+  interaction: RepliableInteraction,
+  ownerControl: boolean,
+) {
+  if (!ownerControl || !interaction.guildId) return undefined;
+  return getOwnedSessionReservations().find(
+    ({ reservation }) => reservation.guildId === interaction.guildId,
+  );
+}
+async function isForeignOwnedInteraction(
+  interaction: RepliableInteraction,
+  ownerControl: boolean,
+  local: boolean,
+): Promise<boolean> {
+  if (!ownerControl || local || !interaction.guildId) return false;
+  const lease = await getActiveMeetingLease(interaction.guildId);
+  return Boolean(
+    lease && lease.leaseExpiresAt >= Math.floor(Date.now() / 1000),
+  );
+}
+async function assertServingBotAdmission() {
+  const context = await getRuntimeAdmissionContext();
+  if (
+    (await getDeploymentControlRepository().checkAdmission(context)).kind !==
+    "admitted"
+  )
+    throw new Error("Bot admission closed");
+}
+async function runServingBotWork(
+  run: (assertServing: () => Promise<void>) => Promise<void>,
+) {
+  const work = beginRuntimeWorkClaim("ancillary", randomUUID());
+  return work.trackPromise(executeServingBotWork(run, work));
+}
+async function executeServingBotWork(
+  run: (assertServing: () => Promise<void>) => Promise<void>,
+  work: RuntimeWorkClaim,
+) {
+  let started = false;
+  try {
+    const authority = await work.authority();
+    if (
+      authority.kind !== "serving" ||
+      (await getDeploymentControlRepository().checkAdmission(authority.context))
+        .kind !== "admitted"
+    )
+      return;
+    work.claimed();
+    started = true;
+    await run(async () => {
+      work.signal.throwIfAborted();
+      await assertServingBotAdmission();
+      work.signal.throwIfAborted();
+    });
+  } catch (error) {
+    if (started || work.signal.aborted) work.fence();
+    throw error;
+  } finally {
+    work.settle();
+  }
+}
+async function reevaluateOccupiedVoiceChannels() {
+  const channels = new Set<string>();
+  for (const guild of client.guilds.cache.values())
+    for (const state of guild.voiceStates.cache.values()) {
+      if (
+        !state.channelId ||
+        !state.member ||
+        state.member.user.bot ||
+        channels.has(state.channelId)
+      )
+        continue;
+      channels.add(state.channelId);
+      await handleUserJoin(state);
+    }
 }
 
 export const isBotGatewayReady = () => client.isReady();
@@ -655,8 +803,8 @@ async function handleVoiceStateUpdate(
   oldState: VoiceState,
   newState: VoiceState,
 ) {
-  recordSuppressionVoiceState(oldState, newState);
-  if (config.runtime.ecs && isRuntimeWarm()) return;
+  if (isRuntimeWarm()) return;
+  await recordSuppressionVoiceState(oldState, newState);
   const botId = client.user?.id;
   if (
     botId &&
@@ -685,31 +833,49 @@ async function handleVoiceStateUpdate(
   }
 }
 
-function recordSuppressionVoiceState(
+async function recordSuppressionVoiceState(
   oldState: VoiceState,
   newState: VoiceState,
 ) {
-  const userId = newState.id || oldState.id;
-  if (!userId) return;
-  const member = newState.member ?? oldState.member;
-  const botUserId = client.user?.id;
-  const isBot =
-    member?.user.bot === true ||
-    (botUserId !== undefined && botUserId === userId);
-  const result = autoRecordJoinSuppressionService.handleVoiceStateChange({
-    guildId: newState.guild.id,
-    userId,
-    isBot,
-    oldChannelId: oldState.channelId,
-    newChannelId: newState.channelId,
-  });
-  if (result.clearedSuppression) {
-    const extra = result.clearedSuppressionInfo
-      ? ` reason=${result.clearedSuppressionInfo.reason} suppressedAt=${result.clearedSuppressionInfo.createdAt}`
-      : "";
-    console.log(
-      `Auto-record suppression cleared after channel became empty: guildId=${newState.guild.id} channelId=${oldState.channelId}${extra}`,
+  if (!oldState.channelId || oldState.channelId === newState.channelId) return;
+  const channel = oldState.guild.channels.cache.get(oldState.channelId);
+  if (!channel?.isVoiceBased()) return;
+  const local = getOwnedSessionReservations().find(
+    ({ reservation }) => reservation.guildId === oldState.guild.id,
+  );
+  let work: RuntimeWorkClaim;
+  try {
+    work = beginRuntimeWorkClaim(
+      "control",
+      randomUUID(),
+      local
+        ? {
+            guildId: local.reservation.guildId,
+            meetingId: local.reservation.meetingId,
+          }
+        : undefined,
     );
+  } catch {
+    return;
+  }
+  try {
+    const authority = await work.authority();
+    await work.trackPromise(
+      autoRecordJoinSuppressionService.clearIfEmpty({
+        guildId: oldState.guild.id,
+        channelId: channel.id,
+        authority,
+        nonBotMemberIds: () =>
+          channel.members
+            .filter((member) => !member.user.bot)
+            .map((member) => member.id),
+      }),
+    );
+  } catch (error) {
+    work.fence();
+    throw error;
+  } finally {
+    work.settle();
   }
 }
 
@@ -730,12 +896,10 @@ async function handleBotVoiceUpdate(
       const nonBotMemberIds = meeting.voiceChannel.members
         .filter((member) => !member.user.bot)
         .map((member) => member.id);
-      const didSuppress = autoRecordJoinSuppressionService.suppressUntilEmpty({
-        guildId: meeting.guildId,
-        channelId: meeting.voiceChannel.id,
-        nonBotMemberIds,
-        reason: "forced_disconnect",
-      });
+      const didSuppress = await persistAutoRecordSuppression(
+        meeting,
+        "forced_disconnect",
+      );
       if (!didSuppress) {
         console.log(
           `Auto-record suppression not set after forced disconnect (already suppressed or channel empty): guildId=${meeting.guildId} channelId=${meeting.voiceChannel.id} nonBotMembers=${nonBotMemberIds.length}`,
@@ -823,14 +987,16 @@ async function maybeStartAutoTtsOnly(newState: VoiceState) {
     botMember,
   );
   if (!permissionCheck.success) {
+    await assertServingBotAdmission();
     await textChannel.send(
       `Cannot start TTS-only chat-to-speech in **${newState.channel.name}**. ${permissionCheck.errorMessage}`,
     );
     return false;
   }
 
-  await initializeMeeting({
+  const meeting = await initializeMeeting({
     sessionMode: "tts_only",
+    suppressionCheck: { channelId: newState.channel.id },
     captureAudio: false,
     recordBotAudio: false,
     storeChatLog: false,
@@ -845,14 +1011,16 @@ async function maybeStartAutoTtsOnly(newState: VoiceState) {
     chatTtsSpeakerPrefixMode: voiceSettings.chatTtsSpeakerPrefixMode,
     subscriptionTier: subscription.tier,
   });
+  meeting.ownershipSignal?.throwIfAborted();
   await textChannel.send(
     `TTS-only chat-to-speech started in **${newState.channel.name}**. No recording or transcription is active.`,
   );
   return true;
 }
 
-async function handleUserJoin(newState: VoiceState) {
+async function handleUserJoin(newState: VoiceState, admitted = false) {
   const meeting = getMeeting(newState.guild.id);
+  if (meeting?.ownershipSignal?.aborted) return;
 
   // Handle existing meeting attendance
   if (
@@ -891,8 +1059,22 @@ async function handleUserJoin(newState: VoiceState) {
     newState.member &&
     newState.member.user.id !== client.user!.id // Don't trigger for bot joining
   ) {
+    if (!admitted) {
+      try {
+        await runServingBotWork(() => handleUserJoin(newState, true));
+      } catch (error) {
+        console.warn("Voice automation admission closed", error);
+      }
+      return;
+    }
+    const activeLease = await getActiveMeetingLease(newState.guild.id);
     if (
-      autoRecordJoinSuppressionService.shouldSuppressAutoJoin(
+      activeLease &&
+      activeLease.leaseExpiresAt >= Math.floor(Date.now() / 1000)
+    )
+      return;
+    if (
+      await autoRecordJoinSuppressionService.shouldSuppressAutoJoin(
         newState.guild.id,
         newState.channelId!,
       )
@@ -983,6 +1165,7 @@ async function handleUserJoin(newState: VoiceState) {
             channelId: autoRecordSetting.channelId,
           };
           await handleAutoStartMeeting(client, newState.channel, textChannel, {
+            assertAdmission: assertServingBotAdmission,
             tags,
             liveVoiceEnabled,
             liveVoiceCommandsEnabled,

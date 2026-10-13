@@ -23,6 +23,7 @@ export type RuntimeReadinessProbe = Pick<
 >;
 export type RuntimeWorkRegistration = RuntimeWorkHandle & {
   transition(kind: RuntimeWorkKind): void;
+  beginOwnedControl(): RuntimeWorkHandle;
 };
 export type RuntimeLifecycle = ReturnType<typeof createRuntimeLifecycle>;
 
@@ -202,6 +203,27 @@ export function createRuntimeLifecycle(options: {
     counts[kind]++;
     let settled = false;
     return {
+      beginOwnedControl() {
+        if (
+          settled ||
+          !["recording", "finalization", "voice_operation"].includes(kind) ||
+          unsafe ||
+          !safetyHandler ||
+          !protection.isSafe() ||
+          !row ||
+          ["releasing", "retired", "stale", "candidate"].includes(row.role)
+        )
+          throw new Error("Session cannot grant control ownership");
+        counts.ancillary_delivery++;
+        let controlSettled = false;
+        return {
+          settle() {
+            if (controlSettled) return;
+            controlSettled = true;
+            counts.ancillary_delivery--;
+          },
+        };
+      },
       settle() {
         if (!settled) {
           settled = true;

@@ -19,6 +19,7 @@ import {
   getOwnedSessionReservations,
   releaseSessionReservation,
   attachMeetingReservation,
+  isReservationControlEligible,
 } from "../../src/services/activeMeetingLeaseService";
 import {
   getActiveMeetingLease,
@@ -177,6 +178,7 @@ describe("activeMeetingLeaseService", () => {
     const releasing = releaseSessionReservation(reservation);
     await Promise.resolve();
     await Promise.resolve();
+    expect(isReservationControlEligible(reservation)).toBe(false);
     meeting.finalizationFenced = true;
     finish();
     expect(await releasing).toBe(false);

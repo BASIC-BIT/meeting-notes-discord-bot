@@ -369,7 +369,11 @@ async function initializeNewMeeting(
   };
   const input =
     options.sessionMode === "tts_only"
-      ? { ...shared, sessionMode: "tts_only" as const }
+      ? {
+          ...shared,
+          sessionMode: "tts_only" as const,
+          suppression: options.suppressionCheck,
+        }
       : {
           ...shared,
           sessionMode: "meeting" as const,

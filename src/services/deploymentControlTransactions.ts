@@ -6,7 +6,12 @@ import type {
 } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { planLocalBootstrap } from "./runtimeLocalBootstrapPlan";
-import type { MeetingHistory } from "../types/db";
+import type {
+  MeetingHistory,
+  PersonalMediaUploadJobRecord,
+  PersonalMediaClaim,
+  PersonalRecordingSegmentRecord,
+} from "../types/db";
 import {
   admissionContextSchema,
   promotionInputSchema,
@@ -22,7 +27,139 @@ import {
   type ControlRecord,
   type RuntimeRecord,
   type SessionReservationInput,
+  type WorkAdmissionAuthority,
 } from "../types/deploymentControl";
+
+export function buildPendingSegmentTransaction(
+  segment: PersonalRecordingSegmentRecord,
+  expectedStatus: "pending_upload" | "failed" | undefined,
+  tables: { personalMediaUpload: string; personalRecordingSegment: string },
+): TransactWriteItemsCommandInput {
+  return {
+    TransactItems: [
+      {
+        ConditionCheck: {
+          TableName: tables.personalMediaUpload,
+          Key: marshall({ uploadId: segment.uploadId }),
+          ConditionExpression:
+            "#status = :pending AND ownerUserId = :owner AND attribute_not_exists(processingClaimId)",
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: marshall({
+            ":pending": "pending_upload",
+            ":owner": segment.ownerUserId,
+          }),
+        },
+      },
+      {
+        Put: {
+          TableName: tables.personalRecordingSegment,
+          Item: marshall(segment, { removeUndefinedValues: true }),
+          ConditionExpression: expectedStatus
+            ? "#status = :expected AND ownerUserId = :owner"
+            : "attribute_not_exists(uploadId)",
+          ...(expectedStatus
+            ? {
+                ExpressionAttributeNames: { "#status": "status" },
+                ExpressionAttributeValues: marshall({
+                  ":expected": expectedStatus,
+                  ":owner": segment.ownerUserId,
+                }),
+              }
+            : {}),
+        },
+      },
+    ],
+  };
+}
+
+export function buildWorkAdmissionChecks(
+  authority: WorkAdmissionAuthority,
+  tables: ControlTableNames,
+): TransactWriteItem[] {
+  if (authority.kind === "serving")
+    return buildRuntimeAdmissionChecks(authority.context, tables);
+  if (!tables.activeMeeting)
+    throw new Error("Active meeting table is required");
+  const owner = authority.ownership;
+  return [
+    {
+      ConditionCheck: {
+        TableName: tables.activeMeeting,
+        Key: marshall({ guildId: owner.guildId }),
+        ConditionExpression:
+          "meetingId = :meeting AND ownerInstanceId = :owner AND executionVersion = :version AND voiceOperationAttemptId = :attempt AND leaseExpiresAt >= :now",
+        ExpressionAttributeValues: marshall({
+          ":meeting": owner.meetingId,
+          ":owner": owner.ownerInstanceId,
+          ":version": owner.executionVersion,
+          ":attempt": owner.voiceOperationAttemptId,
+          ":now": authority.now,
+        }),
+      },
+    },
+  ];
+}
+
+export function buildPersonalClaimCheck(
+  claim: PersonalMediaClaim,
+  table: string,
+) {
+  return {
+    ConditionCheck: {
+      TableName: table,
+      Key: marshall({ uploadId: claim.uploadId }),
+      ConditionExpression:
+        "#status = :processing AND processingOwnerInstanceId = :owner AND attempts = :attempt AND processingClaimId = :claim AND claimExpiresAt >= :now",
+      ExpressionAttributeNames: { "#status": "status" },
+      ExpressionAttributeValues: marshall({
+        ":processing": "processing",
+        ":owner": claim.instanceId,
+        ":attempt": claim.attempt,
+        ":claim": claim.claimId,
+        ":now": claim.nowEpochSeconds,
+      }),
+    },
+  };
+}
+export function buildPersonalMediaClaimTransaction(
+  input: {
+    job: PersonalMediaUploadJobRecord;
+    context: AdmissionContext;
+    expectedAttempts: number;
+    maxAttempts: number;
+    claimId: string;
+  },
+  tables: ControlTableNames & { personalMediaUpload: string },
+): TransactWriteItemsCommandInput {
+  if (
+    input.job.processingOwnerInstanceId !== input.context.instanceId ||
+    input.job.attempts !== input.expectedAttempts + 1 ||
+    input.job.processingClaimId !== input.claimId ||
+    input.expectedAttempts < 0 ||
+    input.expectedAttempts >= input.maxAttempts
+  )
+    throw new Error("Personal claim identity mismatch");
+  return {
+    ClientRequestToken: input.claimId,
+    TransactItems: [
+      ...buildRuntimeAdmissionChecks(input.context, tables),
+      {
+        Put: {
+          TableName: tables.personalMediaUpload,
+          Item: marshall(input.job, { removeUndefinedValues: true }),
+          ConditionExpression: `(#status = :queued OR (#status = :processing AND claimExpiresAt < :now)) AND ${input.expectedAttempts === 0 ? "(attribute_not_exists(attempts) OR attempts = :expected)" : "attempts = :expected"}`,
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: marshall({
+            ":queued": "queued",
+            ":processing": "processing",
+            ":now": input.context.now,
+            ":expected": input.expectedAttempts,
+          }),
+        },
+      },
+    ],
+  };
+}
 
 function validateReservationIdentity({
   context,

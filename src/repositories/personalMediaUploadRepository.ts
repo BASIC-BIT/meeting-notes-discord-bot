@@ -8,11 +8,33 @@ import {
   updatePersonalMediaUploadJob,
   writeClaimedPersonalMediaUploadJob,
   writePersonalMediaUploadJob,
+  submitPersonalMediaUploadJob,
+  writePersonalHistoryUnderClaim,
+  writePersonalSegmentUnderClaim,
+  personalMediaClaimForJob,
+  personalProcessingHistoryFields,
 } from "../db";
-import type { PersonalMediaUploadJobRecord } from "../types/db";
+import type {
+  PersonalMediaUploadJobRecord,
+  PersonalMediaClaim,
+  MeetingHistory,
+  PersonalRecordingSegmentRecord,
+} from "../types/db";
+import type { AdmissionContext } from "../types/deploymentControl";
+import { mockWorkAdmissionAllowed } from "./deploymentControlRepository";
 import { getMockStore } from "./mockStore";
 
 export type PersonalMediaUploadRepository = {
+  submit: (job: PersonalMediaUploadJobRecord) => Promise<boolean>;
+  writeHistory: (
+    history: MeetingHistory,
+    claim: PersonalMediaClaim,
+    terminalJob?: PersonalMediaUploadJobRecord,
+  ) => Promise<boolean>;
+  writeSegment: (
+    segment: PersonalRecordingSegmentRecord,
+    claim: PersonalMediaClaim,
+  ) => Promise<boolean>;
   write: (job: PersonalMediaUploadJobRecord) => Promise<void>;
   get: (uploadId: string) => Promise<PersonalMediaUploadJobRecord | undefined>;
   update: (job: PersonalMediaUploadJobRecord) => Promise<void>;
@@ -29,12 +51,18 @@ export type PersonalMediaUploadRepository = {
     claimExpiresAt: number;
     updatedAt: string;
     maxAttempts: number;
+    context: AdmissionContext;
+    claimId: string;
+    expectedAttempts: number;
   }) => Promise<PersonalMediaUploadJobRecord | undefined>;
   renewClaim: (options: {
     uploadId: string;
     instanceId: string;
     claimExpiresAt: number;
     updatedAt: string;
+    attempt: number;
+    claimId: string;
+    nowEpochSeconds: number;
   }) => Promise<boolean>;
   updateClaimed: (
     job: PersonalMediaUploadJobRecord,
@@ -47,10 +75,16 @@ export type PersonalMediaUploadRepository = {
     uploadedSegmentCount: number;
     processedSegmentCount: number;
     updatedAt: string;
+    attempt: number;
+    claimId: string;
+    nowEpochSeconds: number;
   }) => Promise<boolean>;
 };
 
 const realRepository: PersonalMediaUploadRepository = {
+  submit: submitPersonalMediaUploadJob,
+  writeHistory: writePersonalHistoryUnderClaim,
+  writeSegment: writePersonalSegmentUnderClaim,
   write: writePersonalMediaUploadJob,
   get: getPersonalMediaUploadJob,
   update: updatePersonalMediaUploadJob,
@@ -61,7 +95,80 @@ const realRepository: PersonalMediaUploadRepository = {
   updateProgress: updateClaimedPersonalMediaUploadJobProgress,
 };
 
+function mockClaimOwned(claim: PersonalMediaClaim): boolean {
+  const job = getMockStore().personalMediaUploadsById.get(claim.uploadId);
+  return Boolean(
+    job &&
+    job.status === "processing" &&
+    job.processingOwnerInstanceId === claim.instanceId &&
+    job.processingClaimId === claim.claimId &&
+    job.attempts === claim.attempt &&
+    (job.claimExpiresAt ?? 0) >= claim.nowEpochSeconds,
+  );
+}
 const mockRepository: PersonalMediaUploadRepository = {
+  async submit(job) {
+    const current = getMockStore().personalMediaUploadsById.get(job.uploadId);
+    if (
+      !current ||
+      current.status !== "pending_upload" ||
+      current.processingClaimId ||
+      current.ownerUserId !== job.ownerUserId
+    )
+      return false;
+    getMockStore().personalMediaUploadsById.set(
+      job.uploadId,
+      structuredClone(job),
+    );
+    return true;
+  },
+  async writeHistory(history, claim, terminalJob) {
+    if (!mockClaimOwned(claim)) return false;
+    const histories =
+      getMockStore().meetingHistoryByGuild.get(history.guildId) ?? [];
+    const index = histories.findIndex(
+      (row) => row.channelId_timestamp === history.channelId_timestamp,
+    );
+    const previous = histories[index];
+    if (
+      previous &&
+      (previous.meetingId !== history.meetingId ||
+        previous.ownerUserId !== history.ownerUserId ||
+        previous.ownershipScope !== "personal" ||
+        previous.status !== "processing")
+    )
+      return false;
+    const next = structuredClone(previous ?? history);
+    if (!previous) {
+      delete next.accessGrants;
+      delete next.archivedAt;
+      delete next.archivedByUserId;
+    }
+    Object.assign(
+      next,
+      Object.fromEntries(personalProcessingHistoryFields(history)),
+    );
+    if (index < 0) histories.push(next);
+    else histories[index] = next;
+    getMockStore().meetingHistoryByGuild.set(history.guildId, histories);
+    if (terminalJob)
+      getMockStore().personalMediaUploadsById.set(
+        claim.uploadId,
+        structuredClone(terminalJob),
+      );
+    return true;
+  },
+  async writeSegment(segment, claim) {
+    if (segment.uploadId !== claim.uploadId || !mockClaimOwned(claim))
+      return false;
+    const segments = getMockStore().personalRecordingSegmentsByUploadId.get(
+      segment.uploadId,
+    );
+    if (segments?.get(segment.segmentKey)?.ownerUserId !== segment.ownerUserId)
+      return false;
+    segments.set(segment.segmentKey, structuredClone(segment));
+    return true;
+  },
   async write(job) {
     getMockStore().personalMediaUploadsById.set(job.uploadId, job);
   },
@@ -90,9 +197,31 @@ const mockRepository: PersonalMediaUploadRepository = {
     claimExpiresAt,
     updatedAt,
     maxAttempts,
+    context,
+    claimId,
+    expectedAttempts,
   }) {
     const job = getMockStore().personalMediaUploadsById.get(uploadId);
     if (!job) return undefined;
+    if (
+      job.processingClaimId === claimId &&
+      job.processingOwnerInstanceId === instanceId &&
+      job.status === "processing"
+    )
+      return (job.claimExpiresAt ?? 0) >= nowEpochSeconds
+        ? structuredClone(job)
+        : undefined;
+    const store = getMockStore();
+    if (
+      context.instanceId !== instanceId ||
+      !mockWorkAdmissionAllowed(
+        { kind: "serving", context: { ...context, now: nowEpochSeconds } },
+        store.deploymentControlRecords,
+        store.activeMeetingLeases,
+      ) ||
+      (job.attempts ?? 0) !== expectedAttempts
+    )
+      return undefined;
     const claimExpired = (job.claimExpiresAt ?? 0) < nowEpochSeconds;
     const attempts = job.attempts ?? 0;
     const claimable =
@@ -107,12 +236,23 @@ const mockRepository: PersonalMediaUploadRepository = {
       claimExpiresAt,
       processingStartedAt: job.processingStartedAt ?? updatedAt,
       attempts: attempts + 1,
+      processingClaimId: claimId,
+      artifactAttempts: {
+        ...job.artifactAttempts,
+        [attempts + 1]: {
+          prefix: `personal/${job.ownerUserId}/${uploadId}/attempt-${attempts + 1}/`,
+          audioS3Key: `personal/${job.ownerUserId}/${uploadId}/attempt-${attempts + 1}/audio.mp3`,
+          transcriptS3Key: `personal/${job.ownerUserId}/${uploadId}/attempt-${attempts + 1}/transcript.json`,
+        },
+      },
       updatedAt,
     };
     getMockStore().personalMediaUploadsById.set(uploadId, next);
     return next;
   },
-  async renewClaim({ uploadId, instanceId, claimExpiresAt, updatedAt }) {
+  async renewClaim(input) {
+    const { uploadId, instanceId, claimExpiresAt, updatedAt } = input;
+    if (!mockClaimOwned(input)) return false;
     const job = getMockStore().personalMediaUploadsById.get(uploadId);
     if (
       !job ||
@@ -129,6 +269,8 @@ const mockRepository: PersonalMediaUploadRepository = {
     return true;
   },
   async updateClaimed(job, instanceId) {
+    if (!mockClaimOwned(personalMediaClaimForJob(job, instanceId)))
+      return false;
     const current = getMockStore().personalMediaUploadsById.get(job.uploadId);
     if (
       !current ||
@@ -140,14 +282,16 @@ const mockRepository: PersonalMediaUploadRepository = {
     getMockStore().personalMediaUploadsById.set(job.uploadId, job);
     return true;
   },
-  async updateProgress({
-    uploadId,
-    instanceId,
-    segmentCount,
-    uploadedSegmentCount,
-    processedSegmentCount,
-    updatedAt,
-  }) {
+  async updateProgress(input) {
+    if (!mockClaimOwned(input)) return false;
+    const {
+      uploadId,
+      instanceId,
+      segmentCount,
+      uploadedSegmentCount,
+      processedSegmentCount,
+      updatedAt,
+    } = input;
     const current = getMockStore().personalMediaUploadsById.get(uploadId);
     if (
       !current ||

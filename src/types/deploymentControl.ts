@@ -57,6 +57,18 @@ export const RUNTIME_WORK_KINDS = [
 ] as const;
 export type RuntimeWorkKind = (typeof RUNTIME_WORK_KINDS)[number];
 export type RuntimeWorkHandle = { settle(): void };
+
+export type SessionOwnership = Pick<
+  SessionReservation,
+  | "guildId"
+  | "meetingId"
+  | "ownerInstanceId"
+  | "executionVersion"
+  | "voiceOperationAttemptId"
+>;
+export type WorkAdmissionAuthority =
+  | { kind: "serving"; context: AdmissionContext }
+  | { kind: "session"; ownership: SessionOwnership; now: number };
 const runtimeMembersSchema = z
   .array(runtimeIdentitySchema)
   .max(98)
@@ -206,6 +218,9 @@ export const suppressionRecordSchema = z
     channelId: id,
     meetingId: id,
     createdAt: epochSecond,
+    version: z.number().int().positive(),
+    suppressed: z.boolean(),
+    reason: z.enum(["explicit_end", "forced_disconnect"]),
   })
   .strict()
   .refine(
@@ -325,7 +340,10 @@ export type SessionReservation = {
   executionVersion: number;
   voiceOperationAttemptId: string;
   reservedAt: number;
-  workHandle: RuntimeWorkHandle & { transition(kind: RuntimeWorkKind): void };
+  workHandle: RuntimeWorkHandle & {
+    transition(kind: RuntimeWorkKind): void;
+    beginOwnedControl(): RuntimeWorkHandle;
+  };
 } & (
   | { sessionMode: "meeting"; historyKey: HistoryKey }
   | { sessionMode: "tts_only"; historyKey?: never }

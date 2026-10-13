@@ -20,6 +20,7 @@ import type {
   AdmissionContext,
   SessionAdmissionResult,
   SessionReservation,
+  SessionReservationInput,
 } from "../types/deploymentControl";
 import {
   beginRuntimeWork,
@@ -52,6 +53,7 @@ export type AcquireMeetingLeaseInput = {
   | { sessionMode: "tts_only"; history?: never }
 );
 type OwnedReservation = {
+  releasing?: boolean;
   reservation: SessionReservation;
   controller: AbortController;
   timer?: ReturnType<typeof setInterval>;
@@ -61,6 +63,7 @@ type OwnedReservation = {
   initializationCleanup?: Promise<boolean>;
 };
 const reservations = new Map<string, OwnedReservation>();
+const processedRemoteEndRequests = new WeakMap<MeetingData, string>();
 const pendingReservations = new Map<string, Promise<SessionAdmissionResult>>();
 const uncertainAdmissions = new Map<
   string,
@@ -247,6 +250,10 @@ async function acquireReservation(
   };
   let result;
   try {
+    if (await observeReservationSuppression(request)) {
+      workHandle.settle();
+      return { kind: "blocked", reason: "suppressed" };
+    }
     for (let attempt = 0; attempt < 3; attempt++) {
       result = await getDeploymentControlRepository().reserveSession(request);
       if (result.kind === "admitted" || result.reason !== "unavailable") break;
@@ -300,6 +307,22 @@ async function acquireReservation(
   return { kind: "admitted", reservation };
 }
 
+async function observeReservationSuppression(
+  request: SessionReservationInput,
+): Promise<boolean> {
+  if (!request.suppression) return false;
+  const row = await getDeploymentControlRepository().getRecord(
+    `SUPPRESS#${request.lease.guildId}`,
+    `CHANNEL#${request.suppression.channelId}`,
+  );
+  if (row?.recordType !== "suppression") return false;
+  if (row.suppressed) return true;
+  request.suppression = {
+    ...request.suppression,
+    expectedVersion: request.suppression.expectedVersion ?? row.version,
+  };
+  return false;
+}
 async function renewReservation(owned: OwnedReservation): Promise<void> {
   if (owned.renewing || owned.controller.signal.aborted) return;
   owned.renewing = true;
@@ -359,6 +382,19 @@ export function attachMeetingReservation(
     reservation.sessionMode === "meeting" ? "recording" : "voice_operation",
   );
 }
+export function isReservationControlEligible(
+  reservation: SessionReservation,
+): boolean {
+  const owned = reservations.get(
+    reservationKey(reservation.guildId, reservation.meetingId),
+  );
+  return Boolean(
+    owned &&
+    owned.reservation === reservation &&
+    !owned.releasing &&
+    !owned.controller.signal.aborted,
+  );
+}
 function reservationReleaseBlocked(
   owned: OwnedReservation | undefined,
 ): boolean {
@@ -384,6 +420,7 @@ export async function releaseSessionReservation(
     return false;
   }
   if (reservationReleaseBlocked(owned)) return false;
+  if (owned) owned.releasing = true;
   const released = await releaseActiveMeetingLease(
     reservation.guildId,
     reservation.meetingId,
@@ -600,7 +637,14 @@ async function endMeetingFromLeaseOwnershipLoss(
 function dispatchEndMeeting(meeting: MeetingData): void {
   // The finalizer owns its promise. A provider wait must never hold the renewal tick.
   void Promise.resolve()
-    .then(() => meeting.onEndMeeting?.(meeting))
+    .then(async () => {
+      if (meeting.isAutoRecording) {
+        const { persistExplicitMeetingStop } =
+          await import("../commands/endMeeting");
+        await persistExplicitMeetingStop(meeting, meeting.endReason);
+      }
+      if (!meeting.finishing) await meeting.onEndMeeting?.(meeting);
+    })
     .catch((error) => {
       console.error("Owned meeting finalization failed", {
         meetingId: meeting.meetingId,
@@ -617,7 +661,7 @@ function processRemoteEndRequest(
   if (
     !lease.endRequestedAt ||
     !lease.endRequestedByUserId ||
-    meeting.finishing ||
+    processedRemoteEndRequests.get(meeting) === lease.endRequestedAt ||
     meeting.finished ||
     !onEndMeeting
   ) {
@@ -629,6 +673,7 @@ function processRemoteEndRequest(
     requestedBy: lease.endRequestedByUserId,
   });
   meeting.endReason = lease.endReason ?? MEETING_END_REASONS.WEB_UI;
+  processedRemoteEndRequests.set(meeting, lease.endRequestedAt);
   meeting.endTriggeredByUserId = lease.endRequestedByUserId;
   dispatchEndMeeting(meeting);
   return true;

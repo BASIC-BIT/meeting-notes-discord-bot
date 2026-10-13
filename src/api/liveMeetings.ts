@@ -1,4 +1,5 @@
 import express from "express";
+import { persistExplicitMeetingStop } from "../commands/endMeeting";
 import { rateLimit } from "express-rate-limit";
 import { passThrough } from "../middleware/passThrough";
 import { getMeeting } from "../meetings";
@@ -167,6 +168,14 @@ export function registerLiveMeetingRoutes(app: express.Express) {
           return;
         }
         res.json({ status: "accepted" });
+        return;
+      }
+      try {
+        await persistExplicitMeetingStop(meeting, MEETING_END_REASONS.WEB_UI);
+      } catch {
+        res.status(409).json({
+          error: "Meeting stop could not be confirmed. Please retry.",
+        });
         return;
       }
       if (meeting.finishing || meeting.finished || meeting.cancelled) {

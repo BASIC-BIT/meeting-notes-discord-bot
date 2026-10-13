@@ -49,6 +49,7 @@ import {
   FeedbackTargetType,
   ContactFeedbackRecord,
   PersonalMediaUploadJobRecord,
+  PersonalMediaClaim,
   PersonalRecordingSegmentRecord,
 } from "./types/db";
 import type { MeetingStatus } from "./types/meetingLifecycle";
@@ -56,9 +57,21 @@ import { trimNotesForHistory } from "./utils/notesHistory";
 import {
   createDynamoDeploymentControlRepository,
   createMockDeploymentControlRepository,
+  classifyDeploymentTransactionError,
+  mockWorkAdmissionAllowed,
 } from "./repositories/deploymentControlRepository";
 import { getMockStore } from "./repositories/mockStore";
-import type { HistoryTransition } from "./types/deploymentControl";
+import type {
+  AdmissionContext,
+  HistoryTransition,
+  WorkAdmissionAuthority,
+} from "./types/deploymentControl";
+import {
+  buildWorkAdmissionChecks,
+  buildPersonalMediaClaimTransaction,
+  buildPersonalClaimCheck,
+  buildPendingSegmentTransaction,
+} from "./services/deploymentControlTransactions";
 
 const MEETING_USER_INDEX_WRITE_BATCH_SIZE = 25;
 const PERSONAL_MEDIA_UPLOAD_STATUS_UPDATED_AT_INDEX = "StatusUpdatedAtIndex";
@@ -441,9 +454,11 @@ export async function getInteractionReceipt(
     : undefined;
 }
 
+const runtimeInteractionReceipts = new Map<string, InteractionReceipt>();
 export async function tryCreateInteractionReceipt(
   receipt: InteractionReceipt,
   replaceExpiredBefore?: number,
+  authority?: WorkAdmissionAuthority,
 ): Promise<boolean> {
   const params = {
     TableName: tableName("InteractionReceiptTable"),
@@ -458,14 +473,38 @@ export async function tryCreateInteractionReceipt(
           ExpressionAttributeValues: marshall({ ":now": replaceExpiredBefore }),
         }),
   };
-  const command = new PutItemCommand(params);
+  if (authority && config.mock.enabled) {
+    const store = getMockStore();
+    if (
+      !mockWorkAdmissionAllowed(
+        authority,
+        store.deploymentControlRecords,
+        store.activeMeetingLeases,
+      )
+    )
+      return false;
+    if (runtimeInteractionReceipts.has(receipt.interactionId)) return false;
+    runtimeInteractionReceipts.set(receipt.interactionId, receipt);
+    return true;
+  }
+  const transaction = authority
+    ? new TransactWriteItemsCommand({
+        TransactItems: [
+          ...buildWorkAdmissionChecks(authority, {
+            deploymentControl: tableName("DeploymentControlTable"),
+            meetingHistory: tableName("MeetingHistoryTable"),
+            activeMeeting: tableName("ActiveMeetingTable"),
+          }),
+          { Put: params },
+        ],
+      })
+    : undefined;
   try {
-    await dynamoDbClient.send(command);
+    if (transaction) await dynamoDbClient.send(transaction);
+    else await dynamoDbClient.send(new PutItemCommand(params));
     return true;
   } catch (error) {
-    if (
-      (error as { name?: string }).name === "ConditionalCheckFailedException"
-    ) {
+    if (classifyDeploymentTransactionError(error) === "stale") {
       return false;
     }
     throw error;
@@ -2099,6 +2138,7 @@ export async function getPersonalMediaUploadJob(
     new GetItemCommand({
       TableName: tableName("PersonalMediaUploadJobTable"),
       Key: marshall({ uploadId }),
+      ConsistentRead: true,
     }),
   );
   return result.Item
@@ -2110,6 +2150,158 @@ export async function updatePersonalMediaUploadJob(
   job: PersonalMediaUploadJobRecord,
 ): Promise<void> {
   await writePersonalMediaUploadJob(job);
+}
+
+export async function submitPersonalMediaUploadJob(
+  job: PersonalMediaUploadJobRecord,
+): Promise<boolean> {
+  try {
+    await dynamoDbClient.send(
+      new PutItemCommand({
+        TableName: tableName("PersonalMediaUploadJobTable"),
+        Item: marshall(job, { removeUndefinedValues: true }),
+        ConditionExpression:
+          "#status = :pending AND ownerUserId = :owner AND attribute_not_exists(processingClaimId)",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: marshall({
+          ":pending": "pending_upload",
+          ":owner": job.ownerUserId,
+        }),
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (isConditionalCheckFailed(error)) return false;
+    throw error;
+  }
+}
+
+export function personalMediaClaimForJob(
+  job: PersonalMediaUploadJobRecord,
+  instanceId: string,
+): PersonalMediaClaim {
+  if (!job.processingClaimId || !job.attempts)
+    throw new Error("Personal processing claim is missing");
+  return {
+    uploadId: job.uploadId,
+    instanceId,
+    attempt: job.attempts,
+    claimId: job.processingClaimId,
+    nowEpochSeconds: Math.floor(Date.now() / 1000),
+  };
+}
+
+export function personalProcessingHistoryFields(history: MeetingHistory) {
+  return Object.entries(history).filter(
+    ([key, value]) =>
+      value !== undefined &&
+      ![
+        "guildId",
+        "channelId_timestamp",
+        "accessGrants",
+        "archivedAt",
+        "archivedByUserId",
+      ].includes(key),
+  );
+}
+
+export async function writePersonalHistoryUnderClaim(
+  history: MeetingHistory,
+  claim: PersonalMediaClaim,
+  terminalJob?: PersonalMediaUploadJobRecord,
+): Promise<boolean> {
+  const fields = personalProcessingHistoryFields(history);
+  const names: Record<string, string> = { "#status": "status" };
+  const values: Record<string, unknown> = {
+    ":meeting": history.meetingId,
+    ":owner": history.ownerUserId,
+    ":personal": "personal",
+    ":processing": "processing",
+  };
+  fields.forEach(([key, value], index) => {
+    names[`#f${index}`] = key;
+    values[`:f${index}`] = value;
+  });
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand({
+        TransactItems: [
+          terminalJob
+            ? {
+                Put: {
+                  TableName: tableName("PersonalMediaUploadJobTable"),
+                  Item: marshall(terminalJob, { removeUndefinedValues: true }),
+                  ConditionExpression: buildPersonalClaimCheck(claim, "unused")
+                    .ConditionCheck.ConditionExpression,
+                  ExpressionAttributeNames: buildPersonalClaimCheck(
+                    claim,
+                    "unused",
+                  ).ConditionCheck.ExpressionAttributeNames,
+                  ExpressionAttributeValues: buildPersonalClaimCheck(
+                    claim,
+                    "unused",
+                  ).ConditionCheck.ExpressionAttributeValues,
+                },
+              }
+            : buildPersonalClaimCheck(
+                claim,
+                tableName("PersonalMediaUploadJobTable"),
+              ),
+          {
+            Update: {
+              TableName: tableName("MeetingHistoryTable"),
+              Key: marshall({
+                guildId: history.guildId,
+                channelId_timestamp: history.channelId_timestamp,
+              }),
+              UpdateExpression: `SET ${fields.map((_, index) => `#f${index} = :f${index}`).join(", ")}`,
+              ConditionExpression:
+                "attribute_not_exists(guildId) OR (meetingId = :meeting AND ownerUserId = :owner AND ownershipScope = :personal AND #status = :processing)",
+              ExpressionAttributeNames: names,
+              ExpressionAttributeValues: marshall(values),
+            },
+          },
+        ],
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (classifyDeploymentTransactionError(error) === "stale") return false;
+    throw error;
+  }
+}
+
+export async function writePersonalSegmentUnderClaim(
+  segment: PersonalRecordingSegmentRecord,
+  claim: PersonalMediaClaim,
+): Promise<boolean> {
+  if (segment.uploadId !== claim.uploadId) return false;
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand({
+        TransactItems: [
+          buildPersonalClaimCheck(
+            claim,
+            tableName("PersonalMediaUploadJobTable"),
+          ),
+          {
+            Put: {
+              TableName: tableName("PersonalRecordingSegmentTable"),
+              Item: marshall(segment, { removeUndefinedValues: true }),
+              ConditionExpression: "ownerUserId = :owner",
+              ExpressionAttributeValues: marshall({
+                ":owner": segment.ownerUserId,
+              }),
+            },
+          },
+        ],
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (classifyDeploymentTransactionError(error) === "stale") return false;
+    throw error;
+  }
 }
 
 export async function writePersonalRecordingSegment(
@@ -2168,6 +2360,50 @@ export async function updatePersonalRecordingSegment(
   segment: PersonalRecordingSegmentRecord,
 ): Promise<void> {
   await writePersonalRecordingSegment(segment);
+}
+
+export async function preparePersonalRecordingSegment(
+  segment: PersonalRecordingSegmentRecord,
+  expectedStatus: "pending_upload" | "failed" | undefined,
+): Promise<boolean> {
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand(
+        buildPendingSegmentTransaction(segment, expectedStatus, {
+          personalMediaUpload: tableName("PersonalMediaUploadJobTable"),
+          personalRecordingSegment: tableName("PersonalRecordingSegmentTable"),
+        }),
+      ),
+    );
+    return true;
+  } catch (error) {
+    if (classifyDeploymentTransactionError(error) === "stale") return false;
+    throw error;
+  }
+}
+
+export async function transitionPersonalRecordingSegment(
+  segment: PersonalRecordingSegmentRecord,
+  expectedStatus: PersonalRecordingSegmentRecord["status"],
+): Promise<boolean> {
+  try {
+    await dynamoDbClient.send(
+      new PutItemCommand({
+        TableName: tableName("PersonalRecordingSegmentTable"),
+        Item: marshall(segment, { removeUndefinedValues: true }),
+        ConditionExpression: "#status = :expected AND ownerUserId = :owner",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: marshall({
+          ":expected": expectedStatus,
+          ":owner": segment.ownerUserId,
+        }),
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (isConditionalCheckFailed(error)) return false;
+    throw error;
+  }
 }
 
 export async function listClaimablePersonalMediaUploadJobs(options: {
@@ -2231,74 +2467,84 @@ export async function claimPersonalMediaUploadJob(options: {
   claimExpiresAt: number;
   updatedAt: string;
   maxAttempts: number;
+  context: AdmissionContext;
+  claimId: string;
+  expectedAttempts: number;
 }): Promise<PersonalMediaUploadJobRecord | undefined> {
-  try {
-    const result = await dynamoDbClient.send(
-      new UpdateItemCommand({
-        TableName: tableName("PersonalMediaUploadJobTable"),
-        Key: marshall({ uploadId: options.uploadId }),
-        UpdateExpression:
-          "SET #status = :processing, #processingOwnerInstanceId = :instanceId, #claimExpiresAt = :claimExpiresAt, #processingStartedAt = if_not_exists(#processingStartedAt, :updatedAt), #updatedAt = :updatedAt, #attempts = if_not_exists(#attempts, :zero) + :one",
-        ConditionExpression:
-          "(#status = :queued OR (#status = :processing AND (attribute_not_exists(#claimExpiresAt) OR #claimExpiresAt < :nowEpochSeconds))) AND (attribute_not_exists(#attempts) OR #attempts < :maxAttempts)",
-        ExpressionAttributeNames: {
-          "#status": "status",
-          "#processingOwnerInstanceId": "processingOwnerInstanceId",
-          "#claimExpiresAt": "claimExpiresAt",
-          "#processingStartedAt": "processingStartedAt",
-          "#updatedAt": "updatedAt",
-          "#attempts": "attempts",
-        },
-        ExpressionAttributeValues: marshall({
-          ":queued": "queued",
-          ":processing": "processing",
-          ":instanceId": options.instanceId,
-          ":claimExpiresAt": options.claimExpiresAt,
-          ":nowEpochSeconds": options.nowEpochSeconds,
-          ":updatedAt": options.updatedAt,
-          ":zero": 0,
-          ":one": 1,
-          ":maxAttempts": options.maxAttempts,
-        }),
-        ReturnValues: "ALL_NEW",
-      }),
-    );
-    return result.Attributes
-      ? (unmarshall(result.Attributes) as PersonalMediaUploadJobRecord)
+  const previous = await getPersonalMediaUploadJob(options.uploadId);
+  if (!previous) return undefined;
+  if (
+    previous.processingClaimId === options.claimId &&
+    previous.processingOwnerInstanceId === options.instanceId &&
+    previous.status === "processing"
+  )
+    return (previous.claimExpiresAt ?? 0) >= options.nowEpochSeconds
+      ? previous
       : undefined;
+  if ((previous.attempts ?? 0) !== options.expectedAttempts) return undefined;
+  const attempt = options.expectedAttempts + 1;
+  const prefix = `personal/${previous.ownerUserId}/${previous.uploadId}/attempt-${attempt}/`;
+  const next: PersonalMediaUploadJobRecord = {
+    ...previous,
+    status: "processing",
+    processingOwnerInstanceId: options.instanceId,
+    processingClaimId: options.claimId,
+    attempts: attempt,
+    claimExpiresAt: options.claimExpiresAt,
+    updatedAt: options.updatedAt,
+    processingStartedAt: previous.processingStartedAt ?? options.updatedAt,
+    artifactAttempts: {
+      ...previous.artifactAttempts,
+      [attempt]: {
+        prefix,
+        audioS3Key: `${prefix}audio.mp3`,
+        transcriptS3Key: `${prefix}transcript.json`,
+      },
+    },
+  };
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand(
+        buildPersonalMediaClaimTransaction(
+          {
+            ...options,
+            job: next,
+            context: { ...options.context, now: options.nowEpochSeconds },
+          },
+          {
+            deploymentControl: tableName("DeploymentControlTable"),
+            meetingHistory: tableName("MeetingHistoryTable"),
+            personalMediaUpload: tableName("PersonalMediaUploadJobTable"),
+          },
+        ),
+      ),
+    );
+    return next;
   } catch (error) {
-    if (isConditionalCheckFailed(error)) return undefined;
+    if (classifyDeploymentTransactionError(error) === "stale") return undefined;
     throw error;
   }
 }
 
-export async function renewPersonalMediaUploadJobClaim(options: {
-  uploadId: string;
-  instanceId: string;
-  claimExpiresAt: number;
-  updatedAt: string;
-}): Promise<boolean> {
+export async function renewPersonalMediaUploadJobClaim(
+  options: PersonalMediaClaim & { claimExpiresAt: number; updatedAt: string },
+): Promise<boolean> {
+  const check = buildPersonalClaimCheck(
+    options,
+    tableName("PersonalMediaUploadJobTable"),
+  ).ConditionCheck;
   try {
     await dynamoDbClient.send(
       new UpdateItemCommand({
-        TableName: tableName("PersonalMediaUploadJobTable"),
-        Key: marshall({ uploadId: options.uploadId }),
-        UpdateExpression:
-          "SET #claimExpiresAt = :claimExpiresAt, #updatedAt = :updatedAt",
-        ConditionExpression:
-          "#status = :processing AND #processingOwnerInstanceId = :instanceId",
-        ExpressionAttributeNames: {
-          "#status": "status",
-          "#processingOwnerInstanceId": "processingOwnerInstanceId",
-          "#claimExpiresAt": "claimExpiresAt",
-          "#updatedAt": "updatedAt",
+        ...check,
+        UpdateExpression: "SET claimExpiresAt = :expiry, updatedAt = :updated",
+        ExpressionAttributeValues: {
+          ...check.ExpressionAttributeValues,
+          ...marshall({
+            ":expiry": options.claimExpiresAt,
+            ":updated": options.updatedAt,
+          }),
         },
-        ExpressionAttributeValues: marshall({
-          ":processing": "processing",
-          ":instanceId": options.instanceId,
-          ":claimExpiresAt": options.claimExpiresAt,
-          ":updatedAt": options.updatedAt,
-        }),
       }),
     );
     return true;
@@ -2307,40 +2553,33 @@ export async function renewPersonalMediaUploadJobClaim(options: {
     throw error;
   }
 }
-
-export async function updateClaimedPersonalMediaUploadJobProgress(options: {
-  uploadId: string;
-  instanceId: string;
-  segmentCount: number;
-  uploadedSegmentCount: number;
-  processedSegmentCount: number;
-  updatedAt: string;
-}): Promise<boolean> {
+export async function updateClaimedPersonalMediaUploadJobProgress(
+  options: PersonalMediaClaim & {
+    segmentCount: number;
+    uploadedSegmentCount: number;
+    processedSegmentCount: number;
+    updatedAt: string;
+  },
+): Promise<boolean> {
+  const check = buildPersonalClaimCheck(
+    options,
+    tableName("PersonalMediaUploadJobTable"),
+  ).ConditionCheck;
   try {
     await dynamoDbClient.send(
       new UpdateItemCommand({
-        TableName: tableName("PersonalMediaUploadJobTable"),
-        Key: marshall({ uploadId: options.uploadId }),
+        ...check,
         UpdateExpression:
-          "SET #segmentCount = :segmentCount, #uploadedSegmentCount = :uploadedSegmentCount, #processedSegmentCount = :processedSegmentCount, #updatedAt = :updatedAt",
-        ConditionExpression:
-          "#status = :processing AND #processingOwnerInstanceId = :instanceId",
-        ExpressionAttributeNames: {
-          "#status": "status",
-          "#processingOwnerInstanceId": "processingOwnerInstanceId",
-          "#segmentCount": "segmentCount",
-          "#uploadedSegmentCount": "uploadedSegmentCount",
-          "#processedSegmentCount": "processedSegmentCount",
-          "#updatedAt": "updatedAt",
+          "SET segmentCount = :segments, uploadedSegmentCount = :uploaded, processedSegmentCount = :processed, updatedAt = :updated",
+        ExpressionAttributeValues: {
+          ...check.ExpressionAttributeValues,
+          ...marshall({
+            ":segments": options.segmentCount,
+            ":uploaded": options.uploadedSegmentCount,
+            ":processed": options.processedSegmentCount,
+            ":updated": options.updatedAt,
+          }),
         },
-        ExpressionAttributeValues: marshall({
-          ":processing": "processing",
-          ":instanceId": options.instanceId,
-          ":segmentCount": options.segmentCount,
-          ":uploadedSegmentCount": options.uploadedSegmentCount,
-          ":processedSegmentCount": options.processedSegmentCount,
-          ":updatedAt": options.updatedAt,
-        }),
       }),
     );
     return true;
@@ -2349,26 +2588,22 @@ export async function updateClaimedPersonalMediaUploadJobProgress(options: {
     throw error;
   }
 }
-
 export async function writeClaimedPersonalMediaUploadJob(
   job: PersonalMediaUploadJobRecord,
   instanceId: string,
 ): Promise<boolean> {
+  const check = buildPersonalClaimCheck(
+    personalMediaClaimForJob(job, instanceId),
+    tableName("PersonalMediaUploadJobTable"),
+  ).ConditionCheck;
   try {
     await dynamoDbClient.send(
       new PutItemCommand({
-        TableName: tableName("PersonalMediaUploadJobTable"),
+        TableName: check.TableName,
+        ConditionExpression: check.ConditionExpression,
+        ExpressionAttributeNames: check.ExpressionAttributeNames,
+        ExpressionAttributeValues: check.ExpressionAttributeValues,
         Item: marshall(job, { removeUndefinedValues: true }),
-        ConditionExpression:
-          "#status = :processing AND #processingOwnerInstanceId = :instanceId",
-        ExpressionAttributeNames: {
-          "#status": "status",
-          "#processingOwnerInstanceId": "processingOwnerInstanceId",
-        },
-        ExpressionAttributeValues: marshall({
-          ":processing": "processing",
-          ":instanceId": instanceId,
-        }),
       }),
     );
     return true;

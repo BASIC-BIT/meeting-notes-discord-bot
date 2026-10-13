@@ -23,6 +23,7 @@ import {
   runEndMeetingFlow,
   fenceMeetingFinalization,
   preserveMeetingFinalizationCapture,
+  persistExplicitMeetingStop,
 } from "../../src/commands/endMeeting";
 import { startProcessingSnippet } from "../../src/audio";
 import { withMeetingEndTrace } from "../../src/observability/meetingTrace";
@@ -121,6 +122,7 @@ jest.mock("../../src/services/autoRecordCancellationService", () => ({
 }));
 jest.mock("../../src/services/activeMeetingLeaseService", () => ({
   releaseMeetingLeaseForMeeting: jest.fn(),
+  isReservationControlEligible: jest.fn(() => false),
 }));
 jest.mock("../../src/services/autoRecordJoinSuppressionService", () => ({
   __esModule: true,
@@ -1056,6 +1058,117 @@ describe("handleEndMeetingButton", () => {
     jest.clearAllMocks();
     mockedReleaseMeetingLeaseForMeeting.mockResolvedValue(true);
   });
+  it("rejects a current stop after ownership release has begun without claiming suppression", async () => {
+    const { autoRecordJoinSuppressionService } =
+      await import("../../src/services/autoRecordJoinSuppressionService");
+    const meeting = {
+      guildId: "guild-1",
+      meetingId: "meeting-1",
+      startMessageId: "current-start",
+      creator: { id: "user-1" },
+      isAutoRecording: true,
+      finishing: true,
+      reservation: { guildId: "guild-1", meetingId: "meeting-1" },
+    } as unknown as MeetingData;
+    mockedGetMeeting.mockReturnValue(meeting);
+    const interaction = {
+      guildId: "guild-1",
+      user: { id: "user-1" },
+      message: { id: "current-start" },
+      reply: jest.fn(),
+      deferUpdate: jest.fn(),
+      followUp: jest.fn(),
+    } as unknown as ButtonInteraction;
+    await handleEndMeetingButton({} as Client, interaction);
+    expect(
+      autoRecordJoinSuppressionService.suppressUntilEmpty,
+    ).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: "Meeting stop could not be confirmed. Please retry.",
+      ephemeral: true,
+    });
+    expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+  });
+  it("rejects a historical button without suppressing the current meeting", async () => {
+    const { autoRecordJoinSuppressionService } =
+      await import("../../src/services/autoRecordJoinSuppressionService");
+    mockedGetMeeting.mockReturnValue({
+      guildId: "guild-1",
+      meetingId: "new-meeting",
+      startMessageId: "new-start",
+      creator: { id: "user-1" },
+      isAutoRecording: true,
+      finishing: true,
+      voiceChannel: {
+        id: "voice-1",
+        members: new Collection([
+          ["user-1", { id: "user-1", user: { bot: false } }],
+        ]),
+      },
+    } as unknown as MeetingData);
+    const interaction = {
+      guildId: "guild-1",
+      user: { id: "user-1" },
+      message: { id: "old-start" },
+      reply: jest.fn(),
+      deferUpdate: jest.fn(),
+      followUp: jest.fn(),
+    } as unknown as ButtonInteraction;
+    await handleEndMeetingButton({} as Client, interaction);
+    expect(
+      autoRecordJoinSuppressionService.suppressUntilEmpty,
+    ).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      "This meeting control is no longer active.",
+    );
+  });
+  it("persists a late explicit stop while finalization is already running", async () => {
+    const { autoRecordJoinSuppressionService } =
+      await import("../../src/services/autoRecordJoinSuppressionService");
+    let resume!: () => void;
+    const held = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    jest
+      .mocked(autoRecordJoinSuppressionService.suppressUntilEmpty)
+      .mockImplementationOnce(async () => {
+        await held;
+        return true;
+      });
+    const meeting = {
+      guildId: "synthetic-guild",
+      meetingId: "synthetic-meeting",
+      isAutoRecording: true,
+      finishing: true,
+      voiceChannel: {
+        id: "voice",
+        members: new Collection([
+          ["member", { id: "member", user: { bot: false } }],
+        ]),
+      },
+    } as unknown as MeetingData;
+    let returned = false;
+    const stop = persistExplicitMeetingStop(
+      meeting,
+      MEETING_END_REASONS.LEAVE_COMMAND,
+    ).then(() => {
+      returned = true;
+    });
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    expect(
+      autoRecordJoinSuppressionService.suppressUntilEmpty,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meetingId: meeting.meetingId,
+        reason: "explicit_end",
+      }),
+    );
+    expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+    resume();
+    await stop;
+    expect(returned).toBe(true);
+  });
 
   it("does not report completion or delete after failed button preparation", async () => {
     mockedWithMeetingEndTrace.mockRejectedValueOnce(
@@ -1063,6 +1176,7 @@ describe("handleEndMeetingButton", () => {
     );
     mockedHasMeeting.mockReturnValue(true);
     const meeting = {
+      startMessageId: "start-message",
       guildId: "guild-1",
       meetingId: "meeting-1",
       creator: { id: "user-1" },
@@ -1073,10 +1187,12 @@ describe("handleEndMeetingButton", () => {
     } as unknown as MeetingData;
     mockedGetMeeting.mockReturnValue(meeting);
     const interaction = {
+      message: { id: "start-message" },
       guildId: "guild-1",
       user: { id: "user-1" },
       deferUpdate: jest.fn(),
       reply: jest.fn(),
+      followUp: jest.fn(),
     } as unknown as ButtonInteraction;
     await handleEndMeetingButton({} as Client, interaction);
     expect(captureEvent).not.toHaveBeenCalled();
@@ -1097,6 +1213,7 @@ describe("handleEndMeetingButton", () => {
     );
 
     const meeting = {
+      startMessageId: "start-message",
       attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
@@ -1132,6 +1249,7 @@ describe("handleEndMeetingButton", () => {
     mockedGetMeeting.mockReturnValue(meeting);
 
     const interaction = {
+      message: { id: "start-message" },
       guildId: "guild-1",
       user: { id: "user-1" },
       deferred: false,
@@ -1173,6 +1291,7 @@ describe("handleEndMeetingButton", () => {
     ]);
 
     const meeting = {
+      startMessageId: "start-message",
       attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
@@ -1212,6 +1331,7 @@ describe("handleEndMeetingButton", () => {
     mockedGetMeeting.mockReturnValue(meeting);
 
     const interaction = {
+      message: { id: "start-message" },
       guildId: "guild-1",
       user: { id: "user-1" },
       deferred: false,

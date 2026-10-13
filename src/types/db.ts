@@ -253,6 +253,11 @@ export interface PersonalMediaUploadJobRecord {
   errorMessage?: string;
   retryable?: boolean;
   attempts?: number;
+  processingClaimId?: string;
+  artifactAttempts?: Record<
+    string,
+    { prefix: string; audioS3Key: string; transcriptS3Key: string }
+  >;
   queuedAt?: string;
   processingStartedAt?: string;
   processingOwnerInstanceId?: string;
@@ -266,6 +271,14 @@ export interface PersonalMediaUploadJobRecord {
   completedAt?: string;
   expiresAt?: number;
 }
+
+export type PersonalMediaClaim = {
+  uploadId: string;
+  instanceId: string;
+  attempt: number;
+  claimId: string;
+  nowEpochSeconds: number;
+};
 
 export interface FeedbackRecord {
   pk: string; // TARGET#<targetType>#<targetId>

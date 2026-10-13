@@ -23,6 +23,7 @@ jest.mock("../../src/services/unifiedConfigService", () => ({
 }));
 jest.mock("../../src/commands/endMeeting", () => ({
   handleEndMeetingOther: jest.fn(),
+  persistExplicitMeetingStop: jest.fn(),
 }));
 
 const mockedGetMeeting = getMeeting as jest.MockedFunction<typeof getMeeting>;

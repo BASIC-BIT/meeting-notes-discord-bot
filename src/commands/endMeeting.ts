@@ -1,4 +1,6 @@
 import { ButtonInteraction, Client, EmbedBuilder } from "discord.js";
+import { randomUUID } from "node:crypto";
+import { beginRuntimeWorkClaim } from "../services/runtimeWorkAdmissionService";
 import { settleOwnedVoiceSession } from "../services/guildVoiceOperationService";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
@@ -66,7 +68,10 @@ import {
   getMeetingTempDir,
   retainMeetingTempDir,
 } from "../services/tempFileService";
-import { releaseMeetingLeaseForMeeting } from "../services/activeMeetingLeaseService";
+import {
+  releaseMeetingLeaseForMeeting,
+  isReservationControlEligible,
+} from "../services/activeMeetingLeaseService";
 import { runTranscriptionFinalPass } from "../services/transcriptionFinalPassService";
 import { getAudioTranscriptionFacts } from "../utils/audioTranscript";
 import {
@@ -224,15 +229,17 @@ export async function handleEndMeetingButton(
       return;
     }
 
+    if (
+      !meeting.startMessageId ||
+      interaction.message.id !== meeting.startMessageId
+    ) {
+      await interaction.reply("This meeting control is no longer active.");
+      return;
+    }
     if (!canUserEndMeeting(meeting, interaction.user.id)) {
       await interaction.reply(
         "You do not have permission to end this meeting.",
       );
-      return;
-    }
-
-    if (meeting.finishing) {
-      await interaction.reply("Meeting is already finishing!");
       return;
     }
 
@@ -241,18 +248,29 @@ export async function handleEndMeetingButton(
       return;
     }
 
+    if (!interaction.deferred && !interaction.replied)
+      await interaction.deferUpdate();
+    await persistExplicitMeetingStop(meeting, MEETING_END_REASONS.BUTTON);
+    if (meeting.finishing) {
+      await interaction.followUp({
+        content: "Meeting is already finishing!",
+        ephemeral: true,
+      });
+      return;
+    }
+
     meeting.endReason = MEETING_END_REASONS.BUTTON;
     meeting.endTriggeredByUserId = interaction.user.id;
-
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferUpdate();
-    }
 
     await withMeetingEndTrace(meeting, async () => {
       await runEndMeetingFlow({ client, meeting });
     });
   } catch (error) {
     console.error("Error during meeting end:", error);
+    await interaction.followUp({
+      content: "Meeting stop could not be confirmed. Please retry.",
+      ephemeral: true,
+    });
   }
 }
 
@@ -431,7 +449,7 @@ async function finalizeRecording(
       startProcessingSnippet(meeting, snippet.userId);
     });
 
-    maybeSuppressAutoRecordRejoin(meeting, initialEndReason);
+    await persistExplicitMeetingStop(meeting, initialEndReason);
 
     if (meeting.connection) {
       if (meeting.reservation)
@@ -659,7 +677,7 @@ async function finalizeRecording(
   }
 }
 
-function maybeSuppressAutoRecordRejoin(
+export async function persistExplicitMeetingStop(
   meeting: MeetingData,
   endReason: MeetingData["endReason"],
 ) {
@@ -669,21 +687,56 @@ function maybeSuppressAutoRecordRejoin(
     endReason !== MEETING_END_REASONS.WEB_UI &&
     endReason !== MEETING_END_REASONS.MCP &&
     endReason !== MEETING_END_REASONS.LIVE_VOICE &&
+    endReason !== MEETING_END_REASONS.LEAVE_COMMAND &&
     endReason !== MEETING_END_REASONS.DISMISSED
   ) {
     return;
   }
+  await persistAutoRecordSuppression(meeting, "explicit_end");
+}
+
+export async function persistAutoRecordSuppression(
+  meeting: MeetingData,
+  reason: "explicit_end" | "forced_disconnect",
+): Promise<boolean> {
+  if (!meeting.isAutoRecording) return false;
+  if (meeting.reservation && !isReservationControlEligible(meeting.reservation))
+    throw new Error("Meeting ownership is already ending");
   const members = meeting.voiceChannel?.members;
-  if (!members) return;
+  if (!members) return false;
   const nonBotMemberIds = members
     .filter((member) => !member.user.bot)
     .map((member) => member.id);
-  autoRecordJoinSuppressionService.suppressUntilEmpty({
-    guildId: meeting.guildId,
-    channelId: meeting.voiceChannel.id,
-    nonBotMemberIds,
-    reason: "explicit_end",
-  });
+  assertMeetingFinalizationActive(meeting);
+  const work = meeting.reservation
+    ? beginRuntimeWorkClaim("control", `suppression:${randomUUID()}`, {
+        guildId: meeting.guildId,
+        meetingId: meeting.meetingId,
+      })
+    : undefined;
+  try {
+    const suppression = autoRecordJoinSuppressionService.suppressUntilEmpty({
+      guildId: meeting.guildId,
+      channelId: meeting.voiceChannel.id,
+      nonBotMemberIds,
+      reason,
+      meetingId: meeting.meetingId,
+      authority: meeting.reservation
+        ? {
+            kind: "session",
+            ownership: meeting.reservation,
+            now: Math.floor(Date.now() / 1000),
+          }
+        : undefined,
+    });
+    return await (work ? work.trackPromise(suppression) : suppression);
+  } catch (error) {
+    work?.fence();
+    fenceMeetingFinalization(meeting);
+    throw error;
+  } finally {
+    work?.settle();
+  }
 }
 
 async function handleAutoRecordCancellation(

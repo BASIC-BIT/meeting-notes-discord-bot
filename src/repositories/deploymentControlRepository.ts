@@ -18,6 +18,7 @@ import {
   buildRuntimeRoleTransition,
   buildLocalBootstrapTransaction,
   buildSessionReservationTransaction,
+  buildWorkAdmissionChecks,
 } from "../services/deploymentControlTransactions";
 import {
   admissionContextSchema,
@@ -42,6 +43,9 @@ import {
   type LocalBootstrapInput,
   type SessionReservationInput,
   type SessionReservationWriteResult,
+  type WorkAdmissionAuthority,
+  type SuppressionRecord,
+  suppressionRecordSchema,
 } from "../types/deploymentControl";
 
 export type ConditionalResult = "applied" | "stale";
@@ -101,6 +105,11 @@ async function conditional(
   }
 }
 export type DeploymentControlRepository = {
+  writeSuppression(input: {
+    record: SuppressionRecord;
+    expectedVersion?: number;
+    authority: WorkAdmissionAuthority;
+  }): Promise<ConditionalResult>;
   reserveSession(
     input: SessionReservationInput,
   ): Promise<SessionReservationWriteResult>;
@@ -279,6 +288,45 @@ export function createDynamoDeploymentControlRepository(
         ),
       );
     },
+    writeSuppression({ record, expectedVersion, authority }) {
+      suppressionRecordSchema.parse(record);
+      if (
+        authority.kind === "session" &&
+        (authority.ownership.guildId !== record.guildId ||
+          (record.suppressed &&
+            authority.ownership.meetingId !== record.meetingId))
+      )
+        throw new Error("Suppression session identity mismatch");
+      if (record.version !== (expectedVersion ?? 0) + 1)
+        throw new Error("Invalid suppression version");
+      return conditional(() =>
+        client.send(
+          new TransactWriteItemsCommand({
+            TransactItems: [
+              ...buildWorkAdmissionChecks(authority, tables),
+              {
+                Put: {
+                  TableName: tables.deploymentControl,
+                  Item: marshall(record),
+                  ConditionExpression:
+                    expectedVersion === undefined
+                      ? "attribute_not_exists(pk)"
+                      : "#version = :version",
+                  ...(expectedVersion === undefined
+                    ? {}
+                    : {
+                        ExpressionAttributeNames: { "#version": "version" },
+                        ExpressionAttributeValues: marshall({
+                          ":version": expectedVersion,
+                        }),
+                      }),
+                },
+              },
+            ],
+          }),
+        ),
+      );
+    },
     async checkAdmission(context) {
       const result = await conditional(() =>
         client.send(
@@ -349,6 +397,43 @@ const mockReservationRequests = new WeakMap<
   Map<string, DeploymentControlRecord>,
   Map<string, SessionReservationInput>
 >();
+
+export function mockWorkAdmissionAllowed(
+  authority: WorkAdmissionAuthority,
+  records: Map<string, DeploymentControlRecord>,
+  leases: Map<string, ActiveMeetingLease>,
+): boolean {
+  if (authority.kind === "session") {
+    const owner = authority.ownership;
+    const lease = leases.get(owner.guildId);
+    return Boolean(
+      lease &&
+      lease.meetingId === owner.meetingId &&
+      lease.ownerInstanceId === owner.ownerInstanceId &&
+      lease.executionVersion === owner.executionVersion &&
+      lease.voiceOperationAttemptId === owner.voiceOperationAttemptId &&
+      lease.leaseExpiresAt >= authority.now,
+    );
+  }
+  const { context } = authority;
+  admissionContextSchema.parse(context);
+  const control = records.get(JSON.stringify(["ENV", "CONTROL"]));
+  const row = records.get(
+    JSON.stringify(["ENV", `RUNTIME#${context.instanceId}`]),
+  );
+  if (control?.recordType !== "control" || row?.recordType !== "runtime")
+    return false;
+  const selected = control.servingMembers[context.instanceId];
+  return Boolean(
+    selected &&
+    sameRuntimeIdentity(selected, context.identity) &&
+    sameRuntimeIdentity(row.identity, context.identity) &&
+    control.servingGeneration === context.authorizedGeneration &&
+    row.role === "serving" &&
+    row.authorizedGeneration === context.authorizedGeneration &&
+    proofReady(row, undefined, context.authorizedGeneration, context.now),
+  );
+}
 function repeatedReservationResult(
   previous: SessionReservationInput,
   input: SessionReservationInput,
@@ -399,6 +484,17 @@ function retainedRuntimesReady(
   );
 }
 
+function suppressionAllowsReservation(
+  row: DeploymentControlRecord | undefined,
+  expectedVersion?: number,
+): boolean {
+  if (expectedVersion === undefined) return !row;
+  return (
+    row?.recordType === "suppression" &&
+    row.version === expectedVersion &&
+    !row.suppressed
+  );
+}
 export function createMockDeploymentControlRepository(
   records = new Map<string, DeploymentControlRecord>(),
   histories = new Map<string, MeetingHistory[]>(),
@@ -464,16 +560,19 @@ export function createMockDeploymentControlRepository(
         (history && getHistory(history))
       )
         return { kind: "blocked", reason: "active_session" };
-      if (
-        suppression &&
-        records.has(
+      if (suppression) {
+        const row = records.get(
           recordKey(
             `SUPPRESS#${lease.guildId}`,
             `CHANNEL#${suppression.channelId}`,
           ),
-        )
-      )
-        return { kind: "blocked", reason: "suppressed" };
+        );
+        const allowed = suppressionAllowsReservation(
+          row,
+          suppression.expectedVersion,
+        );
+        if (!allowed) return { kind: "blocked", reason: "suppressed" };
+      }
       leases.set(lease.guildId, structuredClone(lease));
       store(voice);
       if (history)
@@ -483,6 +582,28 @@ export function createMockDeploymentControlRepository(
         ]);
       requests.set(input.requestToken, structuredClone(input));
       return { kind: "admitted" };
+    },
+    async writeSuppression({ record, expectedVersion, authority }) {
+      suppressionRecordSchema.parse(record);
+      if (
+        authority.kind === "session" &&
+        (authority.ownership.guildId !== record.guildId ||
+          (record.suppressed &&
+            authority.ownership.meetingId !== record.meetingId))
+      )
+        throw new Error("Suppression session identity mismatch");
+      if (record.version !== (expectedVersion ?? 0) + 1)
+        throw new Error("Invalid suppression version");
+      if (!mockWorkAdmissionAllowed(authority, records, leases)) return "stale";
+      const current = records.get(recordKey(record.pk, record.sk));
+      if (
+        expectedVersion === undefined
+          ? Boolean(current)
+          : current?.recordType !== "suppression" ||
+            current.version !== expectedVersion
+      )
+        return "stale";
+      return store(record);
     },
     supportsLocalBootstrap: async () => true,
     async bootstrapLocal(input) {

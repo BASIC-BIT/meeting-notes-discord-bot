@@ -1,5 +1,8 @@
 import { ChatInputCommandInteraction, Client } from "discord.js";
-import { handleEndMeetingOther } from "./endMeeting";
+import {
+  handleEndMeetingOther,
+  persistExplicitMeetingStop,
+} from "./endMeeting";
 import { endTtsOnlySession, getMeeting } from "../meetings";
 import { MEETING_END_REASONS } from "../types/meetingLifecycle";
 import { canUserEndMeeting } from "../utils/meetingPermissions";
@@ -67,6 +70,7 @@ export async function handleLeaveCommand(
   meeting.endReason = MEETING_END_REASONS.LEAVE_COMMAND;
   meeting.endTriggeredByUserId = interaction.user.id;
   await interaction.deferReply({ ephemeral: true });
+  await persistExplicitMeetingStop(meeting, MEETING_END_REASONS.LEAVE_COMMAND);
   await handleEndMeetingOther(client, meeting);
   await interaction.editReply(
     "Meeting ended. Chronote left the voice channel.",
