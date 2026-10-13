@@ -1,6 +1,28 @@
 # Transcription eval runner
 
-This CLI runs repeated transcription passes against a local audio clip and summarizes variance.
+This CLI runs repeated transcription passes against labeled audio and measures unwanted text, dropped speech, recognition errors, and request usage.
+
+## Production pipeline corpus runs
+
+Use `--manifest` to compare the raw provider with the same audio gate, conversion, transcript guards, and candidate selection used by the bot. No Langfuse dataset is required. Corpus tracing stays disabled and results stay in an ignored artifact directory.
+
+```powershell
+npm run eval:transcription:corpus -- --speech
+npm run eval:transcription -- --manifest <printed-manifest-path> --mode preflight --runs 1
+npm run eval:transcription -- --manifest <printed-manifest-path> --mode provider --runs 3 --max-requests 100
+npm run eval:transcription -- --manifest <printed-manifest-path> --mode pipeline --pass-mode fast --runs 3 --max-requests 100
+npm run eval:transcription -- --manifest <printed-manifest-path> --mode pipeline --pass-mode slow --runs 3 --max-requests 150
+```
+
+Corpus preparation generates eight nonspeech controls. `--speech` adds eight short TTS requests and produces normal, quiet, and Opus speech variants. Synthetic labels come from independent synthesis inputs; they are controls, not proof of real Discord quality.
+
+Each manifest case requires an audio SHA-256, split, tags, and explicit speech/nonspeech/unreviewed label with provenance. Every repetition is scored. An empty expected transcript means nonspeech; an absent reference is unscored. Provider failures and exhausted budgets stay unscored, retain request accounting, and cause a nonzero exit code. SDK retries are disabled in corpus mode. Usage is retained for every successful response; dollar cost is unpriced.
+
+`--policy` loads validated guard settings, `--prompt-file` changes the prompt, and `--split tune` limits development runs. Keep a fresh holdout separate from tuning. `--vad-report` applies experimental detector decisions bound to each clip's hash. The optional Silero Python script is an offline experiment and does not change the production bot.
+
+Keep real recordings, references, and results in the private ops workspace. Use `--artifact-dir D:/bench/chronote-ops/.cache/transcription-eval`, with any explicit `--output` inside that directory. Production recording replay retains the private ops authorization requirement.
+
+See [the October 13 findings and run instructions](analysis/2026-10-13-transcription-quality-evals.md) for the corpus format, optional speech detector, observed results, and release limits.
 
 ## Local file runs
 
@@ -13,7 +35,7 @@ Optional flags:
 - --prompt-file prompts/chronote-transcription-cleanup-chat.md
 - --glossary-file docs/evals/transcription-glossary.txt
 - --reference-file docs/evals/reference.txt
-- --output docs/evals/run-2025-12-30.json
+- --output .cache/transcription-eval/run.json
 
 ## Bedrock Data Automation runs
 
@@ -88,7 +110,7 @@ Expected output example:
 Notes:
 
 - Paths are resolved from the repo root.
-- WER is computed with word level Levenshtein distance.
+- WER uses Unicode word segmentation and Levenshtein distance across every repetition. Exact match, nonspeech unwanted-output rate, and speech-drop rate also cover every repetition. Empty references are scoreable.
 - With --drop-prompt-like, prompt leakage outputs are counted but replaced with empty strings.
 - Chat prompt files are reduced to their system messages before use.
 - Bedrock evals require AWS S3 and ignore STORAGE_ENDPOINT overrides.

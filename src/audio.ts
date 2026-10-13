@@ -5,13 +5,6 @@ import {
   FRAME_SIZE,
   MAX_SNIPPET_LENGTH,
   MINIMUM_TRANSCRIPTION_LENGTH,
-  NOISE_GATE_APPLY_TO_FAST,
-  NOISE_GATE_APPLY_TO_SLOW,
-  NOISE_GATE_ENABLED,
-  NOISE_GATE_MIN_ACTIVE_WINDOWS,
-  NOISE_GATE_MIN_PEAK_ABOVE_NOISE_DB,
-  NOISE_GATE_PEAK_DBFS,
-  NOISE_GATE_WINDOW_MS,
   RECORD_SAMPLE_RATE,
   SILENCE_THRESHOLD,
   TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE,
@@ -45,7 +38,11 @@ import {
   ensureMeetingTempDirSync,
   getMeetingTempDir,
 } from "./services/tempFileService";
-import { evaluateNoiseGate } from "./utils/audioNoiseGate";
+import {
+  evaluateNoiseGate,
+  DEFAULT_NOISE_GATE_CONFIG,
+  isNoiseGateEnabled,
+} from "./utils/audioNoiseGate";
 
 const TRANSCRIPTION_HEADER =
   `NOTICE: Transcription is automatically generated and may not be perfectly accurate!\n` +
@@ -263,16 +260,6 @@ const DEFAULT_TRANSCRIPTION_TIMING = {
   interjectionMinSpeakerSeconds: MINIMUM_TRANSCRIPTION_LENGTH,
 };
 
-const DEFAULT_NOISE_GATE_CONFIG = {
-  enabled: NOISE_GATE_ENABLED,
-  windowMs: NOISE_GATE_WINDOW_MS,
-  peakDbfs: NOISE_GATE_PEAK_DBFS,
-  minActiveWindows: NOISE_GATE_MIN_ACTIVE_WINDOWS,
-  minPeakAboveNoiseDb: NOISE_GATE_MIN_PEAK_ABOVE_NOISE_DB,
-  applyToFast: NOISE_GATE_APPLY_TO_FAST,
-  applyToSlow: NOISE_GATE_APPLY_TO_SLOW,
-};
-
 function formatDbfs(value: number): string {
   if (!Number.isFinite(value)) return "silence";
   return value.toFixed(1);
@@ -287,9 +274,7 @@ function shouldSkipByNoiseGate(
   const noiseGate = runtimeConfig
     ? runtimeConfig.transcription.noiseGate
     : DEFAULT_NOISE_GATE_CONFIG;
-  if (!noiseGate.enabled) return false;
-  if (mode === "fast" && !noiseGate.applyToFast) return false;
-  if (mode === "slow" && !noiseGate.applyToSlow) return false;
+  if (!isNoiseGateEnabled(noiseGate, mode)) return false;
   if (snippet.chunks.length === 0) return false;
 
   const buffer = Buffer.concat(snippet.chunks, getAudioBytes(snippet));

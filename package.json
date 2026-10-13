@@ -84,6 +84,7 @@
     "stripe:trigger:subscription-deleted": "stripe trigger customer.subscription.deleted",
     "eval:meeting-summary": "ts-node src/evals/meetingSummaryEval.ts",
     "eval:transcription": "ts-node src/evals/transcriptionEval.ts",
+    "eval:transcription:corpus": "ts-node --project scripts/evals/tsconfig.json scripts/evals/prepare-transcription-corpus.ts",
     "eval:meeting-notes": "ts-node src/evals/meetingNotesEval.ts",
     "evals:harvest-downvotes": "ts-node scripts/evals/harvest-downvoted-notes.ts",
     "evals:upload": "ts-node scripts/evals/upload-dataset.ts",
