@@ -192,3 +192,39 @@ test("requires fresh viewport proof when a hidden tab becomes visible", () => {
   visibility(1);
   expect(track).toHaveBeenCalledTimes(1);
 });
+
+test("rejects the old observer's queued full record after tab return", () => {
+  render(<Page />);
+  const oldNotify = notify;
+  const target = document.querySelector('[data-testid="basic-intro-terms"]')!;
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: "hidden",
+  });
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: "visible",
+  });
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  expect(track).not.toHaveBeenCalled();
+  act(() =>
+    oldNotify(
+      [
+        {
+          target,
+          intersectionRatio: 1,
+          isIntersecting: true,
+          boundingClientRect: { width: 300, height: 80 },
+        } as IntersectionObserverEntry,
+      ],
+      {} as IntersectionObserver,
+    ),
+  );
+  expect(track).not.toHaveBeenCalled();
+  visibility(0.5);
+  expect(track).not.toHaveBeenCalled();
+  visibility(1);
+  visibility(1);
+  expect(track).toHaveBeenCalledTimes(1);
+});

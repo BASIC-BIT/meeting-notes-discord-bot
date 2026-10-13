@@ -236,7 +236,6 @@ export default function UpgradeServerSelect({
       tier: requestedPlan,
       interval,
       promo_present: Boolean(promoCode.trim()),
-      offer: requestedPlan === "basic" ? displayedOffer : "none",
       event_version: 1,
     };
     if (blockedReason && lastBlocked.current !== blockedReason) {
@@ -251,7 +250,10 @@ export default function UpgradeServerSelect({
       !readyStates.current.has(key)
     ) {
       readyStates.current.add(key);
-      track("upgrade_ready", properties);
+      track("upgrade_ready", {
+        ...properties,
+        offer: requestedPlan === "basic" ? displayedOffer : "none",
+      });
     }
   }, [
     limitContext,

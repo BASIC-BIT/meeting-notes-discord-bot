@@ -43,25 +43,33 @@ export function useIntroOfferExposure({
         event_version: 1,
       });
     };
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const observed = entries.find((value) => value.target === terms);
-        if (!observed) return;
-        fullyVisible =
-          observed.isIntersecting &&
-          observed.intersectionRatio === 1 &&
-          observed.boundingClientRect.width > 0 &&
-          observed.boundingClientRect.height > 0;
-        capture();
-      },
-      { threshold: 1 },
-    );
-    observer.observe(terms);
+    let observationGeneration = 0;
+    const createObserver = () => {
+      const generation = ++observationGeneration;
+      const nextObserver = new IntersectionObserver(
+        (entries) => {
+          if (!active || generation !== observationGeneration) return;
+          const observed = entries.find((value) => value.target === terms);
+          if (!observed) return;
+          fullyVisible =
+            observed.isIntersecting &&
+            observed.intersectionRatio === 1 &&
+            observed.boundingClientRect.width > 0 &&
+            observed.boundingClientRect.height > 0;
+          capture();
+        },
+        { threshold: 1 },
+      );
+      nextObserver.observe(terms);
+      return nextObserver;
+    };
+    let observer = createObserver();
     const refreshVisibility = () => {
       fullyVisible = false;
+      observationGeneration++;
+      observer.disconnect();
       if (document.visibilityState === "visible") {
-        observer.unobserve(terms);
-        observer.observe(terms);
+        observer = createObserver();
       }
     };
     document.addEventListener("visibilitychange", refreshVisibility);

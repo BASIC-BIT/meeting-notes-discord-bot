@@ -224,3 +224,17 @@ test("paid Billing remains a management entry without purchase readiness", () =>
   expect(screen.getByRole("button", { name: "Manage billing" })).toBeEnabled();
   expect(billingCheckoutMutation.mutateAsync).not.toHaveBeenCalled();
 });
+
+test("blocked Upgrade events do not carry the offer property", () => {
+  authState.state = "unauthenticated";
+  renderWithMantine(<UpgradeServerSelect />);
+  const blocked = jest
+    .mocked(track)
+    .mock.calls.filter(([event]) => event === "upgrade_blocked");
+  expect(blocked).toHaveLength(1);
+  expect(blocked[0][1]).toMatchObject({
+    reason: "auth_required",
+    event_version: 1,
+  });
+  expect(blocked[0][1]).not.toHaveProperty("offer");
+});
