@@ -15,7 +15,7 @@ export const normalizeTranscriptForCompare = (value: string) =>
   value
     .normalize("NFKC")
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}'\s]+/gu, " ")
+    .replace(/[^\p{L}\p{M}\p{N}'\s]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 const tokenize = (value: string) =>

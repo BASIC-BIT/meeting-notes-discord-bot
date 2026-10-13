@@ -29,6 +29,22 @@ test("preserves non-Latin text when grading a reference", () => {
   });
 });
 
+test("preserves combining marks when distinguishing Hindi vowel forms", () => {
+  expect(scoreTranscription("दिन", "दुन")).toMatchObject({
+    scored: true,
+    exactMatch: false,
+    referenceWords: 1,
+    wordErrors: 1,
+    wer: 1,
+  });
+  expect(scoreTranscription("दिन", "दिन")).toMatchObject({
+    scored: true,
+    exactMatch: true,
+    referenceWords: 1,
+    wordErrors: 0,
+    wer: 0,
+  });
+});
 test("reports every run rather than grading only the modal output", () => {
   const summary = summarizeTranscriptionScores([
     scoreTranscription("", ""),
