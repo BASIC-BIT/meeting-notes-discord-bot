@@ -10,11 +10,21 @@ export default function IntroPriceComparison({
   if (offer.status !== "available") return null;
   return (
     <Group gap="xs" wrap="wrap" data-testid="basic-intro-discount">
-      <Text component="del" size="sm" c="dimmed" aria-label="Regular price">
+      <Text
+        component="del"
+        size="sm"
+        c="var(--mantine-color-text)"
+        aria-label="Regular price"
+      >
         {formatCurrency(offer.regularUnitAmount, offer.currency)} /{" "}
         {offer.id === "basic_intro_v1" ? "mo" : "yr"}
       </Text>
-      <Badge variant="light" color="green" tt="none">
+      <Badge
+        variant="light"
+        color="green"
+        c="var(--mantine-color-text)"
+        tt="none"
+      >
         {offer.percentOff}% off
       </Badge>
     </Group>

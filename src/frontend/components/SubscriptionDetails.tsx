@@ -11,7 +11,7 @@ export default function SubscriptionDetails({
 }) {
   if (!details || details.status === "unavailable")
     return (
-      <Text size="sm" c="dimmed">
+      <Text size="sm" c="var(--mantine-color-text)">
         Provider price and renewal details are unavailable. Review payment and
         cancellation in Manage billing.
       </Text>
@@ -35,12 +35,12 @@ export default function SubscriptionDetails({
     <Stack gap="xs" data-testid="subscription-details">
       {firstYear?.status === "available" ? (
         <>
-          <Text size="sm">
+          <Text size="sm" c="var(--mantine-color-text)">
             First year paid:{" "}
             {formatCurrency(firstYear.amountPaid, firstYear.currency)},
             including any tax.
           </Text>
-          <Text size="xs" c="dimmed">
+          <Text size="xs" c="var(--mantine-color-text)">
             First-year subtotal:{" "}
             {formatCurrency(firstYear.discountedSubtotal, firstYear.currency)}.
             Covers {date(firstYear.periodStartsAt)} to{" "}
@@ -48,24 +48,24 @@ export default function SubscriptionDetails({
           </Text>
         </>
       ) : firstYear?.status === "unavailable" ? (
-        <Text size="sm" c="dimmed">
+        <Text size="sm" c="var(--mantine-color-text)">
           First-year payment details are unavailable. Review your invoice in
           Manage billing.
         </Text>
       ) : (
-        <Text size="sm">
+        <Text size="sm" c="var(--mantine-color-text)">
           Current price: {currentPrice}/{period}, before tax.
         </Text>
       )}
       {details.discount?.introductory ? (
-        <Text size="sm" c="dimmed">
+        <Text size="sm" c="var(--mantine-color-text)">
           {details.discount.endsAt
             ? `Introductory discount ends ${date(details.discount.endsAt)}.`
             : "The provider has not supplied the introductory discount end."}{" "}
           Regular price: {regularPrice}/{period}, before tax.
         </Text>
       ) : null}
-      <Text size="sm">
+      <Text size="sm" c="var(--mantine-color-text)">
         {details.cancelAtPeriodEnd
           ? details.renewalAt
             ? `Cancels on ${date(details.renewalAt)}. No automatic renewal.`
@@ -84,7 +84,7 @@ export default function SubscriptionDetails({
           An introductory discount on your billing account temporarily limits
           plan changes across its subscriptions. Payment methods and
           cancellation remain available.
-          <Text size="sm" mt="xs">
+          <Text size="sm" mt="xs" c="var(--mantine-color-text)">
             {details.planChangeRestrictionEndsAt
               ? `Restriction ends ${date(details.planChangeRestrictionEndsAt)}.`
               : "The provider has not supplied the restriction end."}

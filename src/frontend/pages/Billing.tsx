@@ -33,6 +33,7 @@ import BasicIntroTerms from "../components/BasicIntroTerms";
 import IntroPromotionChoice from "../components/IntroPromotionChoice";
 import SubscriptionDetails from "../components/SubscriptionDetails";
 import classes from "./UpgradeServerSelect.module.css";
+import { useCheckoutAttempt } from "../hooks/useCheckoutAttempt";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
@@ -621,10 +622,6 @@ export function Billing() {
   const search = useSearch({ from: "/portal/server/$serverId/billing" });
   const navigate = useNavigate({ from: "/portal/server/$serverId/billing" });
   const interval = search.interval ?? "month";
-  const [failedCheckout, setFailedCheckout] = useState<
-    inferRouterInputs<AppRouter>["billing"]["checkout"] | null
-  >(null);
-  const [frozenOffer, setFrozenOffer] = useState<BasicIntroOffer | null>(null);
   const source =
     search.source === undefined
       ? "portal_billing"
@@ -652,6 +649,19 @@ export function Billing() {
   });
   const checkoutMutation = trpc.billing.checkout.useMutation();
   const portalMutation = trpc.billing.portal.useMutation();
+  const attemptIdentity = JSON.stringify([
+    routeServerId,
+    interval,
+    offerChoice,
+    promoCode.trim(),
+    source,
+    limitContext,
+  ]);
+  const checkoutAttempt = useCheckoutAttempt(attemptIdentity, () =>
+    Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
+  );
+  const failedCheckout = checkoutAttempt.attempt?.request ?? null;
+  const frozenOffer = checkoutAttempt.attempt?.offer ?? null;
 
   const serverName = useMemo(
     () =>
@@ -705,10 +715,12 @@ export function Billing() {
   }, [loading, error, data, selectedGuildId, source, limitContext]);
 
   const handleCheckout = async (tier: PaidTier) => {
+    let attempt: ReturnType<typeof checkoutAttempt.begin> | null = null;
     try {
       if (!selectedGuildId || selectedGuildId !== routeServerId) return;
       if (
         busy ||
+        checkoutAttempt.refreshing ||
         failedCheckout ||
         billingQuery.isFetching ||
         pricingQuery.isFetching ||
@@ -759,13 +771,14 @@ export function Billing() {
         ...limitContext,
         ...(isDoNotTrackEnabled() ? { analyticsDisabled: true } : {}),
       };
-      setFailedCheckout(request);
-      setFrozenOffer(offer);
+      attempt = checkoutAttempt.begin(request, offer);
       const body = await checkoutMutation.mutateAsync(request);
-      window.location.href = body.url;
+      if (checkoutAttempt.isCurrent(attempt)) window.location.href = body.url;
     } catch (err) {
-      console.error(err);
-      showBillingError(err, "checkout");
+      if (attempt && checkoutAttempt.isCurrent(attempt)) {
+        console.error(err);
+        showBillingError(err, "checkout");
+      }
     }
   };
 
@@ -862,7 +875,12 @@ export function Billing() {
         onOfferChoiceChange={(value) =>
           navigate({ replace: true, search: { ...search, offerChoice: value } })
         }
-        busy={busy || billingQuery.isFetching || pricingQuery.isFetching}
+        busy={
+          busy ||
+          billingQuery.isFetching ||
+          pricingQuery.isFetching ||
+          checkoutAttempt.refreshing
+        }
         checkoutBlocked={Boolean(failedCheckout) || pricingQuery.isError}
       />
       {(offer.status === "unavailable" || failedCheckout) && (
@@ -876,13 +894,24 @@ export function Billing() {
               <Button
                 disabled={busy}
                 onClick={async () => {
-                  if (busy) return;
+                  const attempt = checkoutAttempt.attempt;
+                  if (
+                    busy ||
+                    !selectedGuildId ||
+                    selectedGuildId !== routeServerId ||
+                    !attempt ||
+                    !checkoutAttempt.isCurrent(attempt)
+                  )
+                    return;
                   try {
-                    const body =
-                      await checkoutMutation.mutateAsync(failedCheckout);
-                    window.location.href = body.url;
+                    const body = await checkoutMutation.mutateAsync(
+                      attempt.request,
+                    );
+                    if (checkoutAttempt.isCurrent(attempt))
+                      window.location.href = body.url;
                   } catch (error) {
-                    showBillingError(error, "checkout");
+                    if (checkoutAttempt.isCurrent(attempt))
+                      showBillingError(error, "checkout");
                   }
                 }}
               >
@@ -893,10 +922,7 @@ export function Billing() {
               disabled={busy}
               variant="light"
               onClick={() => {
-                setFailedCheckout(null);
-                setFrozenOffer(null);
-                void billingQuery.refetch();
-                void pricingQuery.refetch();
+                checkoutAttempt.refresh();
               }}
             >
               Refresh offers

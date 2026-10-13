@@ -6,6 +6,311 @@ import {
 import { defaultParseSearch } from "@tanstack/react-router";
 import { expect, test } from "./fixtures";
 import { mockBilling, mockGuilds } from "./mockData";
+import type { Locator } from "@playwright/test";
+
+async function expectReadableText(locator: Locator) {
+  const ratios = await locator.evaluateAll((elements) =>
+    elements.map((element) => {
+      const channels = (color: string) => color.match(/[\d.]+/g)!.map(Number);
+      const luminance = (values: number[]) =>
+        values
+          .slice(0, 3)
+          .map((value) => value / 255)
+          .map((value) =>
+            value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+          )
+          .reduce(
+            (total, value, index) =>
+              total + value * [0.2126, 0.7152, 0.0722][index],
+            0,
+          );
+      const layers: number[][] = [];
+      for (
+        let parent: Element | null = element;
+        parent;
+        parent = parent.parentElement
+      )
+        layers.push(channels(getComputedStyle(parent).backgroundColor));
+      let background = [255, 255, 255];
+      for (const layer of layers.reverse()) {
+        const alpha = layer[3] ?? 1;
+        background = background.map(
+          (value, index) => layer[index] * alpha + value * (1 - alpha),
+        );
+      }
+      const foreground = luminance(channels(getComputedStyle(element).color));
+      const behind = luminance(background);
+      return (
+        (Math.max(foreground, behind) + 0.05) /
+        (Math.min(foreground, behind) + 0.05)
+      );
+    }),
+  );
+  expect(ratios.length).toBeGreaterThan(0);
+  for (const ratio of ratios) expect(ratio).toBeGreaterThanOrEqual(4.5);
+}
+
+test("retry intent follows browser Back after a failed Annual purchase", async ({
+  page,
+}) => {
+  const reads = { billing: 0, pricing: 0 };
+  page.on("request", (request) => {
+    if (request.url().includes("billing.me")) reads.billing++;
+    if (request.url().includes("pricing.plans")) reads.pricing++;
+  });
+  await useIntroBilling(page);
+  await page.route("**/trpc/billing.checkout*", (route) =>
+    route.fulfill({
+      status: 400,
+      json: [
+        {
+          error: {
+            message: "Controlled failed checkout",
+            code: -32600,
+            data: { code: "BAD_REQUEST", httpStatus: 400 },
+          },
+        },
+      ],
+    }),
+  );
+  await page.goto(`/upgrade/select-server?serverId=${mockGuilds.ddm.id}`);
+  await page
+    .getByTestId("upgrade-billing-period")
+    .getByText("Annual", { exact: true })
+    .click();
+  await page.getByRole("button", { name: "Continue with Basic" }).click();
+  await expect(
+    page.getByRole("button", { name: "Retry checkout" }),
+  ).toBeEnabled();
+  const priorReads = { ...reads };
+  await page.goBack();
+  await expect(page.getByRole("radio", { name: "Monthly" })).toBeChecked();
+  await expect(page.getByTestId("basic-intro-terms")).toContainText("$6/month");
+  await expect(page.getByTestId("upgrade-plan-basic")).not.toContainText("$60");
+  await expect(
+    page.getByRole("button", { name: "Retry checkout" }),
+  ).toHaveCount(0);
+  await expect.poll(() => reads.billing).toBeGreaterThan(priorReads.billing);
+  await expect.poll(() => reads.pricing).toBeGreaterThan(priorReads.pricing);
+  await expect(
+    page.getByRole("button", { name: "Continue with Basic" }),
+  ).toBeEnabled();
+});
+
+test("retry intent cannot follow a failed Billing request to another server", async ({
+  page,
+}) => {
+  await useIntroBilling(page);
+  const requests: unknown[] = [];
+  await page.route("**/trpc/billing.checkout*", (route) => {
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({
+      status: 400,
+      json: [
+        {
+          error: {
+            message: "Controlled failed checkout",
+            code: -32600,
+            data: { code: "BAD_REQUEST", httpStatus: 400 },
+          },
+        },
+      ],
+    });
+  });
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+  await page.getByRole("button", { name: "Upgrade to Basic" }).click();
+  await expect(
+    page.getByRole("button", { name: "Retry checkout" }),
+  ).toBeEnabled();
+  await page.evaluate(
+    (path) => window.history.pushState(null, "", path),
+    `/portal/server/${mockGuilds.chronote.id}/billing`,
+  );
+  await expect(
+    page.getByText(`Server: ${mockGuilds.chronote.name}`, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Retry checkout" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Upgrade to Basic" }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1]).toMatchObject({
+    "0": { serverId: mockGuilds.chronote.id },
+  });
+});
+
+test("management-only Upgrade has no unused promotion entry", async ({
+  page,
+}) => {
+  await useIntroBilling(page, {
+    status: "ineligible",
+    details: annualSubscriber,
+  });
+  await page.goto(
+    `/upgrade/select-server?serverId=${mockGuilds.ddm.id}&promo=SAVE20`,
+  );
+  await expect(
+    page.getByRole("button", { name: "Manage billing" }),
+  ).toBeEnabled();
+  await expect(page.getByLabel("Promo code")).toHaveCount(0);
+  await expect(page.getByTestId("intro-promotion-choice")).toHaveCount(0);
+});
+
+for (const scheme of ["light", "dark"] as const) {
+  test(`offer and annual payment disclosures have accessible contrast in ${scheme}`, async ({
+    page,
+  }) => {
+    await page.addInitScript(
+      (value) => localStorage.setItem("mantine-color-scheme-value", value),
+      scheme,
+    );
+    await useIntroBilling(page);
+    await page.goto(`/upgrade/select-server?serverId=${mockGuilds.ddm.id}`);
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-mantine-color-scheme",
+      scheme,
+    );
+    await expect(page.getByTestId("basic-intro-terms")).toBeVisible();
+    await expectReadableText(
+      page.getByTestId("basic-intro-terms").locator("p"),
+    );
+    await expectReadableText(
+      page.getByTestId("basic-intro-discount").getByLabel("Regular price"),
+    );
+    await expectReadableText(
+      page.getByTestId("basic-intro-discount").getByText("40% off"),
+    );
+    await page.unroute("**/trpc/**");
+    await useIntroBilling(page, {
+      status: "ineligible",
+      details: annualSubscriber,
+    });
+    await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+    await expect(page.getByTestId("subscription-details")).toContainText(
+      "First year paid: $64.20",
+    );
+    await expectReadableText(
+      page.getByTestId("subscription-details").locator("p"),
+    );
+  });
+}
+
+for (const outcome of ["success", "error"] as const) {
+  test(`late checkout ${outcome} cannot redirect or notify a different Back intent`, async ({
+    page,
+  }) => {
+    await useIntroBilling(page);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let submitted = false;
+    await page.route("**/trpc/billing.checkout*", async (route) => {
+      submitted = true;
+      await held;
+      await route.fulfill(
+        outcome === "success"
+          ? {
+              json: [
+                {
+                  result: {
+                    data: {
+                      url: `/upgrade/success?serverId=${mockGuilds.ddm.id}&interval=year`,
+                    },
+                  },
+                },
+              ],
+            }
+          : {
+              status: 400,
+              json: [
+                {
+                  error: {
+                    message: "Controlled late error",
+                    code: -32600,
+                    data: { code: "BAD_REQUEST", httpStatus: 400 },
+                  },
+                },
+              ],
+            },
+      );
+    });
+    await page.goto(`/upgrade/select-server?serverId=${mockGuilds.ddm.id}`);
+    await expect(
+      page.getByRole("button", { name: "Continue with Basic" }),
+    ).toBeEnabled();
+    await page
+      .getByTestId("upgrade-billing-period")
+      .getByText("Annual", { exact: true })
+      .click();
+    await page.getByRole("button", { name: "Continue with Basic" }).click();
+    await expect.poll(() => submitted).toBe(true);
+    await page.goBack();
+    await expect(page.getByRole("radio", { name: "Monthly" })).toBeChecked();
+    release();
+    await expect(
+      page.getByRole("button", { name: "Continue with Basic" }),
+    ).toBeEnabled();
+    await expect(page).toHaveURL(
+      new RegExp(`/upgrade/select-server\\?serverId=${mockGuilds.ddm.id}$`),
+    );
+    await expect(
+      page.getByRole("button", { name: "Retry checkout" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("Controlled late error", { exact: true }),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("basic-intro-terms")).toContainText(
+      "$6/month",
+    );
+  });
+}
+
+test("late Billing checkout cannot redirect the newly selected server", async ({
+  page,
+}) => {
+  await useIntroBilling(page);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let submitted = false;
+  await page.route("**/trpc/billing.checkout*", async (route) => {
+    submitted = true;
+    await held;
+    await route.fulfill({
+      json: [
+        {
+          result: {
+            data: {
+              url: `/portal/server/${mockGuilds.ddm.id}/billing?outdated=1`,
+            },
+          },
+        },
+      ],
+    });
+  });
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+  await page.getByRole("button", { name: "Upgrade to Basic" }).click();
+  await expect.poll(() => submitted).toBe(true);
+  await page.evaluate(
+    (path) => window.history.pushState(null, "", path),
+    `/portal/server/${mockGuilds.chronote.id}/billing`,
+  );
+  await expect(
+    page.getByText(`Server: ${mockGuilds.chronote.name}`, { exact: true }),
+  ).toBeVisible();
+  release();
+  await expect(
+    page.getByRole("button", { name: "Upgrade to Basic" }),
+  ).toBeEnabled();
+  await expect(page).toHaveURL(
+    new RegExp(`/portal/server/${mockGuilds.chronote.id}/billing$`),
+  );
+  await expect(
+    page.getByRole("button", { name: "Retry checkout" }),
+  ).toHaveCount(0);
+});
 
 test("purchase billing selector defaults monthly and changes totals in both directions", async ({
   page,

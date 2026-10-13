@@ -35,7 +35,7 @@ import { buildApiUrl } from "../services/apiClient";
 import { trpc } from "../services/trpc";
 import { showBillingError } from "../utils/billingErrorNotification";
 import { usePortalStore } from "../stores/portalStore";
-import type { BasicIntroOffer, PaidTier } from "../../types/pricing";
+import type { PaidTier } from "../../types/pricing";
 import {
   billingLabelForInterval,
   buildPaidPlanLookup,
@@ -45,6 +45,7 @@ import {
   resolvePaidPlan,
 } from "../utils/pricing";
 import classes from "./UpgradeServerSelect.module.css";
+import { useCheckoutAttempt } from "../hooks/useCheckoutAttempt";
 
 const FEATURES = {
   free: [
@@ -123,7 +124,20 @@ export default function UpgradeServerSelect({
   const offerChoice = promoCode.trim()
     ? (search.offerChoice ?? "automatic")
     : "automatic";
-  const [frozenOffer, setFrozenOffer] = useState<BasicIntroOffer | null>(null);
+  const attemptIdentity = JSON.stringify([
+    selectedServerId,
+    search.plan,
+    interval,
+    offerChoice,
+    promoCode.trim(),
+    source,
+    limitContext,
+  ]);
+  const checkoutAttempt = useCheckoutAttempt(attemptIdentity, () =>
+    Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
+  );
+  const failedCheckout = checkoutAttempt.attempt?.request ?? null;
+  const frozenOffer = checkoutAttempt.attempt?.offer ?? null;
   const offer =
     frozenOffer ??
     resolveIntroOffer(
@@ -135,9 +149,6 @@ export default function UpgradeServerSelect({
       ? { status: "inactive" as const }
       : offer;
   const offerBlocked = offer.status === "unavailable";
-  const [failedCheckout, setFailedCheckout] = useState<
-    inferRouterInputs<AppRouter>["billing"]["checkout"] | null
-  >(null);
   const currentTier = billing?.tier;
   const isComped = billing?.billingSource === "manual_comp";
   const isForced = billing?.billingSource === "forced";
@@ -156,6 +167,7 @@ export default function UpgradeServerSelect({
     !pricingQuery.isError &&
     !pricingQuery.isFetching &&
     !managementOnly &&
+    !checkoutAttempt.refreshing &&
     !busy;
 
   const arrived = useRef(false);
@@ -303,10 +315,11 @@ export default function UpgradeServerSelect({
     if (tier === "basic" && (!basicTierEligible || offerBlocked)) return;
     if (failedCheckout) return;
     // The clicked tier travels with the request, never through a state update.
-    navigate({
+    await navigate({
       replace: true,
       search: { ...intent, plan: tier, canceled: undefined },
     });
+    let attempt: ReturnType<typeof checkoutAttempt.begin> | null = null;
     try {
       track("upgrade_plan_clicked", {
         guild_id: selectedServerId,
@@ -339,12 +352,12 @@ export default function UpgradeServerSelect({
         ...limitContext,
         ...(isDoNotTrackEnabled() ? { analyticsDisabled: true } : {}),
       };
-      setFailedCheckout(request);
-      setFrozenOffer(offer);
+      attempt = checkoutAttempt.begin(request, offer);
       const body = await checkoutMutation.mutateAsync(request);
-      window.location.href = body.url;
+      if (checkoutAttempt.isCurrent(attempt)) window.location.href = body.url;
     } catch (err) {
-      showBillingError(err, "checkout");
+      if (attempt && checkoutAttempt.isCurrent(attempt))
+        showBillingError(err, "checkout");
     }
   };
   const handlePortal = async () => {
@@ -692,15 +705,25 @@ export default function UpgradeServerSelect({
               <Group>
                 {failedCheckout && (
                   <Button
-                    disabled={busy}
+                    disabled={busy || !serverReady}
                     onClick={async () => {
-                      if (busy) return;
+                      const attempt = checkoutAttempt.attempt;
+                      if (
+                        busy ||
+                        !serverReady ||
+                        !attempt ||
+                        !checkoutAttempt.isCurrent(attempt)
+                      )
+                        return;
                       try {
-                        const body =
-                          await checkoutMutation.mutateAsync(failedCheckout);
-                        window.location.href = body.url;
+                        const body = await checkoutMutation.mutateAsync(
+                          attempt.request,
+                        );
+                        if (checkoutAttempt.isCurrent(attempt))
+                          window.location.href = body.url;
                       } catch (error) {
-                        showBillingError(error, "checkout");
+                        if (checkoutAttempt.isCurrent(attempt))
+                          showBillingError(error, "checkout");
                       }
                     }}
                   >
@@ -711,10 +734,7 @@ export default function UpgradeServerSelect({
                   variant="light"
                   disabled={busy}
                   onClick={() => {
-                    setFailedCheckout(null);
-                    setFrozenOffer(null);
-                    void billingQuery.refetch();
-                    void pricingQuery.refetch();
+                    checkoutAttempt.refresh();
                   }}
                 >
                   Refresh offers
@@ -722,7 +742,7 @@ export default function UpgradeServerSelect({
               </Group>
             </Stack>
           )}
-          {offer.status === "available" && intent.promo && (
+          {!managementOnly && offer.status === "available" && intent.promo && (
             <IntroPromotionChoice
               choice={offerChoice}
               disabled={busy || Boolean(failedCheckout)}
@@ -734,22 +754,24 @@ export default function UpgradeServerSelect({
               }
             />
           )}
-          <Box component="details" open={intent.promo ? true : undefined}>
-            <Text component="summary" size="sm" style={{ cursor: "pointer" }}>
-              Have a code?{intent.promo ? " (code entered)" : ""}
-            </Text>
-            <TextInput
-              mt="sm"
-              maw={360}
-              label="Promo code"
-              className="ph-no-capture"
-              value={promoCode}
-              disabled={busy || Boolean(failedCheckout)}
-              onChange={(event) => setPromoCode(event.currentTarget.value)}
-              onBlur={() => navigate({ replace: true, search: intent })}
-              description="Eligibility and discounts are confirmed at checkout."
-            />
-          </Box>
+          {!managementOnly && (
+            <Box component="details" open={intent.promo ? true : undefined}>
+              <Text component="summary" size="sm" style={{ cursor: "pointer" }}>
+                Have a code?{intent.promo ? " (code entered)" : ""}
+              </Text>
+              <TextInput
+                mt="sm"
+                maw={360}
+                label="Promo code"
+                className="ph-no-capture"
+                value={promoCode}
+                disabled={busy || Boolean(failedCheckout)}
+                onChange={(event) => setPromoCode(event.currentTarget.value)}
+                onBlur={() => navigate({ replace: true, search: intent })}
+                description="Eligibility and discounts are confirmed at checkout."
+              />
+            </Box>
+          )}
           <Text size="sm" c="dimmed">
             Payment is handled securely by Stripe. Any available changes and
             discounts are confirmed before payment.
