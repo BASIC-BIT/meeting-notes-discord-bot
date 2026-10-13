@@ -12,6 +12,8 @@
 
 **Status:** Plan for review and execution-method selection. No product execution or production activation is authorized by this document alone.
 
+**Revision:** October 13 user clarification: the feature must be togglable and its improvement measurable. Tasks 4, 5 and 8 now require measurements for the off baseline as well as shadow/enforce, and one comparison report before promotion.
+
 ## Global constraints
 
 - Retain the Alpine base image and repository resource budget of 0.5 vCPU / 1 GiB; these are source settings, not verified live ECS settings.
@@ -27,6 +29,26 @@
 - Private recordings/references/results stay in private ops and ignored caches. Production replay, shadow activation, and enforcement retain their separate authorization.
 - Do not add/widen PostHog events or send audio/content/identifiers in detector telemetry. Audio hashes used for local reuse never leave process/eval artifacts.
 - If engine compatibility or acceptance budgets fail, stop and revise the design. Do not quietly substitute a detector or increase resources.
+
+## Feature toggle and improvement measurement
+
+The existing typed mode is the feature toggle. `off` preserves the current transcription path and performs no detector work; `shadow` measures detector decisions while retaining transcription; `enforce` may skip verified nonspeech. Operators can select these modes through the existing global superadmin settings without a code release. The setting is captured at meeting start, so switching off applies to new meetings. This clarification does not introduce server-level targeting or an immediate active-meeting kill switch.
+
+Measurement remains enabled in all three modes. Turning off VAD must not turn off the baseline counters needed to compare it. Tasks 4–5 count Discord snippet outcomes and provider SDK submissions, including application retries and prompt/no-prompt voting. They also record decoded recording seconds independently of gate decisions, so reducing submitted audio cannot shrink the comparison denominator. SDK submissions are observed invocations, not proof of internal SDK transport retries or billable usage.
+
+Task 8 produces one comparison report with these measures:
+
+| Measure                                | Comparison and meaning                                                                                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nonspeech false-transcript rate        | Human-labeled nonspeech clips with retained text / all reviewed nonspeech clips; compare the same clips with VAD off and enforce                                     |
+| Speech rejection and empty-output rate | Separate rates for verified speech assessed as nonspeech and genuine speech with an empty final transcript, each / reviewed speech clips; include quiet/short groups |
+| Transcript error                       | Aggregate WER on the same human references, prompt, model and repetitions                                                                                            |
+| Provider work                          | Total SDK submissions and submitted audio seconds per decoded audio minute, by mode and fast/slow phase; include failed submissions and voting                       |
+| Processing cost and reliability        | Assessment/end-to-end p95 latency, uncertainty/unavailability rates, queue saturation, restarts, memory and event-loop delay                                         |
+
+Each report includes raw counts, denominators, absolute and relative differences, sample size, source/model/policy versions and mode. A zero baseline makes relative improvement undefined; it is never reported as 100% savings. Live comparisons use documented mode/time windows and recording-volume normalization, with traffic/composition differences recorded as limits. Live ASR text and shadow disagreement are not ground truth. Claim quality improvement only when the matched labeled evaluation supports it; fewer requests with unchanged quality is a separate result. Convert workload savings to money only with verified pricing/billing evidence.
+
+The report is a required implementation artifact, not a later observability task. Reuse the existing internal Prometheus/Grafana route and private ops evidence workflow. No new customer analytics events or content-bearing metric labels are needed.
 
 ## Review focus
 
@@ -263,7 +285,7 @@ type PreparedTranscriptionInput = {
 
 **Files:** Create `src/config/speechDetection.ts`, `test/services/meetingConfigService.test.ts`, `test/trpc/configSpeechDetection.test.ts`, `test/metrics/speechDetectionMetrics.test.ts`. Modify `src/config/{registry,keys,types}.ts`, `src/services/meetingConfigService.ts`, `src/metrics.ts` and `src/bot.ts`. Extend `test/services/speechDetectionService.test.ts` for lazy startup/shutdown.
 
-**Interfaces:** Produces `SPEECH_DETECTION_MODES`, `SpeechDetectionMode`, `DEFAULT_SPEECH_DETECTION_MODE = "off"`, and schema-validated `resolveSpeechDetectionMode(value: unknown): SpeechDetectionMode`. Registry key is `transcription.speechDetection.mode`; consumer key is `CONFIG_KEYS.transcription.speechDetectionMode`; resolved snapshot field is `MeetingRuntimeConfig.transcription.speechDetectionMode`. In `src/metrics.ts`, produce `recordSpeechAssessment(input: {mode: SpeechDetectionMode; phase: SpeechPhase; assessment: SpeechAssessment; durationMs: number}): void` and `recordSpeechRequestSkipped(input: {phase: SpeechPhase; audioSeconds: number}): void` with no content-bearing inputs.
+**Interfaces:** Produces `SPEECH_DETECTION_MODES`, `SpeechDetectionMode`, `DEFAULT_SPEECH_DETECTION_MODE = "off"`, and schema-validated `resolveSpeechDetectionMode(value: unknown): SpeechDetectionMode`. Registry key is `transcription.speechDetection.mode`; consumer key is `CONFIG_KEYS.transcription.speechDetectionMode`; resolved snapshot field is `MeetingRuntimeConfig.transcription.speechDetectionMode`. In `src/metrics.ts`, produce `recordSpeechAssessment(input: {mode: SpeechDetectionMode; phase: SpeechPhase; assessment: SpeechAssessment; durationMs: number}): void`, `recordSpeechRequestSkipped(input: {phase: SpeechPhase; audioSeconds: number}): void`, `recordSpeechSnippetOutcome(input: {mode: SpeechDetectionMode; phase: SpeechPhase; outcome: "transcribed" | "reused" | "vad_skipped" | "conversion_error" | "provider_error"; audioSeconds: number; durationMs: number}): void`, `recordSpeechProviderSubmission(input: {mode: SpeechDetectionMode; phase: SpeechPhase; candidate: "prompt" | "no_prompt"; audioSeconds: number}): void`, and `recordSpeechCapturedAudio(input: {mode: SpeechDetectionMode; audioSeconds: number}): void`. Inputs contain no audio/text/identifiers. New comparison metrics use the prefix `chronote_speech_detection_` with suffixes `snippet_outcomes_total`, `provider_submissions_total`, `submitted_audio_seconds_total`, `captured_audio_seconds_total`, and `end_to_end_duration_seconds`. Stable enum labels only; register each once and convert ms to seconds at the metric boundary.
 
 - [ ] Write `defaultsSpeechDetectionOff` against resolved meeting config. Keep the no-model-work assertion at the actual admission/startup boundaries in Tasks 4–5.
 
@@ -278,6 +300,16 @@ type PreparedTranscriptionInput = {
 - [ ] Add schema tests for all three modes and rejection of arbitrary values. Test the actual tRPC boundary: `config.setServerOverride` refuses the key with `Config key is not server scoped.`; global access remains superadmin-only. Do not put scope enforcement in the unvalidated repository writer.
 - [ ] Preserve the existing meeting-start snapshot behavior: test that newly resolved meetings see a changed global mode, while an active meeting retains its captured mode. Explain this limit in Task 7 docs and rollback instructions. An immediate switch for active meetings would require a separate config-refresh design, not an undocumented per-snippet database lookup.
 - [ ] Add metric-registry tests: unavailable is not a rejection; only actual enforce skips increment skipped-request/seconds counters; allowed labels are fixed mode/phase/kind/reason enums. Include duration histograms, queue saturation and worker restarts, using `recordSpeechWorkerRestart(): void` in `src/metrics.ts`. Model policy/coverage data, user IDs, text and audio never become labels.
+- [ ] Add `offModeStillRecordsComparableBaseline` and `countsEveryApplicationSubmissionIncludingVoting`: an off-mode successful snippet records one outcome and one submission without starting a detector; a prompted request followed by a no-prompt vote records two submissions. Failed submissions also count. Reused text and enforced skips record their outcomes without a fictitious provider submission. Extend the existing metric label allowlist with fixed candidate/outcome enums.
+
+  ```typescript
+  expect(offBaseline.snippetOutcomes).toBe(1);
+  expect(offBaseline.providerSubmissions).toBe(1);
+  expect(detectorSpawn).not.toHaveBeenCalled();
+  expect(votingRun.providerSubmissions).toBe(2);
+  expect(reusedRun.providerSubmissions).toBe(0);
+  ```
+
 - [ ] Add shutdown coverage at the existing signal owner: stop new meetings, await their finalization, then shut down an initialized detector before process exit. API-only bootstrap and off mode must spawn no worker. Importing a module must not load ONNX or a model.
 - [ ] Run new config/metrics tests and `test/services/unifiedConfigService.test.ts`; run `npx tsc --noEmit`. Commit `feat: configure and observe speech detection without enabling it`.
 
@@ -298,6 +330,7 @@ type PreparedTranscriptionInput = {
 
 - [ ] Run `npm test -- --runInBand --coverage=false test/services/transcriptionSpeechAdmission.test.ts` and observe the unwanted provider call or missing skipped-result failure.
 - [ ] Implement `withPreparedTranscriptionInput` and its `transcribeSnippet` integration after existing conversion and before prompt/provider/tracing work.
+- [ ] Wire Task 4 measurements into the Discord snippet path in all modes. Record one terminal snippet outcome per invocation; record provider submission immediately before each SDK call, including existing application retries/voting, without changing provider retry behavior. Pass mode/phase through the existing transcription context. In the decoded capture handler in `src/audio.ts`, record captured seconds once per received PCM chunk before admission, not once per fast snapshot. Add an integration assertion that rejected/repeated fast snapshots leave the captured-seconds denominator unchanged. Exclude personal uploads and the separate final verification pass from these Discord comparison counters.
 - [ ] Add one cycle per mode: off and explicit force do not call the detector; enforce speech/uncertain/unavailable call ASR; shadow starts assessment but submits ASR before a deliberately unresolved detector finishes. Late shadow results record only metrics and do not mutate text.
 - [ ] Add `detectorErrorDoesNotBecomeProviderFailure` and delayed-read cleanup coverage. Copy input before scheduling shadow work; cleanup cannot delete a file still needed by the worker. Detector errors become unavailable and ASR proceeds; genuine conversion/provider errors retain current failure reasons and retries.
 - [ ] Preserve existing suppression override semantics. Bypass is an explicit option passed from the forced live-command caller, not inferred from noise-gate or prompt-echo settings. Keep voting/prompt behavior unchanged.
@@ -332,6 +365,7 @@ type PreparedTranscriptionInput = {
 
 - [ ] Handle skipped results separately in fast and slow owners. Fast skip affects only its snapshot; final skip sets finalSpeechRejection and is not transcriptionFailed. Preserve prior usable fast text on a real provider failure. Record lastFastSpeechCoverage only for an accepted current revision with known speech and usable text.
 - [ ] Test unchanged PCM+policy reuse; same byte length with changed contents; appended bytes; changed policy; and unavailable final assessment. Off/shadow retain existing shortcuts. A final assessment and fallback share one conversion/cleanup owner. Force bypass still prevents shortcut reuse where current behavior requires a fresh request.
+- [ ] Record a reused outcome at the owner of a fast-finalization shortcut that bypasses `transcribeSnippet`; do not also count it as a new transcription or provider submission. Test this shortcut in off and enforce modes, preserving the single captured-audio denominator from Task 5.
 - [ ] Test a delayed fast reply after finalization and an old worker reply after restart: neither restores rejected text. Compile, notes input and final-pass baseline remain empty for rejected files; final-pass reset must not clear the rejection marker. Do not modify successful-empty non-VAD policy.
 - [ ] Guard direct readers using isAudioFileSpeechRejected. Timeline omits the event; uploaded JSON contains no rejected text; auto-cancel input excludes it. Add regression cases proving uploader nullish fallback and compiler usable-text fallback retain their previous behavior when no marker exists.
 - [ ] Run relevant Jest suites plus `test/api/liveMeetings.test.ts` and `src/frontend/hooks/useLiveMeetingStream.test.tsx`. The combined E2E synthetic stream must show a fast guess and then remove it in both live-page and dashboard entry paths while original audio/offsets remain unchanged: `npm run test:e2e -- test/e2e/live-transcript-rejection.spec.ts`. Require the separately reviewed removal/UI foundations; report that dependency if unavailable.
@@ -384,6 +418,7 @@ type PreparedTranscriptionInput = {
 - [ ] Compare pipeline baseline and VAD on the same split, prompt, echo setting and repetitions, in batches: `npm run eval:transcription -- --manifest <private-manifest> --mode pipeline --pass-mode slow --speech-detector production --speech-mode enforce --runs 3 --max-requests 150 --split holdout --batch-size 25 --batch-index N --artifact-dir D:/bench/chronote-ops/.cache/transcription-eval`. Replace production with off for baseline; repeat fast comparison. Dollar cost remains unpriced without verified rates.
 - [ ] Benchmark the compiled service using `node scripts/speech-detection/benchmark.mjs --duration-seconds 120 --fast-per-second 4 --slow-per-second 1` in the 0.5 vCPU/1 GiB container. Use a fixed mixed two-second speech/nonspeech schedule, then separate duration buckets 0.3/2/10/60/180 seconds and a ten-job burst. Compare detector-off event-loop delay/RSS; report cold/warm, queue/deadline availability and per-bucket results. Burst overflow must fail open, not pass as a healthy assessment.
 - [ ] Test and implement `check-acceptance.mjs --manifest <private-manifest> --review-evidence <private-review.json> --detector <detector-report.json> --baseline <batch-report-list.json> --candidate <batch-report-list.json> --benchmark <benchmark.json>`. Exit nonzero for incomplete/mismatched data, insufficient samples/profiles, duplicate SHA/family leakage, missing attestations, any verified speech classified nonspeech, <50% rejection of nonspeech admitted by the baseline amplitude gate, transcript regression, or missed resource budgets. Baseline/candidate must have identical cases, repetitions, prompt/echo/model/config and source version except VAD selection. Define transcript regression as an increase in matched aggregate WER or genuine-speech empty-output rate, or an increase in nonspeech false-positive rate; report quiet/short groups separately. Test each boundary through the CLI, including an apparently perfect report with a leaked family. Warm p95 must meet phase deadlines, steady-load availability >=95%, detector overhead <128 MiB and added p95 event-loop delay <20 ms. Acceptance reports attested evidence separately from machine-verified evidence; final review is still required.
+- [ ] Add `--output <comparison-report.json>` to the acceptance checker. Emit the scorecard above with raw numerators/denominators, absolute/relative changes, unique clip counts separate from repeated attempts, per-family breakdowns, and a separate pass/fail/incomplete result. Use null for undefined relative change and unavailable money estimates. Add CLI tests for a zero baseline, incomplete data, and a candidate with lower provider work but worse speech quality; savings must not override failed quality gates. Document matching internal metric queries and mode/time windows in `docs/transcription-eval.md`; retain actual live evidence in private ops. Promotion requires the generated comparison report and a review of its interpretation.
 - [ ] Commit the reusable eval/benchmark/checker code only as `eval: measure production speech detection and acceptance`. Save private results separately. **Do not declare enforcement ready if the fresh holdout or constrained benchmark is missing/failing.**
 
 ## Final validation and execution handoff
@@ -396,4 +431,4 @@ type PreparedTranscriptionInput = {
 
 ## Self-review record
 
-Spec sections map to Tasks 1–8: runtime/assets (1, 3, 7), signal policy (2), worker bounds/failure (3), mode/metrics (4), shared admission (5), final authority and all readers (6), UI/docs (7), quality/resource/rollout evidence (8 and final validation). The five review-focus inputs each have a named test cycle. Shared type/function names are fixed above, and later tasks consume those interfaces. No model runtime or product source was changed while writing this plan.
+Spec sections map to Tasks 1–8: runtime/assets (1, 3, 7), signal policy (2), worker bounds/failure (3), mode/metrics (4), shared admission (5), final authority and all readers (6), UI/docs (7), quality/resource/rollout evidence (8 and final validation). The user clarification adds an explicit toggle/measurement contract, off-mode baseline tests, gate-independent recording denominators and a required comparison report (4, 5, 8). The five review-focus inputs each have a named test cycle. Shared type/function names are fixed above, and later tasks consume those interfaces. No model runtime or product source was changed while writing this plan.

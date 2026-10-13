@@ -172,6 +172,8 @@ Backend build output must include the compiled worker and model assets. Containe
 
 Use existing Prometheus counters/histograms for assessment counts, reason enums, phase, mode, duration, queue saturation, worker restarts, skipped primary requests, and skipped audio seconds. Emit no audio, transcript, dictionary text, participant IDs, or new fine-grained identifiers. Do not add or widen PostHog events. Skipped seconds and calls are observed counters; translate to dollars only with verified pricing and traffic evidence.
 
+User clarification on October 13: feature toggling and measurable improvement are required. Keep baseline measurement active when the detector is off. Compare off/shadow/enforce with mode-tagged snippet outcomes, provider SDK submissions including voting/application retries, and submitted audio seconds normalized by independently counted decoded recording time. SDK submissions are not evidence of internal transport retries or billed usage. Produce one matched off/enforce evaluation report for false transcripts, speech loss, WER, workload and latency/resource costs. Human-reviewed references establish quality; live shadow disagreements and request savings alone do not prove improvement. The implementation plan makes that report and its counter tests required before promotion.
+
 ## Acceptance and rollout proposal
 
 The implementation plan must start with runtime feasibility and then progress through independently reviewable checkpoints. Failure at the compatibility checkpoint stops production integration.
