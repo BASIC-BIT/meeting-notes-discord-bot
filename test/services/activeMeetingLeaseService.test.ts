@@ -157,6 +157,34 @@ describe("activeMeetingLeaseService", () => {
     await releaseSessionReservation(reservation);
   });
 
+  test("fence during actual lease deletion retains the work handle", async () => {
+    const { reservation } = await recordingReservation();
+    const meeting = {
+      reservation,
+      finalization: {
+        disposition: "durable",
+        controller: new AbortController(),
+      },
+    } as unknown as MeetingData;
+    attachMeetingReservation(meeting, reservation);
+    let finish!: () => void;
+    mockedReleaseActiveMeetingLease.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return true;
+    });
+    const releasing = releaseSessionReservation(reservation);
+    await Promise.resolve();
+    await Promise.resolve();
+    meeting.finalizationFenced = true;
+    finish();
+    expect(await releasing).toBe(false);
+    expect(reservation.workHandle.settle).not.toHaveBeenCalled();
+    expect(getOwnedSessionReservations()).toContainEqual(
+      expect.objectContaining({ reservation }),
+    );
+  });
   test("rejected history unwind retains counted ownership but still settles voice", async () => {
     const { reservation, getMeetingHistory } = await recordingReservation();
     jest

@@ -1,3 +1,4 @@
+import { assertMeetingProcessingSucceeded } from "../utils/meetingProcessing";
 import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
 import { MEETING_STATUS } from "../types/meetingLifecycle";
@@ -92,6 +93,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   if (meeting.sessionMode === "tts_only") return;
 
   try {
+    assertMeetingProcessingSucceeded(meeting);
     const timestamp = meeting.startTime.toISOString();
     const duration = meeting.endTime
       ? Math.floor(
@@ -142,6 +144,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
 
     const notes = await ensureMeetingNotes(meeting);
     const summaries = await ensureMeetingSummaries(meeting, notes);
+    assertMeetingProcessingSucceeded(meeting);
     const transcriptS3Key = meeting.transcriptS3Key;
     const { notesVersion, notesLastEditedBy, notesLastEditedAt, notesHistory } =
       buildNotesMetadata(meeting, notes, timestamp);

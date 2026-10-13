@@ -69,7 +69,14 @@ import {
 import { releaseMeetingLeaseForMeeting } from "../services/activeMeetingLeaseService";
 import { runTranscriptionFinalPass } from "../services/transcriptionFinalPassService";
 import { getAudioTranscriptionFacts } from "../utils/audioTranscript";
-import { classifyTranscription } from "../utils/meetingProcessing";
+import {
+  runOwnedMeetingFinalization,
+  assertMeetingFinalizationActive,
+} from "../services/meetingFinalizationService";
+import {
+  classifyTranscription,
+  assertMeetingProcessingSucceeded,
+} from "../utils/meetingProcessing";
 
 export type EndMeetingFlowOptions = {
   client: Client;
@@ -90,12 +97,10 @@ async function runMeetingEndStep<T>(
   run: () => Promise<T>,
   options: MeetingEndStepOptions = {},
 ): Promise<T> {
-  meeting.ownershipSignal?.throwIfAborted();
-  meeting.finalization?.controller.signal.throwIfAborted();
+  assertMeetingFinalizationActive(meeting);
   const startedAt = Date.now();
   const result = await withMeetingEndStep(meeting, name, run, options);
-  meeting.ownershipSignal?.throwIfAborted();
-  meeting.finalization?.controller.signal.throwIfAborted();
+  assertMeetingFinalizationActive(meeting);
   const durationMs = Date.now() - startedAt;
   console.log(`Meeting end step completed: ${name} durationMs=${durationMs}`);
   return result;
@@ -183,10 +188,14 @@ function shouldFinalizeDismissedAutoRecording(meeting: MeetingData): boolean {
   return chatMessageCount >= DISMISSED_AUTO_RECORD_COMPLETE_MIN_CHAT_MESSAGES;
 }
 
-function shouldRetainLocalAudioArtifacts(
+function hasMissingExpectedArtifacts(
   result: UploadMeetingArtifactsResult,
 ): boolean {
-  return result.audioUploadExpected && !result.audioS3Key;
+  return (
+    (result.audioUploadExpected && !result.audioS3Key) ||
+    (result.chatUploadExpected && !result.chatS3Key) ||
+    (result.transcriptUploadExpected && !result.transcriptS3Key)
+  );
 }
 
 async function retainLocalMeetingArtifacts(
@@ -196,7 +205,7 @@ async function retainLocalMeetingArtifacts(
   const retainedTempDir = await retainMeetingTempDir(meeting, reason);
   const localPath = retainedTempDir ?? getMeetingTempDir(meeting);
   console.error(
-    "Meeting audio was not durably uploaded; retained local artifacts",
+    "Expected meeting artifacts were not durably uploaded; retained local artifacts",
     {
       guildId: meeting.guildId,
       meetingId: meeting.meetingId,
@@ -274,18 +283,10 @@ export function runEndMeetingFlow(
   options: EndMeetingFlowOptions,
 ): Promise<void> {
   const { meeting } = options;
-  if (meeting.finalization) return meeting.finalization.promise;
-  if (meeting.finished) return Promise.resolve();
-  if (meeting.finalizationFenced)
-    return Promise.reject(new Error("Meeting finalization fenced"));
-  const controller = new AbortController();
-  // Install ownership before the first await or callback can reenter.
-  const promise = Promise.resolve().then(() =>
+  if (meeting.sessionMode === "tts_only") return endTtsOnlySession(meeting);
+  return runOwnedMeetingFinalization(meeting, () =>
     executeOwnedFinalization(options),
   );
-  meeting.finalization = { promise, controller, disposition: "pending" };
-  meeting.reservation?.workHandle.transition("finalization");
-  return promise;
 }
 
 export function getMeetingFinalizationCheckpoint(meeting: MeetingData) {
@@ -303,6 +304,7 @@ export function getMeetingFinalizationCheckpoint(meeting: MeetingData) {
 /** R3 can fence late AI results before running preservation under its shared deadline. */
 export function fenceMeetingFinalization(meeting: MeetingData): void {
   meeting.finalizationFenced = true;
+  if (meeting.finalization) meeting.finalization.disposition = "unresolved";
   meeting.finalization?.controller.abort(
     new Error("Meeting finalization fenced"),
   );
@@ -347,21 +349,17 @@ async function executeOwnedFinalization(
 ): Promise<void> {
   const { meeting } = options;
   try {
-    meeting.ownershipSignal?.throwIfAborted();
-    meeting.finalization?.controller.signal.throwIfAborted();
-    if (meeting.sessionMode === "tts_only") {
-      await endTtsOnlySession(meeting);
-      return;
-    }
+    assertMeetingFinalizationActive(meeting);
     await finalizeRecording(options);
-    meeting.ownershipSignal?.throwIfAborted();
-    meeting.finalization?.controller.signal.throwIfAborted();
+    assertMeetingFinalizationActive(meeting);
     if (meeting.finalization?.disposition !== "durable")
       throw new Error("Meeting artifacts require preservation");
     await cleanupMeetingTempDir(meeting);
+    assertMeetingFinalizationActive(meeting);
     const released = await releaseMeetingLeaseForMeeting(meeting);
     if (!released)
       throw new Error("Meeting voice or lease release remains unresolved");
+    assertMeetingFinalizationActive(meeting);
     meeting.setFinished();
     meeting.finished = true;
     captureMeetingCompleted(meeting);
@@ -380,6 +378,9 @@ async function executeOwnedFinalization(
           status: MEETING_STATUS.FAILED,
           processing: meeting.processing,
           endReason: meeting.endReason,
+          audioS3Key: meeting.audioS3Key,
+          chatS3Key: meeting.chatS3Key,
+          transcriptS3Key: meeting.transcriptS3Key,
         },
         [
           MEETING_STATUS.STARTING,
@@ -458,6 +459,12 @@ async function finalizeRecording(
       closeOutputFile(meeting),
     );
 
+    if (meeting.transcribeMeeting)
+      await runMeetingEndStep(meeting, "wait-finalization-processing", () =>
+        waitForFinishProcessing(meeting),
+      );
+    assertMeetingProcessingSucceeded(meeting);
+
     const finalizeDismissedAutoRecording =
       shouldFinalizeDismissedAutoRecording(meeting);
     if (finalizeDismissedAutoRecording) {
@@ -491,14 +498,18 @@ async function finalizeRecording(
           },
         },
       );
+      assertMeetingProcessingSucceeded(meeting);
       if (cancellationDecision.cancel) {
-        meeting.cancelled = true;
-        meeting.cancellationReason = cancellationDecision.reason;
-        meeting.endReason = MEETING_END_REASONS.AUTO_CANCELLED;
         const retention = await runMeetingEndStep(
           meeting,
           "auto-record-cancel-flow",
-          () => handleAutoRecordCancellation(client, meeting, chatLogFilePath),
+          () =>
+            handleAutoRecordCancellation(
+              client,
+              meeting,
+              chatLogFilePath,
+              cancellationDecision,
+            ),
         );
         preserveMeetingTempDir = retention.preserveLocalArtifacts;
         if (!preserveMeetingTempDir) {
@@ -604,6 +615,7 @@ async function finalizeRecording(
         );
       }
 
+      assertMeetingProcessingSucceeded(meeting);
       transcriptForUpload = await runMeetingEndStep(
         meeting,
         "compile-transcriptions-upload",
@@ -625,15 +637,14 @@ async function finalizeRecording(
           transcriptText: transcriptForUpload,
         }),
     );
-    if (shouldRetainLocalAudioArtifacts(uploadResult)) {
-      const retention = await runMeetingEndStep(
-        meeting,
-        "retain-local-artifacts",
-        () => retainLocalMeetingArtifacts(meeting, "audio_upload_failed"),
+    if (hasMissingExpectedArtifacts(uploadResult)) {
+      await runMeetingEndStep(meeting, "retain-local-artifacts", () =>
+        retainLocalMeetingArtifacts(meeting, "audio_upload_failed"),
       );
-      preserveMeetingTempDir = retention.preserveLocalArtifacts;
+      throw new Error("Meeting artifact upload failed");
     }
 
+    assertMeetingProcessingSucceeded(meeting);
     await runMeetingEndStep(meeting, "update-summary-message", () =>
       updateMeetingSummaryMessage(meeting),
     );
@@ -704,22 +715,33 @@ async function handleAutoRecordCancellation(
   client: Client,
   meeting: MeetingData,
   chatLogFilePath: string,
+  automaticDecision?: { reason?: string },
 ): Promise<LocalArtifactRetentionResult> {
-  meetingsCancelled.inc();
   const uploadResult = await uploadCancelledMeetingArtifacts(
     client,
     meeting,
     chatLogFilePath,
   );
-  const retention = shouldRetainLocalAudioArtifacts(uploadResult)
+  const retention = hasMissingExpectedArtifacts(uploadResult)
     ? await retainLocalMeetingArtifacts(
         meeting,
         "cancelled_audio_upload_failed",
       )
     : { preserveLocalArtifacts: false };
+  if (retention.preserveLocalArtifacts)
+    throw new Error("Meeting artifact upload failed");
+  assertMeetingProcessingSucceeded(meeting);
+  assertMeetingFinalizationActive(meeting);
+  if (automaticDecision) {
+    meeting.cancelled = true;
+    meeting.cancellationReason = automaticDecision.reason;
+    meeting.endReason = MEETING_END_REASONS.AUTO_CANCELLED;
+  }
   await updateAutoRecordCancelledMessage(meeting);
   await deleteTrackedMessages(meeting);
   await saveMeetingHistoryToDatabase(meeting);
+  assertMeetingFinalizationActive(meeting);
+  meetingsCancelled.inc();
   if (meeting.finalization) {
     meeting.finalization.disposition = retention.preserveLocalArtifacts
       ? "unresolved"

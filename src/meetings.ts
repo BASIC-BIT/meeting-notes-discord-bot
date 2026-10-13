@@ -16,7 +16,14 @@ import {
   unwindSessionInitialization,
   releaseSessionReservation,
 } from "./services/activeMeetingLeaseService";
-import { joinOwnedVoiceSession } from "./services/guildVoiceOperationService";
+import {
+  runOwnedMeetingFinalization,
+  assertMeetingFinalizationActive,
+} from "./services/meetingFinalizationService";
+import {
+  joinOwnedVoiceSession,
+  settleOwnedVoiceSession,
+} from "./services/guildVoiceOperationService";
 import { saveMeetingStartToDatabase } from "./commands/saveMeetingHistory";
 import { AudioSnippet } from "./types/audio";
 import {
@@ -252,20 +259,34 @@ export function resetTtsOnlyIdleTimeout(meeting: MeetingData) {
       ) {
         return;
       }
-      await endTtsOnlySession(meeting);
-      await Promise.resolve(
-        meeting.textChannel.send(
-          `TTS-only session ended after ${formatIdleTimeoutDuration(timeoutMs)} without speech activity. No recording or transcription was active.`,
-        ),
-      ).catch((error) => {
-        console.warn("Failed to send TTS-only idle timeout notice.", error);
+      await endTtsOnlySession(meeting, async () => {
+        await Promise.resolve(
+          meeting.textChannel.send(
+            `TTS-only session ended after ${formatIdleTimeoutDuration(timeoutMs)} without speech activity. No recording or transcription was active.`,
+          ),
+        ).catch((error) => {
+          console.warn("Failed to send TTS-only idle timeout notice.", error);
+        });
       });
-    })();
+    })().catch((error) => {
+      console.warn("TTS-only idle finalization remains unresolved.", error);
+    });
   }, timeoutMs);
 }
 
-export async function endTtsOnlySession(meeting: MeetingData) {
-  if (meeting.finishing || meeting.finished) return;
+export function endTtsOnlySession(
+  meeting: MeetingData,
+  ancillary?: () => Promise<void>,
+): Promise<void> {
+  return runOwnedMeetingFinalization(meeting, () =>
+    finalizeTtsOnlySession(meeting, ancillary),
+  );
+}
+
+async function finalizeTtsOnlySession(
+  meeting: MeetingData,
+  ancillary?: () => Promise<void>,
+): Promise<void> {
   if (meeting.timeoutTimer) {
     clearTimeout(meeting.timeoutTimer);
     meeting.timeoutTimer = undefined;
@@ -275,17 +296,28 @@ export async function endTtsOnlySession(meeting: MeetingData) {
   meeting.endTime = new Date();
   meeting.ttsQueue?.stopAndClear();
   try {
+    assertMeetingFinalizationActive(meeting);
+    if (
+      meeting.reservation &&
+      (await settleOwnedVoiceSession(meeting.reservation)) !== "settled"
+    )
+      throw new Error("TTS voice ownership remains unresolved");
+    assertMeetingFinalizationActive(meeting);
+    await restoreVoiceSessionNickname(meeting);
+    assertMeetingFinalizationActive(meeting);
+    await ancillary?.();
+    assertMeetingFinalizationActive(meeting);
     if (meeting.finalization) meeting.finalization.disposition = "durable";
     if (
       meeting.reservation &&
       !(await releaseSessionReservation(meeting.reservation))
     )
       throw new Error("TTS voice ownership remains unresolved");
+    assertMeetingFinalizationActive(meeting);
   } catch (error) {
     if (meeting.finalization) meeting.finalization.disposition = "unresolved";
     throw error;
   }
-  await restoreVoiceSessionNickname(meeting);
   meeting.setFinished();
   meeting.finished = true;
   deleteMeeting(meeting.guildId);

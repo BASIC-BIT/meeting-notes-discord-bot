@@ -1,3 +1,5 @@
+jest.mock("../../src/services/notesService", () => ({ getNotes: jest.fn() }));
+import { getNotes } from "../../src/services/notesService";
 import { notifyRecordingLimit } from "../../src/services/recordingLimitService";
 // This suite replaces the trace wrapper, so it also replaces span updates at that boundary.
 jest.mock("@langfuse/tracing", () => ({
@@ -611,7 +613,8 @@ describe("handleEndMeetingOther", () => {
       mockedSaveMeetingHistoryToDatabase.mockImplementation(async (meeting) => {
         meeting.historySaved =
           state !== "history_failed" && state !== "history_error";
-        if (state === "history_error") throw new Error("history unavailable");
+        if (state === "history_error" || state === "history_failed")
+          throw new Error("history unavailable");
       });
       jest.mocked(ensureMeetingNotes).mockImplementation(async (meeting) => {
         meeting.notesText = state === "empty" ? "" : "Private notes";
@@ -708,7 +711,7 @@ describe("handleEndMeetingOther", () => {
       });
       if (state !== "transcription_error")
         expect(meeting.processing).toMatchObject({ transcription: "ready" });
-      if (state.endsWith("_error")) {
+      if (state.endsWith("_error") || state.endsWith("_failed")) {
         expect(captureEvent).not.toHaveBeenCalled();
         expect(meeting.setFinished).not.toHaveBeenCalled();
         expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
@@ -821,7 +824,11 @@ describe("handleEndMeetingOther", () => {
     mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
     mockedWaitForAudioOnlyFinishProcessing.mockResolvedValue(undefined);
     mockedCloseOutputFile.mockResolvedValue(undefined);
-    mockedWaitForFinishProcessing.mockResolvedValue(undefined);
+    mockedWaitForFinishProcessing.mockImplementationOnce(async (meeting) => {
+      meeting.audioData.audioFiles.forEach((file) => {
+        file.processing = false;
+      });
+    });
     mockedCompileTranscriptions.mockResolvedValueOnce(
       "Transcript without cues",
     );
@@ -1324,7 +1331,7 @@ it("preparationFailurePersistsFailure", async () => {
   expect(meeting.setFinished).not.toHaveBeenCalled();
   expect(mockedCleanupMeetingTempDir).not.toHaveBeenCalled();
 });
-it("preservation fence prevents a held provider result from publishing or cleaning up", async () => {
+it("preservation fence prevents a held encoder result from publishing or cleaning up", async () => {
   jest.clearAllMocks();
   jest
     .mocked(transitionOwnedMeetingHistoryService)
@@ -1385,4 +1392,263 @@ it("held ancillary delivery remains counted until completion", async () => {
   finish();
   await promise;
   expect(meeting.setFinished).toHaveBeenCalledTimes(1);
+});
+
+describe("H4 review outcome and fence regressions", () => {
+  let errorOutput: jest.SpiedFunction<typeof console.error>;
+  beforeEach(() => {
+    jest.clearAllMocks();
+    errorOutput = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    mockedReleaseMeetingLeaseForMeeting.mockResolvedValue(true);
+    mockedCleanupMeetingTempDir.mockResolvedValue(undefined);
+    mockedCloseOutputFile.mockResolvedValue(undefined);
+    mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
+    mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
+    mockedUploadMeetingArtifacts.mockResolvedValue(successfulArtifactUpload);
+    mockedGetGuildLimits.mockResolvedValue({ limits: {} } as never);
+    mockedCompileTranscriptions.mockResolvedValue("Fixture speech");
+    jest.mocked(updateMeetingSummaryMessage).mockReset();
+    jest
+      .mocked(transitionOwnedMeetingHistoryService)
+      .mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    errorOutput.mockRestore();
+  });
+  it("caught notes-provider failure cannot complete", async () => {
+    const actual = jest.requireActual<
+      typeof import("../../src/services/meetingNotesService")
+    >("../../src/services/meetingNotesService");
+    jest
+      .mocked(ensureMeetingNotes)
+      .mockImplementationOnce(actual.ensureMeetingNotes);
+    jest
+      .mocked(getNotes)
+      .mockRejectedValueOnce(new Error("fixture provider unavailable"));
+    const meeting = finalizationFixture();
+    meeting.transcribeMeeting = true;
+    meeting.generateNotes = true;
+    meeting.audioData.audioFiles = [
+      { transcript: "Fixture speech", processing: false },
+    ] as never;
+    await expect(
+      runEndMeetingFlow({ client: {} as Client, meeting }),
+    ).rejects.toThrow("processing");
+    expect(meeting.processing?.notes).toBe("failed");
+    expect(errorOutput).toHaveBeenCalledWith(
+      "Error generating meeting notes:",
+      expect.objectContaining({ message: "fixture provider unavailable" }),
+    );
+    expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
+    expect(mockedDeleteIfExists).not.toHaveBeenCalled();
+    expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+    expect(meeting.finalization?.historyDisposition).toBe("failed");
+  });
+  it.each(["audio", "chat", "transcript"] as const)(
+    "missing expected %s never commits complete or deletes artifacts",
+    async (missing) => {
+      const meeting = finalizationFixture();
+      const upload = {
+        audioUploadExpected: true,
+        chatUploadExpected: true,
+        transcriptUploadExpected: true,
+        audioS3Key: "audio",
+        chatS3Key: "chat",
+        transcriptS3Key: "transcript",
+      };
+      delete (upload as Partial<typeof upload>)[`${missing}S3Key`];
+      mockedUploadMeetingArtifacts.mockResolvedValueOnce(upload);
+      await expect(
+        runEndMeetingFlow({ client: {} as Client, meeting }),
+      ).rejects.toThrow("artifact");
+      expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
+      expect(mockedDeleteIfExists).not.toHaveBeenCalled();
+      expect(mockedCleanupSpeakerTracks).not.toHaveBeenCalled();
+      expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+      expect(captureEvent).not.toHaveBeenCalled();
+      expect(meeting.finalization?.historyDisposition).toBe("failed");
+      expect(errorOutput).toHaveBeenCalledWith(
+        "Expected meeting artifacts were not durably uploaded; retained local artifacts",
+        expect.objectContaining({ meetingId: meeting.meetingId }),
+      );
+    },
+  );
+  it.each(["audio", "chat", "transcript"] as const)(
+    "automatic cancellation refuses a missing expected %s artifact",
+    async (missing) => {
+      mockedEvaluateAutoRecordCancellation.mockResolvedValueOnce({
+        cancel: true,
+        reason: "No substantive content",
+      });
+      const meeting = finalizationFixture();
+      const upload = {
+        audioUploadExpected: true,
+        chatUploadExpected: true,
+        transcriptUploadExpected: true,
+        audioS3Key: "audio",
+        chatS3Key: "chat",
+        transcriptS3Key: "transcript",
+      };
+      delete (upload as Partial<typeof upload>)[`${missing}S3Key`];
+      mockedUploadMeetingArtifacts.mockResolvedValueOnce(upload);
+      await expect(
+        runEndMeetingFlow({ client: {} as Client, meeting }),
+      ).rejects.toThrow("artifact");
+      expect(meeting.cancelled).not.toBe(true);
+      expect(meeting.finalization?.historyDisposition).toBe("failed");
+      expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
+      expect(mockedDeleteIfExists).not.toHaveBeenCalled();
+      expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["failed-segment", "partial", "capture-incomplete"] as const)(
+    "required %s processing cannot reach automatic cancellation",
+    async (failure) => {
+      const meeting = finalizationFixture();
+      meeting.transcribeMeeting = true;
+      meeting.audioData.audioFiles = [
+        {
+          transcript: "",
+          processing: false,
+          transcriptionFailed: failure === "failed-segment",
+        },
+      ] as never;
+      meeting.audioData.captureIncomplete = failure === "capture-incomplete";
+      if (failure === "partial")
+        meeting.processing = { transcription: "partial" };
+      await expect(
+        runEndMeetingFlow({ client: {} as Client, meeting }),
+      ).rejects.toThrow("processing");
+      expect(mockedEvaluateAutoRecordCancellation).not.toHaveBeenCalled();
+      expect(meeting.finalization?.historyDisposition).toBe("failed");
+      expect(mockedDeleteIfExists).not.toHaveBeenCalled();
+      expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+    },
+  );
+  it("deliberately suppressed empty speech permits completion with skipped notes", async () => {
+    const meeting = finalizationFixture();
+    meeting.transcribeMeeting = true;
+    meeting.processing = {
+      transcription: "empty",
+      notes: "skipped",
+      summary: "skipped",
+    };
+    meeting.audioData.audioFiles = [
+      { transcript: "", processing: false, transcriptionFailed: false },
+    ] as never;
+    await runEndMeetingFlow({ client: {} as Client, meeting });
+    expect(meeting.processing.transcription).toBe("empty");
+    expect(meeting.finished).toBe(true);
+  });
+  it("does not require artifacts that were empty or disabled", async () => {
+    mockedUploadMeetingArtifacts.mockResolvedValueOnce({
+      audioUploadExpected: false,
+      chatUploadExpected: false,
+      transcriptUploadExpected: false,
+    });
+    const meeting = finalizationFixture();
+    await runEndMeetingFlow({ client: {} as Client, meeting });
+    expect(meeting.finalization?.historyDisposition).toBe("complete");
+    expect(meeting.finished).toBe(true);
+  });
+  it("optional final verification fallback preserves usable baseline completion", async () => {
+    const meeting = finalizationFixture();
+    meeting.transcribeMeeting = true;
+    meeting.audioData.audioFiles = [
+      { transcript: "Fixture speech", processing: false },
+    ] as never;
+    const fallback = {
+      enabled: true,
+      applied: false,
+      processedChunks: 1,
+      totalChunks: 1,
+      totalSegments: 1,
+      candidateEdits: 1,
+      acceptedEdits: 0,
+      replacedSegments: 0,
+      droppedSegments: 0,
+      rejectedTrivialEdits: 0,
+      repetitionFilteredSegments: 0,
+      fallbackApplied: true,
+      fallbackReason: "guardrail_threshold",
+    };
+    mockedRunTranscriptionFinalPass.mockResolvedValueOnce(fallback);
+    await runEndMeetingFlow({ client: {} as Client, meeting });
+    expect(meeting.processing?.transcription).toBe("ready");
+    expect(meeting.audioData.audioFiles[0].transcript).toBe("Fixture speech");
+    expect(meeting.finished).toBe(true);
+    expect(fallback.fallbackApplied).toBe(true);
+  });
+  it.each(["cleanup", "release"] as const)(
+    "fence during held %s blocks the completion tail",
+    async (held) => {
+      let finish!: () => void;
+      const wait = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      if (held === "cleanup")
+        mockedCleanupMeetingTempDir.mockImplementationOnce(() => wait);
+      else
+        mockedReleaseMeetingLeaseForMeeting.mockImplementationOnce(async () => {
+          await wait;
+          return true;
+        });
+      const meeting = finalizationFixture();
+      const promise = runEndMeetingFlow({ client: {} as Client, meeting });
+      const outcome = promise.then(
+        () => "completed",
+        () => "fenced",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fenceMeetingFinalization(meeting);
+      finish();
+      expect(await outcome).toBe("fenced");
+      if (held === "cleanup")
+        expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+      expect(meeting.setFinished).not.toHaveBeenCalled();
+      expect(captureEvent).not.toHaveBeenCalled();
+      expect(deleteMeeting).not.toHaveBeenCalled();
+    },
+  );
+});
+
+it("late actual notes-provider result cannot publish after fencing", async () => {
+  jest.clearAllMocks();
+  mockedCloseOutputFile.mockResolvedValue(undefined);
+  mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
+  mockedCompileTranscriptions.mockResolvedValue("Fixture speech");
+  jest
+    .mocked(transitionOwnedMeetingHistoryService)
+    .mockResolvedValue(undefined);
+  const actual = jest.requireActual<
+    typeof import("../../src/services/meetingNotesService")
+  >("../../src/services/meetingNotesService");
+  jest
+    .mocked(ensureMeetingNotes)
+    .mockImplementationOnce(actual.ensureMeetingNotes);
+  let finish!: () => void;
+  jest.mocked(getNotes).mockImplementationOnce(async () => {
+    await new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    return "Fixture notes";
+  });
+  const meeting = finalizationFixture();
+  meeting.transcribeMeeting = true;
+  meeting.generateNotes = true;
+  meeting.audioData.audioFiles = [
+    { transcript: "Fixture speech", processing: false },
+  ] as never;
+  const promise = runEndMeetingFlow({ client: {} as Client, meeting });
+  const rejected = expect(promise).rejects.toThrow("fenced");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(getNotes).toHaveBeenCalledTimes(1);
+  fenceMeetingFinalization(meeting);
+  finish();
+  await rejected;
+  expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
+  expect(updateMeetingSummaryMessage).not.toHaveBeenCalled();
+  expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
 });

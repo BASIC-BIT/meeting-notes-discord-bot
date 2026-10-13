@@ -28,6 +28,7 @@ jest.mock("../commands/saveMeetingHistory", () => ({
   saveMeetingStartToDatabase: jest.fn(),
 }));
 jest.mock("../services/guildVoiceOperationService", () => ({
+  settleOwnedVoiceSession: jest.fn(async () => "settled"),
   joinOwnedVoiceSession: jest.fn(async (_reservation, options) =>
     jest.requireMock("@discordjs/voice").joinVoiceChannel({
       channelId: options.voiceChannel.id,
@@ -137,6 +138,8 @@ import {
   deleteMeeting,
   initializeMeeting,
   restoreVoiceSessionNickname,
+  endTtsOnlySession,
+  getMeeting,
 } from "../meetings";
 import type { Guild, TextChannel, User, VoiceBasedChannel } from "discord.js";
 
@@ -194,6 +197,76 @@ describe("initializeMeeting", () => {
     jest.mocked(getSnapshotString).mockReturnValue(undefined);
   });
 
+  it("TTS nickname restoration remains owned before release", async () => {
+    const bot = buildBotMember();
+    const meeting = await initializeMeeting({
+      ...buildMeetingOptions(bot),
+      sessionMode: "tts_only",
+      transcribeMeeting: false,
+      generateNotes: false,
+    });
+    meeting.botNicknameChanged = true;
+    let finish!: () => void;
+    bot.setNickname.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    const ending = endTtsOnlySession(meeting);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(releaseSessionReservation).not.toHaveBeenCalled();
+    finish();
+    await ending;
+    expect(meeting.finished).toBe(true);
+  });
+  it("TTS idle notice remains owned before release", async () => {
+    jest.useFakeTimers();
+    mockConfig.chatTts.ttsOnlyIdleTimeoutMs = 1000;
+    const options = buildMeetingOptions();
+    let finish!: () => void;
+    jest.mocked(options.textChannel.send).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return {} as never;
+    });
+    const meeting = await initializeMeeting({
+      ...options,
+      sessionMode: "tts_only",
+      transcribeMeeting: false,
+      generateNotes: false,
+    });
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(options.textChannel.send).toHaveBeenCalled();
+    expect(releaseSessionReservation).not.toHaveBeenCalled();
+    expect(meeting.finished).toBe(false);
+    finish();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(meeting.finished).toBe(true);
+  });
+  it("TTS idle release failure is observed and retains unresolved ownership", async () => {
+    jest.useFakeTimers();
+    mockConfig.chatTts.ttsOnlyIdleTimeoutMs = 1000;
+    const warn = jest.spyOn(console, "warn");
+    jest.mocked(releaseSessionReservation).mockResolvedValueOnce(false);
+    const meeting = await initializeMeeting({
+      ...buildMeetingOptions(),
+      sessionMode: "tts_only",
+      transcribeMeeting: false,
+      generateNotes: false,
+    });
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(warn).toHaveBeenCalledWith(
+      "TTS-only idle finalization remains unresolved.",
+      expect.any(Error),
+    );
+    expect(meeting.finalization?.disposition).toBe("unresolved");
+    expect(meeting.finished).toBe(false);
+    expect(getMeeting(meeting.guildId)).toBe(meeting);
+    expect(meeting.reservation?.workHandle.settle).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
   afterEach(() => {
     jest.useRealTimers();
   });

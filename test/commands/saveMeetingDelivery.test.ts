@@ -20,12 +20,34 @@ beforeEach(() => {
 });
 
 it.each([
-  { cancelled: false, generationEnabled: true, deliveryFailed: true },
+  {
+    cancelled: false,
+    generationEnabled: true,
+    deliveryFailed: true,
+    processingFailed: false,
+  },
+  {
+    cancelled: false,
+    generationEnabled: true,
+    deliveryFailed: false,
+    processingFailed: true,
+  },
+  {
+    cancelled: true,
+    generationEnabled: true,
+    deliveryFailed: false,
+    processingFailed: true,
+  },
   { cancelled: true, generationEnabled: true, deliveryFailed: true },
   { cancelled: false, generationEnabled: false, deliveryFailed: false },
 ])(
   "persists processing independently ($cancelled, $generationEnabled, $deliveryFailed)",
-  async ({ cancelled, generationEnabled, deliveryFailed }) => {
+  async ({
+    cancelled,
+    generationEnabled,
+    deliveryFailed,
+    processingFailed,
+  }) => {
     const meeting = {
       guildId: "guild",
       meetingId: "meeting",
@@ -34,13 +56,14 @@ it.each([
       startTime: new Date("2026-09-05T19:00:00Z"),
       endTime: new Date("2026-09-05T20:00:00Z"),
       participants: new Map(),
+      audioData: { audioFiles: [] },
       creator: { id: "creator" },
       transcribeMeeting: true,
       generateNotes: generationEnabled,
       processing: {
-        transcription: "partial",
+        transcription: "ready",
         notes: "generated",
-        summary: "failed",
+        summary: processingFailed ? "failed" : "generated",
       },
       transcriptS3Key: "transcript",
       audioS3Key: "audio",
@@ -56,6 +79,14 @@ it.each([
           }
         : undefined,
     } as unknown as MeetingData;
+    if (processingFailed) {
+      await expect(saveMeetingHistoryToDatabase(meeting)).rejects.toThrow(
+        "processing",
+      );
+      expect(saveOwnedMeetingHistoryService).not.toHaveBeenCalled();
+      expect(meeting.historySaved).toBe(false);
+      return;
+    }
     await saveMeetingHistoryToDatabase(meeting);
     expect(meeting.historySaved).toBe(true);
     expect(saveOwnedMeetingHistoryService).toHaveBeenLastCalledWith(
@@ -66,9 +97,9 @@ it.each([
           ? {}
           : {
               processing: {
-                transcription: "partial",
+                transcription: "ready",
                 notes: "generated",
-                summary: "failed",
+                summary: processingFailed ? "failed" : "generated",
               },
             }),
         transcriptS3Key: "transcript",

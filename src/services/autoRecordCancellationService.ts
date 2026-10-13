@@ -4,6 +4,7 @@ import { createOpenAIClient } from "./openaiClient";
 import { buildModelOverrides, getModelChoice } from "./modelFactory";
 import { config } from "./configService";
 import { resolveChatParamsForRole } from "./openaiModelParams";
+import { assertMeetingProcessingSucceeded } from "../utils/meetingProcessing";
 import { countWords } from "../utils/text";
 
 type CancellationDecision = {
@@ -78,6 +79,7 @@ export async function evaluateAutoRecordCancellation(
   }
 
   await waitForFinishProcessing(meeting);
+  assertMeetingProcessingSucceeded(meeting);
   const transcriptText = collectTranscriptText(meeting);
   const transcriptWords = countWords(transcriptText);
   const chatLines = collectChatLines(meeting);
@@ -160,6 +162,6 @@ export async function evaluateAutoRecordCancellation(
     };
   } catch (error) {
     console.error("Auto-record cancellation check failed:", error);
-    return { cancel: false };
+    throw error;
   }
 }

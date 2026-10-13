@@ -359,29 +359,38 @@ export function attachMeetingReservation(
     reservation.sessionMode === "meeting" ? "recording" : "voice_operation",
   );
 }
+function reservationReleaseBlocked(
+  owned: OwnedReservation | undefined,
+): boolean {
+  if (owned?.initializationUnresolved) return true;
+  const meeting = owned?.meeting;
+  if (!meeting) return false;
+  return Boolean(
+    meeting.finalizationFenced ||
+    meeting.ownershipSignal?.aborted ||
+    meeting.finalization?.controller.signal.aborted ||
+    (meeting.finalization && meeting.finalization.disposition !== "durable"),
+  );
+}
 export async function releaseSessionReservation(
   reservation: SessionReservation,
 ): Promise<boolean> {
   const key = reservationKey(reservation.guildId, reservation.meetingId);
   const owned = reservations.get(key);
-  if (owned?.initializationUnresolved) return false;
-  if (
-    owned?.meeting?.finalization &&
-    owned.meeting.finalization.disposition !== "durable"
-  )
-    return false;
+  if (reservationReleaseBlocked(owned)) return false;
   const outcome = await settleOwnedVoiceSession(reservation);
   if (outcome !== "settled") {
     reservation.workHandle.transition("voice_operation");
     return false;
   }
+  if (reservationReleaseBlocked(owned)) return false;
   const released = await releaseActiveMeetingLease(
     reservation.guildId,
     reservation.meetingId,
     reservation.ownerInstanceId,
     reservation,
   );
-  if (!released) return false;
+  if (!released || reservationReleaseBlocked(owned)) return false;
   if (owned?.timer) clearInterval(owned.timer);
   reservation.workHandle.settle();
   reservations.delete(key);

@@ -273,3 +273,40 @@ describe("autoRecordCancellationService", () => {
     expect(result).toEqual({ cancel: false });
   });
 });
+
+test("failed sparse transcription is excluded before the actual cancellation provider", async () => {
+  const { evaluateAutoRecordCancellation, completionCreate } = await loadModule(
+    { responseContent: '{"cancel":true}' },
+  );
+  const meeting = buildMeeting();
+  meeting.audioData.audioFiles = [
+    { transcriptionFailed: true, processing: false, transcript: "" },
+  ] as never;
+  await expect(evaluateAutoRecordCancellation(meeting)).rejects.toThrow(
+    "processing",
+  );
+  expect(completionCreate).not.toHaveBeenCalled();
+});
+
+test("actual automatic cancellation provider failure is propagated for durable failure", async () => {
+  const { evaluateAutoRecordCancellation, completionCreate } =
+    await loadModule();
+  const meeting = buildMeeting();
+  meeting.audioData.audioFiles = [
+    { transcript: "Hello", processing: false },
+  ] as never;
+  const failure = new Error("fixture cancellation provider unavailable");
+  completionCreate.mockRejectedValueOnce(failure);
+  const errorOutput = jest
+    .spyOn(console, "error")
+    .mockImplementation(() => undefined);
+  try {
+    await expect(evaluateAutoRecordCancellation(meeting)).rejects.toBe(failure);
+    expect(errorOutput).toHaveBeenCalledWith(
+      "Auto-record cancellation check failed:",
+      failure,
+    );
+  } finally {
+    errorOutput.mockRestore();
+  }
+});
