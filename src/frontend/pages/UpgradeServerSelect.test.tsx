@@ -76,6 +76,17 @@ const freeBilling = {
   hasStripeBilling: false,
   canManageBillingPortal: false,
 };
+const monthlyOffer = {
+  status: "available",
+  id: "basic_intro_v1",
+  priceId: "basic",
+  currency: "usd",
+  percentOff: 40,
+  regularUnitAmount: 1000,
+  discountedUnitAmount: 600,
+  durationMonths: 3,
+  enrollmentEndsAt: null,
+};
 const guildState = {
   guilds: [
     { id: "s1", name: "Test server", canManage: true },
@@ -94,6 +105,115 @@ const renderSelector = () =>
       <UpgradeServerSelect />
     </MantineProvider>,
   );
+it("shows verified monthly terms and protects the quoted offer at checkout", async () => {
+  mockBillingQuery.mockReturnValue({
+    data: { ...freeBilling, introOffer: monthlyOffer },
+  });
+  renderSelector();
+  expect(
+    screen.getByText("$6/month for your first 3 months, then $10/month"),
+  ).toBeVisible();
+  await userEvent.click(button("Basic"));
+  expect(screen.getByText("40% off")).toBeVisible();
+  expect(screen.getByLabelText("Regular price")).toHaveTextContent("$10 / mo");
+  expect(mockCheckout).toHaveBeenCalledWith(
+    expect.objectContaining({
+      expectedOffer: "basic_intro_v1",
+      offerChoice: "automatic",
+    }),
+  );
+});
+it("uses only the selected annual quote and actual upfront terms", async () => {
+  mockSearch.mockReturnValue({ interval: "year" });
+  mockPricingQuery.mockReturnValue({
+    data: {
+      plans: [
+        ...plans,
+        {
+          tier: "basic",
+          interval: "year",
+          priceId: "basic-year",
+          unitAmount: 10000,
+          currency: "usd",
+        },
+      ],
+    },
+  });
+  mockBillingQuery.mockReturnValue({
+    data: {
+      ...freeBilling,
+      introOffer: monthlyOffer,
+      annualIntroOffer: {
+        ...monthlyOffer,
+        id: "basic_annual_intro_v1",
+        priceId: "basic-year",
+        regularUnitAmount: 10000,
+        discountedUnitAmount: 6000,
+        durationMonths: 12,
+      },
+    },
+  });
+  renderSelector();
+  expect(
+    screen.getByText("$60 upfront for your first year, then $100/year"),
+  ).toBeVisible();
+  expect(screen.queryByText(/months free/)).not.toBeInTheDocument();
+  await userEvent.click(button("Basic"));
+  expect(mockCheckout).toHaveBeenCalledWith(
+    expect.objectContaining({
+      interval: "year",
+      expectedOffer: "basic_annual_intro_v1",
+    }),
+  );
+});
+it.each([
+  { status: "unavailable" },
+  { ...monthlyOffer, priceId: "stale-price" },
+])("blocks unavailable or stale quoted Basic pricing", (introOffer) => {
+  mockBillingQuery.mockReturnValue({ data: { ...freeBilling, introOffer } });
+  renderSelector();
+  expect(button("Basic")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Refresh offers" })).toBeVisible();
+  expect(button("Pro")).toBeEnabled();
+});
+it("makes the promotion an explicit alternative while preserving the code", async () => {
+  mockSearch.mockReturnValue({ promo: "SAVE20", offerChoice: "promotion" });
+  mockBillingQuery.mockReturnValue({
+    data: { ...freeBilling, introOffer: monthlyOffer },
+  });
+  renderSelector();
+  expect(
+    screen.getByRole("radio", { name: "Use my promotion code instead" }),
+  ).toBeChecked();
+  expect(screen.queryByText("$6 / mo")).not.toBeInTheDocument();
+  await userEvent.click(button("Basic"));
+  expect(mockCheckout).toHaveBeenCalledWith(
+    expect.objectContaining({
+      expectedOffer: "none",
+      offerChoice: "promotion",
+      promotionCode: "SAVE20",
+      savedPromotionCode: "SAVE20",
+    }),
+  );
+});
+it("retries the frozen request deliberately and prevents editing its cadence or promotion", async () => {
+  mockSearch.mockReturnValue({
+    promo: "SAVE20",
+    source: "discord_limit",
+    limitType: "weekly_recording",
+    limitSurface: "manual_start",
+  });
+  mockBillingQuery.mockReturnValue({
+    data: { ...freeBilling, introOffer: monthlyOffer },
+  });
+  renderSelector();
+  await userEvent.click(button("Basic"));
+  const original = mockCheckout.mock.calls[0][0];
+  expect(button("Basic")).toBeDisabled();
+  expect(screen.getByRole("radio", { name: "Annual" })).toBeDisabled();
+  await userEvent.click(screen.getByRole("button", { name: "Retry checkout" }));
+  expect(mockCheckout.mock.calls[1][0]).toEqual(original);
+});
 const button = (tier: string) =>
   screen.getByRole("button", { name: `Continue with ${tier}` });
 beforeEach(() => {
@@ -138,6 +258,9 @@ it.each(["Basic", "Pro"])(
       tier: tier.toLowerCase(),
       interval: "month",
       promotionCode: "SAVE20",
+      savedPromotionCode: "SAVE20",
+      expectedOffer: "none",
+      offerChoice: "automatic",
       source: "direct",
     });
     expect(mockNavigate).toHaveBeenCalledWith({
@@ -237,6 +360,9 @@ it("preserves annual intent and refuses a missing annual Basic price", async () 
     tier: "pro",
     interval: "year",
     promotionCode: "SAVE20",
+    savedPromotionCode: "SAVE20",
+    expectedOffer: "none",
+    offerChoice: "automatic",
     source: "direct",
   });
   expect(screen.getByText("$200 / yr")).toBeInTheDocument();
@@ -265,7 +391,7 @@ it("defaults to Monthly and switches to accurate annual totals without losing in
   });
   const view = renderSelector();
   expect(screen.getByRole("radio", { name: "Monthly" })).toBeChecked();
-  expect(screen.getByText("2 months free")).toBeVisible();
+  expect(screen.queryByText(/months free/)).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("radio", { name: /Annual/ }));
   expect(mockNavigate).toHaveBeenCalledWith({
     search: expect.objectContaining({
@@ -287,13 +413,15 @@ it("defaults to Monthly and switches to accurate annual totals without losing in
     </MantineProvider>,
   );
   expect(screen.getByText("$100 / yr")).toBeVisible();
-  expect(screen.getByText("Billed yearly · Save $20 a year")).toBeVisible();
+  expect(screen.getAllByText("Billed yearly")).toHaveLength(2);
   await userEvent.click(button("Basic"));
   expect(mockCheckout).toHaveBeenCalledWith(
     expect.objectContaining({
       interval: "year",
       tier: "basic",
       promotionCode: "SAVE20",
+      expectedOffer: "none",
+      offerChoice: "automatic",
     }),
   );
 });
@@ -362,6 +490,7 @@ it("preserves tier, interval, promo and cancellation through login", () => {
     interval: "year",
     promo: "SAVE20",
     canceled: "true",
+    offerChoice: "automatic",
     source: "direct",
   });
   expect(button("Pro")).toBeDisabled();
@@ -429,7 +558,7 @@ it("blocks both actions during checkout and while changing the server", async ()
   expect(button("Pro")).toBeDisabled();
 });
 
-it("keeps Basic subscriptions on the guarded Pro path", async () => {
+it("keeps Basic subscriptions in guarded billing management", async () => {
   mockBillingQuery.mockReturnValue({
     data: {
       ...freeBilling,
@@ -442,9 +571,8 @@ it("keeps Basic subscriptions on the guarded Pro path", async () => {
   renderSelector();
   expect(screen.getByRole("button", { name: "Current plan" })).toBeDisabled();
   await userEvent.click(button("Pro"));
-  expect(mockCheckout).toHaveBeenCalledWith(
-    expect.objectContaining({ tier: "pro" }),
-  );
+  expect(button("Pro")).toBeDisabled();
+  expect(mockCheckout).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Manage billing" })).toBeEnabled();
 });
 

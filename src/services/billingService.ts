@@ -321,6 +321,7 @@ export async function createCheckoutSession(params: {
   priceId?: string | null;
   promotionCodeId?: string | null;
   promotionCode?: string | null;
+  savedPromotionCode?: string;
   allowPromotionCodes?: boolean;
   tier?: PaidTier;
   interval?: BillingInterval;
@@ -351,6 +352,12 @@ export async function createCheckoutSession(params: {
     throw new Error("Stripe price not configured");
   }
   const promoValue = promotionCode?.trim();
+  const savedPromo = params.savedPromotionCode?.trim();
+  if (savedPromo && promoValue && savedPromo !== promoValue)
+    throw new BillingActionError(
+      "BAD_REQUEST",
+      "Saved and selected promotion codes do not match.",
+    );
   const promotionCodeId =
     suppliedPromotionCodeId ||
     (promoValue ? await resolvePromotionCodeId(stripe, promoValue) : null);
@@ -358,7 +365,8 @@ export async function createCheckoutSession(params: {
     throw new BillingActionError("BAD_REQUEST", "Invalid promotion code");
   }
   const successUrl = appendQueryParams(config.stripe.successUrl, {
-    promo: promoValue || undefined,
+    promo: savedPromo || promoValue || undefined,
+    offerChoice: params.offerChoice ?? "automatic",
     serverId: guildId,
     plan: tier,
     interval,
@@ -366,7 +374,8 @@ export async function createCheckoutSession(params: {
     ...limitContext,
   });
   const cancelUrl = appendQueryParams(config.stripe.cancelUrl, {
-    promo: promoValue || undefined,
+    promo: savedPromo || promoValue || undefined,
+    offerChoice: params.offerChoice ?? "automatic",
     serverId: guildId,
     plan: tier,
     interval,
@@ -401,6 +410,7 @@ export async function createCheckoutSession(params: {
     ...(tier ? { purchase_tier: tier } : {}),
     ...(interval ? { purchase_interval: interval } : {}),
     ...(promoValue ? { promo_code: promoValue } : {}),
+    ...(savedPromo ? { purchase_promo_present: "true" } : {}),
   };
   return createInitialPurchase({
     stripe,

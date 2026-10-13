@@ -1,4 +1,8 @@
-import { useFreeBilling } from "./billingMocks";
+import { useFreeBilling, useIntroBilling } from "./billingMocks";
+import {
+  annualSubscriber,
+  monthlySubscriber,
+} from "../../src/frontend/pages/basicIntroFixtures";
 import { defaultParseSearch } from "@tanstack/react-router";
 import { expect, test } from "./fixtures";
 import { mockBilling, mockGuilds } from "./mockData";
@@ -12,13 +16,13 @@ test("purchase billing selector defaults monthly and changes totals in both dire
   );
   const period = page.getByRole("radiogroup", { name: "Billing period" });
   await expect(period.getByRole("radio", { name: "Monthly" })).toBeChecked();
-  await expect(period.getByText("2 months free")).toBeVisible();
+  await expect(period.getByText("Annual", { exact: true })).toBeVisible();
   await period.getByText("Annual", { exact: true }).click();
   await expect(page.getByTestId("upgrade-plan-basic")).toContainText(
     "$120 / yr",
   );
   await expect(page.getByTestId("upgrade-plan-basic")).toContainText(
-    "Save $24 a year",
+    "Billed yearly",
   );
   let search = defaultParseSearch(new URL(page.url()).search);
   expect(search).toMatchObject({
@@ -126,6 +130,9 @@ for (const tier of ["basic", "pro"] as const) {
         tier,
         interval: "year",
         promotionCode: "SAVE20",
+        savedPromotionCode: "SAVE20",
+        expectedOffer: "none",
+        offerChoice: "automatic",
         source: "discord_limit",
         limitType: "weekly_recording",
         limitSurface: "manual_start",
@@ -177,6 +184,132 @@ test("indexable purchase route keeps checkout pending during search updates", as
   }
   await expect(page).toHaveURL(/\/upgrade\/success/);
   expect(requests).toBe(1);
+});
+
+for (const interval of ["month", "year"] as const) {
+  test(`basic intro ${interval} checkout preserves offer, explicit choice, pending guard and frozen retry`, async ({
+    page,
+  }) => {
+    await useIntroBilling(page);
+    const requests: unknown[] = [];
+    await page.route("**/trpc/billing.checkout*", async (route) => {
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 400,
+        json: [
+          {
+            error: {
+              message:
+                "Checkout terms changed. Refresh offers before continuing.",
+              code: -32600,
+              data: { code: "BAD_REQUEST", httpStatus: 400 },
+            },
+          },
+        ],
+      });
+    });
+    await page.goto(
+      `/upgrade/select-server?serverId=${mockGuilds.ddm.id}&interval=${interval}&promo=SAVE20&source=discord_limit&limitType=weekly_recording&limitSurface=manual_start`,
+    );
+    await expect(page.getByTestId("basic-intro-terms")).toContainText(
+      interval === "month"
+        ? "$6/month for your first 3 months, then $10/month"
+        : "$60 upfront for your first year, then $100/year",
+    );
+    await page.getByRole("button", { name: "Continue with Basic" }).click();
+    await expect(
+      page.getByRole("button", { name: "Retry checkout" }),
+    ).toBeEnabled();
+    expect(requests[0]).toMatchObject({
+      "0": {
+        expectedOffer:
+          interval === "month" ? "basic_intro_v1" : "basic_annual_intro_v1",
+        offerChoice: "automatic",
+        savedPromotionCode: "SAVE20",
+        interval,
+        source: "discord_limit",
+        limitType: "weekly_recording",
+        limitSurface: "manual_start",
+      },
+    });
+    expect(requests[0]).not.toMatchObject({ "0": { promotionCode: "SAVE20" } });
+    await expect(page.getByRole("radio", { name: "Annual" })).toBeDisabled();
+    await page.getByRole("button", { name: "Retry checkout" }).click();
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1]).toEqual(requests[0]);
+    await page.getByRole("button", { name: "Refresh offers" }).click();
+    await expect(
+      page.getByRole("button", { name: "Continue with Basic" }),
+    ).toBeEnabled();
+    await page
+      .getByRole("radio", { name: "Use my promotion code instead" })
+      .click();
+    await page.getByRole("button", { name: "Continue with Basic" }).click();
+    await expect.poll(() => requests.length).toBe(3);
+    expect(requests[2]).toMatchObject({
+      "0": {
+        expectedOffer: "none",
+        offerChoice: "promotion",
+        promotionCode: "SAVE20",
+      },
+    });
+  });
+}
+test("basic intro Billing uses actual taxed annual invoice and shared account restriction", async ({
+  page,
+}) => {
+  await useIntroBilling(page, {
+    status: "ineligible",
+    details: {
+      ...annualSubscriber,
+      planChangesRestricted: true,
+      planChangeRestrictionEndsAt: null,
+    },
+  });
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+  await expect(page.getByTestId("subscription-details")).toContainText(
+    "First year paid: $64.20",
+  );
+  await expect(page.getByTestId("subscription-details")).toContainText(
+    "Next renewal: $100/year",
+  );
+  await expect(
+    page.getByText("Account-wide plan changes are temporarily restricted"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Manage billing" }),
+  ).toBeEnabled();
+  await expect(page.getByLabel("Promo code")).toHaveCount(0);
+});
+test("basic intro Billing shows actual monthly discount and cancellation", async ({
+  page,
+}) => {
+  await useIntroBilling(page, {
+    status: "ineligible",
+    details: { ...monthlySubscriber, cancelAtPeriodEnd: true },
+  });
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+  await expect(page.getByTestId("subscription-details")).toContainText(
+    "Current price: $6/month",
+  );
+  await expect(page.getByTestId("subscription-details")).toContainText(
+    "Cancels on",
+  );
+  await expect(page.getByTestId("subscription-details")).not.toContainText(
+    "Next renewal",
+  );
+});
+test("basic intro unavailable quotes block signup and legacy billing stays management-only", async ({
+  page,
+}) => {
+  await useIntroBilling(page, { status: "unavailable" });
+  await page.goto(`/upgrade/select-server?serverId=${mockGuilds.ddm.id}`);
+  await expect(
+    page.getByRole("button", { name: "Continue with Basic" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Refresh offers" }),
+  ).toBeVisible();
 });
 
 test("purchase recovers unavailable server without dropping intent", async ({

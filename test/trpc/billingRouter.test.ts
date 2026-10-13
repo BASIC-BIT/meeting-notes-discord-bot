@@ -12,6 +12,7 @@ import {
   BillingActionError,
   createCheckoutSession,
   createPortalSession,
+  resolvePromotionCodeId,
 } from "../../src/services/billingService";
 
 jest.mock("../../src/services/billingService", () => ({
@@ -49,6 +50,38 @@ const caller = (dnt?: string) =>
     res: {} as Response,
     user: { ...getMockUser(), accessToken: "fixture-token" },
   });
+
+test("saved introductory code is return intent and never looked up for redemption", async () => {
+  await caller().checkout({
+    serverId: "111111111111111111",
+    tier: "basic",
+    expectedOffer: "basic_intro_v1",
+    offerChoice: "automatic",
+    savedPromotionCode: "SAVE20",
+  });
+  expect(resolvePromotionCodeId).not.toHaveBeenCalled();
+  expect(createCheckoutSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      savedPromotionCode: "SAVE20",
+      promotionCode: undefined,
+      promotionCodeId: null,
+      offerChoice: "automatic",
+    }),
+  );
+});
+test("rejects conflicting saved and redeemed codes before provider work", async () => {
+  await expect(
+    caller().checkout({
+      serverId: "111111111111111111",
+      tier: "basic",
+      promotionCode: "ONE",
+      savedPromotionCode: "TWO",
+      offerChoice: "promotion",
+    }),
+  ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  expect(resolvePromotionCodeId).not.toHaveBeenCalled();
+  expect(createCheckoutSession).not.toHaveBeenCalled();
+});
 
 test.each(["header", "input"])(
   "browser %s opt-out suppresses synchronous server analytics",

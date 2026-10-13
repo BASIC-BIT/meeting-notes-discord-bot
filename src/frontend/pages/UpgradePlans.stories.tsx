@@ -20,6 +20,18 @@ import UpgradeServerSelect from "./UpgradeServerSelect";
 import Billing from "./Billing";
 import Join from "./Join";
 import PromoLanding from "./PromoLanding";
+import Home from "./Home";
+import type {
+  BasicIntroOffer,
+  ProviderSubscriptionDetails,
+} from "../../types/pricing";
+import {
+  introPlans,
+  monthlyIntroOffer,
+  annualIntroOffer,
+  monthlySubscriber,
+  annualSubscriber,
+} from "./basicIntroFixtures";
 
 function previewBilling(
   tier: "free" | "basic" | "pro",
@@ -55,6 +67,11 @@ export function UpgradePreview({
   signedIn = true,
   errorFor,
   billingSource,
+  introStatus,
+  subscriptionDetails,
+  loadingBilling = false,
+  staleQuote = false,
+  pendingCheckout = false,
 }: {
   path?: string;
   tier?: "free" | "basic" | "pro";
@@ -62,6 +79,11 @@ export function UpgradePreview({
   signedIn?: boolean;
   errorFor?: "billing.me" | "pricing.plans" | "servers.listEligible";
   billingSource?: "free" | "stripe" | "manual_comp" | "forced";
+  introStatus?: BasicIntroOffer["status"];
+  subscriptionDetails?: ProviderSubscriptionDetails;
+  loadingBilling?: boolean;
+  staleQuote?: boolean;
+  pendingCheckout?: boolean;
 }) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => setColorScheme(colorScheme), [colorScheme, setColorScheme]);
@@ -125,14 +147,50 @@ export function UpgradePreview({
                   },
                 ],
               },
-              "billing.me": previewBilling(tier, billingSource),
+              "billing.me": {
+                ...previewBilling(tier, billingSource),
+                subscriptionDetails,
+                introOffer:
+                  introStatus === "available"
+                    ? monthlyIntroOffer
+                    : { status: introStatus ?? "inactive" },
+                annualIntroOffer:
+                  introStatus === "available"
+                    ? annualIntroOffer
+                    : { status: introStatus ?? "inactive" },
+              },
             };
+            if (introStatus)
+              data["pricing.plans"] = {
+                plans: introPlans,
+                introOffer:
+                  introStatus === "available"
+                    ? monthlyIntroOffer
+                    : { status: introStatus },
+                annualIntroOffer:
+                  introStatus === "available"
+                    ? annualIntroOffer
+                    : { status: introStatus },
+              };
+            if (staleQuote)
+              data["billing.me"] = {
+                ...previewBilling(tier, billingSource),
+                introOffer: { ...monthlyIntroOffer, priceId: "stale-price" },
+                annualIntroOffer: {
+                  ...annualIntroOffer,
+                  priceId: "stale-price",
+                },
+              };
             const paths = new URL(String(url), window.location.origin).pathname
               .split("/")
               .at(-1)!
               .split(",");
             if (errorFor && paths.includes(errorFor))
               throw new Error("Preview request failed");
+            if (loadingBilling && paths.includes("billing.me"))
+              await new Promise(() => {});
+            if (pendingCheckout && paths.includes("billing.checkout"))
+              await new Promise(() => {});
             // Story requests never reach a server, and purchase actions are deliberately refused.
             if (paths.some((name) => !(name in data)))
               throw new Error("Preview only: billing actions are disabled");
@@ -151,6 +209,7 @@ export function UpgradePreview({
     localStorage.setItem("mn-selected-guild", "example");
     const root = createRootRoute({ component: Outlet });
     const routes = [
+      createRoute({ getParentRoute: () => root, path: "/", component: Home }),
       createRoute({
         getParentRoute: () => root,
         path: "/promo/$code",
@@ -231,7 +290,7 @@ export const NewBuyer: Story = {
     );
     await expect(canvas.getByText("Recommended")).toBeVisible();
     await expect(canvas.getByRole("radio", { name: "Monthly" })).toBeChecked();
-    await expect(canvas.getByText("2 months free")).toBeVisible();
+    await expect(canvas.queryByText(/months free/)).toBeNull();
   },
 };
 export const NewBuyerLight: Story = {
@@ -287,9 +346,7 @@ export const ExplicitProAnnual: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText("$100 / yr")).toBeVisible();
-    await expect(
-      canvas.getByText("Billed yearly · Save $20 a year"),
-    ).toBeVisible();
+    await expect(canvas.getAllByText("Billed yearly")[0]).toBeVisible();
     await userEvent.click(canvas.getByRole("radio", { name: "Monthly" }));
     await expect(await canvas.findByText("$10 / mo")).toBeVisible();
     await userEvent.click(canvas.getByRole("radio", { name: /Annual/ }));
@@ -381,4 +438,218 @@ export const LegacyBillingLimit: Story = {
       }),
     ).toBeVisible();
   },
+};
+
+const saleTags = ["basic-intro"];
+export const IntroMonthly: Story = {
+  tags: saleTags,
+  args: { introStatus: "available" },
+};
+export const IntroMonthlyLight: Story = {
+  ...IntroMonthly,
+  args: { ...IntroMonthly.args, colorScheme: "light" },
+};
+export const IntroAnnual: Story = {
+  tags: saleTags,
+  args: {
+    introStatus: "available",
+    path: "/upgrade/select-server?serverId=example&interval=year",
+  },
+};
+export const IntroProAnnual: Story = {
+  ...IntroAnnual,
+  args: {
+    ...IntroAnnual.args,
+    path: "/upgrade/select-server?serverId=example&plan=pro&interval=year",
+  },
+};
+export const IntroLoading: Story = {
+  tags: saleTags,
+  args: { introStatus: "available", loadingBilling: true },
+};
+export const IntroUnavailable: Story = {
+  tags: saleTags,
+  args: { introStatus: "unavailable" },
+};
+export const IntroStaleQuote: Story = {
+  tags: saleTags,
+  args: { introStatus: "available", staleQuote: true },
+};
+export const IntroFrozenRetry: Story = {
+  tags: saleTags,
+  args: {
+    introStatus: "available",
+    path: "/upgrade/select-server?serverId=example&promo=SAVE20",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Continue with Basic" }),
+      ).toBeEnabled(),
+    );
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Continue with Basic" }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Retry checkout" }),
+      ).toBeEnabled(),
+    );
+  },
+};
+export const IntroCheckoutPending: Story = {
+  ...IntroFrozenRetry,
+  args: { ...IntroFrozenRetry.args, pendingCheckout: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const basic = await canvas.findByRole("button", {
+      name: "Continue with Basic",
+    });
+    await waitFor(() => expect(basic).toBeEnabled());
+    await userEvent.click(basic);
+    await waitFor(() => expect(basic).toBeDisabled());
+    await expect(
+      canvas.getByRole("button", { name: "Continue with Pro" }),
+    ).toBeDisabled();
+  },
+};
+export const IntroExpired: Story = {
+  tags: saleTags,
+  args: { introStatus: "expired" },
+};
+export const IntroInactive: Story = {
+  tags: saleTags,
+  args: { introStatus: "inactive" },
+};
+export const IntroIneligible: Story = {
+  tags: saleTags,
+  args: { introStatus: "ineligible", tier: "basic" },
+};
+export const IntroLegacy: Story = {
+  tags: saleTags,
+  args: { introStatus: "ineligible", billingSource: "stripe" },
+};
+export const IntroPromotionConflict: Story = {
+  tags: saleTags,
+  args: {
+    introStatus: "available",
+    path: "/upgrade/select-server?serverId=example&promo=SAVE20",
+  },
+};
+export const IntroPromotionChosen: Story = {
+  tags: saleTags,
+  args: {
+    introStatus: "available",
+    path: "/upgrade/select-server?serverId=example&promo=SAVE20&offerChoice=promotion",
+  },
+};
+export const IntroHome: Story = {
+  tags: saleTags,
+  args: { introStatus: "available", path: "/" },
+};
+export const IntroHomeAnnual: Story = {
+  ...IntroHome,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByText("Annual"));
+    await expect(await canvas.findByText("$60 upfront")).toBeVisible();
+  },
+};
+export const IntroBillingFree: Story = {
+  tags: saleTags,
+  args: { introStatus: "available", path: "/portal/server/example/billing" },
+};
+export const IntroBillingAnnual: Story = {
+  tags: saleTags,
+  args: {
+    introStatus: "available",
+    path: "/portal/server/example/billing?interval=year",
+  },
+};
+export const IntroMonthlySubscriber: Story = {
+  tags: saleTags,
+  args: {
+    tier: "basic",
+    introStatus: "ineligible",
+    subscriptionDetails: monthlySubscriber,
+    path: "/portal/server/example/billing",
+  },
+};
+export const IntroAnnualSubscriber: Story = {
+  ...IntroMonthlySubscriber,
+  args: {
+    ...IntroMonthlySubscriber.args,
+    subscriptionDetails: annualSubscriber,
+  },
+};
+export const IntroAnnualPaymentUnavailable: Story = {
+  ...IntroAnnualSubscriber,
+  args: {
+    ...IntroAnnualSubscriber.args,
+    subscriptionDetails: {
+      ...annualSubscriber,
+      firstYearPayment: { status: "unavailable" },
+    },
+  },
+};
+export const IntroAnnualNormalRenewal: Story = {
+  ...IntroAnnualSubscriber,
+  args: {
+    ...IntroAnnualSubscriber.args,
+    subscriptionDetails: { ...annualSubscriber, firstYearPayment: null },
+  },
+};
+export const IntroAnnualSharedRestriction: Story = {
+  ...IntroAnnualSubscriber,
+  args: {
+    ...IntroAnnualSubscriber.args,
+    subscriptionDetails: {
+      ...annualSubscriber,
+      planChangesRestricted: true,
+      planChangeRestrictionEndsAt: null,
+    },
+  },
+};
+export const IntroSubscriberCanceled: Story = {
+  ...IntroAnnualSubscriber,
+  args: {
+    ...IntroAnnualSubscriber.args,
+    subscriptionDetails: { ...annualSubscriber, cancelAtPeriodEnd: true },
+  },
+};
+export const IntroProviderUnavailable: Story = {
+  ...IntroAnnualSubscriber,
+  args: {
+    ...IntroAnnualSubscriber.args,
+    subscriptionDetails: { status: "unavailable" },
+  },
+};
+export const IntroAnnualLight: Story = {
+  ...IntroAnnual,
+  args: { ...IntroAnnual.args, colorScheme: "light" },
+};
+export const IntroHomeLight: Story = {
+  ...IntroHome,
+  args: { ...IntroHome.args, colorScheme: "light" },
+};
+export const IntroHomeAnnualLight: Story = {
+  ...IntroHomeAnnual,
+  args: { ...IntroHomeAnnual.args, colorScheme: "light" },
+};
+export const IntroBillingFreeLight: Story = {
+  ...IntroBillingFree,
+  args: { ...IntroBillingFree.args, colorScheme: "light" },
+};
+export const IntroBillingAnnualLight: Story = {
+  ...IntroBillingAnnual,
+  args: { ...IntroBillingAnnual.args, colorScheme: "light" },
+};
+export const IntroAnnualSubscriberLight: Story = {
+  ...IntroAnnualSubscriber,
+  args: { ...IntroAnnualSubscriber.args, colorScheme: "light" },
+};
+export const IntroMonthlySubscriberLight: Story = {
+  ...IntroMonthlySubscriber,
+  args: { ...IntroMonthlySubscriber.args, colorScheme: "light" },
 };

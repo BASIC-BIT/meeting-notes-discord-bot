@@ -290,7 +290,9 @@ function captureNewCheckout(input: PurchaseInput, attempt: PurchaseAttempt) {
         source: resolvePurchaseSource(
           String(metadata?.purchase_source ?? "direct"),
         ),
-        promo_present: Boolean(metadata?.promo_code),
+        promo_present:
+          metadata?.purchase_promo_present === "true" ||
+          Boolean(metadata?.promo_code),
         surface: "billing",
         event_version: 1,
         billing_kind: "new_subscription",

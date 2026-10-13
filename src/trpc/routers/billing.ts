@@ -58,6 +58,7 @@ const checkout = manageGuildProcedure
       tier: z.enum(["basic", "pro"]),
       interval: z.enum(["month", "year"]).default("month"),
       promotionCode: z.string().optional(),
+      savedPromotionCode: z.string().max(200).optional(),
       expectedOffer: z
         .enum(["none", "basic_intro_v1", "basic_annual_intro_v1"])
         .optional(),
@@ -99,6 +100,15 @@ const checkout = manageGuildProcedure
     }
     let reason = "provider_failed";
     try {
+      if (
+        input.promotionCode?.trim() &&
+        input.savedPromotionCode?.trim() &&
+        input.promotionCode.trim() !== input.savedPromotionCode.trim()
+      )
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Saved and selected promotion codes do not match.",
+        });
       let priceId =
         (await resolvePaidPlanPriceId({
           stripe,
@@ -143,6 +153,7 @@ const checkout = manageGuildProcedure
         priceId,
         promotionCodeId,
         promotionCode,
+        savedPromotionCode: input.savedPromotionCode?.trim(),
         expectedOffer: input.expectedOffer,
         offerChoice: input.offerChoice,
         tier: input.tier as PaidTier,

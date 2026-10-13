@@ -10,8 +10,10 @@ import {
   Title,
 } from "@mantine/core";
 import { IconCheck } from "@tabler/icons-react";
-import type { MouseEventHandler } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
 import Surface from "./Surface";
+import IntroPriceComparison from "./IntroPriceComparison";
+import type { BasicIntroOffer } from "../../types/pricing";
 import { uiBorders, uiColors } from "../uiTokens";
 
 type ButtonVariant =
@@ -45,6 +47,8 @@ type PricingCardProps = {
   borderColor?: string;
   borderWidth?: number;
   testId?: string;
+  terms?: ReactNode;
+  introOffer?: BasicIntroOffer;
 };
 
 const resolveBadgeLabel = (highlighted: boolean, badge?: string) =>
@@ -96,6 +100,8 @@ export function PricingCard({
   borderColor,
   borderWidth,
   testId,
+  terms,
+  introOffer,
 }: PricingCardProps) {
   const badgeLabel = resolveBadgeLabel(highlighted, badge);
   const buttonVariant = resolveButtonVariant(highlighted, ctaProps);
@@ -133,6 +139,7 @@ export function PricingCard({
           <Text c="dimmed">{description}</Text>
         </Stack>
         <Stack gap={4}>
+          {introOffer ? <IntroPriceComparison offer={introOffer} /> : null}
           <Text fw={700} size="xl">
             {price}
           </Text>
@@ -155,6 +162,7 @@ export function PricingCard({
           ))}
         </List>
         <Box mt="auto">
+          {terms ? <Box mb="sm">{terms}</Box> : null}
           {cta ? (
             <Button
               variant={buttonVariant}

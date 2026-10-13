@@ -372,6 +372,51 @@ describe("authoritative initial-purchase offer", () => {
       }),
     );
   });
+  test("saved code preserves return and analytics intent while only the intro coupon is redeemed", async () => {
+    const { request } = purchaseFixture();
+    const input = {
+      ...request,
+      expectedOffer: "basic_intro_v1" as const,
+      offerChoice: "automatic" as const,
+      savedPromotionCode: "SAVE20",
+      tier: "basic" as const,
+      interval: "month" as const,
+      source: "discord_limit" as const,
+      limitType: "weekly_recording" as const,
+      limitSurface: "manual_start" as const,
+    };
+    await createCheckoutSession(input);
+    const checkout = getMockStore().purchaseAttempts.get(
+      request.guildId,
+    )?.checkout;
+    expect(checkout).toMatchObject({
+      discounts: [{ coupon: "coupon_intro" }],
+      metadata: { purchase_promo_present: "true" },
+    });
+    expect(checkout?.metadata?.promo_code).toBeUndefined();
+    for (const link of [checkout?.success_url, checkout?.cancel_url]) {
+      const url = new URL(link!);
+      expect(Object.fromEntries(url.searchParams)).toMatchObject({
+        promo: "SAVE20",
+        offerChoice: "automatic",
+        plan: "basic",
+        interval: "month",
+        source: "discord_limit",
+        limitType: "weekly_recording",
+        limitSurface: "manual_start",
+      });
+    }
+    expect(captureEvent).toHaveBeenCalledWith(
+      "billing_checkout_created",
+      expect.objectContaining({
+        properties: expect.objectContaining({ promo_present: true }),
+      }),
+    );
+    await createCheckoutSession(input);
+    expect(
+      getMockStore().purchaseAttempts.get(request.guildId)?.checkout,
+    ).toEqual(checkout);
+  });
 
   test.each([
     "manual_comp",

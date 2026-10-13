@@ -1,4 +1,4 @@
-import { useFreeBilling } from "./billingMocks";
+import { useFreeBilling, useIntroBilling } from "./billingMocks";
 import type { Page } from "@playwright/test";
 import type { Locator } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -173,6 +173,152 @@ test.describe("visual regression", () => {
       maxDiffPixels: PAGE_SCREENSHOT_MAX_DIFF_PIXELS,
     });
   };
+
+  for (const colorScheme of ["light", "dark"] as const) {
+    for (const viewport of marketingViewports) {
+      for (const surface of ["home", "upgrade", "billing"] as const) {
+        test(`basic intro ${surface} ${viewport.name} ${colorScheme} @visual`, async ({
+          page,
+        }) => {
+          await page.setViewportSize(viewport);
+          await page.addInitScript(
+            (scheme) =>
+              localStorage.setItem("mantine-color-scheme-value", scheme),
+            colorScheme,
+          );
+          await useIntroBilling(page);
+          const path =
+            surface === "home"
+              ? "/"
+              : surface === "upgrade"
+                ? `/upgrade/select-server?serverId=${mockGuilds.ddm.id}`
+                : `/portal/server/${mockGuilds.ddm.id}/billing`;
+          await page.goto(path);
+          const selector = page.getByTestId(
+            surface === "home"
+              ? "home-billing-period"
+              : surface === "upgrade"
+                ? "upgrade-billing-period"
+                : "billing-interval",
+          );
+          await expect(page.getByTestId("basic-intro-terms")).toBeVisible();
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-mantine-color-scheme",
+            colorScheme,
+          );
+          for (const interval of ["month", "year"] as const) {
+            await selector
+              .getByText(interval === "month" ? "Monthly" : "Annual", {
+                exact: true,
+              })
+              .click();
+            await expect(page.getByTestId("basic-intro-terms")).toContainText(
+              interval === "month"
+                ? "$6/month for your first 3 months, then $10/month"
+                : "$60 upfront for your first year, then $100/year",
+            );
+            const heights = await selector
+              .locator("label")
+              .evaluateAll((labels) =>
+                labels.map((label) => label.getBoundingClientRect().height),
+              );
+            expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(1);
+            expect(
+              await page.evaluate(
+                () => document.documentElement.scrollWidth <= innerWidth,
+              ),
+            ).toBe(true);
+            const purchase = page.getByTestId(
+              surface === "home"
+                ? "home-cta-basic"
+                : surface === "upgrade"
+                  ? "upgrade-plan-basic"
+                  : "billing-plan-basic",
+            );
+            const action =
+              surface === "home" ? purchase : purchase.getByRole("button");
+            await action.scrollIntoViewIfNeeded();
+            await expect(action).toBeVisible();
+            await expect(action).toBeEnabled();
+            if (surface === "home" && viewport.width === 390) {
+              const scroll = page.getByTestId("home-pricing-scroll");
+              const movement = await scroll.evaluate((element) => {
+                const before = element.scrollLeft;
+                const overflow = element.scrollWidth > element.clientWidth;
+                element.scrollLeft = 160;
+                return { overflow, before, after: element.scrollLeft };
+              });
+              expect(movement.overflow).toBe(true);
+              expect(movement.after).toBeGreaterThan(movement.before);
+              await scroll.evaluate((element) => {
+                element.scrollLeft = 0;
+              });
+            }
+            const scroll = await page.evaluate(() => {
+              const elements = [
+                document.scrollingElement,
+                ...document.querySelectorAll<HTMLElement>("*"),
+              ];
+              const element = elements.find(
+                (candidate) =>
+                  candidate &&
+                  candidate.scrollHeight > candidate.clientHeight + 10 &&
+                  (candidate === document.scrollingElement ||
+                    ["auto", "scroll"].includes(
+                      getComputedStyle(candidate).overflowY,
+                    )),
+              );
+              if (!element) return null;
+              element.scrollTop = 0;
+              const before = element.scrollTop;
+              element.scrollTop = 100;
+              const result = {
+                height: element.scrollHeight,
+                client: element.clientHeight,
+                before,
+                after: element.scrollTop,
+              };
+              element.scrollTop = 0;
+              return result;
+            });
+            expect(scroll).not.toBeNull();
+            expect(scroll!.height).toBeGreaterThan(scroll!.client);
+            expect(scroll!.after).toBeGreaterThan(scroll!.before);
+            await page.evaluate(() => window.scrollTo(0, 0));
+            for (const mode of visualModes) {
+              await page.goto(
+                withVisualMode(
+                  new URL(page.url()).pathname + new URL(page.url()).search,
+                  mode,
+                ),
+              );
+              await selector
+                .getByText(interval === "month" ? "Monthly" : "Annual", {
+                  exact: true,
+                })
+                .click();
+              await expect(page.getByTestId("basic-intro-terms")).toContainText(
+                interval === "month" ? "$6/month" : "$60 upfront",
+              );
+              await expectVisualScreenshot(
+                page,
+                `basic-intro-${surface}-${viewport.name}-${colorScheme}-${interval}`,
+                mode,
+              );
+              expect(
+                await page.evaluate(
+                  () => document.documentElement.scrollWidth <= innerWidth,
+                ),
+              ).toBe(true);
+              await expect(
+                page.getByTestId("basic-intro-discount"),
+              ).toContainText("40% off");
+            }
+          }
+        });
+      }
+    }
+  }
 
   const resetDrawerScroll = async (
     page: Page,

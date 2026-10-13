@@ -26,7 +26,13 @@ import {
 } from "@mantine/core";
 import { IconCheck, IconCreditCard } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
-import { useParams, useSearch } from "@tanstack/react-router";
+import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import type { inferRouterInputs } from "@trpc/server";
+import type { BasicIntroOffer, IntroOfferChoice } from "../../types/pricing";
+import BasicIntroTerms from "../components/BasicIntroTerms";
+import IntroPromotionChoice from "../components/IntroPromotionChoice";
+import SubscriptionDetails from "../components/SubscriptionDetails";
+import classes from "./UpgradeServerSelect.module.css";
 import { useGuildContext } from "../contexts/GuildContext";
 import PageHeader from "../components/PageHeader";
 import Surface from "../components/Surface";
@@ -42,6 +48,8 @@ import {
   billingLabelForInterval,
   buildPaidPlanLookup,
   formatPlanPrice,
+  introOfferPrice,
+  resolveIntroOffer,
   resolvePaidPlan,
 } from "../utils/pricing";
 
@@ -74,6 +82,7 @@ type BillingPaidProps = BillingBaseProps & {
   isPortalPending: boolean;
   canManage: boolean;
   onPortal: () => void;
+  normalPrice: string;
 };
 
 type BillingPlansProps = {
@@ -89,6 +98,11 @@ type BillingPlansProps = {
   onPromoCodeChange: (value: string) => void;
   basicPlan: ReturnType<typeof resolvePaidPlan>;
   proPlan: ReturnType<typeof resolvePaidPlan>;
+  offer: BasicIntroOffer;
+  offerChoice: IntroOfferChoice;
+  onOfferChoiceChange: (choice: IntroOfferChoice) => void;
+  busy: boolean;
+  checkoutBlocked: boolean;
 };
 
 const DEFAULT_DESCRIPTION = "Manage subscriptions for the current server.";
@@ -148,9 +162,6 @@ const formatStatusLine = (
         nextBillingDate,
       ).toLocaleDateString()}`
     : statusLabel;
-
-const normalPlanValue = (tier: PlanTier) =>
-  tier === "basic" ? "$5/month" : "the normal Pro plan price";
 
 const BillingShell = ({
   children,
@@ -250,6 +261,7 @@ const BillingPaidPanel = ({
   isPortalPending,
   canManage,
   onPortal,
+  normalPrice,
 }: BillingPaidProps) => (
   <Surface p="xl" data-testid="billing-current-plan">
     {(() => {
@@ -282,7 +294,7 @@ const BillingPaidPanel = ({
                 <Stack gap={4}>
                   <Text c="dimmed" size="sm">
                     Chronote has granted this server {planName} for free. This
-                    is normally {normalPlanValue(data.tier)}.
+                    is normally {normalPrice}.
                   </Text>
                   <Text c="dimmed" size="sm">
                     {expiryLine}
@@ -299,6 +311,9 @@ const BillingPaidPanel = ({
               <Text size="sm" c="dimmed">
                 Server: {serverName}
               </Text>
+              {!isComped && (
+                <SubscriptionDetails details={data.subscriptionDetails} />
+              )}
               <BillingUsageMeter usage={usage} />
             </Stack>
 
@@ -364,11 +379,22 @@ const BillingPlansSection = ({
   onPromoCodeChange,
   basicPlan,
   proPlan,
+  offer,
+  offerChoice,
+  onOfferChoiceChange,
+  busy,
+  checkoutBlocked,
 }: BillingPlansProps) => {
   const isFreePlan = data.tier === "free";
   const isComped = data.billingSource === "manual_comp";
   const plansExpanded = isFreePlan || isComped ? true : showPlans;
   const hasPromo = promoCode.trim().length > 0;
+  const managementOnly =
+    data.hasStripeBilling || data.billingSource === "forced";
+  const shownOffer =
+    offerChoice === "promotion" && hasPromo
+      ? { status: "inactive" as const }
+      : offer;
   const basicCta =
     data.tier === "basic"
       ? isComped
@@ -384,8 +410,21 @@ const BillingPlansSection = ({
         : "Current plan"
       : "Upgrade to Pro";
   const basicDisabled =
-    !basicPlan || data.tier === "pro" || (data.tier === "basic" && !isComped);
-  const proDisabled = !proPlan || (data.tier === "pro" && !isComped);
+    !basicPlan ||
+    data.hasStripeBilling ||
+    data.billingSource === "forced" ||
+    busy ||
+    checkoutBlocked ||
+    offer.status === "unavailable" ||
+    data.tier === "pro" ||
+    (data.tier === "basic" && !isComped);
+  const proDisabled =
+    !proPlan ||
+    data.hasStripeBilling ||
+    data.billingSource === "forced" ||
+    busy ||
+    checkoutBlocked ||
+    (data.tier === "pro" && !isComped);
   return (
     <Surface
       p="lg"
@@ -393,6 +432,7 @@ const BillingPlansSection = ({
       onClick={!plansExpanded ? onExpandPlans : undefined}
       style={{
         width: "100%",
+        containerType: "inline-size",
         ...(plansExpanded
           ? {}
           : {
@@ -420,6 +460,13 @@ const BillingPlansSection = ({
             ]}
             size="sm"
             data-testid="billing-interval"
+            aria-label="Billing period"
+            classNames={{
+              root: classes.billingPeriod,
+              control: classes.control,
+              label: classes.label,
+            }}
+            disabled={busy || checkoutBlocked}
           />
           {isFreePlan ? null : (
             <Button
@@ -432,31 +479,55 @@ const BillingPlansSection = ({
             </Button>
           )}
         </Group>
-        <Stack gap={4}>
-          <Group gap="sm" align="flex-end" wrap="wrap">
-            <TextInput
-              label="Promo code"
-              placeholder="Enter code"
-              className="ph-no-capture"
-              value={promoCode}
-              onChange={(event) => onPromoCodeChange(event.currentTarget.value)}
-              style={{ flex: "1 1 220px" }}
-            />
-            {hasPromo ? (
-              <Button
-                variant="subtle"
-                color="gray"
-                size="xs"
-                onClick={() => onPromoCodeChange("")}
-              >
-                Clear
-              </Button>
-            ) : null}
-          </Group>
-          <Text size="xs" c="dimmed">
-            One code per purchase. Applied at checkout.
-          </Text>
-        </Stack>
+        {!managementOnly && (
+          <Stack gap={4}>
+            <Group gap="sm" align="flex-end" wrap="wrap">
+              <TextInput
+                label="Promo code"
+                placeholder="Enter code"
+                className="ph-no-capture"
+                value={promoCode}
+                disabled={busy || checkoutBlocked}
+                onChange={(event) =>
+                  onPromoCodeChange(event.currentTarget.value)
+                }
+                style={{ flex: "1 1 220px" }}
+              />
+              {hasPromo ? (
+                <Button
+                  variant="subtle"
+                  color="gray"
+                  size="xs"
+                  disabled={busy || checkoutBlocked}
+                  onClick={() => onPromoCodeChange("")}
+                >
+                  Clear
+                </Button>
+              ) : null}
+            </Group>
+            <Text size="xs" c="dimmed">
+              One code per purchase. Applied at checkout.
+            </Text>
+          </Stack>
+        )}
+        {!managementOnly && offer.status === "available" && hasPromo && (
+          <IntroPromotionChoice
+            choice={offerChoice}
+            onChange={onOfferChoiceChange}
+            disabled={busy || checkoutBlocked}
+          />
+        )}
+        {offer.status === "unavailable" && (
+          <Alert title="Introductory pricing unavailable" color="yellow">
+            Refresh offers before starting Basic checkout.
+          </Alert>
+        )}
+        {offer.status === "expired" && (
+          <Alert title="Introductory enrollment ended" color="gray">
+            The regular Basic price is shown. Choose a plan to continue at that
+            price.
+          </Alert>
+        )}
         {!plansExpanded ? (
           <Text size="sm" c="dimmed">
             Compare plan details when you are ready to change tiers.
@@ -464,7 +535,7 @@ const BillingPlansSection = ({
         ) : null}
         <Collapse expanded={plansExpanded}>
           <Divider my="sm" />
-          <SimpleGrid cols={{ base: 1, xl: 3 }} spacing="md">
+          <div className={classes.plans}>
             <PricingCard
               name="Free"
               price="$0"
@@ -486,7 +557,7 @@ const BillingPlansSection = ({
             />
             <PricingCard
               name="Basic"
-              price={formatPlanPrice(basicPlan, interval)}
+              price={introOfferPrice(shownOffer, basicPlan, interval)}
               description="Unlock longer sessions and deeper recall."
               features={[
                 "20 recording hours per rolling week",
@@ -506,6 +577,8 @@ const BillingPlansSection = ({
               highlighted
               badge={data.tier === "basic" ? "Current plan" : "Best value"}
               billingLabel={billingLabelForInterval(interval)}
+              terms={<BasicIntroTerms offer={shownOffer} />}
+              introOffer={shownOffer}
               testId="billing-plan-basic"
             />
             <PricingCard
@@ -536,7 +609,7 @@ const BillingPlansSection = ({
               billingLabel={billingLabelForInterval(interval)}
               testId="billing-plan-pro"
             />
-          </SimpleGrid>
+          </div>
         </Collapse>
       </Stack>
     </Surface>
@@ -545,8 +618,13 @@ const BillingPlansSection = ({
 
 export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
-  const [interval, setInterval] = useState<BillingInterval>("month");
   const search = useSearch({ from: "/portal/server/$serverId/billing" });
+  const navigate = useNavigate({ from: "/portal/server/$serverId/billing" });
+  const interval = search.interval ?? "month";
+  const [failedCheckout, setFailedCheckout] = useState<
+    inferRouterInputs<AppRouter>["billing"]["checkout"] | null
+  >(null);
+  const [frozenOffer, setFrozenOffer] = useState<BasicIntroOffer | null>(null);
   const source =
     search.source === undefined
       ? "portal_billing"
@@ -560,6 +638,10 @@ export function Billing() {
     from: "/portal/server/$serverId/billing",
   });
   const [promoCode, setPromoCode] = useState(() => search.promo ?? "");
+  const offerChoice = promoCode.trim()
+    ? (search.offerChoice ?? "automatic")
+    : "automatic";
+  useEffect(() => setPromoCode(search.promo ?? ""), [search.promo]);
   const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
   const billingQuery = trpc.billing.me.useQuery(
     { serverId: selectedGuildId ?? undefined },
@@ -586,6 +668,13 @@ export function Billing() {
   const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
   const basicPlan = resolvePaidPlan(planLookup, "basic", interval);
   const proPlan = resolvePaidPlan(planLookup, "pro", interval);
+  const offer =
+    frozenOffer ??
+    resolveIntroOffer(
+      interval === "year" ? data?.annualIntroOffer : data?.introOffer,
+      basicPlan,
+    );
+  const busy = checkoutMutation.isPending || portalMutation.isPending;
   const hasAnnualPlans = paidPlans.some((plan) => plan.interval === "year");
   const isPortalPending = portalMutation.isPending;
   const isFreeTier = data?.tier === "free";
@@ -618,6 +707,17 @@ export function Billing() {
   const handleCheckout = async (tier: PaidTier) => {
     try {
       if (!selectedGuildId || selectedGuildId !== routeServerId) return;
+      if (
+        busy ||
+        failedCheckout ||
+        billingQuery.isFetching ||
+        pricingQuery.isFetching ||
+        pricingQuery.isError ||
+        data?.hasStripeBilling ||
+        data?.billingSource === "forced" ||
+        (tier === "basic" && offer.status === "unavailable")
+      )
+        return;
       const plan = resolvePaidPlan(planLookup, tier, interval);
       if (!plan) {
         notifications.show({
@@ -637,15 +737,31 @@ export function Billing() {
         promo_present: Boolean(promotionCode),
         event_version: 1,
       });
-      const body = await checkoutMutation.mutateAsync({
+      const request: inferRouterInputs<AppRouter>["billing"]["checkout"] = {
         serverId: selectedGuildId,
         tier,
         interval,
-        promotionCode: promotionCode.length ? promotionCode : undefined,
+        promotionCode:
+          tier === "basic" &&
+          offer.status === "available" &&
+          offerChoice === "automatic"
+            ? undefined
+            : promotionCode || undefined,
+        savedPromotionCode: promotionCode || undefined,
+        expectedOffer:
+          tier === "basic" &&
+          offer.status === "available" &&
+          offerChoice === "automatic"
+            ? offer.id
+            : "none",
+        offerChoice,
         source,
         ...limitContext,
         ...(isDoNotTrackEnabled() ? { analyticsDisabled: true } : {}),
-      });
+      };
+      setFailedCheckout(request);
+      setFrozenOffer(offer);
+      const body = await checkoutMutation.mutateAsync(request);
       window.location.href = body.url;
     } catch (err) {
       console.error(err);
@@ -656,6 +772,7 @@ export function Billing() {
   const handlePortal = async () => {
     try {
       if (!selectedGuildId || selectedGuildId !== routeServerId) return;
+      if (busy) return;
       const body = await portalMutation.mutateAsync({
         serverId: selectedGuildId,
       });
@@ -698,24 +815,95 @@ export function Billing() {
           statusLine={statusLine}
           usage={data.usage}
           isPortalPending={isPortalPending}
-          canManage={Boolean(selectedGuildId) && data.canManageBillingPortal}
+          canManage={
+            Boolean(selectedGuildId) && data.canManageBillingPortal && !busy
+          }
           onPortal={handlePortal}
+          normalPrice={formatPlanPrice(
+            resolvePaidPlan(
+              planLookup,
+              data.tier === "pro" ? "pro" : "basic",
+              "month",
+            ),
+            "month",
+          )}
         />
       )}
       <BillingPlansSection
         data={data}
         interval={interval}
-        onIntervalChange={setInterval}
+        onIntervalChange={(value) =>
+          navigate({
+            replace: true,
+            search: {
+              ...search,
+              interval: value,
+              promo: promoCode.trim() || undefined,
+            },
+          })
+        }
         hasAnnualPlans={hasAnnualPlans}
         showPlans={showPlans}
         onExpandPlans={() => setShowPlans(true)}
         onTogglePlans={() => setShowPlans((prev) => !prev)}
         onCheckout={handleCheckout}
         promoCode={promoCode}
-        onPromoCodeChange={setPromoCode}
+        onPromoCodeChange={(value) => {
+          setPromoCode(value);
+          navigate({
+            replace: true,
+            search: { ...search, promo: value.trim() || undefined },
+          });
+        }}
         basicPlan={basicPlan}
         proPlan={proPlan}
+        offer={offer}
+        offerChoice={offerChoice}
+        onOfferChoiceChange={(value) =>
+          navigate({ replace: true, search: { ...search, offerChoice: value } })
+        }
+        busy={busy || billingQuery.isFetching || pricingQuery.isFetching}
+        checkoutBlocked={Boolean(failedCheckout) || pricingQuery.isError}
       />
+      {(offer.status === "unavailable" || failedCheckout) && (
+        <Stack gap="xs">
+          <Text size="sm">
+            A previous checkout may still be pending. Retry keeps its original
+            terms. Refreshing does not cancel it or change its terms.
+          </Text>
+          <Group>
+            {failedCheckout && (
+              <Button
+                disabled={busy}
+                onClick={async () => {
+                  if (busy) return;
+                  try {
+                    const body =
+                      await checkoutMutation.mutateAsync(failedCheckout);
+                    window.location.href = body.url;
+                  } catch (error) {
+                    showBillingError(error, "checkout");
+                  }
+                }}
+              >
+                Retry checkout
+              </Button>
+            )}
+            <Button
+              disabled={busy}
+              variant="light"
+              onClick={() => {
+                setFailedCheckout(null);
+                setFrozenOffer(null);
+                void billingQuery.refetch();
+                void pricingQuery.refetch();
+              }}
+            >
+              Refresh offers
+            </Button>
+          </Group>
+        </Stack>
+      )}
     </BillingShell>
   );
 }

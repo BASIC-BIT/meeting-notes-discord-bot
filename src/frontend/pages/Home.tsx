@@ -16,6 +16,9 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import AddToDiscordButton from "../components/AddToDiscordButton";
 import SampleSummary from "../components/SampleSummary";
+import BasicIntroTerms from "../components/BasicIntroTerms";
+import IntroPriceComparison from "../components/IntroPriceComparison";
+import classes from "./UpgradeServerSelect.module.css";
 import Wordmark from "../components/Wordmark";
 import { trpc } from "../services/trpc";
 import { track } from "../services/analytics";
@@ -23,6 +26,8 @@ import type { BillingInterval, PaidTier } from "../../types/pricing";
 import {
   buildPaidPlanLookup,
   formatPlanPrice,
+  resolveIntroOffer,
+  introOfferPrice,
   resolvePaidPlan,
 } from "../utils/pricing";
 
@@ -106,6 +111,12 @@ export default function Home() {
   );
   const basicPlan = resolvePaidPlan(planLookup, "basic", billingInterval);
   const proPlan = resolvePaidPlan(planLookup, "pro", billingInterval);
+  const offer = resolveIntroOffer(
+    billingInterval === "year"
+      ? pricingQuery.data?.annualIntroOffer
+      : pricingQuery.data?.introOffer,
+    basicPlan,
+  );
 
   const startUpgrade = (plan: PaidTier) => {
     track("pricing_cta_clicked", { plan, interval: billingInterval });
@@ -166,7 +177,7 @@ export default function Home() {
         </Stack>
 
         <Stack gap="md">
-          <Group justify="space-between" align="baseline" wrap="wrap" gap="sm">
+          <Stack align="center" gap="md">
             <Title order={2} fz={22} fw={600}>
               Pricing
             </Title>
@@ -182,13 +193,27 @@ export default function Home() {
                 },
               ]}
               size="xs"
+              aria-label="Billing period"
+              data-testid="home-billing-period"
+              classNames={{
+                root: classes.billingPeriod,
+                control: classes.control,
+                label: classes.label,
+              }}
             />
-          </Group>
+          </Stack>
           <Text size="sm" c="dimmed">
             Per server, not per member.
           </Text>
           <Paper withBorder radius="md" p={{ base: "sm", sm: "lg" }}>
-            <Table.ScrollContainer minWidth={PRICING_TABLE_MIN_WIDTH}>
+            <Text size="xs" c="dimmed" hiddenFrom="sm" mb="sm">
+              Scroll sideways to compare all plans.
+            </Text>
+            <Table.ScrollContainer
+              minWidth={PRICING_TABLE_MIN_WIDTH}
+              data-testid="home-pricing-scroll"
+              type="native"
+            >
               <Table verticalSpacing="sm" horizontalSpacing="md" fz="sm">
                 <Table.Thead>
                   <Table.Tr>
@@ -212,7 +237,8 @@ export default function Home() {
                       $0
                     </Table.Td>
                     <Table.Td fw={700} fz="lg" style={recommendedCell}>
-                      {formatPlanPrice(basicPlan, billingInterval)}
+                      <IntroPriceComparison offer={offer} />
+                      {introOfferPrice(offer, basicPlan, billingInterval)}
                     </Table.Td>
                     <Table.Td fw={700} fz="lg">
                       {formatPlanPrice(proPlan, billingInterval)}
@@ -230,6 +256,7 @@ export default function Home() {
                     <Table.Td />
                     <Table.Td />
                     <Table.Td style={recommendedCell}>
+                      <BasicIntroTerms offer={offer} conditional />
                       <Button
                         size="sm"
                         radius="md"
