@@ -16,6 +16,32 @@ charge and any savings compared with twelve monthly payments. Savings labels
 reflect the available prices. Choose **Continue with Basic** or **Continue with
 Pro** to open checkout for that plan. One subscription covers the server.
 
+### Basic introductory pricing
+
+When an introductory offer is available, eligible servers starting their first
+paid subscription can choose Basic at $6/month for the first three months, then
+$10/month. Annual Basic is $60 paid upfront for the first year, then $100/year.
+Annual billing is one yearly payment. Prices are in US dollars. Tax may apply. Subscriptions renew
+automatically unless canceled.
+
+The offer applies automatically when shown for your server. Eligibility is per
+server, so paying for another server does not by itself exclude this one.
+Existing paid or legacy billing, complimentary access and forced plans are not
+eligible. Pro pricing is unchanged. Introductory pricing cannot be combined with
+another promotion. If you entered a code, choose the introductory offer
+or that promotion before checkout. Enrollment has no announced end date and
+remains open until we end the offer.
+
+Use **Manage billing** for an existing subscription. While an introductory
+discount remains active on your shared billing account, plan changes can be
+temporarily unavailable for all servers on that account. You can still update
+payment details or cancel. The annual discount is consumed when the first
+invoice is finalized, so that discount alone does not lock plan changes for the
+first year. Another active introductory discount on the same account can still
+restrict them. Billing shows available management actions. When verified, it
+shows the first annual invoice's amount paid separately from its subtotal and
+the next annual renewal price.
+
 | Limit                             | Free       | Basic    | Pro             |
 | --------------------------------- | ---------- | -------- | --------------- |
 | Recording time per rolling 7 days | 4 hours    | 20 hours | No weekly limit |

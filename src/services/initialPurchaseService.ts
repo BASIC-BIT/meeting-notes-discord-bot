@@ -16,6 +16,7 @@ import { BillingActionError } from "./billingActionError";
 import { captureEvent } from "./analyticsService";
 import {
   resolvePurchaseSource,
+  resolvePurchaseOffer,
   recordingLimitAnalytics,
 } from "../utils/purchaseAnalytics";
 
@@ -293,6 +294,7 @@ function captureNewCheckout(input: PurchaseInput, attempt: PurchaseAttempt) {
         promo_present:
           metadata?.purchase_promo_present === "true" ||
           Boolean(metadata?.promo_code),
+        offer: resolvePurchaseOffer(String(metadata?.intro_offer_id ?? "")),
         surface: "billing",
         event_version: 1,
         billing_kind: "new_subscription",

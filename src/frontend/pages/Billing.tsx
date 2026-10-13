@@ -1,3 +1,4 @@
+import { useIntroOfferExposure } from "../hooks/useIntroOfferExposure";
 import RecordingPlanContext from "../components/RecordingPlanContext";
 import {
   resolveRecordingLimitContext,
@@ -688,6 +689,17 @@ export function Billing() {
   const hasAnnualPlans = paidPlans.some((plan) => plan.interval === "year");
   const isPortalPending = portalMutation.isPending;
   const isFreeTier = data?.tier === "free";
+  const displayedOffer =
+    offer.status === "available" && offerChoice === "automatic"
+      ? offer.id
+      : "none";
+  useIntroOfferExposure({
+    offer: displayedOffer,
+    entry: `portal_billing:${routeServerId}`,
+    surface: "portal_billing",
+    guildId: selectedGuildId ?? undefined,
+    enabled: !loading && !error && showPlans,
+  });
 
   useEffect(() => {
     if (isFreeTier) {
@@ -747,6 +759,7 @@ export function Billing() {
         source,
         ...recordingLimitAnalytics(limitContext ?? {}),
         promo_present: Boolean(promotionCode),
+        offer: tier === "basic" ? displayedOffer : "none",
         event_version: 1,
       });
       const request: inferRouterInputs<AppRouter>["billing"]["checkout"] = {

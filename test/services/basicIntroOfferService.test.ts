@@ -368,7 +368,10 @@ describe("authoritative initial-purchase offer", () => {
     expect(captureEvent).toHaveBeenCalledWith(
       "billing_checkout_created",
       expect.objectContaining({
-        properties: expect.objectContaining({ promo_present: false }),
+        properties: expect.objectContaining({
+          promo_present: false,
+          offer: "basic_intro_v1",
+        }),
       }),
     );
   });
@@ -1311,6 +1314,15 @@ describe("annual first-year offer", () => {
       getMockStore().purchaseAttempts.get(f.request.guildId)?.checkout
         .discounts,
     ).toEqual([{ coupon: "coupon_annual" }]);
+    expect(captureEvent).toHaveBeenCalledWith(
+      "billing_checkout_created",
+      expect.objectContaining({
+        properties: expect.objectContaining({
+          offer: "basic_annual_intro_v1",
+          promo_present: false,
+        }),
+      }),
+    );
   });
   test.each(["disabled", "ended"])(
     "new annual enrollment after %s cannot silently accept stale offer",

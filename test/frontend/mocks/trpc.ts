@@ -12,7 +12,7 @@ import type {
   MeetingAccessGrant,
 } from "../../../src/types/db";
 import type { MeetingStatus } from "../../../src/types/meetingLifecycle";
-import type { PaidPlan } from "../../../src/types/pricing";
+import type { PaidPlan, BasicIntroOffer } from "../../../src/types/pricing";
 
 type QueryState<T> = {
   data: T | null;
@@ -43,6 +43,8 @@ type ChannelSummary = {
 };
 
 export type BillingData = {
+  introOffer?: BasicIntroOffer;
+  annualIntroOffer?: BasicIntroOffer;
   billingEnabled: boolean;
   tier: "free" | "basic" | "pro";
   status: string;
@@ -112,7 +114,11 @@ export type MeetingDetail = {
   status?: MeetingStatus;
 };
 
-type PricingPlansData = { plans: PaidPlan[] };
+type PricingPlansData = {
+  plans: PaidPlan[];
+  introOffer?: BasicIntroOffer;
+  annualIntroOffer?: BasicIntroOffer;
+};
 type BillingDataQuery = BillingData;
 type MeetingsListData = { meetings: MeetingSummaryRow[] };
 type MeetingsDetailData = { meeting: MeetingDetail | null };

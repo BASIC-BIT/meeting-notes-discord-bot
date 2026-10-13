@@ -7,6 +7,12 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Basic introductory terms and analytics notice (October 12)
+
+- When Basic introductory pricing is available for an eligible server's first paid subscription, monthly billing is $6/month for three months, then $10/month. Annual billing is $60 upfront for the first year, then $100/year. The offer applies automatically when shown, cannot be combined with another promotion and does not change Pro pricing. See [Server plans](/features/#basic-introductory-pricing) for eligibility and billing management.
+- We are adding fixed introductory-offer categories to purchase events and recording when complete offer terms are visible in the browser. Each displayed offer counts once per page visit and server choice. These counts do not establish unique people, whether someone read the terms or an offer caused a purchase.
+- Paid invoices are categorized as introductory discount, regular price, other discount or unknown from billing evidence. Original offer categories and entered-code presence remain separate from actual invoice discounts. The new categories contain no additional identifiers, prices, provider IDs, raw codes or meeting content. Browser Do Not Track and new-subscription billing opt-outs remain supported. See the [Privacy Policy](/legal/privacy/).
+
 ### Recording limits and plan links (October 12)
 
 - Recording-limit messages explain when recording can resume and link to the plan options for that server. Servers with existing billing get **Manage plan**. No plan removes the two-hour maximum per meeting.

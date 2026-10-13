@@ -13,6 +13,7 @@ import { resolveGuildSubscription } from "../services/subscriptionService";
 import { captureEvent } from "../services/analyticsService";
 import {
   resolvePurchaseSource,
+  resolvePurchaseOffer,
   recordingLimitAnalytics,
 } from "../utils/purchaseAnalytics";
 import { resolveTierFromPrice } from "../services/pricingService";
@@ -203,9 +204,10 @@ async function resolveInvoicePlan(
   )?.pricing?.price_details?.price;
   const price =
     typeof invoicePrice === "string"
-      ? await stripe.prices.retrieve(invoicePrice)
+      ? await stripe.prices.retrieve(invoicePrice).catch(() => undefined)
       : invoicePrice;
   return {
+    price,
     tier: price
       ? (resolveTierFromPrice({
           priceId: price.id,
@@ -229,12 +231,18 @@ async function capturePaidInvoiceOnce(
   };
   const billingKind = billingKinds[invoice.billing_reason ?? ""] ?? "unknown";
   try {
-    const { tier, interval } = await resolveInvoicePlan(stripe, invoice);
+    const { tier, interval, price } = await resolveInvoicePlan(stripe, invoice);
     // Qualification is analytics-only; a lookup outage must not retry paid billing.
     const effective = await resolveGuildSubscription(guildId);
     if (effective.billingSource !== "stripe" || effective.status !== "active")
       return;
     if (await isPurchaseAnalyticsOptedOut(guildId, subscription)) return;
+    const invoicePrice = await classifyInvoicePrice({
+      stripe,
+      invoice,
+      subscription,
+      price,
+    });
     // Reuse webhook receipts for one canonical outcome per invoice, including
     // retries delivered under a different Stripe event id (30-day retention).
     const now = Date.now();
@@ -255,6 +263,8 @@ async function capturePaidInvoiceOnce(
         event_version: 1,
         tier,
         billing_kind: billingKind,
+        offer: resolvePurchaseOffer(subscription.metadata.intro_offer_id),
+        invoice_price: invoicePrice,
         ...recordingLimitAnalytics({
           limitType:
             readMetadataValue(subscription.metadata, "recording_limit_type") ||
@@ -272,13 +282,166 @@ async function capturePaidInvoiceOnce(
         interval: ["month", "year"].includes(interval ?? "")
           ? interval
           : "unknown",
-        promo_present: Boolean(
-          readMetadataValue(subscription.metadata, "promo_code"),
-        ),
+        promo_present:
+          subscription.metadata.purchase_promo_present === "true" ||
+          Boolean(readMetadataValue(subscription.metadata, "promo_code")),
       },
     });
   } catch {
     console.warn("Paid outcome analytics unavailable");
+  }
+}
+
+// Classify the event's invoice, never the subscription's latest/current period.
+// Unsupported native evidence is an analytics category, not a billing failure.
+async function classifyInvoicePrice({
+  stripe,
+  invoice: eventInvoice,
+  subscription,
+  price,
+}: {
+  stripe: StripeClient;
+  invoice: StripeInvoice;
+  subscription: StripeSubscription;
+  price: Awaited<ReturnType<typeof resolveInvoicePlan>>["price"];
+}): Promise<
+  "intro_discounted" | "regular_price" | "other_discount" | "unknown"
+> {
+  try {
+    const invoice = eventInvoice.discounts?.some(
+      (discount) => typeof discount === "string",
+    )
+      ? await stripe.invoices.retrieve(eventInvoice.id, {
+          expand: ["discounts.source.coupon"],
+        })
+      : eventInvoice;
+    const reference = resolveInvoiceSubscription(invoice);
+    const owner =
+      typeof invoice.customer === "string"
+        ? invoice.customer
+        : invoice.customer?.id;
+    const subscriptionOwner =
+      typeof subscription.customer === "string"
+        ? subscription.customer
+        : subscription.customer.id;
+    const line = invoice.lines?.data[0];
+    const linePrice = line?.pricing?.price_details?.price;
+    const linePriceId =
+      typeof linePrice === "string" ? linePrice : linePrice?.id;
+    const parent = line?.parent?.subscription_item_details;
+    const discounts = invoice.total_discount_amounts;
+    if (
+      !price ||
+      !price.unit_amount ||
+      invoice.id !== eventInvoice.id ||
+      invoice.amount_paid !== eventInvoice.amount_paid ||
+      invoice.subtotal !== eventInvoice.subtotal ||
+      invoice.total_excluding_tax !== eventInvoice.total_excluding_tax ||
+      (typeof reference === "string" ? reference : reference?.id) !==
+        subscription.id ||
+      owner !== subscriptionOwner ||
+      invoice.livemode !== subscription.livemode ||
+      invoice.status !== "paid" ||
+      invoice.amount_paid !== invoice.total ||
+      invoice.amount_remaining !== 0 ||
+      invoice.starting_balance !== 0 ||
+      invoice.ending_balance !== 0 ||
+      invoice.pre_payment_credit_notes_amount !== 0 ||
+      invoice.post_payment_credit_notes_amount !== 0 ||
+      !Number.isSafeInteger(invoice.subtotal) ||
+      !Number.isSafeInteger(invoice.total_excluding_tax) ||
+      invoice.lines.has_more ||
+      invoice.lines.data.length !== 1 ||
+      !line ||
+      line.invoice !== invoice.id ||
+      linePriceId !== price.id ||
+      line.quantity !== 1 ||
+      parent?.subscription !== subscription.id ||
+      parent.proration !== false ||
+      line.currency !== invoice.currency ||
+      invoice.currency !== price.currency ||
+      line.subtotal !== price.unit_amount ||
+      invoice.subtotal !== line.subtotal ||
+      price.type !== "recurring" ||
+      price.billing_scheme !== "per_unit" ||
+      price.transform_quantity ||
+      !Array.isArray(invoice.discounts) ||
+      !Array.isArray(discounts) ||
+      !Array.isArray(line.discount_amounts) ||
+      line.pretax_credit_amounts?.some((credit) => credit.type !== "discount")
+    )
+      return "unknown";
+    if (
+      !invoice.discounts.length &&
+      !discounts.length &&
+      !line.discount_amounts.length
+    )
+      return invoice.total_excluding_tax === invoice.subtotal
+        ? "regular_price"
+        : "unknown";
+    if (
+      invoice.discounts.length !== 1 ||
+      discounts.length !== 1 ||
+      line.discount_amounts.length !== 1
+    )
+      return "unknown";
+    const discount = invoice.discounts[0];
+    if (typeof discount === "string" || !discount || discount.deleted)
+      return "unknown";
+    const totalDiscount = discounts[0];
+    const lineDiscount = line.discount_amounts[0];
+    const totalId =
+      typeof totalDiscount.discount === "string"
+        ? totalDiscount.discount
+        : totalDiscount.discount.id;
+    const lineId =
+      typeof lineDiscount.discount === "string"
+        ? lineDiscount.discount
+        : lineDiscount.discount.id;
+    if (
+      totalId !== discount.id ||
+      lineId !== discount.id ||
+      !Number.isSafeInteger(totalDiscount.amount) ||
+      totalDiscount.amount <= 0 ||
+      totalDiscount.amount !== lineDiscount.amount ||
+      invoice.total_excluding_tax !== invoice.subtotal - totalDiscount.amount
+    )
+      return "unknown";
+    const couponReference = discount.source.coupon;
+    if (!couponReference) return "unknown";
+    const coupon =
+      typeof couponReference === "string"
+        ? await stripe.coupons.retrieve(couponReference)
+        : couponReference;
+    if (coupon.deleted || coupon.livemode !== invoice.livemode)
+      return "unknown";
+    const offer = resolvePurchaseOffer(subscription.metadata.intro_offer_id);
+    if (
+      offer === "none" ||
+      coupon.id !== subscription.metadata.intro_offer_coupon_id ||
+      discount.promotion_code
+    )
+      return "other_discount";
+    const annual = offer === "basic_annual_intro_v1";
+    return resolveTierFromPrice({
+      priceId: price.id,
+      lookupKey: price.lookup_key,
+    }) === "basic" &&
+      price.currency === "usd" &&
+      price.unit_amount === (annual ? 10000 : 1000) &&
+      price.recurring?.interval === (annual ? "year" : "month") &&
+      price.recurring.interval_count === 1 &&
+      coupon.percent_off === 40 &&
+      coupon.amount_off === null &&
+      coupon.currency === null &&
+      coupon.duration === (annual ? "once" : "repeating") &&
+      coupon.duration_in_months === (annual ? null : 3) &&
+      totalDiscount.amount === (annual ? 4000 : 400) &&
+      (!annual || invoice.billing_reason === "subscription_create")
+      ? "intro_discounted"
+      : "unknown";
+  } catch {
+    return "unknown";
   }
 }
 

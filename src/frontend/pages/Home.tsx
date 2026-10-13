@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useIntroOfferExposure } from "../hooks/useIntroOfferExposure";
 import {
   Badge,
   Button,
@@ -125,6 +126,11 @@ export default function Home() {
       search: { plan, interval: billingInterval, source: "homepage_pricing" },
     });
   };
+  useIntroOfferExposure({
+    offer: offer.status === "available" ? offer.id : "none",
+    entry: "homepage_pricing",
+    surface: "homepage_pricing",
+  });
 
   return (
     <Container size={720} pt={{ base: 28, md: 48 }} pb={{ base: 48, md: 96 }}>

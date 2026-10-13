@@ -46,6 +46,7 @@ import {
 } from "../utils/pricing";
 import classes from "./UpgradeServerSelect.module.css";
 import { useCheckoutAttempt } from "../hooks/useCheckoutAttempt";
+import { useIntroOfferExposure } from "../hooks/useIntroOfferExposure";
 
 const FEATURES = {
   free: [
@@ -149,6 +150,15 @@ export default function UpgradeServerSelect({
       ? { status: "inactive" as const }
       : offer;
   const offerBlocked = offer.status === "unavailable";
+  const displayedOffer =
+    shownOffer.status === "available" ? shownOffer.id : "none";
+  useIntroOfferExposure({
+    offer: displayedOffer,
+    entry: `${from}:${selectedServerId ?? "unresolved"}`,
+    surface: "upgrade",
+    guildId: serverReady ? (selectedServerId ?? undefined) : undefined,
+    enabled: serverReady && !changingServer,
+  });
   const currentTier = billing?.tier;
   const isComped = billing?.billingSource === "manual_comp";
   const isForced = billing?.billingSource === "forced";
@@ -226,13 +236,14 @@ export default function UpgradeServerSelect({
       tier: requestedPlan,
       interval,
       promo_present: Boolean(promoCode.trim()),
+      offer: requestedPlan === "basic" ? displayedOffer : "none",
       event_version: 1,
     };
     if (blockedReason && lastBlocked.current !== blockedReason) {
       track("upgrade_blocked", { ...properties, reason: blockedReason });
     }
     lastBlocked.current = blockedReason;
-    const key = `${selectedServerId}:${requestedPlan}:${interval}:${source}`;
+    const key = `${selectedServerId}:${requestedPlan}:${interval}:${source}:${displayedOffer}`;
     if (
       purchaseReady &&
       requestedTierEligible &&
@@ -254,6 +265,7 @@ export default function UpgradeServerSelect({
     purchaseReady,
     requestedPrice,
     requestedTierEligible,
+    displayedOffer,
   ]);
 
   useEffect(() => setPromoCode(search.promo?.trim() ?? ""), [search.promo]);
@@ -328,6 +340,7 @@ export default function UpgradeServerSelect({
         source,
         ...recordingLimitAnalytics(limitContext ?? {}),
         promo_present: Boolean(intent.promo),
+        offer: tier === "basic" ? displayedOffer : "none",
         event_version: 1,
       });
       const request: inferRouterInputs<AppRouter>["billing"]["checkout"] = {

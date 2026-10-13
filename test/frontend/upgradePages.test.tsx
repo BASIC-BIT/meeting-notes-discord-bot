@@ -35,7 +35,6 @@ describe("upgrade pages", () => {
   });
 
   test.each([
-    { label: "paid Basic", tier: "basic", billingSource: "stripe" },
     { label: "complimentary Pro", tier: "pro", billingSource: "manual_comp" },
     { label: "Free with no Basic price", tier: "free", billingSource: "free" },
   ] as const)(

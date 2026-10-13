@@ -122,6 +122,14 @@ it("shows verified monthly terms and protects the quoted offer at checkout", asy
       offerChoice: "automatic",
     }),
   );
+  expect(mockTrack).toHaveBeenCalledWith(
+    "upgrade_ready",
+    expect.objectContaining({ offer: "basic_intro_v1", promo_present: false }),
+  );
+  expect(mockTrack).toHaveBeenCalledWith(
+    "upgrade_plan_clicked",
+    expect.objectContaining({ offer: "basic_intro_v1", promo_present: false }),
+  );
 });
 it("uses only the selected annual quote and actual upfront terms", async () => {
   mockSearch.mockReturnValue({ interval: "year" });
@@ -315,6 +323,7 @@ it("records arrival/readiness once and retains only safe purchase properties", a
   ).toHaveLength(1);
   await userEvent.click(button("Pro"));
   expect(mockTrack).toHaveBeenCalledWith("upgrade_plan_clicked", {
+    offer: "none",
     guild_id: "s1",
     tier: "pro",
     interval: "month",
