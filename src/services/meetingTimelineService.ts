@@ -65,7 +65,10 @@ const addEvent = (
   seconds: number,
   event: MeetingEvent,
 ) => {
-  events.push({ seconds, event });
+  events.push({
+    seconds,
+    event: { ...event, offsetSeconds: Math.max(0, seconds) },
+  });
 };
 
 const toTimestampMsSafe = (value: number | string | Date, fallbackMs = 0) =>
