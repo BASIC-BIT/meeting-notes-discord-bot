@@ -361,6 +361,7 @@ class ConfigService {
   readonly stripe = {
     basicIntroOffer: {
       couponId: process.env.STRIPE_BASIC_INTRO_COUPON_ID || "",
+      annualCouponId: process.env.STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID || "",
       startsAt: process.env.STRIPE_BASIC_INTRO_STARTS_AT || "",
       // Empty leaves enrollment open-ended once the required offer inputs are set.
       enrollmentEndsAt: process.env.STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT || "",

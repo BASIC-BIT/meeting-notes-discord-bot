@@ -58,7 +58,9 @@ const checkout = manageGuildProcedure
       tier: z.enum(["basic", "pro"]),
       interval: z.enum(["month", "year"]).default("month"),
       promotionCode: z.string().optional(),
-      expectedOffer: z.enum(["none", "basic_intro_v1"]).optional(),
+      expectedOffer: z
+        .enum(["none", "basic_intro_v1", "basic_annual_intro_v1"])
+        .optional(),
       offerChoice: z.enum(["automatic", "promotion"]).default("automatic"),
       source: z.enum(PURCHASE_SOURCES).catch("unknown").default("direct"),
       limitType: z.enum(RECORDING_LIMIT_TYPES).optional().catch(undefined),

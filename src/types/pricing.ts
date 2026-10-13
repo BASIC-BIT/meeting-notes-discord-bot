@@ -12,18 +12,38 @@ export type PaidPlan = {
 };
 export type BasicIntroOffer =
   | { status: "inactive" | "ineligible" | "expired" | "unavailable" }
-  | {
+  | ({
       status: "available";
-      id: "basic_intro_v1";
       priceId: string;
       currency: "usd";
-      regularUnitAmount: 1000;
-      discountedUnitAmount: 600;
       percentOff: 40;
-      durationMonths: 3;
       enrollmentEndsAt: string | null;
+    } & (
+      | {
+          id: "basic_intro_v1";
+          regularUnitAmount: 1000;
+          discountedUnitAmount: 600;
+          durationMonths: 3;
+        }
+      | {
+          id: "basic_annual_intro_v1";
+          regularUnitAmount: 10000;
+          discountedUnitAmount: 6000;
+          durationMonths: 12;
+        }
+    ));
+export type ExpectedIntroOffer =
+  "none" | "basic_intro_v1" | "basic_annual_intro_v1";
+export type FirstYearPayment =
+  | { status: "unavailable" }
+  | {
+      status: "available";
+      currency: "usd";
+      discountedSubtotal: 6000;
+      amountPaid: number;
+      periodStartsAt: string;
+      periodEndsAt: string;
     };
-export type ExpectedIntroOffer = "none" | "basic_intro_v1";
 export type IntroOfferChoice = "automatic" | "promotion";
 export type ProviderSubscriptionDetails =
   | { status: "unavailable" }
@@ -36,6 +56,7 @@ export type ProviderSubscriptionDetails =
       interval: BillingInterval;
       renewalAt: string | null;
       cancelAtPeriodEnd: boolean;
+      firstYearPayment: FirstYearPayment | null;
       discount: {
         percentOff: number | null;
         amountOff: number | null;

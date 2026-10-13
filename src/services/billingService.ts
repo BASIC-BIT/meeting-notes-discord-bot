@@ -40,6 +40,7 @@ import {
 } from "./basicIntroOfferService";
 export type BillingSnapshot = {
   introOffer?: BasicIntroOffer;
+  annualIntroOffer?: BasicIntroOffer;
   subscriptionDetails?: ProviderSubscriptionDetails | null;
   billingEnabled: boolean;
   stripeMode: string;
@@ -73,6 +74,7 @@ type StripeUser = {
 export function buildBillingDisabledSnapshot(): BillingSnapshot {
   return {
     introOffer: { status: "inactive" },
+    annualIntroOffer: { status: "inactive" },
     subscriptionDetails: null,
     tier: "free",
     status: "free",
@@ -116,12 +118,21 @@ export async function getBillingSnapshot(params: {
     subscription?.stripeSubscriptionId || subscription?.stripeCustomerId,
   );
 
-  const [introOffer, subscriptionDetails] = await Promise.all([
-    getGuildBasicIntroOffer({ stripe, guildId, payerId: params.payerId }),
-    loadProviderSubscriptionDetails(stripe, guildId, subscription),
-  ]);
+  const [introOffer, annualIntroOffer, subscriptionDetails] = await Promise.all(
+    [
+      getGuildBasicIntroOffer({ stripe, guildId, payerId: params.payerId }),
+      getGuildBasicIntroOffer({
+        stripe,
+        guildId,
+        payerId: params.payerId,
+        interval: "year",
+      }),
+      loadProviderSubscriptionDetails(stripe, guildId, subscription),
+    ],
+  );
   return {
     introOffer,
+    annualIntroOffer,
     subscriptionDetails,
     tier: resolvedSubscription.tier,
     status: resolvedSubscription.status,
@@ -167,6 +178,7 @@ export async function getMockBillingSnapshot(
 
   return {
     introOffer: { status: "inactive" },
+    annualIntroOffer: { status: "inactive" },
     subscriptionDetails: null,
     tier: resolvedSubscription.tier,
     status: resolvedSubscription.status,
@@ -457,7 +469,8 @@ async function createExistingSubscriptionConfirmation(params: {
   } = params;
   const existing = await getSubscriptionRepository().get(guildId);
   if (
-    params.expectedOffer === "basic_intro_v1" &&
+    params.expectedOffer &&
+    params.expectedOffer !== "none" &&
     (existing?.stripeSubscriptionId || existing?.stripeCustomerId)
   ) {
     throw new BillingActionError(

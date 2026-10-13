@@ -26,6 +26,7 @@ test("mock pricing preserves regular fixtures with no active offer", async () =>
     )?.unitAmount,
   ).toBe(1200);
   expect(result.introOffer).toEqual({ status: "inactive" });
+  expect(result.annualIntroOffer).toEqual({ status: "inactive" });
 });
 
 test.each([true, false])(
@@ -35,6 +36,7 @@ test.each([true, false])(
     jest.useFakeTimers({ now: Date.parse("2026-10-12T12:00:00Z") });
     Object.assign(config.stripe.basicIntroOffer, {
       couponId: "coupon_intro",
+      annualCouponId: "coupon_annual",
       startsAt: "2026-10-01T00:00:00Z",
       enrollmentEndsAt: "",
       portalConfigurationId: "bpc_intro",
@@ -55,21 +57,30 @@ test.each([true, false])(
       },
       product: "prod_basic",
     };
+    const annualPrice = {
+      ...price,
+      id: "price_annual",
+      unit_amount: 10000,
+      lookup_key: config.stripe.lookupKeys.basicAnnual,
+      recurring: { ...price.recurring, interval: "year" },
+    };
     const stripe = {
       prices: {
-        list: jest.fn(async () => ({ data: [price] })),
-        retrieve: jest.fn(async () => price),
+        list: jest.fn(async () => ({ data: [price, annualPrice] })),
+        retrieve: jest.fn(async (id: string) =>
+          id === annualPrice.id ? annualPrice : price,
+        ),
       },
       coupons: {
-        retrieve: jest.fn(async () => ({
-          id: "coupon_intro",
+        retrieve: jest.fn(async (id: string) => ({
+          id,
           valid,
           livemode: false,
           percent_off: 40,
           amount_off: null,
           currency: null,
-          duration: "repeating",
-          duration_in_months: 3,
+          duration: id === "coupon_annual" ? "once" : "repeating",
+          duration_in_months: id === "coupon_annual" ? null : 3,
           redeem_by: null,
         })),
       },
@@ -98,5 +109,15 @@ test.each([true, false])(
     if (valid)
       expect(result.introOffer).toMatchObject({ enrollmentEndsAt: null });
     expect(result.introOffer).not.toHaveProperty("couponId");
+    expect(result.annualIntroOffer).toMatchObject({
+      status: valid ? "available" : "unavailable",
+    });
+    if (valid)
+      expect(result.annualIntroOffer).toMatchObject({
+        id: "basic_annual_intro_v1",
+        discountedUnitAmount: 6000,
+        enrollmentEndsAt: null,
+      });
+    expect(result.annualIntroOffer).not.toHaveProperty("couponId");
   },
 );

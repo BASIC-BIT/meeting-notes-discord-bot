@@ -395,7 +395,13 @@ variable "STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED" {
 }
 
 variable "STRIPE_BASIC_INTRO_COUPON_ID" {
-  description = "Existing native 40-percent three-month Basic intro coupon ID; empty disables new enrollment"
+  description = "Existing native 40-percent three-month Basic monthly intro coupon ID; empty disables monthly enrollment"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID" {
+  description = "Separate native 40 percent once coupon for Basic first-year annual enrollment; empty disables annual enrollment"
   type        = string
   default     = ""
 }
@@ -1918,6 +1924,10 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "STRIPE_BASIC_INTRO_COUPON_ID"
           value = var.STRIPE_BASIC_INTRO_COUPON_ID
+        },
+        {
+          name  = "STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID"
+          value = var.STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID
         },
         {
           name  = "STRIPE_BASIC_INTRO_STARTS_AT"

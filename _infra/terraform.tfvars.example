@@ -143,6 +143,7 @@ ANALYTICS_PROXY_CNAME_TARGET=""              # CNAME target PostHog issues for t
 
 # Inert until existing native Stripe objects and an enrollment start are approved.
 STRIPE_BASIC_INTRO_COUPON_ID=""
+STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID="" # Separate 40 percent once coupon; annual disabled when empty.
 STRIPE_BASIC_INTRO_STARTS_AT=""
 STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT="" # Optional; empty means open-ended once the offer is enabled.
 STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID=""

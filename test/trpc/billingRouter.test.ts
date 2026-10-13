@@ -225,19 +225,22 @@ test("checkout forwards expected offer and explicit promotion choice to the shar
   );
 });
 
-test("checkout defaults offer choice to automatic", async () => {
-  jest
-    .mocked(createCheckoutSession)
-    .mockResolvedValue("https://checkout.stripe.com/test");
-  await caller().checkout({
-    serverId: "111111111111111111",
-    tier: "basic",
-    expectedOffer: "basic_intro_v1",
-  });
-  expect(createCheckoutSession).toHaveBeenCalledWith(
-    expect.objectContaining({
-      expectedOffer: "basic_intro_v1",
-      offerChoice: "automatic",
-    }),
-  );
-});
+test.each(["basic_intro_v1", "basic_annual_intro_v1"] as const)(
+  "checkout accepts %s and defaults offer choice to automatic",
+  async (expectedOffer) => {
+    jest
+      .mocked(createCheckoutSession)
+      .mockResolvedValue("https://checkout.stripe.com/test");
+    await caller().checkout({
+      serverId: "111111111111111111",
+      tier: "basic",
+      expectedOffer,
+    });
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedOffer,
+        offerChoice: "automatic",
+      }),
+    );
+  },
+);

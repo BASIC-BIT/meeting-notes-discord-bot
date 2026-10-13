@@ -12,12 +12,18 @@ export const pricingRouter = router({
       return {
         plans: getMockPaidPlans(),
         introOffer: { status: "inactive" } satisfies BasicIntroOffer,
+        annualIntroOffer: { status: "inactive" } satisfies BasicIntroOffer,
       };
     }
     const stripe = getStripeClient();
     if (!stripe || !config.stripe.secretKey) {
       return {
         plans: getMockPaidPlans(),
+        annualIntroOffer: {
+          status: config.stripe.basicIntroOffer.annualCouponId
+            ? "unavailable"
+            : "inactive",
+        } satisfies BasicIntroOffer,
         introOffer: {
           status: Object.values(config.stripe.basicIntroOffer).some(Boolean)
             ? "unavailable"
@@ -30,6 +36,11 @@ export const pricingRouter = router({
       return {
         plans: plans.length ? plans : getMockPaidPlans(),
         introOffer: await getBasicIntroOffer({ stripe, plans }),
+        annualIntroOffer: await getBasicIntroOffer({
+          stripe,
+          plans,
+          interval: "year",
+        }),
       };
     } catch (err) {
       console.error("Failed to load pricing from Stripe", err);

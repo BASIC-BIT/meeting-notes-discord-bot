@@ -10,6 +10,7 @@ it("keeps the introductory offer inactive with no environment configuration", ()
   expect(config.stripe).toMatchObject({
     basicIntroOffer: {
       couponId: "",
+      annualCouponId: "",
       startsAt: "",
       enrollmentEndsAt: "",
       portalConfigurationId: "",
@@ -1172,6 +1173,604 @@ describe("open-ended introductory enrollment", () => {
         false,
       );
       expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(2);
+    },
+  );
+});
+
+describe("annual first-year offer", () => {
+  function annualFixture() {
+    const base = purchaseFixture();
+    const price = {
+      ...base.price,
+      id: "price_annual",
+      unit_amount: 10000,
+      lookup_key: config.stripe.lookupKeys.basicAnnual,
+      recurring: {
+        interval: "year",
+        interval_count: 1,
+        usage_type: "licensed",
+      },
+    };
+    const coupon = {
+      ...base.coupon,
+      id: "coupon_annual",
+      duration: "once",
+      duration_in_months: null,
+      redeem_by: null,
+    };
+    base.coupon.redeem_by = null;
+    base.stripe.prices.retrieve.mockImplementation(async (id) =>
+      id === price.id ? price : base.price,
+    );
+    base.stripe.prices.list.mockResolvedValue({ data: [base.price, price] });
+    base.stripe.coupons.retrieve.mockImplementation(async (id) =>
+      id === coupon.id ? coupon : base.coupon,
+    );
+    return {
+      ...base,
+      price,
+      coupon,
+      request: { ...base.request, priceId: price.id },
+      plans: [
+        ...plans,
+        {
+          tier: "basic",
+          interval: "year",
+          priceId: price.id,
+          unitAmount: 10000,
+          currency: "usd",
+        },
+      ],
+    };
+  }
+  beforeEach(() => {
+    resetMockStore();
+    clearGuildSubscriptionCache();
+    jest.useFakeTimers({ now });
+    Object.assign(config.stripe.basicIntroOffer, settings, {
+      annualCouponId: "coupon_annual",
+      enrollmentEndsAt: "",
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Object.assign(config.stripe.basicIntroOffer, { annualCouponId: "" });
+  });
+  test("each new server qualifies even when its payer already paid for another server", async () => {
+    const f = annualFixture();
+    const customer = { id: "cus_intro", metadata: { discord_id: "payer" } };
+    f.stripe.customers.list.mockResolvedValue({
+      data: [customer],
+      has_more: false,
+    });
+    Object.assign(f.stripe.customers, {
+      retrieve: jest.fn(async () => customer),
+    });
+    Object.assign(f.request.user, { email: "payer@example.test" });
+    getMockStore().subscriptions.set("another_server", {
+      guildId: "another_server",
+      tier: "basic",
+      status: "active",
+      subscriptionType: "stripe",
+      stripeCustomerId: "cus_intro",
+      stripeSubscriptionId: "sub_other",
+      startDate: "2026-01-01",
+    });
+    await expect(
+      createCheckoutSession({
+        ...f.request,
+        expectedOffer: "basic_annual_intro_v1",
+      }),
+    ).resolves.toContain("checkout.stripe.com");
+    expect(
+      getMockStore().purchaseAttempts.get(f.request.guildId)?.checkout
+        .discounts,
+    ).toEqual([{ coupon: "coupon_annual" }]);
+  });
+  test.each(["disabled", "ended"])(
+    "new annual enrollment after %s cannot silently accept stale offer",
+    async (decision) => {
+      const f = annualFixture();
+      if (decision === "disabled")
+        Object.assign(config.stripe.basicIntroOffer, empty, {
+          annualCouponId: "",
+        });
+      else
+        config.stripe.basicIntroOffer.enrollmentEndsAt = new Date(
+          now,
+        ).toISOString();
+      await expect(
+        createCheckoutSession({
+          ...f.request,
+          expectedOffer: "basic_annual_intro_v1",
+        }),
+      ).rejects.toThrow("changed");
+      expect(getMockStore().purchaseAttempts.size).toBe(0);
+      expect(f.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+    },
+  );
+  test("wrong client labels cannot change actual annual coupon identity", async () => {
+    const f = annualFixture();
+    await createCheckoutSession({
+      ...f.request,
+      tier: "pro",
+      interval: "month",
+      expectedOffer: "basic_annual_intro_v1",
+    });
+    expect(
+      getMockStore().purchaseAttempts.get(f.request.guildId)?.checkout
+        .discounts,
+    ).toEqual([{ coupon: "coupon_annual" }]);
+  });
+  test("a selected stale Basic annual Price cannot silently become a regular purchase", async () => {
+    const f = annualFixture();
+    const oldPrice = { ...f.price, id: "price_old" };
+    f.stripe.prices.retrieve.mockImplementation(async (id) =>
+      id === oldPrice.id ? oldPrice : f.price,
+    );
+    await expect(
+      createCheckoutSession({ ...f.request, priceId: oldPrice.id }),
+    ).rejects.toThrow("changed");
+    expect(getMockStore().purchaseAttempts.size).toBe(0);
+  });
+  test("each cadence can be enabled alone and missing annual stays inactive", async () => {
+    const f = annualFixture();
+    config.stripe.basicIntroOffer.annualCouponId = "";
+    await expect(
+      getBasicIntroOffer({
+        stripe: f.request.stripe,
+        plans: f.plans,
+        interval: "year",
+      }),
+    ).resolves.toEqual({ status: "inactive" });
+    config.stripe.basicIntroOffer.annualCouponId = "coupon_annual";
+    config.stripe.basicIntroOffer.couponId = "";
+    await expect(
+      getBasicIntroOffer({ stripe: f.request.stripe, plans: f.plans }),
+    ).resolves.toEqual({ status: "inactive" });
+    await expect(
+      createCheckoutSession({
+        ...f.request,
+        expectedOffer: "basic_annual_intro_v1",
+      }),
+    ).resolves.toContain("checkout.stripe.com");
+  });
+  test.each([
+    "amount",
+    "mode",
+    "lookup",
+    "quantity transform",
+    "duration",
+    "coupon amount",
+    "product",
+    "deadline",
+    "portal",
+    "missing shared start",
+  ])("annual %s mismatch fails closed", async (kind) => {
+    const f = annualFixture();
+    if (kind === "amount") f.price.unit_amount = 9999;
+    if (kind === "mode") f.price.livemode = true;
+    if (kind === "lookup")
+      f.price.lookup_key = config.stripe.lookupKeys.proAnnual;
+    if (kind === "quantity transform")
+      Object.assign(f.price, {
+        transform_quantity: { divide_by: 2, round: "up" },
+      });
+    if (kind === "duration") f.coupon.duration = "repeating";
+    if (kind === "coupon amount") f.coupon.percent_off = 50;
+    if (kind === "product") f.coupon.applies_to.products = ["prod_other"];
+    if (kind === "deadline") f.coupon.redeem_by = now / 1000 + 3600;
+    if (kind === "portal") f.portal.features.subscription_update.enabled = true;
+    if (kind === "missing shared start")
+      config.stripe.basicIntroOffer.startsAt = "";
+    await expect(
+      getBasicIntroOffer({
+        stripe: f.request.stripe,
+        plans: f.plans,
+        interval: "year",
+      }),
+    ).resolves.toEqual({ status: "unavailable" });
+  });
+  test("alternate promotion is explicit and frozen independently of annual terms", async () => {
+    const f = annualFixture();
+    await createCheckoutSession({
+      ...f.request,
+      promotionCode: "OTHER",
+      offerChoice: "promotion",
+      expectedOffer: "none",
+    });
+    expect(
+      getMockStore().purchaseAttempts.get(f.request.guildId)?.checkout
+        .discounts,
+    ).toEqual([{ promotion_code: "promo_other" }]);
+    await expect(
+      createCheckoutSession({
+        ...f.request,
+        expectedOffer: "basic_annual_intro_v1",
+      }),
+    ).rejects.toThrow("Choose");
+  });
+  test("verifies separate native once annual terms and leaves monthly independently available", async () => {
+    const f = annualFixture();
+    await expect(
+      getBasicIntroOffer({
+        stripe: f.request.stripe,
+        plans: f.plans,
+        interval: "year",
+      }),
+    ).resolves.toMatchObject({
+      status: "available",
+      id: "basic_annual_intro_v1",
+      regularUnitAmount: 10000,
+      discountedUnitAmount: 6000,
+      durationMonths: 12,
+      enrollmentEndsAt: null,
+    });
+    f.coupon.duration = "repeating";
+    await expect(
+      getBasicIntroOffer({
+        stripe: f.request.stripe,
+        plans: f.plans,
+        interval: "year",
+      }),
+    ).resolves.toEqual({ status: "unavailable" });
+    await expect(
+      getBasicIntroOffer({ stripe: f.request.stripe, plans: f.plans }),
+    ).resolves.toMatchObject({ status: "available", id: "basic_intro_v1" });
+  });
+  test.each(["disabled", "ended", "rotated"])(
+    "frozen annual response-loss survives %s and cadence switch cannot rewrite",
+    async (decision) => {
+      const f = annualFixture();
+      f.stripe.checkout.sessions.create.mockRejectedValueOnce(
+        new Error("lost response"),
+      );
+      await expect(
+        createCheckoutSession({
+          ...f.request,
+          expectedOffer: "basic_annual_intro_v1",
+        }),
+      ).rejects.toThrow("lost response");
+      const frozen = structuredClone(
+        getMockStore().purchaseAttempts.get(f.request.guildId)?.checkout,
+      );
+      expect(frozen?.discounts).toEqual([{ coupon: "coupon_annual" }]);
+      expect(frozen?.subscription_data?.metadata).toMatchObject({
+        intro_offer_id: "basic_annual_intro_v1",
+      });
+      if (decision === "disabled")
+        Object.assign(config.stripe.basicIntroOffer, empty, {
+          annualCouponId: "",
+        });
+      if (decision === "ended")
+        config.stripe.basicIntroOffer.enrollmentEndsAt = new Date(
+          now,
+        ).toISOString();
+      if (decision === "rotated")
+        Object.assign(config.stripe.basicIntroOffer, {
+          annualCouponId: "coupon_new",
+          portalConfigurationId: "bpc_new",
+        });
+      await expect(
+        getGuildBasicIntroOffer({
+          stripe: f.request.stripe,
+          guildId: f.request.guildId,
+          payerId: "payer",
+          interval: "year",
+        }),
+      ).resolves.toMatchObject({
+        status: "available",
+        id: "basic_annual_intro_v1",
+      });
+      await expect(
+        createCheckoutSession({
+          ...f.request,
+          expectedOffer: "basic_annual_intro_v1",
+        }),
+      ).resolves.toContain("checkout.stripe.com");
+      expect(
+        getMockStore().purchaseAttempts.get(f.request.guildId)?.checkout,
+      ).toEqual(frozen);
+      await expect(
+        createCheckoutSession({
+          ...f.request,
+          priceId: "price_basic",
+          expectedOffer: "basic_intro_v1",
+        }),
+      ).rejects.toThrow();
+      expect(f.stripe.checkout.sessions.create).toHaveBeenCalledTimes(2);
+    },
+  );
+  test("annual stale monthly expectation and promotion stacking fail before reservation", async () => {
+    const f = annualFixture();
+    await expect(
+      createCheckoutSession({ ...f.request, expectedOffer: "basic_intro_v1" }),
+    ).rejects.toThrow("changed");
+    await expect(
+      createCheckoutSession({ ...f.request, promotionCode: "OTHER" }),
+    ).rejects.toThrow("Choose");
+    expect(getMockStore().purchaseAttempts.size).toBe(0);
+  });
+  test.each(["failed", "partial"])(
+    "annual unavailable cannot bypass with %s catalog",
+    async (kind) => {
+      const f = annualFixture();
+      if (kind === "failed")
+        f.stripe.prices.list.mockRejectedValue(new Error("catalog"));
+      else
+        f.stripe.prices.list.mockResolvedValue({
+          data: [f.price].filter(() => false),
+        });
+      await expect(createCheckoutSession(f.request)).rejects.toThrow(
+        "unavailable",
+      );
+      expect(getMockStore().purchaseAttempts.size).toBe(0);
+    },
+  );
+});
+
+import {
+  getProviderSubscriptionDetails,
+  getBasicIntroCustomerRestriction,
+} from "../../src/services/basicIntroOfferService";
+describe("consumed annual once invoice evidence", () => {
+  function annualInvoiceFixture() {
+    const price = {
+      ...fixture().price,
+      id: "price_annual",
+      unit_amount: 10000,
+      lookup_key: config.stripe.lookupKeys.basicAnnual,
+      recurring: {
+        interval: "year",
+        interval_count: 1,
+        usage_type: "licensed",
+      },
+    };
+    const end = Date.parse("2027-10-12T12:00:00Z") / 1000;
+    const coupon = {
+      ...fixture().coupon,
+      id: "coupon_annual",
+      duration: "once",
+      duration_in_months: null,
+    };
+    const discount = {
+      id: "di_annual",
+      source: { type: "coupon", coupon },
+      promotion_code: null,
+      end: null,
+    };
+    const invoice = {
+      id: "in_first",
+      status: "paid",
+      livemode: false,
+      customer: "cus_intro",
+      currency: "usd",
+      billing_reason: "subscription_create",
+      parent: { subscription_details: { subscription: "sub_annual" } },
+      subtotal: 10000,
+      total_excluding_tax: 6000,
+      total: 6420,
+      amount_paid: 6420,
+      amount_remaining: 0,
+      starting_balance: 0,
+      ending_balance: 0,
+      pre_payment_credit_notes_amount: 0,
+      post_payment_credit_notes_amount: 0,
+      discounts: [discount],
+      total_discount_amounts: [{ amount: 4000, discount: "di_annual" }],
+      lines: {
+        has_more: false,
+        data: [
+          {
+            id: "il_annual",
+            invoice: "in_first",
+            currency: "usd",
+            livemode: false,
+            subtotal: 10000,
+            quantity: 1,
+            pricing: { price_details: { price: "price_annual" } },
+            parent: {
+              subscription_item_details: {
+                subscription: "sub_annual",
+                subscription_item: "si_annual",
+                proration: false,
+              },
+            },
+            period: { start: now / 1000, end },
+            discount_amounts: [{ amount: 4000, discount: "di_annual" }],
+            pretax_credit_amounts: [],
+          },
+        ],
+      },
+    };
+    const subscription = {
+      id: "sub_annual",
+      status: "active",
+      livemode: false,
+      customer: "cus_intro",
+      metadata: {
+        intro_offer_id: "basic_annual_intro_v1",
+        intro_offer_coupon_id: "coupon_annual",
+        intro_offer_portal_configuration_id: "bpc_intro",
+      },
+      discounts: [],
+      latest_invoice: "in_first",
+      items: {
+        data: [
+          {
+            id: "si_annual",
+            price,
+            quantity: 1,
+            discounts: [],
+            current_period_start: now / 1000,
+            current_period_end: end,
+          },
+        ],
+      },
+    };
+    const stripe = {
+      ...fixture().stripe,
+      invoices: { retrieve: jest.fn(async () => invoice) },
+      subscriptions: {
+        list: jest.fn(async () => ({ data: [subscription], has_more: false })),
+      },
+    };
+    return {
+      invoice,
+      subscription,
+      stripe,
+      client: stripe as unknown as StripeClient,
+      native: subscription as unknown as import("stripe").default.Subscription,
+    };
+  }
+  test.each([true, false])(
+    "native annual portal configuration follows actual unconsumed discount: %s",
+    async (unconsumed) => {
+      resetMockStore();
+      const f = annualInvoiceFixture();
+      const guildId = "111111111111111111";
+      Object.assign(f.subscription.metadata, { guild_id: guildId });
+      if (unconsumed)
+        Object.assign(f.subscription, { discounts: f.invoice.discounts });
+      Object.assign(f.stripe.subscriptions, {
+        retrieve: jest.fn(async () => f.subscription),
+      });
+      Object.assign(f.stripe, {
+        customers: {
+          retrieve: jest.fn(async () => ({
+            id: "cus_intro",
+            metadata: { discord_id: "payer" },
+          })),
+        },
+      });
+      const sessions = {
+        create: jest.fn(async () => ({
+          url: "https://billing.stripe.com/manage",
+        })),
+      };
+      Object.assign(f.stripe.billingPortal, { sessions });
+      getMockStore().subscriptions.set(guildId, {
+        guildId,
+        tier: "basic",
+        status: "active",
+        subscriptionType: "stripe",
+        stripeCustomerId: "cus_intro",
+        stripeSubscriptionId: f.subscription.id,
+        startDate: "2026-10-12",
+      });
+      await expect(
+        createPortalSession({
+          stripe: f.client,
+          user: { id: "payer" },
+          guildId,
+        }),
+      ).resolves.toContain("billing.stripe.com");
+      if (unconsumed)
+        expect(sessions.create).toHaveBeenCalledWith(
+          expect.objectContaining({ configuration: "bpc_intro" }),
+        );
+      else
+        expect(sessions.create.mock.calls[0][0]).not.toHaveProperty(
+          "configuration",
+        );
+    },
+  );
+  test("expanded invoice reference is read with native discount expansion", async () => {
+    const f = annualInvoiceFixture();
+    Object.assign(f.subscription, { latest_invoice: f.invoice });
+    await expect(
+      getProviderSubscriptionDetails(f.client, f.native),
+    ).resolves.toMatchObject({ firstYearPayment: { status: "available" } });
+    expect(f.stripe.invoices.retrieve).toHaveBeenCalledWith("in_first", {
+      expand: ["discounts.source.coupon"],
+    });
+  });
+  test("consumed annual alone permits native portal while sibling monthly discount still restricts through pagination", async () => {
+    const f = annualInvoiceFixture();
+    const monthly = {
+      ...f.subscription,
+      id: "sub_monthly",
+      metadata: {
+        ...f.subscription.metadata,
+        intro_offer_id: "basic_intro_v1",
+        intro_offer_coupon_id: "coupon_monthly",
+      },
+      discounts: [
+        {
+          id: "di_monthly",
+          source: { coupon: "coupon_monthly" },
+          promotion_code: null,
+          end: now / 1000 + 86400,
+        },
+      ],
+    };
+    f.stripe.subscriptions.list
+      .mockResolvedValueOnce({ data: [f.subscription], has_more: true })
+      .mockResolvedValueOnce({ data: [monthly], has_more: false });
+    await expect(
+      getBasicIntroCustomerRestriction(f.client, "cus_intro", f.native),
+    ).resolves.toMatchObject({ configurationId: "bpc_intro" });
+    expect(f.stripe.subscriptions.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ starting_after: "sub_annual" }),
+    );
+  });
+  test("string invoice retains paid first-year subtotal and actual tax-inclusive payment after coupon is consumed", async () => {
+    const f = annualInvoiceFixture();
+    await expect(
+      getProviderSubscriptionDetails(f.client, f.native),
+    ).resolves.toMatchObject({
+      status: "available",
+      unitAmount: 10000,
+      discountedUnitAmount: null,
+      planChangesRestricted: false,
+      firstYearPayment: {
+        status: "available",
+        currency: "usd",
+        discountedSubtotal: 6000,
+        amountPaid: 6420,
+        periodStartsAt: "2026-10-12T12:00:00.000Z",
+        periodEndsAt: "2027-10-12T12:00:00.000Z",
+      },
+    });
+    await expect(
+      getBasicIntroCustomerRestriction(f.client, "cus_intro", f.native),
+    ).resolves.toBeNull();
+  });
+  test.each([
+    "unpaid",
+    "other subscription",
+    "wrong price",
+    "proration",
+    "missing discount",
+    "multiple lines",
+    "credit",
+    "other period",
+    "inaccessible",
+  ])(
+    "%s cannot fabricate paid first-year detail or restrict consumed portal",
+    async (kind) => {
+      const f = annualInvoiceFixture();
+      if (kind === "unpaid") f.invoice.status = "open";
+      if (kind === "other subscription")
+        f.invoice.parent.subscription_details.subscription = "sub_other";
+      if (kind === "wrong price")
+        f.invoice.lines.data[0].pricing.price_details.price = "price_other";
+      if (kind === "proration")
+        f.invoice.lines.data[0].parent.subscription_item_details.proration = true;
+      if (kind === "missing discount") f.invoice.discounts = [];
+      if (kind === "multiple lines") f.invoice.lines.has_more = true;
+      if (kind === "credit") f.invoice.starting_balance = -100;
+      if (kind === "other period") f.invoice.lines.data[0].period.end += 86400;
+      if (kind === "inaccessible")
+        f.stripe.invoices.retrieve.mockRejectedValue(new Error("offline"));
+      await expect(
+        getProviderSubscriptionDetails(f.client, f.native),
+      ).resolves.toMatchObject({
+        status: "available",
+        unitAmount: 10000,
+        firstYearPayment: { status: "unavailable" },
+        planChangesRestricted: false,
+      });
     },
   );
 });

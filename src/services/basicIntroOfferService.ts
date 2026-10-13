@@ -10,6 +10,8 @@ import { BillingActionError } from "./billingActionError";
 import { z } from "zod";
 import type {
   BasicIntroOffer,
+  BillingInterval,
+  FirstYearPayment,
   ExpectedIntroOffer,
   IntroOfferChoice,
   PaidPlan,
@@ -20,6 +22,7 @@ import { config } from "./configService";
 
 const CHECKOUT_LIFETIME_SECONDS = 3600;
 export const BASIC_INTRO_OFFER_ID = "basic_intro_v1";
+export const BASIC_ANNUAL_INTRO_OFFER_ID = "basic_annual_intro_v1";
 const BASIC_INTRO_TERMS = {
   id: BASIC_INTRO_OFFER_ID,
   currency: "usd",
@@ -27,10 +30,15 @@ const BASIC_INTRO_TERMS = {
   discountedUnitAmount: 600,
   percentOff: 40,
   durationMonths: 3,
-} satisfies Omit<
-  Extract<BasicIntroOffer, { status: "available" }>,
-  "status" | "priceId" | "enrollmentEndsAt"
->;
+} as const;
+const BASIC_ANNUAL_INTRO_TERMS = {
+  id: BASIC_ANNUAL_INTRO_OFFER_ID,
+  currency: "usd",
+  regularUnitAmount: 10000,
+  discountedUnitAmount: 6000,
+  percentOff: 40,
+  durationMonths: 12,
+} as const;
 
 export async function verifyBasicIntroPortalConfiguration(
   stripe: StripeClient,
@@ -57,12 +65,20 @@ export async function getBasicIntroOffer(params: {
   stripe: StripeClient;
   plans: PaidPlan[];
   now?: number;
+  interval?: BillingInterval;
 }): Promise<BasicIntroOffer> {
   const settings = { ...config.stripe.basicIntroOffer };
+  const interval = params.interval ?? "month";
+  const terms =
+    interval === "year" ? BASIC_ANNUAL_INTRO_TERMS : BASIC_INTRO_TERMS;
+  const couponId =
+    interval === "year" ? settings.annualCouponId : settings.couponId;
+  if (!couponId && (interval === "year" || settings.annualCouponId))
+    return { status: "inactive" };
   const values = Object.values(settings);
   if (values.every((value) => !value)) return { status: "inactive" };
   if (
-    [settings.couponId, settings.startsAt, settings.portalConfigurationId].some(
+    [couponId, settings.startsAt, settings.portalConfigurationId].some(
       (value) => !value.trim(),
     )
   )
@@ -85,18 +101,19 @@ export async function getBasicIntroOffer(params: {
   if (now < start) return { status: "inactive" };
   if (end !== null && now >= end) return { status: "expired" };
   const plan = params.plans.find(
-    (candidate) => candidate.tier === "basic" && candidate.interval === "month",
+    (candidate) =>
+      candidate.tier === "basic" && candidate.interval === interval,
   );
   if (
     !plan ||
-    plan.currency !== BASIC_INTRO_TERMS.currency ||
-    plan.unitAmount !== BASIC_INTRO_TERMS.regularUnitAmount
+    plan.currency !== terms.currency ||
+    plan.unitAmount !== terms.regularUnitAmount
   )
     return { status: "unavailable" };
   try {
     const [price, coupon] = await Promise.all([
       params.stripe.prices.retrieve(plan.priceId),
-      params.stripe.coupons.retrieve(settings.couponId, {
+      params.stripe.coupons.retrieve(couponId, {
         expand: ["applies_to"],
       }),
       verifyBasicIntroPortalConfiguration(
@@ -106,16 +123,19 @@ export async function getBasicIntroOffer(params: {
     ]);
     const live = config.subscription.stripeMode === "live";
     if (
-      price.lookup_key !== config.stripe.lookupKeys.basicMonthly ||
+      price.lookup_key !==
+        (interval === "year"
+          ? config.stripe.lookupKeys.basicAnnual
+          : config.stripe.lookupKeys.basicMonthly) ||
       price.transform_quantity ||
       !price.active ||
       price.id !== plan.priceId ||
       price.livemode !== live ||
-      price.currency !== BASIC_INTRO_TERMS.currency ||
-      price.unit_amount !== BASIC_INTRO_TERMS.regularUnitAmount ||
+      price.currency !== terms.currency ||
+      price.unit_amount !== terms.regularUnitAmount ||
       price.billing_scheme !== "per_unit" ||
       price.type !== "recurring" ||
-      price.recurring?.interval !== "month" ||
+      price.recurring?.interval !== interval ||
       price.recurring.interval_count !== 1 ||
       price.recurring.usage_type !== "licensed"
     )
@@ -124,14 +144,14 @@ export async function getBasicIntroOffer(params: {
       typeof price.product === "string" ? price.product : price.product.id;
     if (
       coupon.deleted ||
-      coupon.id !== settings.couponId ||
+      coupon.id !== couponId ||
       !coupon.valid ||
       coupon.livemode !== live ||
-      coupon.percent_off !== BASIC_INTRO_TERMS.percentOff ||
+      coupon.percent_off !== terms.percentOff ||
       coupon.amount_off !== null ||
       coupon.currency !== null ||
-      coupon.duration !== "repeating" ||
-      coupon.duration_in_months !== BASIC_INTRO_TERMS.durationMonths ||
+      coupon.duration !== (interval === "year" ? "once" : "repeating") ||
+      coupon.duration_in_months !== (interval === "year" ? null : 3) ||
       (coupon.redeem_by !== null &&
         (end === null ||
           !Number.isFinite(coupon.redeem_by) ||
@@ -144,7 +164,7 @@ export async function getBasicIntroOffer(params: {
       return { status: "expired" };
     return {
       status: "available",
-      ...BASIC_INTRO_TERMS,
+      ...terms,
       priceId: price.id,
       enrollmentEndsAt,
     };
@@ -188,15 +208,21 @@ async function serverIsEligible(
 function frozenIntroOffer(
   current: PurchaseAttempt | undefined,
 ): BasicIntroOffer | null {
-  if (current?.checkout.metadata?.intro_offer_id !== BASIC_INTRO_OFFER_ID)
+  const id = current?.checkout.metadata?.intro_offer_id;
+  if (
+    !current ||
+    (id !== BASIC_INTRO_OFFER_ID && id !== BASIC_ANNUAL_INTRO_OFFER_ID)
+  )
     return null;
   const priceId = current.checkout.line_items?.[0]?.price;
   const enrollmentEndsAt =
-    current.checkout.metadata.intro_offer_enrollment_ends_at;
+    current.checkout.metadata?.intro_offer_enrollment_ends_at;
   if (!priceId) return null;
   return {
     status: "available",
-    ...BASIC_INTRO_TERMS,
+    ...(id === BASIC_ANNUAL_INTRO_OFFER_ID
+      ? BASIC_ANNUAL_INTRO_TERMS
+      : BASIC_INTRO_TERMS),
     priceId,
     enrollmentEndsAt: enrollmentEndsAt ? String(enrollmentEndsAt) : null,
   };
@@ -207,6 +233,7 @@ export async function getGuildBasicIntroOffer(params: {
   guildId: string;
   payerId?: string;
   plans?: PaidPlan[];
+  interval?: BillingInterval;
 }): Promise<BasicIntroOffer> {
   const [subscription, current] = await Promise.all([
     getSubscriptionRepository().get(params.guildId),
@@ -217,7 +244,11 @@ export async function getGuildBasicIntroOffer(params: {
   if (current && current.state !== "expired") {
     const frozen = frozenIntroOffer(current);
     if (
-      frozen &&
+      frozen?.status === "available" &&
+      frozen.id ===
+        ((params.interval ?? "month") === "year"
+          ? BASIC_ANNUAL_INTRO_OFFER_ID
+          : BASIC_INTRO_OFFER_ID) &&
       params.payerId === current.payerId &&
       !current.incidentKey &&
       (current.state === "open" ||
@@ -228,11 +259,19 @@ export async function getGuildBasicIntroOffer(params: {
       return frozen;
     return { status: "ineligible" };
   }
-  if (Object.values(config.stripe.basicIntroOffer).every((value) => !value))
+  if (
+    Object.values(config.stripe.basicIntroOffer).every((value) => !value) ||
+    (params.interval === "year" &&
+      !config.stripe.basicIntroOffer.annualCouponId) ||
+    ((params.interval ?? "month") === "month" &&
+      !config.stripe.basicIntroOffer.couponId &&
+      config.stripe.basicIntroOffer.annualCouponId)
+  )
     return { status: "inactive" };
   try {
     return await getBasicIntroOffer({
       stripe: params.stripe,
+      interval: params.interval,
       plans: params.plans ?? (await getPaidPlans(params.stripe)),
     });
   } catch {
@@ -240,31 +279,33 @@ export async function getGuildBasicIntroOffer(params: {
   }
 }
 
-async function assertRegularAlternativePrice(
+async function selectedPriceInterval(
   stripe: StripeClient,
   priceId: string | undefined,
-): Promise<void> {
+): Promise<BillingInterval | null> {
   if (!priceId) throw unavailableOffer();
   try {
     const price = await stripe.prices.retrieve(priceId);
     const lookup = config.stripe.lookupKeys;
-    const monthlyPro =
-      price.lookup_key === lookup.proMonthly &&
-      price.recurring?.interval === "month";
-    const annual =
-      (price.lookup_key === lookup.basicAnnual ||
-        price.lookup_key === lookup.proAnnual) &&
-      price.recurring?.interval === "year";
+    const matches = [
+      { key: lookup.basicMonthly, interval: "month", basic: true },
+      { key: lookup.basicAnnual, interval: "year", basic: true },
+      { key: lookup.proMonthly, interval: "month", basic: false },
+      { key: lookup.proAnnual, interval: "year", basic: false },
+    ].filter((candidate) => candidate.key === price.lookup_key);
+    const match = matches[0];
     if (
+      matches.length !== 1 ||
+      !match ||
       price.id !== priceId ||
-      price.lookup_key === lookup.basicMonthly ||
       !price.active ||
       price.livemode !== (config.subscription.stripeMode === "live") ||
       price.type !== "recurring" ||
       price.recurring?.interval_count !== 1 ||
-      (!monthlyPro && !annual)
+      price.recurring.interval !== match.interval
     )
       throw unavailableOffer();
+    return match.basic ? (match.interval === "year" ? "year" : "month") : null;
   } catch {
     throw unavailableOffer();
   }
@@ -290,7 +331,8 @@ export async function prepareBasicIntroCheckout(params: {
     if ((current.offerChoice ?? "automatic") !== choice) throw choiceRequired();
     if (
       params.expectedOffer &&
-      params.expectedOffer !== (frozen ? BASIC_INTRO_OFFER_ID : "none")
+      params.expectedOffer !==
+        (frozen?.status === "available" ? frozen.id : "none")
     )
       throw changedTerms();
     if (frozen) {
@@ -308,26 +350,45 @@ export async function prepareBasicIntroCheckout(params: {
       "BAD_REQUEST",
       "Enter a promotion code before choosing a promotion.",
     );
+  const settingsBeforeVerification = JSON.stringify(
+    config.stripe.basicIntroOffer,
+  );
   let offer: BasicIntroOffer = { status: "inactive" };
-  if (Object.values(config.stripe.basicIntroOffer).some(Boolean)) {
-    try {
-      const plans = await getPaidPlans(params.stripe);
-      offer = await getBasicIntroOffer({ stripe: params.stripe, plans });
-    } catch {
-      offer = { status: "unavailable" };
-    }
-  }
   const selectedPrice = params.checkout.line_items?.[0]?.price;
   const eligible = await serverIsEligible(params.guildId, params.expected);
+  if (eligible && Object.values(config.stripe.basicIntroOffer).some(Boolean)) {
+    const interval = await selectedPriceInterval(params.stripe, selectedPrice);
+    if (
+      interval &&
+      (interval === "year"
+        ? config.stripe.basicIntroOffer.annualCouponId
+        : config.stripe.basicIntroOffer.couponId ||
+          !config.stripe.basicIntroOffer.annualCouponId)
+    ) {
+      try {
+        offer = await getBasicIntroOffer({
+          stripe: params.stripe,
+          plans: await getPaidPlans(params.stripe),
+          interval,
+        });
+      } catch {
+        offer = { status: "unavailable" };
+      }
+      if (offer.status === "unavailable") throw unavailableOffer();
+      if (offer.status === "available" && offer.priceId !== selectedPrice)
+        throw changedTerms();
+    }
+  }
   if (
     offer.status === "available" &&
     offer.enrollmentEndsAt !== null &&
     Date.now() >= Date.parse(offer.enrollmentEndsAt)
   )
     offer = { status: "expired" };
-  if (eligible && offer.status === "unavailable") {
-    await assertRegularAlternativePrice(params.stripe, selectedPrice);
-  }
+  if (
+    JSON.stringify(config.stripe.basicIntroOffer) !== settingsBeforeVerification
+  )
+    throw unavailableOffer();
   const applies =
     choice === "automatic" &&
     eligible &&
@@ -336,15 +397,27 @@ export async function prepareBasicIntroCheckout(params: {
   if (applies && manualPromotion) throw choiceRequired();
   if (
     params.expectedOffer &&
-    params.expectedOffer !== (applies ? BASIC_INTRO_OFFER_ID : "none")
+    params.expectedOffer !==
+      (applies && offer.status === "available" ? offer.id : "none")
   )
     throw changedTerms();
+  const couponId =
+    offer.status === "available" && offer.id === BASIC_ANNUAL_INTRO_OFFER_ID
+      ? config.stripe.basicIntroOffer.annualCouponId
+      : config.stripe.basicIntroOffer.couponId;
+  if (
+    applies &&
+    (params.checkout.line_items?.length !== 1 ||
+      params.checkout.line_items[0].quantity !== 1 ||
+      params.checkout.discounts?.length)
+  )
+    throw choiceRequired();
   const offerMetadata = {
     purchase_offer_choice: choice,
     ...(applies && offer.status === "available"
       ? {
-          intro_offer_id: BASIC_INTRO_OFFER_ID,
-          intro_offer_coupon_id: config.stripe.basicIntroOffer.couponId,
+          intro_offer_id: offer.id,
+          intro_offer_coupon_id: couponId,
           intro_offer_portal_configuration_id:
             config.stripe.basicIntroOffer.portalConfigurationId,
           ...(offer.enrollmentEndsAt
@@ -357,7 +430,7 @@ export async function prepareBasicIntroCheckout(params: {
     ...params.checkout,
     ...(applies
       ? {
-          discounts: [{ coupon: config.stripe.basicIntroOffer.couponId }],
+          discounts: [{ coupon: couponId }],
           allow_promotion_codes: undefined,
         }
       : {}),
@@ -378,9 +451,12 @@ export const BASIC_INTRO_PLAN_CHANGE_MESSAGE =
 export function activeBasicIntroDiscount(
   subscription: Stripe.Subscription,
 ): Stripe.Discount | null {
-  const couponId =
-    subscription.metadata.intro_offer_coupon_id ||
-    config.stripe.basicIntroOffer.couponId;
+  const couponIds = subscription.metadata.intro_offer_coupon_id
+    ? [subscription.metadata.intro_offer_coupon_id]
+    : [
+        config.stripe.basicIntroOffer.couponId,
+        config.stripe.basicIntroOffer.annualCouponId,
+      ];
   const discounts = [
     ...(subscription.discounts ?? []),
     ...subscription.items.data.flatMap((item) => item.discounts ?? []),
@@ -391,14 +467,143 @@ export function activeBasicIntroDiscount(
     const coupon = discount.source.coupon;
     const actualCouponId = typeof coupon === "string" ? coupon : coupon?.id;
     if (
-      couponId &&
-      actualCouponId === couponId &&
+      actualCouponId &&
+      couponIds.includes(actualCouponId) &&
       !discount.promotion_code &&
       (discount.end === null || discount.end > Date.now() / 1000)
     )
       return discount;
   }
   return null;
+}
+
+// A consumed once discount remains on its invoice, not on subscription.discounts.
+export async function getAnnualIntroFirstYearPayment(
+  stripe: StripeClient,
+  subscription: Stripe.Subscription,
+): Promise<FirstYearPayment | null> {
+  if (subscription.metadata.intro_offer_id !== BASIC_ANNUAL_INTRO_OFFER_ID)
+    return null;
+  try {
+    const item = subscription.items.data[0];
+    const reference = subscription.latest_invoice;
+    if (!reference || subscription.items.data.length !== 1)
+      return { status: "unavailable" };
+    const invoice = await stripe.invoices.retrieve(
+      typeof reference === "string" ? reference : reference.id,
+      { expand: ["discounts.source.coupon"] },
+    );
+    const invoiceSubscription =
+      invoice.parent?.subscription_details?.subscription;
+    const owner =
+      typeof invoice.customer === "string"
+        ? invoice.customer
+        : invoice.customer?.id;
+    const subscriptionOwner =
+      typeof subscription.customer === "string"
+        ? subscription.customer
+        : subscription.customer.id;
+    const line = invoice.lines.data[0];
+    const lineParent = line?.parent?.subscription_item_details;
+    const priceReference = line?.pricing?.price_details?.price;
+    const priceId =
+      typeof priceReference === "string" ? priceReference : priceReference?.id;
+    const discount = invoice.discounts[0];
+    if (!discount || typeof discount === "string")
+      return { status: "unavailable" };
+    const couponReference = discount.source.coupon;
+    const coupon =
+      typeof couponReference === "string"
+        ? await stripe.coupons.retrieve(couponReference)
+        : couponReference;
+    const lineDiscount = line?.discount_amounts?.[0];
+    const invoiceDiscount = invoice.total_discount_amounts?.[0];
+    const lineDiscountId =
+      typeof lineDiscount?.discount === "string"
+        ? lineDiscount.discount
+        : lineDiscount?.discount.id;
+    const invoiceDiscountId =
+      typeof invoiceDiscount?.discount === "string"
+        ? invoiceDiscount.discount
+        : invoiceDiscount?.discount.id;
+    const termDays = line ? (line.period.end - line.period.start) / 86400 : 0;
+    if (
+      invoice.id !==
+        (typeof reference === "string" ? reference : reference.id) ||
+      (typeof invoiceSubscription === "string"
+        ? invoiceSubscription
+        : invoiceSubscription?.id) !== subscription.id ||
+      owner !== subscriptionOwner ||
+      invoice.livemode !== subscription.livemode ||
+      invoice.livemode !== (config.subscription.stripeMode === "live") ||
+      invoice.status !== "paid" ||
+      invoice.billing_reason !== "subscription_create" ||
+      invoice.currency !== "usd" ||
+      invoice.subtotal !== 10000 ||
+      invoice.total_excluding_tax !== 6000 ||
+      !Number.isSafeInteger(invoice.amount_paid) ||
+      invoice.amount_paid < 6000 ||
+      invoice.amount_paid !== invoice.total ||
+      invoice.amount_remaining !== 0 ||
+      invoice.starting_balance !== 0 ||
+      invoice.ending_balance !== 0 ||
+      invoice.pre_payment_credit_notes_amount !== 0 ||
+      invoice.post_payment_credit_notes_amount !== 0 ||
+      invoice.lines.has_more ||
+      invoice.lines.data.length !== 1 ||
+      !line ||
+      line.invoice !== invoice.id ||
+      line.currency !== "usd" ||
+      line.livemode !== invoice.livemode ||
+      line.subtotal !== 10000 ||
+      line.quantity !== 1 ||
+      lineParent?.subscription !== subscription.id ||
+      lineParent.subscription_item !== item.id ||
+      lineParent.proration !== false ||
+      priceId !== item.price.id ||
+      item.quantity !== 1 ||
+      item.price.currency !== "usd" ||
+      item.price.unit_amount !== 10000 ||
+      item.price.type !== "recurring" ||
+      item.price.billing_scheme !== "per_unit" ||
+      item.price.transform_quantity ||
+      item.price.recurring?.interval !== "year" ||
+      item.price.recurring.interval_count !== 1 ||
+      item.price.recurring.usage_type !== "licensed" ||
+      ![365, 366].includes(termDays) ||
+      line.period.start !== item.current_period_start ||
+      line.period.end !== item.current_period_end ||
+      invoice.discounts.length !== 1 ||
+      !coupon ||
+      coupon.deleted ||
+      coupon.id !== subscription.metadata.intro_offer_coupon_id ||
+      coupon.duration !== "once" ||
+      coupon.duration_in_months !== null ||
+      coupon.percent_off !== 40 ||
+      coupon.amount_off !== null ||
+      coupon.currency !== null ||
+      coupon.livemode !== invoice.livemode ||
+      discount.promotion_code ||
+      line.discount_amounts?.length !== 1 ||
+      lineDiscount?.amount !== 4000 ||
+      lineDiscountId !== discount.id ||
+      invoice.total_discount_amounts?.length !== 1 ||
+      invoiceDiscount?.amount !== 4000 ||
+      invoiceDiscountId !== discount.id ||
+      line.pretax_credit_amounts?.some((credit) => credit.type !== "discount")
+    )
+      return { status: "unavailable" };
+    return {
+      status: "available",
+      currency: "usd",
+      discountedSubtotal: 6000,
+      amountPaid: invoice.amount_paid,
+      periodStartsAt: new Date(line.period.start * 1000).toISOString(),
+      periodEndsAt: new Date(line.period.end * 1000).toISOString(),
+    };
+  } catch {
+    return { status: "unavailable" };
+  }
 }
 
 export async function getProviderSubscriptionDetails(
@@ -483,6 +688,10 @@ export async function getProviderSubscriptionDetails(
         : new Date(item.current_period_end * 1000).toISOString(),
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
     discount: discountDetails,
+    firstYearPayment: await getAnnualIntroFirstYearPayment(
+      stripe,
+      subscription,
+    ),
     planChangesRestricted: Boolean(intro),
     planChangeRestrictionEndsAt: intro?.end
       ? new Date(intro.end * 1000).toISOString()
