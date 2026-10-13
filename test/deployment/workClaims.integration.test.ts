@@ -100,6 +100,47 @@ it("loads synthetic application configuration without enabling mock repositories
   expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
 });
 
+it("removes inherited optional credentials before loading real configuration", async () => {
+  const keys = [
+    "DISCORD_CLIENT_SECRET",
+    "NOTION_CLIENT_SECRET",
+    "NOTION_TOKEN_ENCRYPTION_SECRET",
+    "STORAGE_ACCESS_KEY_ID",
+    "STORAGE_SECRET_ACCESS_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "REDIS_URL",
+    "CACHE_REDIS_URL",
+  ];
+  const previous = keys.map((key) => process.env[key]);
+  const sentinel = randomUUID();
+  try {
+    for (const key of keys) process.env[key] = sentinel;
+    await jest.isolateModulesAsync(async () => {
+      await import("./integrationSetup");
+      const { config: isolated } =
+        await import("../../src/services/configService");
+      expect(keys.every((key) => process.env[key] === "")).toBe(true);
+      expect(
+        [
+          isolated.discord.clientSecret,
+          isolated.notion.clientSecret,
+          isolated.notion.tokenEncryptionSecret,
+          isolated.storage.accessKeyId,
+          isolated.storage.secretAccessKey,
+          isolated.stripe.webhookSecret,
+          isolated.cache.redisUrl,
+        ].every((value) => value !== sentinel),
+      ).toBe(true);
+      expect(isolated.mock.enabled).toBe(false);
+    });
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+  }
+});
+
 it("conditions signed segment intake on both the pending job and observed segment", async () => {
   const job = { ...upload(), status: "pending_upload" };
   await put(tables.personalMediaUpload, job);
