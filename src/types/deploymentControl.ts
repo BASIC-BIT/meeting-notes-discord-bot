@@ -362,6 +362,20 @@ export const HISTORY_TRANSITION_FIELDS = [
   "transcriptS3Key",
   "audioS3Key",
   "chatS3Key",
+  "notes",
+  "meetingName",
+  "summarySentence",
+  "summaryLabel",
+  "context",
+  "participants",
+  "tags",
+  "summaryMessageId",
+  "notesMessageIds",
+  "notesChannelId",
+  "notesVersion",
+  "notesLastEditedBy",
+  "notesLastEditedAt",
+  "notesHistory",
 ] as const;
 export type HistoryTransition = {
   key: HistoryKey;
@@ -376,7 +390,7 @@ export type HistoryTransition = {
 const legalTransitions: Record<MeetingStatus, readonly MeetingStatus[]> = {
   starting: ["in_progress", "processing", "interrupted", "failed", "cancelled"],
   in_progress: ["processing", "interrupted", "failed", "cancelled"],
-  processing: ["processing", "complete", "interrupted", "failed"],
+  processing: ["processing", "complete", "interrupted", "failed", "cancelled"],
   interrupted: ["processing", "failed"],
   failed: [],
   complete: [],

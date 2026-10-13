@@ -18,6 +18,7 @@ import {
   unwindSessionInitialization,
   getOwnedSessionReservations,
   releaseSessionReservation,
+  attachMeetingReservation,
 } from "../../src/services/activeMeetingLeaseService";
 import {
   getActiveMeetingLease,
@@ -125,6 +126,36 @@ describe("activeMeetingLeaseService", () => {
       throw new Error("fixture admission failed");
     return { reservation: admitted.reservation, getMeetingHistory };
   }
+
+  test("remoteStopKeepsRenewingBeyondLease", async () => {
+    const { reservation } = await recordingReservation();
+    let finish!: () => void;
+    const end = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const meeting = {
+      guildId: reservation.guildId,
+      meetingId: reservation.meetingId,
+      reservation,
+      finishing: false,
+      finished: false,
+      onEndMeeting: jest.fn(async () => {
+        meeting.finishing = true;
+        await end;
+      }),
+    } as unknown as MeetingData;
+    attachMeetingReservation(meeting, reservation);
+    mockedGetActiveMeetingLease.mockResolvedValue({
+      endRequestedAt: "now",
+      endRequestedByUserId: "operator",
+    } as never);
+    const before = mockedRenewActiveMeetingLease.mock.calls.length;
+    await jest.advanceTimersByTimeAsync(50_000);
+    expect(mockedRenewActiveMeetingLease.mock.calls.length - before).toBe(5);
+    expect(meeting.onEndMeeting).toHaveBeenCalledTimes(1);
+    finish();
+    await releaseSessionReservation(reservation);
+  });
 
   test("rejected history unwind retains counted ownership but still settles voice", async () => {
     const { reservation, getMeetingHistory } = await recordingReservation();

@@ -91,6 +91,15 @@ export interface MeetingData {
   botNicknameBeforeSession?: string | null;
   botNicknameChanged?: boolean;
 
+  ownershipSignal?: AbortSignal;
+  finalizationFenced?: boolean;
+  finalization?: {
+    promise: Promise<void>;
+    controller: AbortController;
+    disposition: "pending" | "durable" | "unresolved";
+    preservation?: Promise<boolean>;
+    historyDisposition?: "complete" | "cancelled" | "failed";
+  };
   finishing: boolean;
   // Used for functions that are waiting for the meeting to be completely over
   isFinished: Promise<void>;

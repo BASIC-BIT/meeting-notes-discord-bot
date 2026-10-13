@@ -323,13 +323,13 @@ async function renewReservation(owned: OwnedReservation): Promise<void> {
     if (!renewed) throw new Error("Reservation ownership lost");
     if (meeting) {
       const lease = await getActiveMeetingLease(reservation.guildId);
-      if (lease) await processRemoteEndRequest(lease, meeting);
+      if (lease) processRemoteEndRequest(lease, meeting);
     }
   } catch {
     owned.controller.abort();
     if (owned.timer) clearInterval(owned.timer);
     if (meeting && !meeting.finishing && !meeting.finished)
-      await meeting.onEndMeeting?.(meeting);
+      dispatchEndMeeting(meeting);
   } finally {
     owned.renewing = false;
   }
@@ -354,6 +354,7 @@ export function attachMeetingReservation(
   if (!owned || owned.controller.signal.aborted)
     throw new Error("Reservation initialization was closed");
   owned.meeting = meeting;
+  meeting.ownershipSignal = owned.controller.signal;
   reservation.workHandle.transition(
     reservation.sessionMode === "meeting" ? "recording" : "voice_operation",
   );
@@ -364,7 +365,11 @@ export async function releaseSessionReservation(
   const key = reservationKey(reservation.guildId, reservation.meetingId);
   const owned = reservations.get(key);
   if (owned?.initializationUnresolved) return false;
-  if (owned?.timer) clearInterval(owned.timer);
+  if (
+    owned?.meeting?.finalization &&
+    owned.meeting.finalization.disposition !== "durable"
+  )
+    return false;
   const outcome = await settleOwnedVoiceSession(reservation);
   if (outcome !== "settled") {
     reservation.workHandle.transition("voice_operation");
@@ -377,6 +382,7 @@ export async function releaseSessionReservation(
     reservation,
   );
   if (!released) return false;
+  if (owned?.timer) clearInterval(owned.timer);
   reservation.workHandle.settle();
   reservations.delete(key);
   pendingReservations.delete(key);
@@ -582,10 +588,22 @@ async function endMeetingFromLeaseOwnershipLoss(
   await onEndMeeting(meeting);
 }
 
-async function processRemoteEndRequest(
+function dispatchEndMeeting(meeting: MeetingData): void {
+  // The finalizer owns its promise. A provider wait must never hold the renewal tick.
+  void Promise.resolve()
+    .then(() => meeting.onEndMeeting?.(meeting))
+    .catch((error) => {
+      console.error("Owned meeting finalization failed", {
+        meetingId: meeting.meetingId,
+        error,
+      });
+    });
+}
+
+function processRemoteEndRequest(
   lease: ActiveMeetingLease,
   meeting: MeetingData,
-): Promise<boolean> {
+): boolean {
   const onEndMeeting = meeting.onEndMeeting;
   if (
     !lease.endRequestedAt ||
@@ -601,10 +619,9 @@ async function processRemoteEndRequest(
     meetingId: meeting.meetingId,
     requestedBy: lease.endRequestedByUserId,
   });
-  stopMeetingLeaseHeartbeat(meeting);
   meeting.endReason = lease.endReason ?? MEETING_END_REASONS.WEB_UI;
   meeting.endTriggeredByUserId = lease.endRequestedByUserId;
-  await onEndMeeting(meeting);
+  dispatchEndMeeting(meeting);
   return true;
 }
 
@@ -643,13 +660,7 @@ export function startMeetingLeaseHeartbeat(meeting: MeetingData) {
         return;
       }
 
-      const handledRemoteEndRequest = await processRemoteEndRequest(
-        lease,
-        meeting,
-      );
-      if (handledRemoteEndRequest) {
-        return;
-      }
+      processRemoteEndRequest(lease, meeting);
 
       const renewed = await renewMeetingLeaseForMeeting(meeting);
       if (renewed) {

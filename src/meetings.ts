@@ -275,10 +275,15 @@ export async function endTtsOnlySession(meeting: MeetingData) {
   meeting.endTime = new Date();
   meeting.ttsQueue?.stopAndClear();
   try {
-    if (meeting.reservation)
-      await releaseSessionReservation(meeting.reservation);
+    if (meeting.finalization) meeting.finalization.disposition = "durable";
+    if (
+      meeting.reservation &&
+      !(await releaseSessionReservation(meeting.reservation))
+    )
+      throw new Error("TTS voice ownership remains unresolved");
   } catch (error) {
-    console.warn("Failed to disconnect TTS-only voice session.", error);
+    if (meeting.finalization) meeting.finalization.disposition = "unresolved";
+    throw error;
   }
   await restoreVoiceSessionNickname(meeting);
   meeting.setFinished();

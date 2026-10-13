@@ -1,9 +1,9 @@
 import { saveMeetingHistoryToDatabase } from "../../src/commands/saveMeetingHistory";
-import { writeMeetingHistoryService } from "../../src/services/meetingHistoryService";
+import { saveOwnedMeetingHistoryService } from "../../src/services/meetingHistoryService";
 import type { MeetingData } from "../../src/types/meeting-data";
 
 jest.mock("../../src/services/meetingHistoryService", () => ({
-  writeMeetingHistoryService: jest.fn(),
+  saveOwnedMeetingHistoryService: jest.fn(),
 }));
 jest.mock("../../src/services/notionAutomationService", () => ({
   maybeAutoExportCompletedMeeting: jest.fn(),
@@ -58,7 +58,8 @@ it.each([
     } as unknown as MeetingData;
     await saveMeetingHistoryToDatabase(meeting);
     expect(meeting.historySaved).toBe(true);
-    expect(writeMeetingHistoryService).toHaveBeenLastCalledWith(
+    expect(saveOwnedMeetingHistoryService).toHaveBeenLastCalledWith(
+      meeting,
       expect.objectContaining({
         generateNotes: generationEnabled,
         ...(cancelled

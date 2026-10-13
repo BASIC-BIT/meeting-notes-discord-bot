@@ -1,3 +1,8 @@
+import type { MeetingData } from "../types/meeting-data";
+import {
+  HISTORY_TRANSITION_FIELDS,
+  type HistoryTransition,
+} from "../types/deploymentControl";
 import type {
   MeetingAccessGrant,
   MeetingHistory,
@@ -197,4 +202,60 @@ export async function updateMeetingAccessGrantsService(params: {
   if (updated)
     await replaceMeetingUserIndexForMeetingService(previous, updated);
   return true;
+}
+
+/** Canonical recording lifecycle writes never replace the owned history row. */
+export async function transitionOwnedMeetingHistoryService(
+  meeting: MeetingData,
+  patch: HistoryTransition["patch"],
+  allowedStatuses: readonly MeetingStatus[],
+): Promise<void> {
+  const reservation = meeting.reservation;
+  if (!reservation || reservation.sessionMode !== "meeting")
+    throw new Error("Recording history requires its owned reservation");
+  const repository = getMeetingHistoryRepository();
+  meeting.ownershipSignal?.throwIfAborted();
+  meeting.finalization?.controller.signal.throwIfAborted();
+  const row = await repository.getOwned(reservation.historyKey);
+  meeting.ownershipSignal?.throwIfAborted();
+  meeting.finalization?.controller.signal.throwIfAborted();
+  if (
+    !row ||
+    row.meetingId !== reservation.meetingId ||
+    row.ownerInstanceId !== reservation.ownerInstanceId ||
+    row.executionVersion !== reservation.executionVersion ||
+    !row.status ||
+    !allowedStatuses.includes(row.status)
+  )
+    throw new Error("Recording history ownership or status changed");
+  const result = await repository.transitionOwned({
+    key: reservation.historyKey,
+    expectedMeetingId: reservation.meetingId,
+    expectedOwnerInstanceId: reservation.ownerInstanceId,
+    expectedExecutionVersion: reservation.executionVersion,
+    expectedStatus: row.status,
+    patch: { ...patch, updatedAt: new Date().toISOString() },
+  });
+  meeting.ownershipSignal?.throwIfAborted();
+  meeting.finalization?.controller.signal.throwIfAborted();
+  if (result !== "applied")
+    throw new Error("Recording history transition was fenced");
+}
+
+export async function saveOwnedMeetingHistoryService(
+  meeting: MeetingData,
+  history: MeetingHistory,
+): Promise<void> {
+  const patch = Object.fromEntries(
+    HISTORY_TRANSITION_FIELDS.map((key) => [key, history[key]]),
+  );
+  await transitionOwnedMeetingHistoryService(meeting, patch, ["processing"]);
+  try {
+    await writeMeetingUserIndexForMeetingService(history);
+  } catch (error) {
+    console.error("Failed to update meeting user index", {
+      meetingId: history.meetingId,
+      error,
+    });
+  }
 }

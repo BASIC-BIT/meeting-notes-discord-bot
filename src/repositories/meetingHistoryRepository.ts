@@ -1,3 +1,4 @@
+import { getDeploymentControlRepository } from "../db";
 import { config } from "../services/configService";
 import {
   getMeetingHistory as getMeetingHistoryRecord,
@@ -23,7 +24,13 @@ import { MEETING_STATUS, type MeetingStatus } from "../types/meetingLifecycle";
 import { trimNotesForHistory } from "../utils/notesHistory";
 import { getMockStore } from "./mockStore";
 
+import type { HistoryTransition } from "../types/deploymentControl";
+
 export type MeetingHistoryRepository = {
+  transitionOwned: (input: HistoryTransition) => Promise<"applied" | "stale">;
+  getOwned: (
+    key: HistoryTransition["key"],
+  ) => Promise<MeetingHistory | undefined>;
   write: (history: MeetingHistory) => Promise<void>;
   get: (
     guildId: string,
@@ -110,7 +117,14 @@ const filterArchivedMeetings = (
   return meetings.filter((meeting) => !meeting.archivedAt);
 };
 
+const ownedOperations = {
+  transitionOwned: (input: HistoryTransition) =>
+    getDeploymentControlRepository().transitionMeetingHistory(input),
+  getOwned: (key: HistoryTransition["key"]) =>
+    getDeploymentControlRepository().getMeetingHistory(key),
+};
 const realRepository: MeetingHistoryRepository = {
+  ...ownedOperations,
   write: writeMeetingHistory,
   get: getMeetingHistoryRecord,
   listRecentByGuild: async (guildId, limit, options) => {
@@ -181,6 +195,7 @@ const realRepository: MeetingHistoryRepository = {
 };
 
 const mockRepository: MeetingHistoryRepository = {
+  ...ownedOperations,
   async write(history) {
     const store = getMockStore();
     const existing = store.meetingHistoryByGuild.get(history.guildId) ?? [];

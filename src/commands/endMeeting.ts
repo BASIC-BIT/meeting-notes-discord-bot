@@ -6,6 +6,7 @@ import {
   buildMixedAudio,
   cleanupSpeakerTracks,
   closeOutputFile,
+  closeFailedInitializationOutput,
   compileTranscriptions,
   startProcessingSnippet,
   waitForAudioOnlyFinishProcessing,
@@ -19,7 +20,7 @@ import {
 import { deleteIfExists } from "../util";
 import { MeetingData } from "../types/meeting-data";
 import { saveMeetingHistoryToDatabase } from "./saveMeetingHistory";
-import { updateMeetingStatusService } from "../services/meetingHistoryService";
+import { transitionOwnedMeetingHistoryService } from "../services/meetingHistoryService";
 import { renderChatEntryLine } from "../utils/chatLog";
 import {
   uploadMeetingArtifacts,
@@ -51,7 +52,6 @@ import {
   deleteMeeting,
   endTtsOnlySession,
   getMeeting,
-  hasMeeting,
   restoreVoiceSessionNickname,
 } from "../meetings";
 import { MEETING_END_REASONS, MEETING_STATUS } from "../types/meetingLifecycle";
@@ -71,7 +71,7 @@ import { runTranscriptionFinalPass } from "../services/transcriptionFinalPassSer
 import { getAudioTranscriptionFacts } from "../utils/audioTranscript";
 import { classifyTranscription } from "../utils/meetingProcessing";
 
-type EndMeetingFlowOptions = {
+export type EndMeetingFlowOptions = {
   client: Client;
   meeting: MeetingData;
 };
@@ -90,15 +90,15 @@ async function runMeetingEndStep<T>(
   run: () => Promise<T>,
   options: MeetingEndStepOptions = {},
 ): Promise<T> {
+  meeting.ownershipSignal?.throwIfAborted();
+  meeting.finalization?.controller.signal.throwIfAborted();
   const startedAt = Date.now();
   const result = await withMeetingEndStep(meeting, name, run, options);
+  meeting.ownershipSignal?.throwIfAborted();
+  meeting.finalization?.controller.signal.throwIfAborted();
   const durationMs = Date.now() - startedAt;
   console.log(`Meeting end step completed: ${name} durationMs=${durationMs}`);
   return result;
-}
-
-function shouldReleaseLeaseDuringErrorCleanup(meeting: MeetingData): boolean {
-  return !meeting.finishing && !meeting.finished;
 }
 
 /**
@@ -160,14 +160,6 @@ function captureMeetingCompleted(meeting: MeetingData): void {
       error,
     });
   }
-}
-
-function captureFailedMeetingCompleted(meeting: MeetingData): void {
-  if (meeting.transcribeMeeting && !meeting.processing?.transcription) {
-    meeting.processing = { ...meeting.processing, transcription: "failed" };
-  }
-  meeting.historySaved ??= false;
-  captureMeetingCompleted(meeting);
 }
 
 function shouldFinalizeDismissedAutoRecording(meeting: MeetingData): boolean {
@@ -261,30 +253,6 @@ export async function handleEndMeetingButton(
     });
   } catch (error) {
     console.error("Error during meeting end:", error);
-    if (meeting && hasMeeting(meeting.guildId)) {
-      await restoreVoiceSessionNickname(meeting);
-      if (shouldReleaseLeaseDuringErrorCleanup(meeting)) {
-        try {
-          await releaseMeetingLeaseForMeeting(meeting);
-        } catch (releaseError) {
-          console.error(
-            "Failed to release meeting lease during error cleanup",
-            {
-              guildId: meeting.guildId,
-              meetingId: meeting.meetingId,
-              error: releaseError,
-            },
-          );
-        }
-      }
-      meeting.setFinished();
-      meeting.finished = true;
-      captureFailedMeetingCompleted(meeting);
-      deleteMeeting(meeting.guildId);
-    }
-    if (meeting) {
-      await cleanupMeetingTempDir(meeting);
-    }
   }
 }
 
@@ -298,40 +266,145 @@ export async function handleEndMeetingOther(
     });
   } catch (error) {
     console.error("Error during meeting end:", error);
-    if (meeting && hasMeeting(meeting.guildId)) {
-      await restoreVoiceSessionNickname(meeting);
-      if (shouldReleaseLeaseDuringErrorCleanup(meeting)) {
-        try {
-          await releaseMeetingLeaseForMeeting(meeting);
-        } catch (releaseError) {
-          console.error(
-            "Failed to release meeting lease during error cleanup",
-            {
-              guildId: meeting.guildId,
-              meetingId: meeting.meetingId,
-              error: releaseError,
-            },
-          );
-        }
-      }
-      meeting.setFinished();
-      meeting.finished = true;
-      captureFailedMeetingCompleted(meeting);
-      deleteMeeting(meeting.guildId);
-    }
-    await cleanupMeetingTempDir(meeting);
   }
 }
 
-async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
+/** Returns the same promise for every button, remote request and timeout. */
+export function runEndMeetingFlow(
+  options: EndMeetingFlowOptions,
+): Promise<void> {
+  const { meeting } = options;
+  if (meeting.finalization) return meeting.finalization.promise;
+  if (meeting.finished) return Promise.resolve();
+  if (meeting.finalizationFenced)
+    return Promise.reject(new Error("Meeting finalization fenced"));
+  const controller = new AbortController();
+  // Install ownership before the first await or callback can reenter.
+  const promise = Promise.resolve().then(() =>
+    executeOwnedFinalization(options),
+  );
+  meeting.finalization = { promise, controller, disposition: "pending" };
+  meeting.reservation?.workHandle.transition("finalization");
+  return promise;
+}
+
+export function getMeetingFinalizationCheckpoint(meeting: MeetingData) {
+  return {
+    promise: meeting.finalization?.promise,
+    disposition: meeting.finalization?.disposition ?? "pending",
+    historyDisposition: meeting.finalization?.historyDisposition,
+    fenced:
+      meeting.finalizationFenced === true ||
+      meeting.ownershipSignal?.aborted === true,
+    preservation: meeting.finalization?.preservation,
+  };
+}
+
+/** R3 can fence late AI results before running preservation under its shared deadline. */
+export function fenceMeetingFinalization(meeting: MeetingData): void {
+  meeting.finalizationFenced = true;
+  meeting.finalization?.controller.abort(
+    new Error("Meeting finalization fenced"),
+  );
+  stopFinalizationCapture(meeting);
+}
+
+function stopFinalizationCapture(meeting: MeetingData): void {
+  meeting.finishing = true;
+  meeting.captureAudio = false;
+  meeting.recordBotAudio = false;
+  meeting.ttsQueue?.stopAndClear();
+  stopThinkingCueLoop(meeting);
+  if (meeting.timeoutTimer) clearTimeout(meeting.timeoutTimer);
+  meeting.reservation?.workHandle.transition("finalization");
+}
+
+/** Stops local capture without invoking notes/AI or deleting artifacts. False remains owned. */
+export function preserveMeetingFinalizationCapture(
+  meeting: MeetingData,
+): Promise<boolean> {
+  fenceMeetingFinalization(meeting);
+  const existing = meeting.finalization?.preservation;
+  if (existing) return existing;
+  const preservation = preserveStoppedCapture(meeting);
+  if (meeting.finalization) meeting.finalization.preservation = preservation;
+  return preservation;
+}
+
+function preserveStoppedCapture(meeting: MeetingData): Promise<boolean> {
+  return Promise.all([
+    closeFailedInitializationOutput(meeting),
+    meeting.reservation
+      ? settleOwnedVoiceSession(meeting.reservation)
+      : Promise.resolve("uncertain"),
+  ])
+    .then(([closed, voice]) => closed && voice === "settled")
+    .catch(() => false);
+}
+
+async function executeOwnedFinalization(
+  options: EndMeetingFlowOptions,
+): Promise<void> {
+  const { meeting } = options;
+  try {
+    meeting.ownershipSignal?.throwIfAborted();
+    meeting.finalization?.controller.signal.throwIfAborted();
+    if (meeting.sessionMode === "tts_only") {
+      await endTtsOnlySession(meeting);
+      return;
+    }
+    await finalizeRecording(options);
+    meeting.ownershipSignal?.throwIfAborted();
+    meeting.finalization?.controller.signal.throwIfAborted();
+    if (meeting.finalization?.disposition !== "durable")
+      throw new Error("Meeting artifacts require preservation");
+    await cleanupMeetingTempDir(meeting);
+    const released = await releaseMeetingLeaseForMeeting(meeting);
+    if (!released)
+      throw new Error("Meeting voice or lease release remains unresolved");
+    meeting.setFinished();
+    meeting.finished = true;
+    captureMeetingCompleted(meeting);
+    deleteMeeting(meeting.guildId);
+  } catch (error) {
+    if (meeting.finalization) meeting.finalization.disposition = "unresolved";
+    stopFinalizationCapture(meeting);
+    // Close capture/voice even when the history provider cannot return.
+    const preservation = preserveStoppedCapture(meeting);
+    if (meeting.finalization) meeting.finalization.preservation = preservation;
+    // Failure is a durable disposition, never evidence that local artifacts can be deleted.
+    try {
+      await transitionOwnedMeetingHistoryService(
+        meeting,
+        {
+          status: MEETING_STATUS.FAILED,
+          processing: meeting.processing,
+          endReason: meeting.endReason,
+        },
+        [
+          MEETING_STATUS.STARTING,
+          MEETING_STATUS.IN_PROGRESS,
+          MEETING_STATUS.PROCESSING,
+        ],
+      );
+      if (meeting.finalization)
+        meeting.finalization.historyDisposition = "failed";
+    } catch (historyError) {
+      console.error("Meeting finalization disposition remains unresolved", {
+        meetingId: meeting.meetingId,
+        error: historyError,
+      });
+    }
+    // A failed encoder/storage/provider leaves work counted for preservation/reconciliation.
+    fenceMeetingFinalization(meeting);
+    throw error;
+  }
+}
+
+async function finalizeRecording(
+  options: EndMeetingFlowOptions,
+): Promise<void> {
   const { client, meeting } = options;
-  if (meeting.finishing || meeting.finished) {
-    return;
-  }
-  if (meeting.sessionMode === "tts_only") {
-    await endTtsOnlySession(meeting);
-    return;
-  }
   if (meeting.timeoutTimer) {
     clearTimeout(meeting.timeoutTimer);
     meeting.timeoutTimer = undefined;
@@ -353,8 +426,7 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
 
   const meetingTempDir = await ensureMeetingTempDir(meeting);
   let preserveMeetingTempDir = false;
-  let retainedMeetingTempDir: string | undefined;
-  try {
+  {
     const chatLogFilePath = path.join(meetingTempDir, "chat.txt");
     writeFileSync(
       chatLogFilePath,
@@ -400,7 +472,6 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
         () => handleAutoRecordCancellation(client, meeting, chatLogFilePath),
       );
       preserveMeetingTempDir = retention.preserveLocalArtifacts;
-      retainedMeetingTempDir = retention.retainedTempDir;
       if (!preserveMeetingTempDir) {
         await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>
           cleanupSpeakerTracks(meeting),
@@ -430,7 +501,6 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
           () => handleAutoRecordCancellation(client, meeting, chatLogFilePath),
         );
         preserveMeetingTempDir = retention.preserveLocalArtifacts;
-        retainedMeetingTempDir = retention.retainedTempDir;
         if (!preserveMeetingTempDir) {
           await runMeetingEndStep(meeting, "cleanup-speaker-tracks", () =>
             cleanupSpeakerTracks(meeting),
@@ -562,12 +632,22 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
         () => retainLocalMeetingArtifacts(meeting, "audio_upload_failed"),
       );
       preserveMeetingTempDir = retention.preserveLocalArtifacts;
-      retainedMeetingTempDir = retention.retainedTempDir;
     }
 
     await runMeetingEndStep(meeting, "update-summary-message", () =>
       updateMeetingSummaryMessage(meeting),
     );
+
+    // Save meeting history to database before cleanup
+    await runMeetingEndStep(meeting, "save-meeting-history", () =>
+      saveMeetingHistoryToDatabase(meeting),
+    );
+    if (meeting.finalization) {
+      meeting.finalization.disposition = preserveMeetingTempDir
+        ? "unresolved"
+        : "durable";
+      meeting.finalization.historyDisposition = "complete";
+    }
 
     if (!preserveMeetingTempDir) {
       deleteIfExists(chatLogFilePath);
@@ -581,12 +661,8 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
       );
     }
 
-    // Save meeting history to database before cleanup
-    await runMeetingEndStep(meeting, "save-meeting-history", () =>
-      saveMeetingHistoryToDatabase(meeting),
-    );
-    // Notice delivery can outlive finalization without retaining the recording lease.
-    void runMeetingEndStep(meeting, "minutes-limit-notice", () =>
+    // Ancillary delivery stays in the same counted finalization until it settles.
+    await runMeetingEndStep(meeting, "minutes-limit-notice", () =>
       maybeSendMinutesLimitNotice(meeting),
     ).catch((error) => {
       console.warn("Recording-limit notice failed", {
@@ -594,44 +670,6 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
         error,
       });
     });
-
-    meeting.setFinished();
-    meeting.finished = true;
-    console.info("Meeting processing completed", {
-      meetingId: meeting.meetingId,
-      processing: meeting.processing,
-      ...getAudioTranscriptionFacts(meeting.audioData),
-    });
-    captureMeetingCompleted(meeting);
-    deleteMeeting(meeting.guildId);
-  } finally {
-    try {
-      const released = await releaseMeetingLeaseForMeeting(meeting);
-      if (!released) {
-        console.warn("Failed to release active meeting lease ownership", {
-          guildId: meeting.guildId,
-          meetingId: meeting.meetingId,
-        });
-      }
-    } catch (error) {
-      console.error("Error releasing active meeting lease", {
-        guildId: meeting.guildId,
-        meetingId: meeting.meetingId,
-        error,
-      });
-    }
-    if (preserveMeetingTempDir) {
-      console.warn(
-        "Skipping meeting temp cleanup because local artifacts were retained",
-        {
-          guildId: meeting.guildId,
-          meetingId: meeting.meetingId,
-          localPath: retainedMeetingTempDir ?? meetingTempDir,
-        },
-      );
-    } else {
-      await cleanupMeetingTempDir(meeting);
-    }
   }
 }
 
@@ -681,17 +719,19 @@ async function handleAutoRecordCancellation(
     : { preserveLocalArtifacts: false };
   await updateAutoRecordCancelledMessage(meeting);
   await deleteTrackedMessages(meeting);
+  await saveMeetingHistoryToDatabase(meeting);
+  if (meeting.finalization) {
+    meeting.finalization.disposition = retention.preserveLocalArtifacts
+      ? "unresolved"
+      : "durable";
+    meeting.finalization.historyDisposition = "cancelled";
+  }
   if (!retention.preserveLocalArtifacts) {
     deleteIfExists(chatLogFilePath);
     if (meeting.audioData.outputFileName) {
       deleteIfExists(meeting.audioData.outputFileName);
     }
   }
-  await saveMeetingHistoryToDatabase(meeting);
-  meeting.setFinished();
-  meeting.finished = true;
-  captureMeetingCompleted(meeting);
-  deleteMeeting(meeting.guildId);
   return retention;
 }
 
@@ -793,16 +833,11 @@ async function updateAutoRecordCancelledMessage(meeting: MeetingData) {
 }
 
 async function markMeetingProcessing(meeting: MeetingData) {
-  if (!meeting.transcribeMeeting) return;
-  try {
-    await updateMeetingStatusService({
-      guildId: meeting.guildId,
-      channelId_timestamp: `${meeting.voiceChannel.id}#${meeting.startTime.toISOString()}`,
-      status: MEETING_STATUS.PROCESSING,
-    });
-  } catch (error) {
-    console.warn("Failed to mark meeting as processing", error);
-  }
+  await transitionOwnedMeetingHistoryService(
+    meeting,
+    { status: MEETING_STATUS.PROCESSING },
+    [MEETING_STATUS.STARTING, MEETING_STATUS.IN_PROGRESS],
+  );
 }
 
 async function maybeSendMinutesLimitNotice(meeting: MeetingData) {

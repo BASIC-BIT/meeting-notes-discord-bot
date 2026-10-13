@@ -18,6 +18,9 @@ import { Collection } from "discord.js";
 import {
   handleEndMeetingButton,
   handleEndMeetingOther,
+  runEndMeetingFlow,
+  fenceMeetingFinalization,
+  preserveMeetingFinalizationCapture,
 } from "../../src/commands/endMeeting";
 import { startProcessingSnippet } from "../../src/audio";
 import { withMeetingEndTrace } from "../../src/observability/meetingTrace";
@@ -37,7 +40,7 @@ import {
   retainMeetingTempDir,
 } from "../../src/services/tempFileService";
 import { getGuildLimits } from "../../src/services/subscriptionService";
-import { updateMeetingStatusService } from "../../src/services/meetingHistoryService";
+import { transitionOwnedMeetingHistoryService } from "../../src/services/meetingHistoryService";
 import { deleteIfExists } from "../../src/util";
 import { deleteMeeting, getMeeting, hasMeeting } from "../../src/meetings";
 import { describeAutoRecordRule } from "../../src/utils/meetingLifecycle";
@@ -46,7 +49,10 @@ import { releaseMeetingLeaseForMeeting } from "../../src/services/activeMeetingL
 import { runTranscriptionFinalPass } from "../../src/services/transcriptionFinalPassService";
 import { captureEvent } from "../../src/services/analyticsService";
 import { ensureMeetingNotes } from "../../src/services/meetingNotesService";
-import { updateMeetingSummaryMessage } from "../../src/embed";
+import {
+  updateMeetingProcessingMessage,
+  updateMeetingSummaryMessage,
+} from "../../src/embed";
 jest.mock("../../src/services/analyticsService", () => ({
   captureEvent: jest.fn(),
 }));
@@ -55,6 +61,7 @@ jest.mock("../../src/audio", () => ({
   buildMixedAudio: jest.fn(),
   cleanupSpeakerTracks: jest.fn(),
   closeOutputFile: jest.fn(),
+  closeFailedInitializationOutput: jest.fn(async () => true),
   compileTranscriptions: jest.fn(),
   startProcessingSnippet: jest.fn(),
   waitForAudioOnlyFinishProcessing: jest.fn(),
@@ -84,7 +91,7 @@ jest.mock("../../src/commands/saveMeetingHistory", () => ({
   saveMeetingHistoryToDatabase: jest.fn(),
 }));
 jest.mock("../../src/services/meetingHistoryService", () => ({
-  updateMeetingStatusService: jest.fn(),
+  transitionOwnedMeetingHistoryService: jest.fn(),
 }));
 jest.mock("../../src/utils/chatLog", () => ({
   renderChatEntryLine: jest.fn().mockReturnValue(""),
@@ -195,8 +202,8 @@ const mockedGetGuildLimits = getGuildLimits as jest.MockedFunction<
   typeof getGuildLimits
 >;
 const mockedUpdateMeetingStatusService =
-  updateMeetingStatusService as jest.MockedFunction<
-    typeof updateMeetingStatusService
+  transitionOwnedMeetingHistoryService as jest.MockedFunction<
+    typeof transitionOwnedMeetingHistoryService
   >;
 const mockedGetMeeting = getMeeting as jest.MockedFunction<typeof getMeeting>;
 const mockedDeleteMeeting = deleteMeeting as jest.MockedFunction<
@@ -226,6 +233,7 @@ describe("handleEndMeetingOther", () => {
   let warning: jest.SpiedFunction<typeof console.warn>;
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedReleaseMeetingLeaseForMeeting.mockResolvedValue(true);
     warning = jest.spyOn(console, "warn");
     jest.mocked(ensureMeetingNotes).mockReset();
     jest.mocked(updateMeetingSummaryMessage).mockReset();
@@ -366,16 +374,26 @@ describe("handleEndMeetingOther", () => {
         meetings: [],
         windowStartIso: "2026-10-01T00:00:00Z",
       });
+      let finishNotice: (() => void) | undefined;
       if (pending)
-        jest
-          .mocked(notifyRecordingLimit)
-          .mockReturnValueOnce(new Promise(() => {}));
+        jest.mocked(notifyRecordingLimit).mockReturnValueOnce(
+          new Promise((resolve) => {
+            finishNotice = resolve;
+          }),
+        );
       else if (fails)
         jest
           .mocked(notifyRecordingLimit)
           .mockRejectedValueOnce(new Error("test notice failure"));
       else jest.mocked(notifyRecordingLimit).mockResolvedValueOnce(undefined);
-      await handleEndMeetingOther({} as Client, meeting);
+      const ending = handleEndMeetingOther({} as Client, meeting);
+      if (pending) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(meeting.setFinished).not.toHaveBeenCalled();
+        expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+        finishNotice?.();
+      }
+      await ending;
 
       expect(notifyRecordingLimit).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -690,37 +708,22 @@ describe("handleEndMeetingOther", () => {
       });
       if (state !== "transcription_error")
         expect(meeting.processing).toMatchObject({ transcription: "ready" });
-      expect(captureEvent).toHaveBeenCalledTimes(1);
-      expect(captureEvent).toHaveBeenCalledWith(
-        "meeting_completed",
-        expect.objectContaining({
-          guildId: "guild-1",
-          userId: "user-1",
-          properties: expect.objectContaining({
-            usable_notes: state === "complete" || state === "cleanup_error",
-            event_version: 2,
-          }),
-        }),
-      );
-      if (state === "transcription_error")
+      if (state.endsWith("_error")) {
+        expect(captureEvent).not.toHaveBeenCalled();
+        expect(meeting.setFinished).not.toHaveBeenCalled();
+        expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+      } else {
+        expect(captureEvent).toHaveBeenCalledTimes(1);
         expect(captureEvent).toHaveBeenCalledWith(
           "meeting_completed",
           expect.objectContaining({
             properties: expect.objectContaining({
-              transcription_outcome: "failed",
-              history_persistence: "not_saved",
+              usable_notes: state === "complete",
+              event_version: 2,
             }),
           }),
         );
-      if (state === "history_error" || state === "upload_error")
-        expect(captureEvent).toHaveBeenCalledWith(
-          "meeting_completed",
-          expect.objectContaining({
-            properties: expect.objectContaining({
-              history_persistence: "not_saved",
-            }),
-          }),
-        );
+      }
       expect(
         JSON.stringify(jest.mocked(captureEvent).mock.calls),
       ).not.toContain("Private notes");
@@ -738,6 +741,7 @@ describe("handleEndMeetingOther", () => {
       chatUploadExpected: true,
       transcriptUploadExpected: false,
     });
+    mockedCloseOutputFile.mockReset().mockResolvedValue(undefined);
     mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
     mockedGetGuildLimits.mockResolvedValue({ limits: {} } as never);
 
@@ -786,7 +790,7 @@ describe("handleEndMeetingOther", () => {
     expect(mockedCleanupMeetingTempDir).not.toHaveBeenCalled();
   });
 
-  it("continues error cleanup when lease release fails", async () => {
+  it("does not release or finish when the trace wrapper fails", async () => {
     mockedWithMeetingEndTrace.mockRejectedValue(new Error("end flow failed"));
     mockedHasMeeting.mockReturnValue(true);
     mockedReleaseMeetingLeaseForMeeting.mockRejectedValue(
@@ -807,10 +811,10 @@ describe("handleEndMeetingOther", () => {
       undefined,
     );
 
-    expect(mockedReleaseMeetingLeaseForMeeting).toHaveBeenCalledWith(meeting);
-    expect(meeting.setFinished).toHaveBeenCalled();
-    expect(meeting.finished).toBe(true);
-    expect(mockedDeleteMeeting).toHaveBeenCalledWith("guild-1");
+    expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+    expect(meeting.setFinished).not.toHaveBeenCalled();
+    expect(meeting.finished).toBe(false);
+    expect(mockedDeleteMeeting).not.toHaveBeenCalled();
   });
 
   it("preserves cancelled artifacts, history and cleanup when cancellation delivery fails", async () => {
@@ -1035,17 +1039,18 @@ describe("handleEndMeetingOther", () => {
     );
 
     expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
-    expect(meeting.setFinished).toHaveBeenCalled();
-    expect(mockedDeleteMeeting).toHaveBeenCalledWith("guild-1");
+    expect(meeting.setFinished).not.toHaveBeenCalled();
+    expect(mockedDeleteMeeting).not.toHaveBeenCalled();
   });
 });
 
 describe("handleEndMeetingButton", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedReleaseMeetingLeaseForMeeting.mockResolvedValue(true);
   });
 
-  it("captures failed button finalization once before deleting the meeting", async () => {
+  it("does not report completion or delete after failed button preparation", async () => {
     mockedWithMeetingEndTrace.mockRejectedValueOnce(
       new Error("transcription unavailable"),
     );
@@ -1067,21 +1072,9 @@ describe("handleEndMeetingButton", () => {
       reply: jest.fn(),
     } as unknown as ButtonInteraction;
     await handleEndMeetingButton({} as Client, interaction);
-    expect(captureEvent).toHaveBeenCalledTimes(1);
-    expect(captureEvent).toHaveBeenCalledWith(
-      "meeting_completed",
-      expect.objectContaining({
-        properties: expect.objectContaining({
-          transcription_outcome: "failed",
-          history_persistence: "not_saved",
-          usable_notes: false,
-        }),
-      }),
-    );
-    expect(mockedDeleteMeeting).toHaveBeenCalledWith("guild-1");
-    expect(jest.mocked(captureEvent).mock.invocationCallOrder[0]).toBeLessThan(
-      mockedDeleteMeeting.mock.invocationCallOrder[0],
-    );
+    expect(captureEvent).not.toHaveBeenCalled();
+    expect(mockedDeleteMeeting).not.toHaveBeenCalled();
+    expect(meeting.setFinished).not.toHaveBeenCalled();
   });
 
   it("acknowledges the end meeting button when auto-recording is cancelled", async () => {
@@ -1233,4 +1226,163 @@ describe("handleEndMeetingButton", () => {
       }),
     );
   });
+});
+
+function finalizationFixture(): MeetingData {
+  return {
+    guildId: "h4-guild",
+    meetingId: "h4-meeting",
+    startTime: new Date(),
+    creator: { id: "creator" },
+    attendance: new Set(),
+    participants: new Map(),
+    voiceChannel: { id: "voice", name: "Voice" },
+    textChannel: { id: "text" },
+    audioData: {
+      audioFiles: [],
+      currentSnippets: new Map(),
+      outputFileName: "audio",
+    },
+    chatLog: [],
+    setFinished: jest.fn(),
+    transcribeMeeting: false,
+    reservation: {
+      sessionMode: "meeting",
+      guildId: "h4-guild",
+      meetingId: "h4-meeting",
+      ownerInstanceId: "owner",
+      executionVersion: 1,
+      historyKey: { guildId: "h4-guild", channelId_timestamp: "key" },
+      workHandle: { transition: jest.fn(), settle: jest.fn() },
+    },
+  } as unknown as MeetingData;
+}
+
+describe("owned finalization durability", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedReleaseMeetingLeaseForMeeting.mockResolvedValue(true);
+    mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
+    mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
+    mockedUploadMeetingArtifacts.mockResolvedValue(successfulArtifactUpload);
+    mockedCloseOutputFile.mockReset().mockResolvedValue(undefined);
+    mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
+    mockedGetGuildLimits.mockResolvedValue({ limits: {} } as never);
+    mockedUpdateMeetingStatusService.mockResolvedValue(undefined);
+  });
+  it("onlyOneFinalizerWins", async () => {
+    const meeting = finalizationFixture();
+    let finish!: () => void;
+    mockedCloseOutputFile.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const first = runEndMeetingFlow({ client: {} as Client, meeting });
+    const second = runEndMeetingFlow({ client: {} as Client, meeting });
+    expect(first).toBe(second);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockedCloseOutputFile).toHaveBeenCalledTimes(1);
+    expect(meeting.setFinished).not.toHaveBeenCalled();
+    finish();
+    await first;
+  });
+  it("historyFailureRetainsArtifactsAndWork", async () => {
+    const meeting = finalizationFixture();
+    mockedSaveMeetingHistoryToDatabase.mockRejectedValueOnce(
+      new Error("storage unavailable"),
+    );
+    await handleEndMeetingOther({} as Client, meeting);
+    expect(mockedCleanupMeetingTempDir).not.toHaveBeenCalled();
+    expect(mockedCleanupSpeakerTracks).not.toHaveBeenCalled();
+    expect(mockedDeleteIfExists).not.toHaveBeenCalled();
+    expect(meeting.setFinished).not.toHaveBeenCalled();
+    expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+    expect(captureEvent).not.toHaveBeenCalled();
+  });
+});
+
+// Preparation errors occur before encoders/providers; the owned failure path still persists them.
+it("preparationFailurePersistsFailure", async () => {
+  jest.clearAllMocks();
+  jest
+    .mocked(transitionOwnedMeetingHistoryService)
+    .mockResolvedValue(undefined);
+  jest
+    .mocked(updateMeetingProcessingMessage)
+    .mockRejectedValueOnce(new Error("Discord unavailable"));
+  const meeting = finalizationFixture();
+  await expect(
+    runEndMeetingFlow({ client: {} as Client, meeting }),
+  ).rejects.toThrow("Discord unavailable");
+  expect(transitionOwnedMeetingHistoryService).toHaveBeenLastCalledWith(
+    meeting,
+    expect.objectContaining({ status: "failed" }),
+    ["starting", "in_progress", "processing"],
+  );
+  expect(meeting.finalization?.historyDisposition).toBe("failed");
+  expect(meeting.setFinished).not.toHaveBeenCalled();
+  expect(mockedCleanupMeetingTempDir).not.toHaveBeenCalled();
+});
+it("preservation fence prevents a held provider result from publishing or cleaning up", async () => {
+  jest.clearAllMocks();
+  jest
+    .mocked(transitionOwnedMeetingHistoryService)
+    .mockResolvedValue(undefined);
+  let finish!: () => void;
+  mockedCloseOutputFile.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const meeting = finalizationFixture();
+  const promise = runEndMeetingFlow({ client: {} as Client, meeting });
+  const rejection = expect(promise).rejects.toThrow("fenced");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fenceMeetingFinalization(meeting);
+  await expect(preserveMeetingFinalizationCapture(meeting)).resolves.toBe(true);
+  finish();
+  await rejection;
+  expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
+  expect(mockedCleanupMeetingTempDir).not.toHaveBeenCalled();
+  expect(meeting.setFinished).not.toHaveBeenCalled();
+});
+
+it("held ancillary delivery remains counted until completion", async () => {
+  jest.clearAllMocks();
+  mockedCloseOutputFile.mockResolvedValue(undefined);
+  mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
+  mockedReleaseMeetingLeaseForMeeting.mockResolvedValue(true);
+  mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
+  mockedUploadMeetingArtifacts.mockResolvedValue(successfulArtifactUpload);
+  jest
+    .mocked(transitionOwnedMeetingHistoryService)
+    .mockResolvedValue(undefined);
+  mockedGetGuildLimits.mockResolvedValue({
+    limits: { maxMeetingMinutesRolling: 240 },
+  } as never);
+  jest.mocked(getRollingUsageForGuild).mockResolvedValue({
+    usedSeconds: 14400,
+    meetings: [],
+    windowStartIso: "2026-10-01T00:00:00Z",
+  });
+  let finish!: () => void;
+  jest.mocked(notifyRecordingLimit).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const meeting = finalizationFixture();
+  const promise = runEndMeetingFlow({ client: {} as Client, meeting });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(notifyRecordingLimit).toHaveBeenCalledTimes(1);
+  expect(meeting.setFinished).not.toHaveBeenCalled();
+  expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+  expect(meeting.reservation?.workHandle.transition).toHaveBeenCalledWith(
+    "finalization",
+  );
+  expect(meeting.reservation?.workHandle.settle).not.toHaveBeenCalled();
+  finish();
+  await promise;
+  expect(meeting.setFinished).toHaveBeenCalledTimes(1);
 });

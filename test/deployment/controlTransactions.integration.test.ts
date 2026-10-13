@@ -791,3 +791,53 @@ test("unsettled voice cannot be replaced without the current attempt", async () 
     await repository.writeVoice({ ...voice, state: "connected" }, voice),
   ).toBe("stale");
 });
+
+test("terminal owned metadata is conditional and keeps execution version and capture fields", async () => {
+  const row = {
+    ...history,
+    channelId_timestamp: `h4-${randomUUID()}`,
+    status: "processing" as const,
+    captureMarker: "kept",
+  };
+  expect(
+    await repository.createInitialMeetingHistory({
+      ...row,
+      status: "starting",
+    }),
+  ).toBe("applied");
+  const transition = {
+    key: { guildId: row.guildId, channelId_timestamp: row.channelId_timestamp },
+    expectedMeetingId: row.meetingId,
+    expectedOwnerInstanceId: "old",
+    expectedExecutionVersion: 1,
+    expectedStatus: "processing" as const,
+    patch: {
+      status: "complete" as const,
+      notes: "Generated fixture notes",
+      notesVersion: 1,
+      participants: [],
+    },
+  };
+  expect(
+    await repository.transitionMeetingHistory({
+      ...transition,
+      expectedStatus: "starting",
+      patch: { status: "processing" },
+    }),
+  ).toBe("applied");
+  expect(await repository.transitionMeetingHistory(transition)).toBe("applied");
+  expect(
+    await repository.transitionMeetingHistory({
+      ...transition,
+      patch: { status: "failed" },
+    }),
+  ).toBe("stale");
+  expect(await repository.getMeetingHistory(transition.key)).toMatchObject({
+    status: "complete",
+    executionVersion: 1,
+    ownerInstanceId: "old",
+    captureMarker: "kept",
+    notes: "Generated fixture notes",
+    notesVersion: 1,
+  });
+});

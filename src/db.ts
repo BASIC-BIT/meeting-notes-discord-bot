@@ -547,10 +547,12 @@ export async function renewActiveMeetingLease(
   },
   ownership?: { executionVersion: number; sessionMode: "meeting" | "tts_only" },
 ): Promise<boolean> {
+  const now = Math.floor(Date.now() / 1000);
   if (config.mock.enabled) {
     const lease = getMockStore().activeMeetingLeases.get(guildId);
     if (
       !lease ||
+      lease.leaseExpiresAt < now ||
       lease.meetingId !== meetingId ||
       lease.ownerInstanceId !== ownerInstanceId ||
       lease.executionVersion !== ownership?.executionVersion ||
@@ -580,6 +582,7 @@ export async function renewActiveMeetingLease(
     ":updatedAt": updatedAt,
     ":expiresAt": expiresAt,
     ":status": snapshot.status,
+    ":now": now,
     ":meetingId": meetingId,
     ":ownerInstanceId": ownerInstanceId,
   };
@@ -615,7 +618,7 @@ export async function renewActiveMeetingLease(
     Key: marshall({ guildId }),
     UpdateExpression: `SET ${updateParts.join(", ")}`,
     ConditionExpression:
-      "#meetingId = :meetingId AND #ownerInstanceId = :ownerInstanceId AND " +
+      "#leaseExpiresAt >= :now AND #meetingId = :meetingId AND #ownerInstanceId = :ownerInstanceId AND " +
       (ownership
         ? "#executionVersion = :executionVersion AND sessionMode = :sessionMode"
         : "attribute_not_exists(#executionVersion)"),

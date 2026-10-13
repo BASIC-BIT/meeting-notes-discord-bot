@@ -355,7 +355,7 @@ test("history patch cannot replace unrelated data or rewind status", async () =>
   await expect(
     repository.transitionMeetingHistory({
       ...transition,
-      patch: { ...{ notes: "unrelated" } },
+      patch: { status: "failed", ...{ ownerInstanceId: "unrelated" } },
     }),
   ).rejects.toThrow("not allowed");
 });
