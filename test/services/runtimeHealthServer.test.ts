@@ -1,6 +1,52 @@
 /** @jest-environment node */
 import { startRuntimeHealthServer } from "../../src/services/runtimeHealthServer";
 import { createRuntimeProtectionService } from "../../src/services/runtimeProtectionService";
+import { createConnection } from "node:net";
+
+function malformedRequest(port: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.setTimeout(1000, () =>
+      socket.destroy(new Error("HTTP response timeout")),
+    );
+    socket.on("error", reject);
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
+    socket.on("end", () => resolve(response));
+    socket.on("connect", () =>
+      socket.write(
+        "GET //[ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+      ),
+    );
+  });
+}
+
+test("malformedRawTargetsCannotCrashTheListenerBeforeOrAfterActivation", async () => {
+  const server = await startRuntimeHealthServer(0);
+  const address = server.server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Missing test address");
+  const origin = `http://127.0.0.1:${address.port}`;
+  const application = jest.fn((_request, response) => {
+    response.writeHead(204);
+    response.end();
+  });
+  try {
+    expect(await malformedRequest(address.port)).toMatch(/^HTTP\/1.1 400 /);
+    expect((await fetch(`${origin}/health`)).status).toBe(200);
+    server.activate(application);
+    expect(await malformedRequest(address.port)).toMatch(/^HTTP\/1.1 400 /);
+    expect(application).not.toHaveBeenCalled();
+    expect((await fetch(`${origin}/health`)).status).toBe(200);
+    expect((await fetch(`${origin}/application`)).status).toBe(204);
+    expect(application).toHaveBeenCalledTimes(1);
+  } finally {
+    await server.close();
+  }
+});
 
 test("healthOnlyListenerRejectsEveryApplicationPathUntilNativeConfirmation", async () => {
   const server = await startRuntimeHealthServer(0);

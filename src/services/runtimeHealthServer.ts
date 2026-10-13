@@ -5,7 +5,14 @@ import { getRuntimeReadiness } from "./runtimeLifecycleService";
 export async function startRuntimeHealthServer(port: number) {
   let application: RequestListener | undefined;
   const server = createServer((request, response) => {
-    const path = new URL(request.url ?? "/", "http://localhost").pathname;
+    let path: string;
+    try {
+      path = new URL(request.url ?? "/", "http://localhost").pathname;
+    } catch {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ status: "invalid_request_target" }));
+      return;
+    }
     if (path === "/health") {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ status: "healthy" }));

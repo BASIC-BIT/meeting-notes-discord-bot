@@ -7,6 +7,15 @@ const exec = promisify(execFile);
 const WARMUP_SECONDS = 900;
 const RETIREMENT_SECONDS = 7500;
 const PROTECTION_MARGIN_SECONDS = 120;
+const CLI_PHASES = ["prepare", "promote", "retire", "reconcile"];
+
+class CoordinatorFailure extends Error {
+  constructor(category, message, operation) {
+    super(message);
+    this.category = category;
+    this.operation = operation;
+  }
+}
 
 async function awsCli(service, operation, input) {
   const validating = operation === "validate-update-service";
@@ -28,18 +37,28 @@ async function awsCli(service, operation, input) {
 }
 function configuration(env) {
   const required = (key) => {
-    if (!env[key]?.trim()) throw new Error(`Missing ${key}`);
+    if (!env[key]?.trim())
+      throw new CoordinatorFailure("configuration_invalid", `Missing ${key}`);
     return env[key].trim();
   };
   const prefix = required("SECRETS_PREFIX");
   if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(prefix))
-    throw new Error("Invalid SECRETS_PREFIX");
+    throw new CoordinatorFailure(
+      "configuration_invalid",
+      "Invalid SECRETS_PREFIX",
+    );
   const tablePrefix = `${prefix}-`;
   if (env.DDB_TABLE_PREFIX && env.DDB_TABLE_PREFIX !== tablePrefix)
-    throw new Error("DDB_TABLE_PREFIX mismatch");
+    throw new CoordinatorFailure(
+      "configuration_invalid",
+      "DDB_TABLE_PREFIX mismatch",
+    );
   const image = required("CANDIDATE_IMAGE");
   if (!/@sha256:[a-f0-9]{64}$/.test(image))
-    throw new Error("Candidate image must pin its digest");
+    throw new CoordinatorFailure(
+      "configuration_invalid",
+      "Candidate image must pin its digest",
+    );
   return {
     cluster: required("ECS_CLUSTER"),
     service: required("ECS_SERVICE"),
@@ -55,7 +74,8 @@ function taskContainer(definition, tablePrefix) {
     container.environment?.some((entry) => entry.name === "DDB_TABLE_PREFIX"),
   );
   if (matches.length !== 1)
-    throw new Error(
+    throw new CoordinatorFailure(
+      "configuration_invalid",
       "Expected one protocol container with an explicit table route",
     );
   const container = matches[0];
@@ -63,7 +83,10 @@ function taskContainer(definition, tablePrefix) {
     (entry) => entry.name === "DDB_TABLE_PREFIX",
   );
   if (route.length !== 1 || route[0].value !== tablePrefix)
-    throw new Error("Task table route mismatch");
+    throw new CoordinatorFailure(
+      "configuration_invalid",
+      "Task table route mismatch",
+    );
   return container;
 }
 function runtimeMode(container) {
@@ -83,11 +106,17 @@ function runtimeMode(container) {
     ],
   };
   if (container.entryPoint?.length)
-    throw new Error("Unreviewed task entry point");
+    throw new CoordinatorFailure(
+      "configuration_invalid",
+      "Unreviewed task entry point",
+    );
   for (const [mode, commands] of Object.entries(modes))
     if (commands.some((value) => JSON.stringify(value) === command))
       return mode;
-  throw new Error("Unreviewed task runtime command");
+  throw new CoordinatorFailure(
+    "configuration_invalid",
+    "Unreviewed task runtime command",
+  );
 }
 function candidateDefinition(definition, config) {
   const next = structuredClone(definition);
@@ -114,9 +143,34 @@ function candidateDefinition(definition, config) {
   });
   return next;
 }
+function createAwsCaller(executeAws, diagnostic) {
+  return async function callAws(service, operation, input) {
+    const name = `${service}.${operation}`;
+    diagnostic.operation = name;
+    try {
+      return await executeAws(service, operation, input);
+    } catch {
+      const categories = {
+        "ecs.validate-update-service": "cli_capability_unsupported",
+        "ecs.get-task-protection": "native_protection_unconfirmed",
+      };
+      const category =
+        categories[name] ??
+        (service === "dynamodb"
+          ? "control_store_operation_failed"
+          : "provider_operation_failed");
+      throw new CoordinatorFailure(
+        category,
+        "Coordinator AWS operation failed",
+        name,
+      );
+    }
+  };
+}
 function createCoordinator(options = {}) {
+  const { diagnostic = {} } = options;
   const config = configuration(options.env ?? process.env);
-  const aws = options.aws ?? awsCli;
+  const aws = createAwsCaller(options.aws ?? awsCli, diagnostic);
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const sleep =
     options.sleep ??
@@ -146,9 +200,11 @@ function createCoordinator(options = {}) {
   async function control() {
     const row = await read("CONTROL");
     if (row?.recordType !== "control" || row.runtimeEnvironment !== "ecs")
-      throw new Error(
+      throw new CoordinatorFailure(
+        "control_incompatible",
         "Compatible ECS control required; activation is a separate reviewed operation",
       );
+    diagnostic.knownPhase = row.deployment?.phase ?? "none";
     return row;
   }
   async function save(previous, next) {
@@ -176,6 +232,7 @@ function createCoordinator(options = {}) {
     } catch (error) {
       if (!isDeepStrictEqual(await control(), next)) throw error;
     }
+    diagnostic.knownPhase = next.deployment?.phase ?? "none";
     return next;
   }
   function own(row) {
@@ -193,7 +250,10 @@ function createCoordinator(options = {}) {
         "tablePrefix",
       ].every((field) => d[field] === config[field])
     )
-      throw new Error("Deployment ownership or environment mismatch");
+      throw new CoordinatorFailure(
+        "coordinator_authority_changed",
+        "Deployment ownership or environment mismatch",
+      );
     return d;
   }
   async function renew(row) {
@@ -219,10 +279,14 @@ function createCoordinator(options = {}) {
       services: [config.service],
     });
     if (result.failures?.length || result.services?.length !== 1)
-      throw new Error("Target service unavailable");
+      throw new CoordinatorFailure(
+        "identity_unconfirmed",
+        "Target service unavailable",
+      );
     const value = result.services[0];
     if (value.desiredCount !== 1 || value.deploymentController?.type !== "ECS")
-      throw new Error(
+      throw new CoordinatorFailure(
+        "configuration_invalid",
         "This coordinator requires the reviewed one-task ECS rolling service",
       );
     return value;
@@ -246,13 +310,20 @@ function createCoordinator(options = {}) {
       nextToken = page.nextToken;
     } while (nextToken);
     if (!arns.length) return [];
-    if (arns.length > 100) throw new Error("Unexpected task count");
+    if (arns.length > 100)
+      throw new CoordinatorFailure(
+        "identity_unconfirmed",
+        "Unexpected task count",
+      );
     const result = await aws("ecs", "describe-tasks", {
       cluster: config.cluster,
       tasks: arns,
     });
     if (result.failures?.length)
-      throw new Error("Task identity lookup incomplete");
+      throw new CoordinatorFailure(
+        "identity_unconfirmed",
+        "Task identity lookup incomplete",
+      );
     return result.tasks;
   }
   function freshProof(proof, margin = 0) {
@@ -277,11 +348,17 @@ function createCoordinator(options = {}) {
     );
   }
   async function protectedTask(identity) {
-    if (identity.kind !== "ecs") throw new Error("ECS identity required");
+    diagnostic.nativeProtection = "unconfirmed";
+    if (identity.kind !== "ecs")
+      throw new CoordinatorFailure(
+        "identity_unconfirmed",
+        "ECS identity required",
+      );
     const result = await aws("ecs", "get-task-protection", {
       cluster: config.cluster,
       tasks: [identity.taskArn],
     });
+    diagnostic.operation = "verify_native_protection";
     const proof = result.protectedTasks?.find(
       (task) => task.taskArn === identity.taskArn,
     );
@@ -292,14 +369,19 @@ function createCoordinator(options = {}) {
       Date.parse(proof.expirationDate) / 1000 <=
         now() + PROTECTION_MARGIN_SECONDS
     )
-      throw new Error(
+      throw new CoordinatorFailure(
+        "native_protection_unconfirmed",
         "Native task protection unconfirmed; preserve work and investigate capacity/DEPLOYMENT_BLOCKED",
       );
+    diagnostic.nativeProtection = "last_check_confirmed";
   }
   async function runtime(identity) {
     const row = await read(`RUNTIME#${identity.instanceId}`);
     if (row?.recordType !== "runtime" || !same(row.identity, identity))
-      throw new Error("Exact runtime identity unavailable");
+      throw new CoordinatorFailure(
+        "identity_unconfirmed",
+        "Exact runtime identity unavailable",
+      );
     return row;
   }
   async function original(ctl, svc) {
@@ -316,16 +398,23 @@ function createCoordinator(options = {}) {
       ),
     );
     if (outgoing.length !== 1 || running.length !== 1)
-      throw new Error(
+      throw new CoordinatorFailure(
+        "identity_unconfirmed",
         "Existing deployment is not an unambiguous compatible serving task",
       );
     const oldDefinition = await definition(svc.taskDefinition);
     const latest = await definition(config.family);
     if (latest.family !== config.family)
-      throw new Error("Task family mismatch");
+      throw new CoordinatorFailure(
+        "configuration_invalid",
+        "Task family mismatch",
+      );
     const mode = runtimeMode(taskContainer(latest, config.tablePrefix));
     if (runtimeMode(taskContainer(oldDefinition, config.tablePrefix)) !== mode)
-      throw new Error("Replacement runtime mode mismatch");
+      throw new CoordinatorFailure(
+        "configuration_invalid",
+        "Replacement runtime mode mismatch",
+      );
     const old = await runtime(outgoing[0]);
     if (
       !ready(old, ctl, outgoing[0], mode) ||
@@ -333,7 +422,8 @@ function createCoordinator(options = {}) {
       old.authorizedGeneration !== ctl.servingGeneration ||
       old.retirementRequest
     )
-      throw new Error(
+      throw new CoordinatorFailure(
+        "application_not_ready",
         "Existing runtime is not a ready compatible serving owner",
       );
     await protectedTask(outgoing[0]);
@@ -366,7 +456,10 @@ function createCoordinator(options = {}) {
       nextToken = page.nextToken;
     } while (nextToken);
     if (matches.length > 1)
-      throw new Error("Ambiguous candidate task definitions require recovery");
+      throw new CoordinatorFailure(
+        "outcome_uncertain",
+        "Ambiguous candidate task definitions require recovery",
+      );
     return matches[0];
   }
   async function register(ctl) {
@@ -377,7 +470,10 @@ function createCoordinator(options = {}) {
         runtimeMode(taskContainer(latest, config.tablePrefix)) !==
         ctl.deployment.runtimeMode
       )
-        throw new Error("Task command changed during prepare");
+        throw new CoordinatorFailure(
+          "configuration_invalid",
+          "Task command changed during prepare",
+        );
       try {
         arn = (
           await aws(
@@ -421,7 +517,8 @@ function createCoordinator(options = {}) {
         ctl.coordinatorExpiresAt > now() ||
         (ctl.deployment && ctl.deployment.phase !== "complete")
       )
-        throw new Error(
+        throw new CoordinatorFailure(
+          "coordinator_authority_changed",
           "Another coordinator or unresolved deployment owns this environment",
         );
       const previous = await original(ctl, svc);
@@ -533,7 +630,10 @@ function createCoordinator(options = {}) {
     const observed = await control();
     own(observed);
     if (!promotionObserved(observed, target, generation, retained))
-      throw new Error("Promotion acknowledgment missing");
+      throw new CoordinatorFailure(
+        "outcome_uncertain",
+        "Promotion acknowledgment missing",
+      );
     return observed;
   }
   async function promote() {
@@ -544,7 +644,10 @@ function createCoordinator(options = {}) {
       if (["promoted", "retiring", "complete"].includes(d.phase))
         return { kind: d.phase };
       if (!["warming", "promoting"].includes(d.phase))
-        throw new Error("Prepare must precede promotion");
+        throw new CoordinatorFailure(
+          "invalid_phase",
+          "Prepare must precede promotion",
+        );
       const svc = await service();
       if (
         svc.taskDefinition !== d.taskDefinition ||
@@ -554,7 +657,10 @@ function createCoordinator(options = {}) {
           sourceServiceRevisionCleanup: "DEFERRED",
         })
       )
-        throw new Error("Candidate service configuration is not confirmed");
+        throw new CoordinatorFailure(
+          "configuration_invalid",
+          "Candidate service configuration is not confirmed",
+        );
       const retained = d.originalMembers.filter(
         (member) => member.instanceId !== d.outgoing.instanceId,
       );
@@ -594,7 +700,8 @@ function createCoordinator(options = {}) {
       }
       await sleep(10000);
     }
-    throw new Error(
+    throw new CoordinatorFailure(
+      "application_not_ready",
       "Candidate readiness timeout; old admission retained, protected tasks preserved (check DEPLOYMENT_BLOCKED)",
     );
   }
@@ -610,7 +717,10 @@ function createCoordinator(options = {}) {
       row.retirementRequest &&
       !isDeepStrictEqual(row.retirementRequest, request)
     )
-      throw new Error("Different retirement request requires recovery");
+      throw new CoordinatorFailure(
+        "outcome_uncertain",
+        "Different retirement request requires recovery",
+      );
     if (!row.retirementRequest) {
       try {
         await aws(
@@ -647,7 +757,10 @@ function createCoordinator(options = {}) {
       const d = ctl.deployment;
       if (d.phase === "complete") return { kind: "complete" };
       if (!["promoted", "retiring"].includes(d.phase))
-        throw new Error("Exact promotion required before retirement");
+        throw new CoordinatorFailure(
+          "invalid_phase",
+          "Exact promotion required before retirement",
+        );
       const retained = d.originalMembers.filter(
         (member) => member.instanceId !== d.outgoing.instanceId,
       );
@@ -655,10 +768,14 @@ function createCoordinator(options = {}) {
         !d.candidate ||
         !promotionObserved(ctl, d.candidate, d.originalGeneration + 1, retained)
       )
-        throw new Error("Serving membership changed before retirement");
+        throw new CoordinatorFailure(
+          "coordinator_authority_changed",
+          "Serving membership changed before retirement",
+        );
       const active = await runtime(d.candidate);
       if (!ready(active, ctl, d.candidate, d.runtimeMode))
-        throw new Error(
+        throw new CoordinatorFailure(
+          "application_not_ready",
           "Promoted runtime readiness lost; reconcile before retirement",
         );
       await protectedTask(d.candidate);
@@ -678,7 +795,8 @@ function createCoordinator(options = {}) {
       }
       await sleep(10000);
     }
-    throw new Error(
+    throw new CoordinatorFailure(
+      "retirement_incomplete",
       "Retirement/convergence incomplete; preserve tasks and request recovery",
     );
   }
@@ -738,28 +856,57 @@ function createCoordinator(options = {}) {
   }
   return { prepare, promote, retire, reconcile };
 }
+async function runCli(requestedPhase, options = {}, output = console) {
+  const diagnostic = {
+    requestedPhase: CLI_PHASES.includes(requestedPhase)
+      ? requestedPhase
+      : "invalid",
+    knownPhase: "unknown",
+    operation: "configuration",
+    nativeProtection: "not_checked",
+  };
+  try {
+    if (!CLI_PHASES.includes(requestedPhase))
+      throw new CoordinatorFailure(
+        "invalid_phase",
+        "Expected a coordinator phase",
+        "arguments",
+      );
+    const coordinator = createCoordinator({ ...options, diagnostic });
+    const result = await coordinator[requestedPhase]();
+    output.log(JSON.stringify(result));
+    return result.kind === "recovery_required" || result.recoveryRequired
+      ? 1
+      : 0;
+  } catch (error) {
+    output.error(
+      JSON.stringify({
+        kind: "deployment_failed",
+        ...diagnostic,
+        operation:
+          error instanceof CoordinatorFailure
+            ? (error.operation ?? diagnostic.operation)
+            : diagnostic.operation,
+        category:
+          error instanceof CoordinatorFailure
+            ? error.category
+            : "state_validation_failed",
+        taskAction: "no_stop_or_unprotect_requested",
+      }),
+    );
+    return 1;
+  }
+}
 module.exports = {
   createCoordinator,
   configuration,
   candidateDefinition,
   runtimeMode,
   awsCli,
+  runCli,
 };
 if (require.main === module) {
-  const phase = process.argv[2];
-  Promise.resolve()
-    .then(async () => {
-      if (!["prepare", "promote", "retire", "reconcile"].includes(phase))
-        throw new Error("Expected prepare, promote, retire or reconcile");
-      const result = await createCoordinator()[phase]();
-      console.log(JSON.stringify(result));
-      if (result.kind === "recovery_required" || result.recoveryRequired)
-        process.exitCode = 1;
-    })
-    .catch(() => {
-      console.error(
-        "Deployment phase failed. Protected work is preserved; inspect the durable control phase and native protection/capacity before recovery.",
-      );
-      process.exitCode = 1;
-    });
+  runCli(process.argv[2]).then((code) => {
+    process.exitCode = code;
+  });
 }

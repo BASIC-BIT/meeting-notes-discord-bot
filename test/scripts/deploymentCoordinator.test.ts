@@ -1,12 +1,14 @@
 /** @jest-environment node */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import * as builders from "../../src/services/deploymentControlTransactions";
 import * as types from "../../src/types/deploymentControl";
 import {
   createCoordinator,
   candidateDefinition,
+  runCli,
 } from "../../scripts/deployment/coordinator.cjs";
 
 const oldIdentity: types.RuntimeIdentity = {
@@ -268,7 +270,7 @@ function fixture() {
     calls.push({ operation, input });
     return service === "ecs" ? ecs(operation, input) : dynamo(operation, input);
   });
-  const coordinator = createCoordinator({
+  const options = {
     env,
     aws,
     builders,
@@ -279,9 +281,134 @@ function fixture() {
       refreshProofs();
       state.onSleep();
     },
-  });
-  return { state, aws, calls, coordinator, definition, refreshProofs };
+  };
+  const coordinator = createCoordinator(options);
+  return { state, aws, calls, coordinator, definition, refreshProofs, options };
 }
+
+test("CLI reports unsupported capability before mutation without provider output", async () => {
+  const f = fixture();
+  const original = f.aws.getMockImplementation()!;
+  f.aws.mockImplementation(async (service, operation, input) => {
+    if (operation === "validate-update-service")
+      throw new Error("RAW_PROVIDER_SECRET_AND_PAYLOAD");
+    return original(service, operation, input);
+  });
+  const output = { log: jest.fn(), error: jest.fn() };
+  expect(await runCli("prepare", f.options, output)).toBe(1);
+  expect(JSON.parse(output.error.mock.calls[0][0])).toMatchObject({
+    requestedPhase: "prepare",
+    knownPhase: "none",
+    operation: "ecs.validate-update-service",
+    category: "cli_capability_unsupported",
+    nativeProtection: "not_checked",
+    taskAction: "no_stop_or_unprotect_requested",
+  });
+  expect(output.error.mock.calls[0][0]).not.toContain("RAW_PROVIDER");
+  expect(output.error.mock.calls[0][0].length).toBeLessThan(512);
+  expect(
+    f.calls.some((call) =>
+      ["put-item", "register-task-definition", "update-service"].includes(
+        call.operation,
+      ),
+    ),
+  ).toBe(false);
+});
+
+test("process CLI exits nonzero with bounded configuration diagnostics", () => {
+  const child = spawnSync(
+    process.execPath,
+    [resolve("scripts/deployment/coordinator.cjs"), "prepare"],
+    {
+      env: { SECRETS_PREFIX: "PRIVATE/INVALID/PREFIX" },
+      encoding: "utf8",
+      timeout: 5000,
+    },
+  );
+  expect(child.error).toBeUndefined();
+  expect(child.status).toBe(1);
+  expect(child.stdout).toBe("");
+  expect(JSON.parse(child.stderr)).toMatchObject({
+    category: "configuration_invalid",
+    operation: "configuration",
+    knownPhase: "unknown",
+    nativeProtection: "not_checked",
+    taskAction: "no_stop_or_unprotect_requested",
+  });
+  expect(child.stderr).not.toContain("PRIVATE");
+  expect(child.stderr.length).toBeLessThan(512);
+});
+
+test("CLI labels a positive native proof only as the last completed check", async () => {
+  const f = fixture();
+  const original = f.aws.getMockImplementation()!;
+  f.aws.mockImplementation(async (service, operation, input) => {
+    if (operation === "register-task-definition")
+      throw new Error("PRIVATE_PROVIDER_DETAIL");
+    return original(service, operation, input);
+  });
+  const output = { log: jest.fn(), error: jest.fn() };
+  expect(await runCli("prepare", f.options, output)).toBe(1);
+  expect(JSON.parse(output.error.mock.calls[0][0])).toMatchObject({
+    knownPhase: "preparing",
+    operation: "ecs.register-task-definition",
+    category: "provider_operation_failed",
+    nativeProtection: "last_check_confirmed",
+    taskAction: "no_stop_or_unprotect_requested",
+  });
+  expect(output.error.mock.calls[0][0]).not.toContain(
+    "PRIVATE_PROVIDER_DETAIL",
+  );
+  expect(f.calls.some((call) => call.operation === "update-service")).toBe(
+    false,
+  );
+});
+
+test("CLI reports rejected native protection truthfully without replacement writes", async () => {
+  const f = fixture();
+  f.state.protected = false;
+  const output = { log: jest.fn(), error: jest.fn() };
+  expect(await runCli("prepare", f.options, output)).toBe(1);
+  expect(JSON.parse(output.error.mock.calls[0][0])).toMatchObject({
+    requestedPhase: "prepare",
+    knownPhase: "none",
+    operation: "verify_native_protection",
+    category: "native_protection_unconfirmed",
+    nativeProtection: "unconfirmed",
+    taskAction: "no_stop_or_unprotect_requested",
+  });
+  expect(output.error.mock.calls[0][0]).not.toContain(
+    "Protected work is preserved",
+  );
+  expect(
+    f.calls.some((call) =>
+      [
+        "put-item",
+        "register-task-definition",
+        "update-service",
+        "stop-task",
+        "update-task-protection",
+      ].includes(call.operation),
+    ),
+  ).toBe(false);
+});
+
+test("CLI identifies a control-store failure without guessing availability or logging details", async () => {
+  const f = fixture();
+  f.aws.mockRejectedValue(new Error("PRIVATE_DATABASE_PAYLOAD"));
+  const output = { log: jest.fn(), error: jest.fn() };
+  expect(await runCli("prepare", f.options, output)).toBe(1);
+  expect(JSON.parse(output.error.mock.calls[0][0])).toMatchObject({
+    operation: "dynamodb.get-item",
+    category: "control_store_operation_failed",
+    knownPhase: "unknown",
+    nativeProtection: "not_checked",
+  });
+  expect(output.error.mock.calls[0][0]).not.toContain(
+    "PRIVATE_DATABASE_PAYLOAD",
+  );
+  expect(f.aws).toHaveBeenCalledTimes(1);
+});
 
 test("oldAdmissionStaysOpenDuringWarmup", async () => {
   const f = fixture();
@@ -346,7 +473,9 @@ test("unsupportedRunnerCannotRequestReplacement", async () => {
       throw new Error("unsupported CLI");
     return original(service, operation, input);
   });
-  await expect(f.coordinator.prepare()).rejects.toThrow("unsupported CLI");
+  await expect(f.coordinator.prepare()).rejects.toMatchObject({
+    category: "cli_capability_unsupported",
+  });
   expect(
     f.calls.some((call) =>
       ["update-service", "register-task-definition", "put-item"].includes(
