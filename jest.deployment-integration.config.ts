@@ -22,6 +22,7 @@ process.env.AWS_REGION = "local";
 const config: Config.InitialOptions = {
   preset: "ts-jest",
   testEnvironment: "node",
+  setupFiles: ["<rootDir>/test/deployment/integrationSetup.ts"],
   testMatch: ["**/test/deployment/**/*.integration.test.ts"],
   testTimeout: 180000,
   collectCoverage: false,

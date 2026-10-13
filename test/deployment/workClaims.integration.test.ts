@@ -18,6 +18,7 @@ import {
   buildPendingSegmentTransaction,
 } from "../../src/services/deploymentControlTransactions";
 import { context, control, runtime, promotion } from "./controlFixtures";
+import { config } from "../../src/services/configService";
 import type {
   PersonalMediaUploadJobRecord,
   PersonalRecordingSegmentRecord,
@@ -84,6 +85,19 @@ afterAll(async () => {
 beforeEach(async () => {
   for (const row of [control, runtime("old"), runtime("new", "candidate")])
     await put(tables.deploymentControl, row);
+});
+
+it("loads synthetic application configuration without enabling mock repositories", () => {
+  expect(config.mock.enabled).toBe(false);
+  expect(config.discord.botToken).toBe("deployment-integration-dummy");
+  expect(config.openai.apiKey).toBe("deployment-integration-dummy");
+  expect(config.frontend.siteUrl).toBe("http://localhost");
+  expect(config.server.sessionSecret).toBe("deployment-integration-dummy");
+  expect(config.server.oauthEnabled).toBe(false);
+  expect(config.mcp.enabled).toBe(false);
+  expect(process.env.AWS_ACCESS_KEY_ID).toBe("dummy");
+  expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("dummy");
+  expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
 });
 
 it("conditions signed segment intake on both the pending job and observed segment", async () => {
