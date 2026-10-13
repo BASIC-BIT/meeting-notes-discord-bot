@@ -17,10 +17,11 @@ import {
   initializeLocalControl,
 } from "./runtimeLocalBootstrapService";
 
-/** Startup installs protection before login, HTTP listeners, or worker startup. */
+/** Protection precedes login, application routes and workers; liveness may listen earlier. */
 export async function initializeRuntimeLifecycle(
   gatewayReady: () => boolean,
   runtimeMode: RuntimeReadiness["runtimeMode"],
+  signal?: AbortSignal,
 ) {
   if (
     !config.runtime.ecs &&
@@ -45,6 +46,7 @@ export async function initializeRuntimeLifecycle(
     identity,
     agentUri: config.runtime.agentUri,
     onUnsafe: () => undefined,
+    signal,
   });
   const lifecycle = createRuntimeLifecycle({
     identity,

@@ -1,4 +1,5 @@
 import type { DeploymentControlRepository } from "../repositories/deploymentControlRepository";
+import { isDeepStrictEqual } from "node:util";
 import {
   sameRuntimeIdentity,
   type RuntimeIdentity,
@@ -9,6 +10,7 @@ import {
   type AdmissionContext,
   type RetirementResult,
   type ControlRecord,
+  type RetirementRequest,
 } from "../types/deploymentControl";
 import {
   RUNTIME_PROTECTION_MARGIN_SECONDS,
@@ -118,7 +120,36 @@ export function createRuntimeLifecycle(options: {
       protection.isSafe()
     );
   }
+  async function refreshRetirement(pending: RuntimeRecord | undefined) {
+    if (
+      pending?.retirementRequest &&
+      (await retirementAuthorized(pending, pending.retirementRequest))
+    ) {
+      const result = await retire(
+        pending.retirementRequest.coordinatorEpoch,
+        pending.retirementRequest,
+      );
+      if (result.kind === "busy" && row) {
+        const projected = {
+          ...row,
+          heartbeatAt: now(),
+          workCounts: { ...counts },
+        };
+        if ((await repository.writeRuntime(projected)) === "applied")
+          row = projected;
+      }
+      if (row) return structuredClone(row.readiness);
+    }
+    if (pending?.role === "retired" || pending?.role === "releasing") {
+      row = pending;
+      allowed = false;
+      return structuredClone(pending.readiness);
+    }
+    return undefined;
+  }
   async function refresh(): Promise<RuntimeReadiness> {
+    const retirement = await refreshRetirement(await readRuntime());
+    if (retirement) return retirement;
     const control = await repository.getRecord("ENV", "CONTROL");
     if (control?.recordType !== "control")
       throw new Error("Deployment control unavailable");
@@ -136,6 +167,7 @@ export function createRuntimeLifecycle(options: {
     );
     const stored = await readRuntime();
     const next: RuntimeRecord = {
+      ...stored,
       pk: "ENV",
       sk: `RUNTIME#${identity.instanceId}`,
       recordType: "runtime",
@@ -262,6 +294,7 @@ export function createRuntimeLifecycle(options: {
     stored: RuntimeRecord,
     role: RuntimeRecord["role"],
     retirementEpoch: number,
+    acknowledgment?: RuntimeRecord["retirementAcknowledgment"],
   ) {
     const next: RuntimeRecord = {
       ...stored,
@@ -269,6 +302,10 @@ export function createRuntimeLifecycle(options: {
       workCounts: { ...counts },
       heartbeatAt: now(),
       readiness: { ...stored.readiness, dependenciesReady: false },
+      ...(acknowledgment ? { retirementAcknowledgment: acknowledgment } : {}),
+      ...(role === "candidate"
+        ? { retirementRequest: undefined, retirementAcknowledgment: undefined }
+        : {}),
     };
     if (
       (await repository.transitionRuntimeRole({
@@ -276,58 +313,95 @@ export function createRuntimeLifecycle(options: {
         expectedRole: stored.role,
         expectedGeneration: stored.authorizedGeneration,
         retirementEpoch,
+        expectedRetirementRequest: stored.retirementRequest,
+        expectedRetirementAcknowledgment: stored.retirementAcknowledgment,
       })) !== "applied"
     )
       throw new Error("Runtime role changed");
     row = next;
     return next;
   }
-  function prepareRuntimeRetirement({
-    retirementEpoch,
-  }: {
-    retirementEpoch: number;
-  }): Promise<RetirementResult> {
-    // Close locally before the first await, including a heartbeat already pending.
-    ineligible = true;
-    allowed = false;
-    return serialize(async () => {
-      try {
-        let stored = await readRuntime();
-        if (!stored) throw new Error("Runtime missing");
-        if (!["draining", "releasing", "retired"].includes(stored.role))
-          stored = await changeRole(stored, "draining", retirementEpoch);
-        if (Object.values(counts).some((count) => count > 0))
-          return {
-            kind: "busy",
-            counts: { ...counts },
-            reason: "work_remaining",
-          };
-        if (releaseUncertain)
-          return {
-            kind: "uncertain",
-            counts: { ...counts },
-            reason: "dependency_unavailable",
-          };
-        if (stored.role === "retired")
-          return { kind: "retired", counts: { ...counts } };
-        if (stored.role !== "releasing")
-          stored = await changeRole(stored, "releasing", retirementEpoch);
-        try {
-          await protection.release();
-        } catch {
-          releaseUncertain = true;
-          throw new Error("Protection release uncertain");
-        }
-        await changeRole(stored, "retired", retirementEpoch);
-        return { kind: "retired", counts: { ...counts } };
-      } catch {
+  async function retirementAuthorized(
+    stored: RuntimeRecord,
+    request: RetirementRequest,
+  ) {
+    const control = await repository.getRecord("ENV", "CONTROL");
+    return (
+      control?.recordType === "control" &&
+      control.coordinatorEpoch === request.coordinatorEpoch &&
+      control.coordinatorToken === request.coordinatorToken &&
+      control.coordinatorExpiresAt > now() &&
+      !control.servingMembers[identity.instanceId] &&
+      sameRuntimeIdentity(request.identity, identity) &&
+      request.authorizedGeneration === stored.authorizedGeneration &&
+      isDeepStrictEqual(stored.retirementRequest, request)
+    );
+  }
+  async function retire(
+    retirementEpoch: number,
+    request?: RetirementRequest,
+  ): Promise<RetirementResult> {
+    try {
+      let stored = await readRuntime();
+      if (!stored) throw new Error("Runtime missing");
+      if (request && !(await retirementAuthorized(stored, request)))
+        throw new Error("Retirement authority changed");
+      ineligible = true;
+      allowed = false;
+      if (!["draining", "releasing", "retired"].includes(stored.role))
+        stored = await changeRole(stored, "draining", retirementEpoch);
+      if (Object.values(counts).some((count) => count > 0))
+        return {
+          kind: "busy",
+          counts: { ...counts },
+          reason: "work_remaining",
+        };
+      if (releaseUncertain)
         return {
           kind: "uncertain",
           counts: { ...counts },
           reason: "dependency_unavailable",
         };
+      if (stored.role === "retired")
+        return { kind: "retired", counts: { ...counts } };
+      if (stored.role !== "releasing")
+        stored = await changeRole(stored, "releasing", retirementEpoch);
+      if (request) {
+        const current = await readRuntime();
+        if (!current || !(await retirementAuthorized(current, request)))
+          throw new Error("Retirement authority changed before release");
       }
-    });
+      try {
+        await protection.release();
+      } catch {
+        releaseUncertain = true;
+        throw new Error("Protection release uncertain");
+      }
+      await changeRole(
+        stored,
+        "retired",
+        retirementEpoch,
+        request ? { request, retiredAt: now() } : undefined,
+      );
+      return { kind: "retired", counts: { ...counts } };
+    } catch {
+      return {
+        kind: "uncertain",
+        counts: { ...counts },
+        reason: "dependency_unavailable",
+      };
+    }
+  }
+  function prepareRuntimeRetirement({
+    retirementEpoch,
+  }: {
+    retirementEpoch: number;
+  }): Promise<RetirementResult> {
+    // Direct local shutdown retains its synchronous admission barrier.
+    // Durable requests validate their authority before closing a runtime.
+    ineligible = true;
+    allowed = false;
+    return serialize(() => retire(retirementEpoch));
   }
   function reauthorizeRuntime({
     retirementEpoch,

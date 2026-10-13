@@ -78,6 +78,55 @@ const runtimeMembersSchema = z
       members.length,
     "Runtime members must be unique",
   );
+export const retirementRequestSchema = z
+  .object({
+    identity: runtimeIdentitySchema,
+    authorizedGeneration: generation,
+    coordinatorToken: id,
+    coordinatorEpoch: generation,
+  })
+  .strict();
+export type RetirementRequest = z.infer<typeof retirementRequestSchema>;
+const retirementAcknowledgmentSchema = z
+  .object({
+    request: retirementRequestSchema,
+    retiredAt: epochSecond,
+  })
+  .strict();
+export type RetirementAcknowledgment = z.infer<
+  typeof retirementAcknowledgmentSchema
+>;
+const deploymentText = z.string().min(1).max(1024);
+export const deploymentPhaseSchema = z
+  .object({
+    runToken: deploymentText,
+    cluster: deploymentText,
+    service: deploymentText,
+    family: deploymentText,
+    tablePrefix: deploymentText,
+    candidateId: deploymentText,
+    image: deploymentText,
+    runtimeMode: runtimeModeSchema,
+    phase: z.enum([
+      "preparing",
+      "warming",
+      "promoting",
+      "promoted",
+      "retiring",
+      "complete",
+      "rollback_promoting",
+      "rolled_back",
+    ]),
+    originalGeneration: generation,
+    originalMembers: runtimeMembersSchema,
+    outgoing: runtimeIdentitySchema,
+    previousTaskDefinition: deploymentText,
+    taskDefinition: deploymentText.optional(),
+    candidate: runtimeIdentitySchema.optional(),
+    updatedAt: epochSecond,
+  })
+  .strict();
+export type DeploymentPhase = z.infer<typeof deploymentPhaseSchema>;
 export const controlRecordSchema = z
   .object({
     pk: z.literal("ENV"),
@@ -89,6 +138,7 @@ export const controlRecordSchema = z
     coordinatorEpoch: generation,
     coordinatorExpiresAt: epochSecond,
     servingGeneration: generation,
+    deployment: deploymentPhaseSchema.optional(),
     servingMembers: z
       .record(z.string(), runtimeIdentitySchema)
       .refine(
@@ -131,6 +181,8 @@ export const runtimeRecordSchema = z
       .record(z.enum(RUNTIME_WORK_KINDS), z.number().int().nonnegative())
       .optional(),
     expiresAt: epochSecond.optional(),
+    retirementRequest: retirementRequestSchema.optional(),
+    retirementAcknowledgment: retirementAcknowledgmentSchema.optional(),
   })
   .strict()
   .superRefine((row, ctx) => {
@@ -165,6 +217,13 @@ export type RuntimeRoleTransition = {
   expectedRole: RuntimeRecord["role"];
   expectedGeneration: number;
   retirementEpoch: number;
+  expectedRetirementRequest?: RetirementRequest;
+  expectedRetirementAcknowledgment?: RetirementAcknowledgment;
+};
+export type RuntimeRetirementRequestInput = {
+  record: RuntimeRecord;
+  request: RetirementRequest;
+  now: number;
 };
 export function validateRuntimeRoleTransition(
   input: RuntimeRoleTransition,

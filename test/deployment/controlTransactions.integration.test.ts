@@ -13,7 +13,14 @@ import {
   createDynamoDeploymentControlRepository,
   DeploymentControlError,
 } from "../../src/repositories/deploymentControlRepository";
-import { buildRuntimeAdmissionChecks } from "../../src/services/deploymentControlTransactions";
+import {
+  buildRuntimeAdmissionChecks,
+  buildRollbackPromotionTransaction,
+} from "../../src/services/deploymentControlTransactions";
+import type {
+  ControlRecord,
+  RuntimeRecord,
+} from "../../src/types/deploymentControl";
 import { localControl, localRuntime } from "./localBootstrapFixtures";
 import { initializeLocalControl } from "../../src/services/runtimeLocalBootstrapService";
 import {
@@ -84,6 +91,140 @@ beforeEach(async () => {
       }),
     );
   }
+});
+
+test("retirement request CAS survives a held heartbeat and prevents candidate promotion", async () => {
+  const candidate = runtime("new", "candidate");
+  const request = {
+    identity: candidate.identity,
+    authorizedGeneration: 7,
+    coordinatorToken: "coordinator",
+    coordinatorEpoch: 3,
+  };
+  expect(
+    await repository.requestRetirement({
+      record: candidate,
+      request,
+      now: 100,
+    }),
+  ).toBe("applied");
+  expect(
+    await repository.writeRuntime({ ...candidate, heartbeatAt: 101 }),
+  ).toBe("stale");
+  expect(await repository.promote(promotion)).toBe("stale");
+  const stored = (await repository.getRecord(
+    "ENV",
+    candidate.sk,
+  )) as RuntimeRecord;
+  expect(stored.retirementRequest).toEqual(request);
+  expect(
+    await repository.requestRetirement({ record: stored, request, now: 100 }),
+  ).toBe("applied");
+  expect(
+    await repository.requestRetirement({
+      record: stored,
+      request: { ...request, coordinatorEpoch: 2 },
+      now: 100,
+    }),
+  ).toBe("stale");
+});
+
+test("retirement acknowledgment CAS carries the exact request and cannot overwrite newer authority", async () => {
+  expect(await repository.promote(promotion)).toBe("applied");
+  const outgoing = runtime("old");
+  const request = {
+    identity: outgoing.identity,
+    authorizedGeneration: 7,
+    coordinatorToken: "coordinator",
+    coordinatorEpoch: 3,
+  };
+  expect(
+    await repository.requestRetirement({ record: outgoing, request, now: 100 }),
+  ).toBe("applied");
+  let current = (await repository.getRecord(
+    "ENV",
+    outgoing.sk,
+  )) as RuntimeRecord;
+  for (const role of ["draining", "releasing", "retired"] as const) {
+    const next = {
+      ...current,
+      role,
+      ...(role === "retired"
+        ? { retirementAcknowledgment: { request, retiredAt: 100 } }
+        : {}),
+    };
+    expect(
+      await repository.transitionRuntimeRole({
+        record: next,
+        expectedRole: current.role,
+        expectedGeneration: 7,
+        retirementEpoch: 3,
+        expectedRetirementRequest: request,
+      }),
+    ).toBe("applied");
+    current = next;
+  }
+  expect(
+    ((await repository.getRecord("ENV", outgoing.sk)) as RuntimeRecord)
+      .retirementAcknowledgment?.request,
+  ).toEqual(request);
+  expect(
+    await repository.writeRuntime({
+      ...current,
+      retirementAcknowledgment: undefined,
+    }),
+  ).toBe("stale");
+});
+
+test("fresh generation rollback requires the exact durable phase and prior outgoing owner", async () => {
+  expect(await repository.promote(promotion)).toBe("applied");
+  const current = (await repository.getRecord(
+    "ENV",
+    "CONTROL",
+  )) as ControlRecord;
+  const rollback: ControlRecord = {
+    ...current,
+    deployment: {
+      runToken: "coordinator",
+      cluster: "fixture",
+      service: "fixture",
+      family: "fixture",
+      tablePrefix: prefix,
+      candidateId: "new",
+      image: "fixture-image",
+      runtimeMode: "all",
+      phase: "rollback_promoting",
+      originalGeneration: 7,
+      originalMembers: Object.values(control.servingMembers),
+      outgoing: runtime("old").identity,
+      candidate: runtime("new").identity,
+      previousTaskDefinition: "fixture:old",
+      taskDefinition: "fixture:new",
+      updatedAt: 100,
+    },
+  };
+  await client.send(
+    new PutItemCommand({
+      TableName: tables.deploymentControl,
+      Item: marshall(rollback),
+    }),
+  );
+  const old = runtime("old");
+  await repository.writeRuntime({
+    ...old,
+    readiness: { ...old.readiness, observedGeneration: 8 },
+  });
+  const transaction = buildRollbackPromotionTransaction(rollback, 100, tables);
+  await client.send(new TransactWriteItemsCommand(transaction));
+  const observed = (await repository.getRecord(
+    "ENV",
+    "CONTROL",
+  )) as ControlRecord;
+  expect(observed.servingGeneration).toBe(9);
+  expect(observed.servingMembers).toEqual({ old: old.identity });
+  await expect(
+    client.send(new TransactWriteItemsCommand(transaction)),
+  ).rejects.toThrow();
 });
 
 async function localBootstrapFixture() {

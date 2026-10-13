@@ -354,6 +354,92 @@ The same ordering applies in reverse, and it is the general rule from the root
 `AGENTS.md`: changing a Terraform-managed ECS environment variable takes three
 steps, and the deploy is the one people miss.
 
+## Recording-safe backend replacement
+
+Production and Sandbox use `scripts/deployment/coordinator.cjs` after installing
+runner dependencies and building the backend protocol builders. Both workflows
+serialize deployments per environment and leave running deployments uncancelled.
+The coordinator requires the reviewed ECS rolling service with desired count one;
+it does not change that count or create another service.
+
+The CLI takes `prepare`, `promote`, `retire`, or `reconcile`. Its environment
+inputs are `ECS_CLUSTER`, `ECS_SERVICE`, `ECS_TASK_FAMILY`, `SECRETS_PREFIX`,
+`DEPLOYMENT_RUN_TOKEN`, `DEPLOYMENT_CANDIDATE_ID`, and `CANDIDATE_IMAGE` pinned
+to an image digest. It derives `DDB_TABLE_PREFIX` as `SECRETS_PREFIX` plus `-`,
+checks any explicit override, and verifies the task definition's table route.
+It does not retrieve secret values. AWS CLI calls use argument arrays and the
+compiled shared DynamoDB transaction builders.
+
+1. **Prepare:** verify the exact compatible serving task, its fresh application
+   readiness, and native protection before requesting replacement. Persist the
+   coordinator token, epoch, original membership, task/image identity, and phase
+   under compare-and-set conditions in the existing control row. Register a
+   digest-pinned task definition while preserving unrelated fields.
+2. **Promote:** let the old runtime keep serving while the candidate warms.
+   Require a fresh proof for the intended `all`, `bot`, or `api` mode, dependencies,
+   current epoch/generation, exact task/image identity, and native protection.
+   Atomically select the candidate under a new serving generation. An ECS health
+   result alone cannot select a runtime or authorize recording work.
+3. **Retire:** write an identity, original generation, token, and epoch-bound
+   request to the outgoing runtime row. Its heartbeat enters the single local
+   retirement barrier. Only that runtime can disable native protection after all
+   owned work and voice operations settle. The coordinator requires its exact
+   durable retired acknowledgment and subsequent ECS convergence to complete.
+   A 7,500-second reporting timeout preserves unfinished work.
+4. **Reconcile:** read back ambiguous writes and preserve the old membership on
+   pre-promotion failure. Before any retirement request, a still-ready compatible
+   prior owner can be selected with another new generation. A candidate that has
+   started work remains protected. After retirement starts, or without a safe
+   rollback target, report recovery required; never stop busy tasks, delete
+   leases, or disable protection to create capacity. Unfinished phases prevent
+   another rollout from accumulating protected revisions.
+
+Minimum health remains 100%, maximum 200%, and the application container's stop
+timeout is 120 seconds. The coordinator also requests
+`earlySuccessCriteria = { enable: true, healthyPercent: 100,
+sourceServiceRevisionCleanup: "DEFERRED" }`, preserving unrelated deployment
+configuration. AWS documents `DEPLOYMENT_BLOCKED` when protected tasks prevent a
+deployment reaching steady state, and recommends deferred source cleanup for
+protected tasks. These settings remove that documented cleanup dependency;
+simultaneous old/candidate protection and renewal acceptance remain **UNKNOWN**
+until an authorized native test proves them. Actual protection acknowledgments
+remain mandatory. See [AWS early-success criteria](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/early-success-criteria.html)
+and [API failure messages](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/api_failures_messages.html).
+
+The runner validates its UpdateService CLI input model with an output skeleton
+before any coordinator mutation. AWS provider 6.64.0 has no matching Terraform
+field, so this setting is owned by the shared coordinator. Unsupported runner
+models fail before replacement; a supported local model is not proof of service
+acceptance. The native update and its configuration are checked before promotion.
+
+ECS startup opens one health-only listener on the existing port before initial
+protection. `/health` reports liveness; `/ready` stays unready and other requests
+receive retryable 503 responses until protection permits full application boot.
+Only exact-task initial `DEPLOYMENT_BLOCKED` receives bounded retries within the
+15-minute warmup allowance, with cancellation and finite request timeouts. Full
+API routes reuse that listener. Source protection keeps its existing minute
+renewal and two-minute safety margin; a positive disabled/unsafe proof invalidates
+an older cached confirmation immediately.
+
+Early ECS success ends provider automatic rollback monitoring sooner. The
+coordinator therefore continues checking application readiness, owns the later
+rollback decision, and waits for runtime retirement. Early `SUCCESSFUL`, a quiet
+lease table, and a task-count snapshot are not recording-safe completion proof.
+
+The completed protocol branch is the first compatible ECS release. Intermediate
+implementation revisions have incompatible strict record schemas and cannot be
+treated as deployed warm-replacement targets. First activation requires its own
+reviewed compatible task/image and control-row evidence. The coordinator refuses
+missing or incompatible control state instead of silently enrolling legacy
+tasks. Qualifying readiness also requires the complete runtime safety handler;
+an incomplete composition must remain unready. No deployment is implied by the
+local fixture tests or these infrastructure definitions.
+
+The new deployment-control table retains top-level `hash_key` and `range_key`:
+the pinned provider requires them and rejects a top-level `key_schema` block.
+Existing GSI key deprecation warnings belong to the provider's nested-index
+migration and are not addressed by changing unrelated live tables here.
+
 ## Parking a non-production environment
 
 Nearly all of an idle environment's cost is the API ALB and the cache cluster.
@@ -372,10 +458,10 @@ it. Three variables park it instead:
   blocks the group's own deletion with a `DependencyViolation`. Expect an
   unattached security group in a parked environment; it is not leftover cruft.
 - `ECS_DESIRED_COUNT=0` stops the task without touching the service definition.
-  Terraform stops it immediately, without the `ActiveMeetingTable` lease wait that
-  `deploy.yml` and `deploy-staging.yml` run before replacing a task, so parking an
-  environment while a recording is in progress truncates it and loses the
-  in-memory state. Check for unexpired leases first if anyone might be recording.
+  This bypasses the backend coordinator's runtime retirement acknowledgment.
+  A quiet lease scan is not proof that owned work or voice operations have settled.
+  Parking requires a separately reviewed shutdown with actual runtime retirement
+  evidence; do not use a count change to force unfinished work to stop.
   A variable validation refuses this outright when `environment` is `prod`.
 - `ENABLE_ELASTICACHE=false` drops the cache cluster.
 

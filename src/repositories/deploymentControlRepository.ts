@@ -19,6 +19,8 @@ import {
   buildLocalBootstrapTransaction,
   buildSessionReservationTransaction,
   buildWorkAdmissionChecks,
+  buildRuntimeRetirementRequest,
+  retirementSnapshotCondition,
 } from "../services/deploymentControlTransactions";
 import {
   admissionContextSchema,
@@ -46,6 +48,7 @@ import {
   type WorkAdmissionAuthority,
   type SuppressionRecord,
   suppressionRecordSchema,
+  type RuntimeRetirementRequestInput,
 } from "../types/deploymentControl";
 
 export type ConditionalResult = "applied" | "stale";
@@ -121,6 +124,9 @@ export type DeploymentControlRepository = {
   ): Promise<DeploymentControlRecord | undefined>;
   initializeControl(record: ControlRecord): Promise<ConditionalResult>;
   writeRuntime(record: RuntimeRecord): Promise<ConditionalResult>;
+  requestRetirement(
+    input: RuntimeRetirementRequestInput,
+  ): Promise<ConditionalResult>;
   transitionRuntimeRole(
     input: RuntimeRoleTransition,
   ): Promise<ConditionalResult>;
@@ -229,13 +235,13 @@ export function createDynamoDeploymentControlRepository(
     },
     writeRuntime(record) {
       runtimeRecordSchema.parse(record);
+      const retirement = retirementSnapshotCondition(record);
       return conditional(() =>
         client.send(
           new PutItemCommand({
             TableName: tables.deploymentControl,
             Item: marshall(record, { removeUndefinedValues: true }),
-            ConditionExpression:
-              "attribute_not_exists(pk) OR (#identity = :identity AND authorizedGeneration = :generation AND #role = :role)",
+            ConditionExpression: `attribute_not_exists(pk) OR (#identity = :identity AND authorizedGeneration = :generation AND #role = :role AND ${retirement.condition})`,
             ExpressionAttributeNames: {
               "#identity": "identity",
               "#role": "role",
@@ -244,11 +250,20 @@ export function createDynamoDeploymentControlRepository(
               ":identity": record.identity,
               ":generation": record.authorizedGeneration,
               ":role": record.role,
+              ...retirement.values,
             }),
           }),
         ),
       );
     },
+    requestRetirement: (input) =>
+      conditional(() =>
+        client.send(
+          new TransactWriteItemsCommand(
+            buildRuntimeRetirementRequest(input, tables),
+          ),
+        ),
+      ),
     transitionRuntimeRole: (input) =>
       conditional(() =>
         client.send(
@@ -637,10 +652,47 @@ export function createMockDeploymentControlRepository(
         existing &&
         (!sameRuntimeIdentity(existing.identity, record.identity) ||
           existing.authorizedGeneration !== record.authorizedGeneration ||
-          existing.role !== record.role)
+          existing.role !== record.role ||
+          !isDeepStrictEqual(
+            existing.retirementRequest,
+            record.retirementRequest,
+          ) ||
+          !isDeepStrictEqual(
+            existing.retirementAcknowledgment,
+            record.retirementAcknowledgment,
+          ))
       )
         return "stale";
       return store(record);
+    },
+    async requestRetirement(input) {
+      buildRuntimeRetirementRequest(input, {
+        deploymentControl: "fixture",
+        meetingHistory: "fixture",
+      });
+      const control = getControl();
+      const existing = getRuntime(input.record.identity.instanceId);
+      if (
+        !control ||
+        control.coordinatorToken !== input.request.coordinatorToken ||
+        control.coordinatorEpoch !== input.request.coordinatorEpoch ||
+        control.coordinatorExpiresAt <= input.now ||
+        control.servingMembers[input.record.identity.instanceId] ||
+        !existing ||
+        !sameRuntimeIdentity(existing.identity, input.record.identity) ||
+        existing.authorizedGeneration !== input.record.authorizedGeneration ||
+        existing.role !== input.record.role ||
+        !isDeepStrictEqual(
+          existing.retirementRequest,
+          input.record.retirementRequest,
+        ) ||
+        !isDeepStrictEqual(
+          existing.retirementAcknowledgment,
+          input.record.retirementAcknowledgment,
+        )
+      )
+        return "stale";
+      return store({ ...existing, retirementRequest: input.request });
     },
     async transitionRuntimeRole(input) {
       validateRuntimeRoleTransition(input);
@@ -649,11 +701,22 @@ export function createMockDeploymentControlRepository(
       if (
         !control ||
         control.coordinatorEpoch !== input.retirementEpoch ||
+        (input.expectedRetirementRequest &&
+          control.coordinatorToken !==
+            input.expectedRetirementRequest.coordinatorToken) ||
         control.servingMembers[input.record.identity.instanceId] ||
         !row ||
         !sameRuntimeIdentity(row.identity, input.record.identity) ||
         row.role !== input.expectedRole ||
-        row.authorizedGeneration !== input.expectedGeneration
+        row.authorizedGeneration !== input.expectedGeneration ||
+        !isDeepStrictEqual(
+          row.retirementRequest,
+          input.expectedRetirementRequest,
+        ) ||
+        !isDeepStrictEqual(
+          row.retirementAcknowledgment,
+          input.expectedRetirementAcknowledgment,
+        )
       )
         return "stale";
       return store(input.record);
@@ -717,6 +780,8 @@ export function createMockDeploymentControlRepository(
         !matchesPromotionControl(control, input) ||
         !retainedRuntimesReady(retained, input) ||
         candidate.role !== "candidate" ||
+        candidate.retirementRequest !== undefined ||
+        candidate.retirementAcknowledgment !== undefined ||
         candidate.readiness.runtimeMode !== input.candidateRuntimeMode ||
         !sameRuntimeIdentity(candidate.identity, input.candidate) ||
         !proofReady(

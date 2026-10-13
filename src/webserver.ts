@@ -54,6 +54,7 @@ import {
   whenRuntimeServing,
 } from "./services/runtimeLifecycleService";
 import { MOCK_STORAGE_UPLOAD_PATH } from "./constants";
+import type { RuntimeHealthServer } from "./services/runtimeHealthServer";
 
 const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
 const AUTH_RATE_LIMIT_MAX = 20;
@@ -81,7 +82,9 @@ const getFrontendFallback = () =>
     ? config.frontend.siteUrl
     : "/";
 
-export function setupWebServer(): Promise<void> {
+export function setupWebServer(
+  healthServer?: RuntimeHealthServer,
+): Promise<void> {
   const app = express();
   const PORT = config.server.port;
 
@@ -534,6 +537,10 @@ export function setupWebServer(): Promise<void> {
   registerLiveMeetingRoutes(app);
 
   whenRuntimeServing(() => startPersonalMediaUploadWorker());
+  if (healthServer) {
+    healthServer.activate(app);
+    return Promise.resolve();
+  }
   return new Promise((resolve, reject) => {
     const server = app.listen(PORT, () => {
       console.log(`Server is running and listening on port ${PORT}`);

@@ -25,6 +25,76 @@ const response = (enabled = true) =>
 beforeEach(() => jest.useFakeTimers({ now: 1_000_000 }));
 afterEach(() => jest.useRealTimers());
 
+test("exactDisabledProofInvalidatesPreviouslyConfirmedProtection", async () => {
+  const unsafe = jest.fn();
+  const request = jest
+    .fn()
+    .mockResolvedValueOnce(response())
+    .mockResolvedValueOnce(response(false));
+  const service = createRuntimeProtectionService({
+    identity,
+    agentUri: "http://agent",
+    request,
+    now,
+    onUnsafe: unsafe,
+  });
+  await service.start();
+  await expect(service.confirm()).rejects.toThrow();
+  expect(service.getConfirmation()).toBeUndefined();
+  expect(service.isSafe()).toBe(false);
+  expect(unsafe).toHaveBeenCalledTimes(1);
+  service.stop();
+});
+
+test("initialDeploymentBlockedRetryHonorsCancellation", async () => {
+  const abort = new AbortController();
+  const request = jest.fn(async () =>
+    Response.json({
+      failure: { Arn: identity.taskArn, Reason: "DEPLOYMENT_BLOCKED" },
+    }),
+  );
+  const retry = jest.fn(async () => {
+    abort.abort();
+  });
+  const service = createRuntimeProtectionService({
+    identity,
+    agentUri: "http://agent",
+    request,
+    now,
+    onUnsafe: jest.fn(),
+    signal: abort.signal,
+    initialRetry: retry,
+  });
+  await expect(service.start()).rejects.toThrow();
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(retry).toHaveBeenCalledTimes(1);
+  expect(service.isSafe()).toBe(false);
+  service.stop();
+});
+
+test("initialDeploymentBlockedCannotRetryBeyondWarmupDeadline", async () => {
+  let seconds = 1000;
+  const request = jest.fn(async () =>
+    Response.json({
+      failure: { Arn: identity.taskArn, Reason: "DEPLOYMENT_BLOCKED" },
+    }),
+  );
+  const service = createRuntimeProtectionService({
+    identity,
+    agentUri: "http://agent",
+    request,
+    now: () => seconds,
+    onUnsafe: jest.fn(),
+    initialRetry: async () => {
+      seconds += 900;
+    },
+  });
+  await expect(service.start()).rejects.toThrow();
+  expect(request.mock.calls.length).toBeLessThanOrEqual(2);
+  expect(service.isSafe()).toBe(false);
+  service.stop();
+});
+
 test("runnerLossDoesNotStopProtectionRenewal", async () => {
   const request = jest.fn(async () => response());
   const service = createRuntimeProtectionService({

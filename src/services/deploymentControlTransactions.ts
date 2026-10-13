@@ -28,6 +28,9 @@ import {
   type RuntimeRecord,
   type SessionReservationInput,
   type WorkAdmissionAuthority,
+  type RuntimeRetirementRequestInput,
+  retirementRequestSchema,
+  sameRuntimeIdentity,
 } from "../types/deploymentControl";
 
 export function buildPendingSegmentTransaction(
@@ -426,7 +429,7 @@ export function buildPromotionTransaction({
             pk: "ENV",
             sk: `RUNTIME#${input.candidate.instanceId}`,
           }),
-          ConditionExpression: `#role = :candidate AND #identity = :identity AND readiness.runtimeMode = :mode AND readiness.observedEpoch = :epoch AND ${runtimeProofCondition}`,
+          ConditionExpression: `#role = :candidate AND #identity = :identity AND attribute_not_exists(retirementRequest) AND attribute_not_exists(retirementAcknowledgment) AND readiness.runtimeMode = :mode AND readiness.observedEpoch = :epoch AND ${runtimeProofCondition}`,
           UpdateExpression:
             "SET #role = :serving, authorizedGeneration = :next, readiness.observedGeneration = :next",
           ExpressionAttributeNames: {
@@ -476,12 +479,101 @@ export function buildPromotionTransaction({
   };
 }
 
-/** Retirement and rearming are owned by this runtime, guarded against promotion. */
-export function buildRuntimeRoleTransition(
-  input: RuntimeRoleTransition,
+/** The sole rollback exception: an exact outgoing owner which has not begun retirement. */
+export function buildRollbackPromotionTransaction(
+  control: ControlRecord,
+  now: number,
   tables: ControlTableNames,
 ): TransactWriteItemsCommandInput {
-  validateRuntimeRoleTransition(input);
+  const deployment = control.deployment;
+  if (
+    !deployment ||
+    deployment.phase !== "rollback_promoting" ||
+    !deployment.candidate ||
+    control.servingGeneration !== deployment.originalGeneration + 1 ||
+    control.servingMembers[deployment.outgoing.instanceId] ||
+    !sameRuntimeIdentity(
+      control.servingMembers[deployment.candidate.instanceId],
+      deployment.candidate,
+    ) ||
+    !deployment.originalMembers.some((member) =>
+      sameRuntimeIdentity(member, deployment.outgoing),
+    )
+  )
+    throw new Error("No exact pre-retirement rollback target");
+  const retainedMembers = Object.values(control.servingMembers).filter(
+    (member) => member.instanceId !== deployment.candidate!.instanceId,
+  );
+  if (
+    !retainedMembers.every((member) =>
+      deployment.originalMembers.some((original) =>
+        sameRuntimeIdentity(member, original),
+      ),
+    )
+  )
+    throw new Error("Rollback membership changed");
+  const transaction = buildPromotionTransaction({
+    tables,
+    coordinatorToken: control.coordinatorToken,
+    coordinatorEpoch: control.coordinatorEpoch,
+    expectedServingGeneration: control.servingGeneration,
+    expectedServingMembers: Object.values(control.servingMembers),
+    candidate: deployment.outgoing,
+    candidateRuntimeMode: deployment.runtimeMode,
+    retainedMembers,
+    proposedGeneration: control.servingGeneration + 1,
+    now,
+  });
+  const updateControl = transaction.TransactItems![0].Update!;
+  updateControl.ConditionExpression += " AND deployment = :deployment";
+  Object.assign(
+    updateControl.ExpressionAttributeValues!,
+    marshall({ ":deployment": deployment }),
+  );
+  const candidate = transaction.TransactItems![1].Update!;
+  candidate.ConditionExpression = candidate.ConditionExpression!.replace(
+    "#role = :candidate",
+    "#role = :previousRole AND authorizedGeneration = :oldGeneration AND attribute_not_exists(retirementRequest) AND attribute_not_exists(retirementAcknowledgment)",
+  );
+  delete candidate.ExpressionAttributeValues![":candidate"];
+  Object.assign(
+    candidate.ExpressionAttributeValues!,
+    marshall({
+      ":previousRole": "serving",
+      ":oldGeneration": deployment.originalGeneration,
+    }),
+  );
+  return transaction;
+}
+
+/** Retirement and rearming are owned by this runtime, guarded against promotion. */
+export function retirementSnapshotCondition(
+  record: Pick<RuntimeRecord, "retirementRequest" | "retirementAcknowledgment">,
+) {
+  const values: Record<string, unknown> = {};
+  const conditions = ["retirementRequest", "retirementAcknowledgment"].map(
+    (field) => {
+      const value = record[field as keyof typeof record];
+      if (!value) return `attribute_not_exists(${field})`;
+      values[`:${field}`] = value;
+      return `${field} = :${field}`;
+    },
+  );
+  return { condition: conditions.join(" AND "), values };
+}
+
+export function buildRuntimeRetirementRequest(
+  input: RuntimeRetirementRequestInput,
+  tables: ControlTableNames,
+): TransactWriteItemsCommandInput {
+  const { record, request, now } = input;
+  retirementRequestSchema.parse(request);
+  if (
+    !sameRuntimeIdentity(record.identity, request.identity) ||
+    record.authorizedGeneration !== request.authorizedGeneration
+  )
+    throw new Error("Retirement request identity or generation mismatch");
+  const snapshot = retirementSnapshotCondition(record);
   return {
     TransactItems: [
       {
@@ -489,12 +581,61 @@ export function buildRuntimeRoleTransition(
           TableName: tables.deploymentControl,
           Key: marshall({ pk: "ENV", sk: "CONTROL" }),
           ConditionExpression:
-            "coordinatorEpoch = :epoch AND attribute_not_exists(servingMembers.#instance)",
+            "coordinatorToken = :token AND coordinatorEpoch = :epoch AND coordinatorExpiresAt > :now AND attribute_not_exists(servingMembers.#instance)",
+          ExpressionAttributeNames: { "#instance": record.identity.instanceId },
+          ExpressionAttributeValues: marshall({
+            ":token": request.coordinatorToken,
+            ":epoch": request.coordinatorEpoch,
+            ":now": now,
+          }),
+        },
+      },
+      {
+        Update: {
+          TableName: tables.deploymentControl,
+          Key: marshall({ pk: record.pk, sk: record.sk }),
+          ConditionExpression: `#identity = :identity AND authorizedGeneration = :generation AND #role = :role AND ${snapshot.condition}`,
+          UpdateExpression: "SET retirementRequest = :request",
+          ExpressionAttributeNames: {
+            "#identity": "identity",
+            "#role": "role",
+          },
+          ExpressionAttributeValues: marshall({
+            ":identity": record.identity,
+            ":generation": record.authorizedGeneration,
+            ":role": record.role,
+            ":request": request,
+            ...snapshot.values,
+          }),
+        },
+      },
+    ],
+  };
+}
+
+export function buildRuntimeRoleTransition(
+  input: RuntimeRoleTransition,
+  tables: ControlTableNames,
+): TransactWriteItemsCommandInput {
+  validateRuntimeRoleTransition(input);
+  const retirement = retirementSnapshotCondition({
+    retirementRequest: input.expectedRetirementRequest,
+    retirementAcknowledgment: input.expectedRetirementAcknowledgment,
+  });
+  const request = input.expectedRetirementRequest;
+  return {
+    TransactItems: [
+      {
+        ConditionCheck: {
+          TableName: tables.deploymentControl,
+          Key: marshall({ pk: "ENV", sk: "CONTROL" }),
+          ConditionExpression: `coordinatorEpoch = :epoch AND attribute_not_exists(servingMembers.#instance)${request ? " AND coordinatorToken = :token" : ""}`,
           ExpressionAttributeNames: {
             "#instance": input.record.identity.instanceId,
           },
           ExpressionAttributeValues: marshall({
             ":epoch": input.retirementEpoch,
+            ...(request ? { ":token": request.coordinatorToken } : {}),
           }),
         },
       },
@@ -502,8 +643,7 @@ export function buildRuntimeRoleTransition(
         Put: {
           TableName: tables.deploymentControl,
           Item: marshall(input.record, { removeUndefinedValues: true }),
-          ConditionExpression:
-            "#identity = :identity AND #role = :role AND authorizedGeneration = :generation",
+          ConditionExpression: `#identity = :identity AND #role = :role AND authorizedGeneration = :generation AND ${retirement.condition}`,
           ExpressionAttributeNames: {
             "#identity": "identity",
             "#role": "role",
@@ -512,6 +652,7 @@ export function buildRuntimeRoleTransition(
             ":identity": input.record.identity,
             ":role": input.expectedRole,
             ":generation": input.expectedGeneration,
+            ...retirement.values,
           }),
         },
       },

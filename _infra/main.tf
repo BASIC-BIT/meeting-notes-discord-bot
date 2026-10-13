@@ -1636,11 +1636,12 @@ resource "aws_ecs_task_definition" "app_task" {
 
   container_definitions = jsonencode([
     {
-      name      = "${local.name_prefix}-bot"
-      image     = aws_ecr_repository.app_ecr_repo.repository_url
-      cpu       = 512
-      memory    = 1024
-      essential = true
+      name        = "${local.name_prefix}-bot"
+      image       = aws_ecr_repository.app_ecr_repo.repository_url
+      cpu         = 512
+      memory      = 1024
+      essential   = true
+      stopTimeout = 120
       portMappings = [
         {
           containerPort = 3001
@@ -1980,7 +1981,7 @@ resource "aws_ecs_service" "app_service" {
     type = "ECS"
   }
 
-  deployment_minimum_healthy_percent = 50
+  deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
 
   network_configuration {

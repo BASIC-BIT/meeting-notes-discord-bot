@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { setTimeout as delay } from "node:timers/promises";
 import type {
   ProtectionConfirmation,
   RuntimeIdentity,
@@ -15,6 +16,13 @@ const protectionResponse = z.object({
     ExpirationDate: z.string().datetime({ offset: true }).nullable(),
   }),
 });
+const blockedResponse = z.object({
+  failure: z.object({
+    Arn: z.string(),
+    Reason: z.literal("DEPLOYMENT_BLOCKED"),
+  }),
+});
+class InitialProtectionBlocked extends Error {}
 
 export type RuntimeProtectionService = ReturnType<
   typeof createRuntimeProtectionService
@@ -27,6 +35,8 @@ export function createRuntimeProtectionService(options: {
   request?: typeof fetch;
   now?: () => number;
   onUnsafe: () => void | Promise<void>;
+  signal?: AbortSignal;
+  initialRetry?: (signal: AbortSignal) => Promise<void>;
 }) {
   const { identity } = options;
   const request = options.request ?? fetch;
@@ -66,14 +76,7 @@ export function createRuntimeProtectionService(options: {
     );
     deadline.unref();
   }
-  async function update(
-    enabled: boolean,
-  ): Promise<ProtectionConfirmation | undefined> {
-    const provenAt = now();
-    if (identity.kind === "local")
-      return enabled
-        ? { identity, provenAt, expiresAt: provenAt + 600 }
-        : undefined;
+  async function requestState(enabled: boolean, signal?: AbortSignal) {
     if (!options.agentUri) throw new Error("ECS agent URI is required");
     const response = await request(
       `${options.agentUri.replace(/\/$/, "")}/task-protection/v1/state`,
@@ -88,30 +91,73 @@ export function createRuntimeProtectionService(options: {
               }
             : { ProtectionEnabled: false },
         ),
-        signal: AbortSignal.timeout(RUNTIME_AGENT_TIMEOUT_MS),
+        signal: AbortSignal.any([
+          AbortSignal.timeout(RUNTIME_AGENT_TIMEOUT_MS),
+          ...(signal ? [signal] : []),
+        ]),
       },
     );
+    const body: unknown = await response.json();
+    const blocked = blockedResponse.safeParse(body);
+    if (
+      blocked.success &&
+      identity.kind === "ecs" &&
+      blocked.data.failure.Arn === identity.taskArn
+    )
+      throw new InitialProtectionBlocked(
+        "Initial task protection blocked by deployment",
+      );
     if (!response.ok) throw new Error("ECS protection request failed");
-    const { protection } = protectionResponse.parse(await response.json());
+    return protectionResponse.parse(body).protection;
+  }
+  async function validateState(
+    protection: z.infer<typeof protectionResponse>["protection"],
+    enabled: boolean,
+  ) {
+    if (identity.kind !== "ecs") throw new Error("Expected ECS identity");
+    const expiresAt = Math.floor(
+      Date.parse(protection.ExpirationDate ?? "") / 1000,
+    );
+    if (
+      enabled &&
+      protection.TaskArn === identity.taskArn &&
+      (!protection.ProtectionEnabled ||
+        !Number.isFinite(expiresAt) ||
+        expiresAt <= now() + RUNTIME_PROTECTION_MARGIN_SECONDS)
+    ) {
+      confirmation = undefined;
+      clearTimeout(deadline);
+      await unsafeHandler();
+      throw new Error("Exact task protection disabled or unsafe");
+    }
     if (
       protection.TaskArn !== identity.taskArn ||
       protection.ProtectionEnabled !== enabled
     )
       throw new Error("ECS protection identity or state mismatch");
-    if (!enabled) return undefined;
-    const expiresAt = Math.floor(
-      Date.parse(protection.ExpirationDate ?? "") / 1000,
+    return expiresAt;
+  }
+  async function update(
+    enabled: boolean,
+    signal?: AbortSignal,
+  ): Promise<ProtectionConfirmation | undefined> {
+    const provenAt = now();
+    if (identity.kind === "local")
+      return enabled
+        ? { identity, provenAt, expiresAt: provenAt + 600 }
+        : undefined;
+    const expiresAt = await validateState(
+      await requestState(enabled, signal),
+      enabled,
     );
-    if (
-      !Number.isFinite(expiresAt) ||
-      expiresAt <= now() + RUNTIME_PROTECTION_MARGIN_SECONDS
-    )
-      throw new Error("ECS protection window is unsafe");
+    if (!enabled) return undefined;
     return { identity, provenAt, expiresAt };
   }
-  async function confirm(): Promise<ProtectionConfirmation> {
+  async function confirm(
+    signal?: AbortSignal,
+  ): Promise<ProtectionConfirmation> {
     return serialize(async () => {
-      const proof = await update(true);
+      const proof = await update(true, signal);
       if (!proof) throw new Error("Protection confirmation missing");
       confirmation = proof;
       armDeadline();
@@ -119,7 +165,26 @@ export function createRuntimeProtectionService(options: {
     });
   }
   async function start() {
-    await confirm();
+    const signal = AbortSignal.any([
+      AbortSignal.timeout(900_000),
+      ...(options.signal ? [options.signal] : []),
+    ]);
+    const initialDeadline = now() + 900;
+    while (true) {
+      signal.throwIfAborted();
+      try {
+        await confirm(signal);
+        break;
+      } catch (error) {
+        if (
+          !(error instanceof InitialProtectionBlocked) ||
+          now() >= initialDeadline
+        )
+          throw error;
+        if (options.initialRetry) await options.initialRetry(signal);
+        else await delay(10_000, undefined, { signal });
+      }
+    }
     if (!renewal) {
       renewal = setInterval(() => {
         void confirm().catch(() =>
