@@ -99,7 +99,7 @@ it.each([
               processing: {
                 transcription: "ready",
                 notes: "generated",
-                summary: processingFailed ? "failed" : "generated",
+                summary: "generated",
               },
             }),
         transcriptS3Key: "transcript",

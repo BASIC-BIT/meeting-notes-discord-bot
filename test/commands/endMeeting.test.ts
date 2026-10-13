@@ -786,7 +786,7 @@ describe("handleEndMeetingOther", () => {
 
     expect(mockedRetainMeetingTempDir).toHaveBeenCalledWith(
       meeting,
-      "audio_upload_failed",
+      "artifact_upload_failed",
     );
     expect(mockedDeleteIfExists).not.toHaveBeenCalledWith("recording.mp3");
     expect(mockedCleanupSpeakerTracks).not.toHaveBeenCalled();
@@ -960,7 +960,7 @@ describe("handleEndMeetingOther", () => {
 
     expect(mockedRetainMeetingTempDir).toHaveBeenCalledWith(
       meeting,
-      "cancelled_audio_upload_failed",
+      "cancelled_artifact_upload_failed",
     );
     expect(mockedDeleteIfExists).not.toHaveBeenCalledWith("recording.mp3");
     expect(mockedCleanupSpeakerTracks).not.toHaveBeenCalled();
@@ -1471,7 +1471,10 @@ describe("H4 review outcome and fence regressions", () => {
       expect(meeting.finalization?.historyDisposition).toBe("failed");
       expect(errorOutput).toHaveBeenCalledWith(
         "Expected meeting artifacts were not durably uploaded; retained local artifacts",
-        expect.objectContaining({ meetingId: meeting.meetingId }),
+        expect.objectContaining({
+          meetingId: meeting.meetingId,
+          reason: "artifact_upload_failed",
+        }),
       );
     },
   );
@@ -1496,6 +1499,10 @@ describe("H4 review outcome and fence regressions", () => {
       await expect(
         runEndMeetingFlow({ client: {} as Client, meeting }),
       ).rejects.toThrow("artifact");
+      expect(mockedRetainMeetingTempDir).toHaveBeenCalledWith(
+        meeting,
+        "cancelled_artifact_upload_failed",
+      );
       expect(meeting.cancelled).not.toBe(true);
       expect(meeting.finalization?.historyDisposition).toBe("failed");
       expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
