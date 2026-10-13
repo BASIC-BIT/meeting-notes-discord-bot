@@ -357,6 +357,48 @@ function repeatedReservationResult(
     ? { kind: "admitted" }
     : { kind: "blocked", reason: "unavailable" };
 }
+function matchesPromotionControl(
+  control: ControlRecord,
+  input: PromotionInput,
+) {
+  return (
+    control.runtimeEnvironment === input.candidate.kind &&
+    control.coordinatorEpoch === input.coordinatorEpoch &&
+    control.coordinatorToken === input.coordinatorToken &&
+    control.coordinatorExpiresAt > input.now &&
+    control.servingGeneration === input.expectedServingGeneration &&
+    Object.keys(control.servingMembers).length ===
+      input.expectedServingMembers.length &&
+    input.expectedServingMembers.every(
+      (identity) =>
+        control.servingMembers[identity.instanceId] &&
+        sameRuntimeIdentity(
+          control.servingMembers[identity.instanceId],
+          identity,
+        ),
+    )
+  );
+}
+
+function retainedRuntimesReady(
+  retained: Array<RuntimeRecord | undefined>,
+  input: PromotionInput,
+) {
+  return retained.every(
+    (row, index) =>
+      row &&
+      row.role === "serving" &&
+      row.authorizedGeneration === input.expectedServingGeneration &&
+      sameRuntimeIdentity(row.identity, (input.retainedMembers ?? [])[index]) &&
+      proofReady(
+        row,
+        input.coordinatorEpoch,
+        input.expectedServingGeneration,
+        input.now,
+      ),
+  );
+}
+
 export function createMockDeploymentControlRepository(
   records = new Map<string, DeploymentControlRecord>(),
   histories = new Map<string, MeetingHistory[]>(),
@@ -551,37 +593,8 @@ export function createMockDeploymentControlRepository(
       if (
         !control ||
         !candidate ||
-        control.runtimeEnvironment !== input.candidate.kind ||
-        control.coordinatorEpoch !== input.coordinatorEpoch ||
-        control.coordinatorToken !== input.coordinatorToken ||
-        control.coordinatorExpiresAt <= input.now ||
-        control.servingGeneration !== input.expectedServingGeneration ||
-        Object.keys(control.servingMembers).length !==
-          input.expectedServingMembers.length ||
-        !input.expectedServingMembers.every(
-          (identity) =>
-            control.servingMembers[identity.instanceId] &&
-            sameRuntimeIdentity(
-              control.servingMembers[identity.instanceId],
-              identity,
-            ),
-        ) ||
-        !retained.every(
-          (row, index) =>
-            row &&
-            row.role === "serving" &&
-            row.authorizedGeneration === input.expectedServingGeneration &&
-            sameRuntimeIdentity(
-              row.identity,
-              (input.retainedMembers ?? [])[index],
-            ) &&
-            proofReady(
-              row,
-              input.coordinatorEpoch,
-              input.expectedServingGeneration,
-              input.now,
-            ),
-        ) ||
+        !matchesPromotionControl(control, input) ||
+        !retainedRuntimesReady(retained, input) ||
         candidate.role !== "candidate" ||
         candidate.readiness.runtimeMode !== input.candidateRuntimeMode ||
         !sameRuntimeIdentity(candidate.identity, input.candidate) ||

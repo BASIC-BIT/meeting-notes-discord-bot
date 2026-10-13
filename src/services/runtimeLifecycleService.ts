@@ -8,6 +8,7 @@ import {
   type RuntimeWorkHandle,
   type AdmissionContext,
   type RetirementResult,
+  type ControlRecord,
 } from "../types/deploymentControl";
 import {
   RUNTIME_PROTECTION_MARGIN_SECONDS,
@@ -79,15 +80,12 @@ export function createRuntimeLifecycle(options: {
       throw new Error("Runtime identity mismatch");
     return stored;
   }
-  async function refresh(): Promise<RuntimeReadiness> {
-    const control = await repository.getRecord("ENV", "CONTROL");
-    if (control?.recordType !== "control")
-      throw new Error("Deployment control unavailable");
-    if (control.runtimeEnvironment !== identity.kind)
-      throw new Error("Runtime identity does not match control environment");
-    const proofTime = now();
-    const flags = await options.probeReadiness();
-    const readiness: RuntimeReadiness = {
+  function snapshotReadiness(
+    control: ControlRecord,
+    flags: RuntimeReadinessProbe,
+    proofTime: number,
+  ): RuntimeReadiness {
+    return {
       identity,
       runtimeMode: options.runtimeMode ?? "all",
       observedEpoch: control.coordinatorEpoch,
@@ -102,6 +100,32 @@ export function createRuntimeLifecycle(options: {
       provenAt: proofTime,
       expiresAt: proofTime + RUNTIME_READINESS_SECONDS,
     };
+  }
+  function canAcceptWork(control: ControlRecord, current: RuntimeRecord) {
+    const selected = control.servingMembers[identity.instanceId];
+    const { readiness } = current;
+    return (
+      !ineligible &&
+      !unsafe &&
+      current.role === "serving" &&
+      Boolean(selected && sameRuntimeIdentity(selected, identity)) &&
+      control.servingGeneration === current.authorizedGeneration &&
+      (readiness.runtimeMode === "api" || readiness.gatewayReady) &&
+      readiness.cacheReady &&
+      readiness.dependenciesReady &&
+      readiness.expiresAt > now() &&
+      protection.isSafe()
+    );
+  }
+  async function refresh(): Promise<RuntimeReadiness> {
+    const control = await repository.getRecord("ENV", "CONTROL");
+    if (control?.recordType !== "control")
+      throw new Error("Deployment control unavailable");
+    if (control.runtimeEnvironment !== identity.kind)
+      throw new Error("Runtime identity does not match control environment");
+    const proofTime = now();
+    const flags = await options.probeReadiness();
+    const readiness = snapshotReadiness(control, flags, proofTime);
     const proof = protection.getConfirmation();
     if (!proof) throw new Error("Runtime protection unavailable");
     // Expire the published admission/promotion proof before ECS protection does.
@@ -127,18 +151,7 @@ export function createRuntimeLifecycle(options: {
     if ((await repository.writeRuntime(next)) !== "applied")
       throw new Error("Runtime changed during heartbeat");
     row = next;
-    const selected = control.servingMembers[identity.instanceId];
-    allowed =
-      !ineligible &&
-      !unsafe &&
-      row.role === "serving" &&
-      Boolean(selected && sameRuntimeIdentity(selected, identity)) &&
-      control.servingGeneration === row.authorizedGeneration &&
-      (readiness.runtimeMode === "api" || readiness.gatewayReady) &&
-      readiness.cacheReady &&
-      readiness.dependenciesReady &&
-      readiness.expiresAt > now() &&
-      protection.isSafe();
+    allowed = canAcceptWork(control, row);
     if (allowed)
       for (const listener of servingListeners) {
         servingListeners.delete(listener);
