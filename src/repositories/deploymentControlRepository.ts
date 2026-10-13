@@ -9,7 +9,7 @@ import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { z } from "zod";
 import { isDeepStrictEqual } from "node:util";
 import { planLocalBootstrap } from "../services/runtimeLocalBootstrapPlan";
-import type { MeetingHistory } from "../types/db";
+import type { ActiveMeetingLease, MeetingHistory } from "../types/db";
 import {
   buildHistoryTransition,
   buildInitialMeetingHistoryPut,
@@ -17,6 +17,7 @@ import {
   buildRuntimeAdmissionChecks,
   buildRuntimeRoleTransition,
   buildLocalBootstrapTransaction,
+  buildSessionReservationTransaction,
 } from "../services/deploymentControlTransactions";
 import {
   admissionContextSchema,
@@ -39,6 +40,8 @@ import {
   type RuntimeRecord,
   type VoiceRecord,
   type LocalBootstrapInput,
+  type SessionReservationInput,
+  type SessionReservationWriteResult,
 } from "../types/deploymentControl";
 
 export type ConditionalResult = "applied" | "stale";
@@ -98,6 +101,9 @@ async function conditional(
   }
 }
 export type DeploymentControlRepository = {
+  reserveSession(
+    input: SessionReservationInput,
+  ): Promise<SessionReservationWriteResult>;
   supportsLocalBootstrap(): Promise<boolean>;
   bootstrapLocal(input: LocalBootstrapInput): Promise<ConditionalResult>;
   getRecord(
@@ -144,6 +150,36 @@ export function createDynamoDeploymentControlRepository(
     );
   }
   return {
+    async reserveSession(input) {
+      const transaction = buildSessionReservationTransaction(input, tables);
+      try {
+        await client.send(new TransactWriteItemsCommand(transaction));
+        return { kind: "admitted" };
+      } catch (error) {
+        const parsed = errorSchema.safeParse(error);
+        if (
+          !parsed.success ||
+          classifyDeploymentTransactionError(error) !== "stale"
+        )
+          return { kind: "blocked", reason: "unavailable" };
+        const reasons = parsed.data.CancellationReasons ?? [];
+        const failed = (index: number) =>
+          reasons[index]?.Code === "ConditionalCheckFailed";
+        return {
+          kind: "blocked",
+          reason:
+            failed(0) || failed(1)
+              ? "not_serving"
+              : failed(3)
+                ? "voice_uncertain"
+                : failed(2) || (input.history && failed(4))
+                  ? "active_session"
+                  : input.suppression && failed(input.history ? 5 : 4)
+                    ? "suppressed"
+                    : "unavailable",
+        };
+      }
+    },
     supportsLocalBootstrap,
     async bootstrapLocal(input) {
       if (!(await supportsLocalBootstrap()))
@@ -309,10 +345,27 @@ function proofReady(
     row.expiresAt === undefined
   );
 }
+const mockReservationRequests = new WeakMap<
+  Map<string, DeploymentControlRecord>,
+  Map<string, SessionReservationInput>
+>();
+function repeatedReservationResult(
+  previous: SessionReservationInput,
+  input: SessionReservationInput,
+): SessionReservationWriteResult {
+  return isDeepStrictEqual(previous, input)
+    ? { kind: "admitted" }
+    : { kind: "blocked", reason: "unavailable" };
+}
 export function createMockDeploymentControlRepository(
   records = new Map<string, DeploymentControlRecord>(),
   histories = new Map<string, MeetingHistory[]>(),
+  leases = new Map<string, ActiveMeetingLease>(),
 ): DeploymentControlRepository {
+  const requests =
+    mockReservationRequests.get(records) ??
+    new Map<string, SessionReservationInput>();
+  mockReservationRequests.set(records, requests);
   const recordKey = (pk: string, sk: string) => JSON.stringify([pk, sk]);
   const getControl = () => {
     const row = records.get(recordKey("ENV", "CONTROL"));
@@ -330,7 +383,65 @@ export function createMockDeploymentControlRepository(
     records.set(recordKey(record.pk, record.sk), structuredClone(record));
     return "applied";
   };
+  const canReserve = (context: AdmissionContext) => {
+    const control = getControl();
+    const runtime = getRuntime(context.instanceId);
+    const selected = control?.servingMembers[context.instanceId];
+    if (!control || !runtime || !selected) return false;
+    return (
+      sameRuntimeIdentity(selected, context.identity) &&
+      sameRuntimeIdentity(runtime.identity, context.identity) &&
+      control.servingGeneration === context.authorizedGeneration &&
+      runtime.role === "serving" &&
+      runtime.authorizedGeneration === context.authorizedGeneration &&
+      proofReady(runtime, undefined, context.authorizedGeneration, context.now)
+    );
+  };
   return {
+    async reserveSession(input) {
+      buildSessionReservationTransaction(input, {
+        deploymentControl: "mock",
+        meetingHistory: "mock",
+        activeMeeting: "mock",
+      });
+      const previous = requests.get(input.requestToken);
+      if (previous) return repeatedReservationResult(previous, input);
+      const { context, lease, voice, history, suppression } = input;
+      if (!canReserve(context))
+        return { kind: "blocked", reason: "not_serving" };
+      const existingVoice = records.get(recordKey(voice.pk, voice.sk));
+      if (
+        existingVoice &&
+        (existingVoice.recordType !== "voice" ||
+          existingVoice.state !== "settled")
+      )
+        return { kind: "blocked", reason: "voice_uncertain" };
+      const existingLease = leases.get(lease.guildId);
+      if (
+        (existingLease && existingLease.leaseExpiresAt >= context.now) ||
+        (history && getHistory(history))
+      )
+        return { kind: "blocked", reason: "active_session" };
+      if (
+        suppression &&
+        records.has(
+          recordKey(
+            `SUPPRESS#${lease.guildId}`,
+            `CHANNEL#${suppression.channelId}`,
+          ),
+        )
+      )
+        return { kind: "blocked", reason: "suppressed" };
+      leases.set(lease.guildId, structuredClone(lease));
+      store(voice);
+      if (history)
+        histories.set(history.guildId, [
+          ...(histories.get(history.guildId) ?? []),
+          structuredClone(history),
+        ]);
+      requests.set(input.requestToken, structuredClone(input));
+      return { kind: "admitted" };
+    },
     supportsLocalBootstrap: async () => true,
     async bootstrapLocal(input) {
       const next = planLocalBootstrap(input);

@@ -1,4 +1,8 @@
 import { notifyRecordingLimit } from "../../src/services/recordingLimitService";
+import { settleOwnedVoiceSession } from "../../src/services/guildVoiceOperationService";
+jest.mock("../../src/services/guildVoiceOperationService", () => ({
+  settleOwnedVoiceSession: jest.fn(async () => "settled"),
+}));
 import { getRollingUsageForGuild } from "../../src/services/meetingUsageService";
 jest.mock("../../src/services/recordingLimitService", () => ({
   notifyRecordingLimit: jest.fn(),
@@ -253,6 +257,10 @@ describe("handleEndMeetingOther", () => {
     "flushes and saves despite a $outcome notice (failure=$fails)",
     async ({ used, outcome, fails, pending }) => {
       const events: string[] = [];
+      jest.mocked(settleOwnedVoiceSession).mockImplementationOnce(async () => {
+        events.push("voice-settled");
+        return "settled";
+      });
       mockedStartProcessingSnippet.mockImplementation(() => {
         events.push("flush");
       });
@@ -277,6 +285,20 @@ describe("handleEndMeetingOther", () => {
       };
 
       const meeting = {
+        reservation: {
+          guildId: "guild-1",
+          meetingId: "meeting-1",
+          sessionMode: "meeting",
+          ownerInstanceId: "fixture",
+          executionVersion: 1,
+          voiceOperationAttemptId: "attempt",
+          reservedAt: 100,
+          historyKey: {
+            guildId: "guild-1",
+            channelId_timestamp: "voice-1#fixture",
+          },
+          workHandle: { settle: jest.fn(), transition: jest.fn() },
+        },
         guildId: "guild-1",
         channelId: "text-1",
         meetingId: "meeting-1",
@@ -353,11 +375,11 @@ describe("handleEndMeetingOther", () => {
       expect(mockedReleaseMeetingLeaseForMeeting).toHaveBeenCalledWith(meeting);
       expect(events.indexOf("flush")).toBeGreaterThanOrEqual(0);
       expect(events.indexOf("flush")).toBeLessThan(
-        events.indexOf("disconnect"),
+        events.indexOf("voice-settled"),
       );
-      expect(events.indexOf("disconnect")).toBeLessThan(
-        events.indexOf("destroy"),
-      );
+      expect(settleOwnedVoiceSession).toHaveBeenCalledWith(meeting.reservation);
+      expect(connection.disconnect).not.toHaveBeenCalled();
+      expect(connection.destroy).not.toHaveBeenCalled();
     },
   );
 

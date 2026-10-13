@@ -3,6 +3,7 @@ import type { DeploymentControlRecord } from "../types/deploymentControl";
 import type { AuthedProfile } from "../trpc/context";
 import type {
   AutoRecordSettings,
+  ActiveMeetingLease,
   EntitlementGrant,
   GuildSubscription,
   ChannelContext,
@@ -39,6 +40,7 @@ import type {
 } from "./types";
 
 type MockStore = {
+  activeMeetingLeases: Map<string, ActiveMeetingLease>;
   deploymentControlRecords: Map<string, DeploymentControlRecord>;
   purchaseAttempts: Map<string, PurchaseAttempt>;
   purchaseIncidents: Map<string, PurchaseIncident>;
@@ -926,6 +928,7 @@ function buildDefaultStore(): MockStore {
     stripeWebhookEvents,
     purchaseAttempts: new Map(),
     deploymentControlRecords: new Map(),
+    activeMeetingLeases: new Map(),
     purchaseIncidents: new Map(),
     onboardingStates,
     meetingHistoryByGuild,

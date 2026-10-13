@@ -10,6 +10,7 @@ import type { MeetingHistory } from "../types/db";
 import {
   admissionContextSchema,
   promotionInputSchema,
+  voiceRecordSchema,
   validateHistoryTransition,
   validateRuntimeRoleTransition,
   type RuntimeRoleTransition,
@@ -20,7 +21,92 @@ import {
   type LocalBootstrapInput,
   type ControlRecord,
   type RuntimeRecord,
+  type SessionReservationInput,
 } from "../types/deploymentControl";
+
+export function buildSessionReservationTransaction(
+  input: SessionReservationInput,
+  tables: ControlTableNames,
+): TransactWriteItemsCommandInput {
+  const { context, lease, voice, history, suppression } = input;
+  voiceRecordSchema.parse(voice);
+  if (
+    lease.voiceOperationAttemptId !== voice.attemptId ||
+    lease.executionVersion !== voice.executionVersion ||
+    lease.sessionMode !== voice.sessionMode
+  )
+    throw new Error("Reservation attempt identity mismatch");
+  if (
+    !tables.activeMeeting ||
+    lease.guildId !== voice.guildId ||
+    lease.meetingId !== voice.meetingId ||
+    lease.ownerInstanceId !== context.instanceId ||
+    voice.ownerInstanceId !== context.instanceId ||
+    voice.state !== "joining" ||
+    lease.executionVersion !== 1
+  )
+    throw new Error("Invalid session reservation");
+  if (
+    lease.sessionMode === "meeting"
+      ? !history ||
+        history.guildId !== lease.guildId ||
+        history.meetingId !== lease.meetingId ||
+        history.ownerInstanceId !== lease.ownerInstanceId ||
+        history.executionVersion !== lease.executionVersion
+      : Boolean(history)
+  )
+    throw new Error("Invalid reservation history");
+  const items: TransactWriteItem[] = [
+    ...buildRuntimeAdmissionChecks(context, tables),
+    {
+      Put: {
+        TableName: tables.activeMeeting,
+        Item: marshall(lease, { removeUndefinedValues: true }),
+        ConditionExpression:
+          "attribute_not_exists(guildId) OR leaseExpiresAt < :now",
+        ExpressionAttributeValues: marshall({ ":now": context.now }),
+      },
+    },
+    {
+      Put: {
+        TableName: tables.deploymentControl,
+        Item: marshall(voice),
+        ConditionExpression: "attribute_not_exists(pk) OR #state = :settled",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: marshall({ ":settled": "settled" }),
+      },
+    },
+  ];
+  if (history)
+    items.push({ Put: buildInitialMeetingHistoryPut(history, tables) });
+  if (suppression)
+    items.push({
+      ConditionCheck: {
+        TableName: tables.deploymentControl,
+        Key: marshall({
+          pk: `SUPPRESS#${lease.guildId}`,
+          sk: `CHANNEL#${suppression.channelId}`,
+        }),
+        ConditionExpression:
+          suppression.expectedVersion === undefined
+            ? "attribute_not_exists(pk)"
+            : "#version = :version AND #suppressed = :false",
+        ...(suppression.expectedVersion === undefined
+          ? {}
+          : {
+              ExpressionAttributeNames: {
+                "#version": "version",
+                "#suppressed": "suppressed",
+              },
+              ExpressionAttributeValues: marshall({
+                ":version": suppression.expectedVersion,
+                ":false": false,
+              }),
+            }),
+      },
+    });
+  return { TransactItems: items, ClientRequestToken: input.requestToken };
+}
 
 /** Snapshot equality includes absent optional fields, so a renewed proof wins CAS. */
 function snapshotCondition(record: ControlRecord | RuntimeRecord) {

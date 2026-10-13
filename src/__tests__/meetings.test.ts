@@ -1,6 +1,48 @@
 jest.mock("../services/recordingLimitService", () => ({
   notifyRecordingLimit: jest.fn(),
 }));
+jest.mock("../services/activeMeetingLeaseService", () => ({
+  tryAcquireMeetingLease: jest.fn(async (input) => ({
+    kind: "admitted",
+    reservation: {
+      guildId: input.guildId,
+      meetingId: input.meetingId,
+      sessionMode: input.sessionMode,
+      ownerInstanceId: "fixture",
+      executionVersion: 1,
+      voiceOperationAttemptId: "attempt",
+      reservedAt: input.reservedAt,
+      historyKey: input.history && {
+        guildId: input.guildId,
+        channelId_timestamp: input.history.channelId_timestamp,
+      },
+      workHandle: { settle: jest.fn(), transition: jest.fn() },
+    },
+  })),
+  getReservationSignal: jest.fn(() => new AbortController().signal),
+  attachMeetingReservation: jest.fn(),
+  unwindSessionInitialization: jest.fn(),
+  releaseSessionReservation: jest.fn(async () => true),
+}));
+jest.mock("../commands/saveMeetingHistory", () => ({
+  saveMeetingStartToDatabase: jest.fn(),
+}));
+jest.mock("../services/guildVoiceOperationService", () => ({
+  joinOwnedVoiceSession: jest.fn(async (_reservation, options) =>
+    jest.requireMock("@discordjs/voice").joinVoiceChannel({
+      channelId: options.voiceChannel.id,
+      guildId: options.guild.id,
+      adapterCreator: options.guild.voiceAdapterCreator,
+      selfDeaf: !options.captureAudio,
+      selfMute: false,
+    }),
+  ),
+}));
+import {
+  releaseSessionReservation,
+  tryAcquireMeetingLease,
+  unwindSessionInitialization,
+} from "../services/activeMeetingLeaseService";
 import { notifyRecordingLimit } from "../services/recordingLimitService";
 jest.mock("@discordjs/voice", () => ({
   NoSubscriberBehavior: { Pause: "pause" },
@@ -16,12 +58,14 @@ jest.mock("@discordjs/voice", () => ({
 
 jest.mock("../audio", () => ({
   openOutputFile: jest.fn(),
+  closeOutputFile: jest.fn(),
   subscribeToUserVoice: jest.fn(),
   userStartTalking: jest.fn(),
   userStopTalking: jest.fn(),
 }));
 
 const mockConfig = {
+  analytics: { posthogKey: "" },
   liveVoice: { mode: "tts_gate" },
   chatTts: { queueLimit: 10, ttsOnlyIdleTimeoutMs: 0 },
 };
@@ -129,7 +173,7 @@ const buildMeetingOptions = (botMember: unknown = null) => {
     name: "Voice",
     guild,
     members: buildMembers([{ user: { id: "user-1" } }]),
-    createMessageCollector: jest.fn(() => ({ on: jest.fn() })),
+    createMessageCollector: jest.fn(() => ({ on: jest.fn(), stop: jest.fn() })),
   } as unknown as VoiceBasedChannel;
   const textChannel = {
     id: "text-1",
@@ -143,6 +187,7 @@ const buildMeetingOptions = (botMember: unknown = null) => {
 describe("initializeMeeting", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    deleteMeeting("guild-1");
     mockConfig.chatTts.ttsOnlyIdleTimeoutMs = 0;
     jest.mocked(getSnapshotBoolean).mockReturnValue(false);
     jest.mocked(getSnapshotString).mockReturnValue(undefined);
@@ -150,6 +195,58 @@ describe("initializeMeeting", () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+  it.each([
+    "manual",
+    "context_menu",
+    "auto_channel",
+    "auto_all",
+    "remote",
+    "tts_only",
+  ])("%s does not join voice when shared admission is sealed", async (path) => {
+    jest
+      .mocked(tryAcquireMeetingLease)
+      .mockResolvedValueOnce({ kind: "blocked", reason: "not_serving" });
+    await expect(
+      initializeMeeting({
+        ...buildMeetingOptions(),
+        transcribeMeeting: true,
+        generateNotes: true,
+        sessionMode: path === "tts_only" ? "tts_only" : "meeting",
+        isAutoRecording: path.startsWith("auto"),
+      }),
+    ).rejects.toThrow("not_serving");
+    expect(joinVoiceChannel).not.toHaveBeenCalled();
+  });
+  it("unwinds the owned reservation if initialization fails after joining", async () => {
+    jest
+      .mocked(subscribeToUserVoice)
+      .mockRejectedValueOnce(new Error("fixture initialization failed"));
+    await expect(
+      initializeMeeting({
+        ...buildMeetingOptions(),
+        transcribeMeeting: true,
+        generateNotes: true,
+      }),
+    ).rejects.toThrow("fixture initialization failed");
+    expect(unwindSessionInitialization).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionMode: "meeting", executionVersion: 1 }),
+    );
+  });
+  it("stable concurrent initialization retries share one reservation and one join", async () => {
+    const options = {
+      ...buildMeetingOptions(),
+      meetingId: "stable-retry",
+      reservedAt: 100,
+      transcribeMeeting: true,
+      generateNotes: true,
+    };
+    const first = initializeMeeting(options);
+    const second = initializeMeeting(options);
+    expect(second).toBe(first);
+    expect(await second).toBe(await first);
+    expect(tryAcquireMeetingLease).toHaveBeenCalledTimes(1);
+    expect(joinVoiceChannel).toHaveBeenCalledTimes(1);
   });
 
   it("ends at the captured cap before awaiting upgrade eligibility", async () => {
@@ -306,14 +403,12 @@ describe("initializeMeeting", () => {
       generateNotes: false,
       chatTtsEnabled: true,
     });
-    const connection = jest.mocked(joinVoiceChannel).mock.results[0].value;
 
-    jest.advanceTimersByTime(1000);
+    await jest.advanceTimersByTimeAsync(1000);
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(connection.disconnect).toHaveBeenCalled();
-    expect(connection.destroy).toHaveBeenCalled();
+    expect(releaseSessionReservation).toHaveBeenCalledWith(meeting.reservation);
     expect(meeting.finished).toBe(true);
     expect(textChannel.send).toHaveBeenCalledWith(
       expect.stringContaining("after 1 second without speech activity"),
@@ -348,11 +443,11 @@ describe("initializeMeeting", () => {
     expect(connection.disconnect).not.toHaveBeenCalled();
     expect(textChannel.send).not.toHaveBeenCalled();
 
-    jest.advanceTimersByTime(1);
+    await jest.advanceTimersByTimeAsync(1);
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(connection.disconnect).toHaveBeenCalled();
+    expect(releaseSessionReservation).toHaveBeenCalledWith(meeting.reservation);
     expect(textChannel.send).toHaveBeenCalledWith(
       expect.stringContaining("after 1 second without speech activity"),
     );

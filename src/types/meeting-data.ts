@@ -1,4 +1,5 @@
 import type { RecordingLimitState } from "../services/recordingLimitService";
+import type { SessionReservation } from "./deploymentControl";
 import { AudioPlayer, VoiceConnection } from "@discordjs/voice";
 import {
   ButtonInteraction,
@@ -40,6 +41,7 @@ export type LiveVoiceThinkingCueState = {
 };
 
 export interface MeetingData {
+  reservation?: SessionReservation;
   meetingId: string;
   sessionMode?: VoiceSessionMode;
   captureAudio?: boolean;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { MeetingHistory } from "./db";
+import type { ActiveMeetingLease, MeetingHistory } from "./db";
 import { MEETING_STATUS, type MeetingStatus } from "./meetingLifecycle";
 
 const id = z.string().min(1);
@@ -179,6 +179,8 @@ export const voiceRecordSchema = z
     meetingId: id,
     ownerInstanceId: id,
     attemptId: id,
+    executionVersion: z.number().int().positive().optional(),
+    sessionMode: z.enum(["meeting", "tts_only"]).optional(),
     state: z.enum([
       "joining",
       "connected",
@@ -264,7 +266,21 @@ export type AdmissionContext = z.infer<typeof admissionContextSchema>;
 export type ControlTableNames = {
   deploymentControl: string;
   meetingHistory: string;
+  activeMeeting?: string;
 };
+export type SessionReservationInput = {
+  context: AdmissionContext;
+  lease: ActiveMeetingLease & {
+    executionVersion: number;
+    sessionMode: "meeting" | "tts_only";
+  };
+  voice: VoiceRecord;
+  history?: MeetingHistory;
+  requestToken: string;
+  suppression?: { channelId: string; expectedVersion?: number };
+};
+export type SessionReservationWriteResult =
+  { kind: "admitted" } | Extract<SessionAdmissionResult, { kind: "blocked" }>;
 export const promotionInputSchema = z
   .object({
     coordinatorToken: id,
@@ -309,7 +325,7 @@ export type SessionReservation = {
   executionVersion: number;
   voiceOperationAttemptId: string;
   reservedAt: number;
-  workHandle: RuntimeWorkHandle;
+  workHandle: RuntimeWorkHandle & { transition(kind: RuntimeWorkKind): void };
 } & (
   | { sessionMode: "meeting"; historyKey: HistoryKey }
   | { sessionMode: "tts_only"; historyKey?: never }

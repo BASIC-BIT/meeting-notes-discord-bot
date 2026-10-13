@@ -86,6 +86,9 @@ export interface InteractionReceipt {
 }
 
 export interface ActiveMeetingLease {
+  sessionMode?: "meeting" | "tts_only";
+  executionVersion?: number;
+  voiceOperationAttemptId?: string;
   guildId: string;
   meetingId: string;
   ownerInstanceId: string;

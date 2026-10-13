@@ -3,7 +3,8 @@ import {
   requestActiveMeetingEnd,
   releaseActiveMeetingLease,
   renewActiveMeetingLease,
-  tryAcquireActiveMeetingLease,
+  getDeploymentControlRepository,
+  transitionMeetingHistory,
 } from "../db";
 import {
   MEETING_END_REASONS,
@@ -13,12 +14,27 @@ import {
 import type { ActiveMeetingLease } from "../types/db";
 import type { MeetingData } from "../types/meeting-data";
 import { getRuntimeInstanceId } from "./runtimeInstanceService";
+import { randomUUID } from "node:crypto";
+import type { MeetingHistory } from "../types/db";
+import type {
+  AdmissionContext,
+  SessionAdmissionResult,
+  SessionReservation,
+} from "../types/deploymentControl";
+import {
+  beginRuntimeWork,
+  getRuntimeAdmissionContext,
+} from "./runtimeLifecycleService";
+import {
+  prepareOwnedVoiceSession,
+  settleOwnedVoiceSession,
+} from "./guildVoiceOperationService";
 
 const ACTIVE_MEETING_LEASE_SECONDS = 30;
 const ACTIVE_MEETING_HEARTBEAT_MS = 10_000;
 const ACTIVE_MEETING_TTL_GRACE_SECONDS = 120;
 
-type AcquireMeetingLeaseInput = {
+export type AcquireMeetingLeaseInput = {
   guildId: string;
   meetingId: string;
   voiceChannelId: string;
@@ -28,7 +44,33 @@ type AcquireMeetingLeaseInput = {
   startReason?: ActiveMeetingLease["startReason"];
   startTriggeredByUserId?: string;
   autoRecordRule?: ActiveMeetingLease["autoRecordRule"];
+  admissionContext?: AdmissionContext;
+  reservedAt: number;
+  suppression?: { channelId: string; expectedVersion?: number };
+} & (
+  | { sessionMode: "meeting"; history: MeetingHistory }
+  | { sessionMode: "tts_only"; history?: never }
+);
+type OwnedReservation = {
+  reservation: SessionReservation;
+  controller: AbortController;
+  timer?: ReturnType<typeof setInterval>;
+  meeting?: MeetingData;
+  renewing: boolean;
 };
+const reservations = new Map<string, OwnedReservation>();
+const pendingReservations = new Map<string, Promise<SessionAdmissionResult>>();
+const uncertainAdmissions = new Map<
+  string,
+  {
+    guildId: string;
+    meetingId: string;
+    voiceOperationAttemptId: string;
+    workHandle: SessionReservation["workHandle"];
+  }
+>();
+const reservationKey = (guildId: string, meetingId: string) =>
+  `${guildId}:${meetingId}`;
 
 type MeetingLeaseSnapshotUpdate = {
   status: ActiveMeetingLease["status"];
@@ -100,53 +142,285 @@ export function isLeaseActive(
 export async function getActiveMeetingLeaseForGuild(
   guildId: string,
 ): Promise<ActiveMeetingLease | undefined> {
-  return getActiveMeetingLease(guildId);
+  const lease = await getActiveMeetingLease(guildId);
+  return lease?.sessionMode === "tts_only" ? undefined : lease;
 }
 
-export async function tryAcquireMeetingLease({
-  guildId,
-  meetingId,
-  voiceChannelId,
-  voiceChannelName,
-  textChannelId,
-  isAutoRecording,
-  startReason,
-  startTriggeredByUserId,
-  autoRecordRule,
-}: AcquireMeetingLeaseInput): Promise<boolean> {
-  const nowMs = Date.now();
-  const { createdAt, updatedAt, leaseExpiresAt, expiresAt, nowEpochSeconds } =
-    buildLeaseTimestamps(nowMs);
-  const leaseRecord: ActiveMeetingLease = {
+export function tryAcquireMeetingLease(
+  input: AcquireMeetingLeaseInput,
+): Promise<SessionAdmissionResult> {
+  const key = reservationKey(input.guildId, input.meetingId);
+  const pending = pendingReservations.get(key);
+  if (pending) return pending;
+  let workHandle;
+  try {
+    workHandle = beginRuntimeWork("pending_admission");
+  } catch {
+    return Promise.resolve({ kind: "blocked", reason: "not_serving" });
+  }
+  const acquisition = acquireReservation(input, workHandle);
+  pendingReservations.set(key, acquisition);
+  void acquisition.then((result) => {
+    if (result.kind === "blocked" && result.reason !== "unavailable")
+      pendingReservations.delete(key);
+  });
+  return acquisition;
+}
+
+async function acquireReservation(
+  input: AcquireMeetingLeaseInput,
+  workHandle: SessionReservation["workHandle"],
+): Promise<SessionAdmissionResult> {
+  const {
     guildId,
     meetingId,
-    ownerInstanceId: getRuntimeInstanceId(),
     voiceChannelId,
     voiceChannelName,
     textChannelId,
     isAutoRecording,
-    status: MEETING_STATUS.IN_PROGRESS,
+    startReason,
+    startTriggeredByUserId,
+    autoRecordRule,
+    sessionMode,
+  } = input;
+  let context: AdmissionContext;
+  try {
+    context = input.admissionContext ?? (await getRuntimeAdmissionContext());
+  } catch {
+    workHandle.settle();
+    return { kind: "blocked", reason: "not_serving" };
+  }
+  const nowMs = Date.now();
+  const { createdAt, updatedAt, leaseExpiresAt, expiresAt, nowEpochSeconds } =
+    buildLeaseTimestamps(nowMs);
+  const voiceOperationAttemptId = randomUUID();
+  const leaseRecord = {
+    guildId,
+    meetingId,
+    ownerInstanceId: context.instanceId,
+    executionVersion: 1,
+    sessionMode,
+    voiceOperationAttemptId,
+    voiceChannelId,
+    voiceChannelName,
+    textChannelId,
+    isAutoRecording,
+    status: MEETING_STATUS.STARTING,
     leaseExpiresAt,
     createdAt,
     updatedAt,
     expiresAt,
+    startReason,
+    startTriggeredByUserId,
+    autoRecordRule,
   };
-  if (startReason) {
-    leaseRecord.startReason = startReason;
+  const history = input.history
+    ? {
+        ...input.history,
+        ownerInstanceId: context.instanceId,
+        executionVersion: 1,
+        status: MEETING_STATUS.STARTING,
+      }
+    : undefined;
+  const request = {
+    context: { ...context, now: nowEpochSeconds },
+    lease: leaseRecord,
+    voice: {
+      pk: `VOICE#${guildId}`,
+      sk: "STATE" as const,
+      recordType: "voice" as const,
+      protocolVersion: 1 as const,
+      guildId,
+      meetingId,
+      ownerInstanceId: context.instanceId,
+      attemptId: voiceOperationAttemptId,
+      executionVersion: 1,
+      sessionMode,
+      state: "joining" as const,
+      updatedAt: nowEpochSeconds,
+    },
+    history,
+    requestToken: voiceOperationAttemptId,
+    suppression: input.suppression,
+  };
+  let result;
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      result = await getDeploymentControlRepository().reserveSession(request);
+      if (result.kind === "admitted" || result.reason !== "unavailable") break;
+    }
+  } catch {
+    result = { kind: "blocked" as const, reason: "unavailable" as const };
   }
-  if (startTriggeredByUserId) {
-    leaseRecord.startTriggeredByUserId = startTriggeredByUserId;
+  if (!result) throw new Error("Reservation retry loop produced no result");
+  if (result.kind === "blocked") {
+    if (result.reason === "unavailable")
+      uncertainAdmissions.set(reservationKey(guildId, meetingId), {
+        guildId,
+        meetingId,
+        voiceOperationAttemptId,
+        workHandle,
+      });
+    else workHandle.settle();
+    return result;
   }
-  if (autoRecordRule) {
-    leaseRecord.autoRecordRule = autoRecordRule;
-  }
+  const shared = {
+    guildId,
+    meetingId,
+    ownerInstanceId: context.instanceId,
+    executionVersion: 1,
+    voiceOperationAttemptId,
+    reservedAt: input.reservedAt,
+    workHandle,
+  };
+  const reservation: SessionReservation = history
+    ? {
+        ...shared,
+        sessionMode: "meeting",
+        historyKey: {
+          guildId,
+          channelId_timestamp: history.channelId_timestamp,
+        },
+      }
+    : { ...shared, sessionMode: "tts_only" };
+  const owned: OwnedReservation = {
+    reservation,
+    controller: new AbortController(),
+    renewing: false,
+  };
+  reservations.set(reservationKey(guildId, meetingId), owned);
+  prepareOwnedVoiceSession(reservation);
+  owned.timer = setInterval(() => {
+    void renewReservation(owned);
+  }, ACTIVE_MEETING_HEARTBEAT_MS);
+  owned.timer.unref?.();
+  await renewReservation(owned);
+  return { kind: "admitted", reservation };
+}
 
-  return tryAcquireActiveMeetingLease(leaseRecord, nowEpochSeconds);
+async function renewReservation(owned: OwnedReservation): Promise<void> {
+  if (owned.renewing || owned.controller.signal.aborted) return;
+  owned.renewing = true;
+  const { reservation, meeting } = owned;
+  try {
+    const { updatedAt, leaseExpiresAt, expiresAt } = buildLeaseTimestamps(
+      Date.now(),
+    );
+    const renewed = await renewActiveMeetingLease(
+      reservation.guildId,
+      reservation.meetingId,
+      reservation.ownerInstanceId,
+      leaseExpiresAt,
+      updatedAt,
+      expiresAt,
+      meeting
+        ? buildMeetingLeaseSnapshot(meeting)
+        : { status: MEETING_STATUS.STARTING },
+      reservation,
+    );
+    if (!renewed) throw new Error("Reservation ownership lost");
+    if (meeting) {
+      const lease = await getActiveMeetingLease(reservation.guildId);
+      if (lease) await processRemoteEndRequest(lease, meeting);
+    }
+  } catch {
+    owned.controller.abort();
+    if (owned.timer) clearInterval(owned.timer);
+    if (meeting && !meeting.finishing && !meeting.finished)
+      await meeting.onEndMeeting?.(meeting);
+  } finally {
+    owned.renewing = false;
+  }
+}
+export function getReservationSignal(
+  reservation: SessionReservation,
+): AbortSignal {
+  const owned = reservations.get(
+    reservationKey(reservation.guildId, reservation.meetingId),
+  );
+  if (!owned || owned.reservation !== reservation)
+    throw new Error("Reservation is not locally owned");
+  return owned.controller.signal;
+}
+export function attachMeetingReservation(
+  meeting: MeetingData,
+  reservation: SessionReservation,
+): void {
+  const owned = reservations.get(
+    reservationKey(reservation.guildId, reservation.meetingId),
+  );
+  if (!owned || owned.controller.signal.aborted)
+    throw new Error("Reservation initialization was closed");
+  owned.meeting = meeting;
+  reservation.workHandle.transition(
+    reservation.sessionMode === "meeting" ? "recording" : "voice_operation",
+  );
+}
+export async function releaseSessionReservation(
+  reservation: SessionReservation,
+): Promise<boolean> {
+  const key = reservationKey(reservation.guildId, reservation.meetingId);
+  const owned = reservations.get(key);
+  if (owned?.timer) clearInterval(owned.timer);
+  const outcome = await settleOwnedVoiceSession(reservation);
+  if (outcome !== "settled") {
+    reservation.workHandle.transition("voice_operation");
+    return false;
+  }
+  const released = await releaseActiveMeetingLease(
+    reservation.guildId,
+    reservation.meetingId,
+    reservation.ownerInstanceId,
+    reservation,
+  );
+  if (!released) return false;
+  reservation.workHandle.settle();
+  reservations.delete(key);
+  pendingReservations.delete(key);
+  return true;
+}
+export async function unwindSessionInitialization(
+  reservation: SessionReservation,
+): Promise<void> {
+  try {
+    if (reservation.sessionMode === "meeting")
+      await transitionMeetingHistory({
+        key: reservation.historyKey,
+        expectedMeetingId: reservation.meetingId,
+        expectedOwnerInstanceId: reservation.ownerInstanceId,
+        expectedExecutionVersion: reservation.executionVersion,
+        expectedStatus: MEETING_STATUS.STARTING,
+        patch: {
+          status: MEETING_STATUS.FAILED,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+  } finally {
+    await releaseSessionReservation(reservation);
+  }
+}
+/** H4/R3 compose these owned sessions with processing and delivery before installing the runtime safety handler. */
+export function getOwnedSessionReservations(): ReadonlyArray<{
+  reservation: SessionReservation;
+  meeting?: MeetingData;
+}> {
+  return [...reservations.values()].map(({ reservation, meeting }) => ({
+    reservation,
+    meeting,
+  }));
+}
+export function getUncertainSessionAdmissions() {
+  return [...uncertainAdmissions.values()];
+}
+export function fenceSessionReservations(): void {
+  for (const owned of reservations.values()) owned.controller.abort();
 }
 
 export async function releaseMeetingLeaseForMeeting(
   meeting: MeetingData,
 ): Promise<boolean> {
+  if (meeting.reservation)
+    return releaseSessionReservation(meeting.reservation);
   stopMeetingLeaseHeartbeat(meeting);
   if (!meeting.leaseOwnerInstanceId) {
     return true;

@@ -21,21 +21,43 @@ import {
   requestActiveMeetingEnd,
   releaseActiveMeetingLease,
   renewActiveMeetingLease,
-  tryAcquireActiveMeetingLease,
+  getDeploymentControlRepository,
 } from "../../src/db";
-import {
-  MEETING_END_REASONS,
-  MEETING_STATUS,
-} from "../../src/types/meetingLifecycle";
+import { MEETING_END_REASONS } from "../../src/types/meetingLifecycle";
 
 jest.mock("../../src/db", () => ({
   getActiveMeetingLease: jest.fn(),
   requestActiveMeetingEnd: jest.fn(),
   releaseActiveMeetingLease: jest.fn(),
   renewActiveMeetingLease: jest.fn(),
-  tryAcquireActiveMeetingLease: jest.fn(),
+  getDeploymentControlRepository: jest.fn(),
+  transitionMeetingHistory: jest.fn(),
 }));
 
+import { beginRuntimeWork } from "../../src/services/runtimeLifecycleService";
+jest.mock("../../src/services/runtimeLifecycleService", () => ({
+  beginRuntimeWork: jest.fn(() => ({
+    settle: jest.fn(),
+    transition: jest.fn(),
+  })),
+  getRuntimeAdmissionContext: jest.fn(async () => ({
+    instanceId: "instance-1",
+    identity: {
+      kind: "local",
+      localId: "fixture",
+      instanceId: "instance-1",
+      protocolVersion: 1,
+    },
+    authorizedGeneration: 1,
+    observedEpoch: 1,
+    protocolVersion: 1,
+    now: Math.floor(Date.now() / 1000),
+  })),
+}));
+jest.mock("../../src/services/guildVoiceOperationService", () => ({
+  prepareOwnedVoiceSession: jest.fn(),
+  settleOwnedVoiceSession: jest.fn(async () => "settled"),
+}));
 jest.mock("../../src/services/runtimeInstanceService", () => ({
   getRuntimeInstanceId: () => "instance-1",
 }));
@@ -47,9 +69,6 @@ describe("activeMeetingLeaseService", () => {
     releaseActiveMeetingLease,
   );
   const mockedRenewActiveMeetingLease = jest.mocked(renewActiveMeetingLease);
-  const mockedTryAcquireActiveMeetingLease = jest.mocked(
-    tryAcquireActiveMeetingLease,
-  );
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -64,49 +83,37 @@ describe("activeMeetingLeaseService", () => {
     jest.restoreAllMocks();
   });
 
-  test("acquires lease with epoch-second expiry payload", async () => {
-    mockedTryAcquireActiveMeetingLease.mockResolvedValue(true);
-    const nowMs = Date.parse("2026-02-14T20:00:00.000Z");
-    const nowEpochSeconds = Math.floor(nowMs / 1000);
-    const expectedLeaseSeconds = 30;
-    const expectedTtlGraceSeconds = 120;
-
-    const acquired = await tryAcquireMeetingLease({
-      guildId: "guild-1",
-      meetingId: "meeting-1",
-      voiceChannelId: "voice-1",
-      voiceChannelName: "General",
-      textChannelId: "text-1",
+  test("reservationHeartbeatsBeforeInitialization and synchronous pending work", async () => {
+    const reserveSession = jest.fn(async () => ({ kind: "admitted" as const }));
+    jest
+      .mocked(getDeploymentControlRepository)
+      .mockReturnValue({ reserveSession } as ReturnType<
+        typeof getDeploymentControlRepository
+      >);
+    mockedRenewActiveMeetingLease.mockResolvedValue(true);
+    const resultPromise = tryAcquireMeetingLease({
+      guildId: "reserved-guild",
+      meetingId: "reserved-meeting",
+      voiceChannelId: "voice",
+      textChannelId: "text",
       isAutoRecording: false,
+      sessionMode: "tts_only",
+      reservedAt: Date.now(),
     });
-
-    expect(acquired).toBe(true);
-    expect(mockedTryAcquireActiveMeetingLease).toHaveBeenCalledWith(
-      {
-        guildId: "guild-1",
-        meetingId: "meeting-1",
-        ownerInstanceId: "instance-1",
-        voiceChannelId: "voice-1",
-        voiceChannelName: "General",
-        textChannelId: "text-1",
-        isAutoRecording: false,
-        status: MEETING_STATUS.IN_PROGRESS,
-        leaseExpiresAt: nowEpochSeconds + expectedLeaseSeconds,
-        createdAt: "2026-02-14T20:00:00.000Z",
-        updatedAt: "2026-02-14T20:00:00.000Z",
-        expiresAt:
-          nowEpochSeconds + expectedLeaseSeconds + expectedTtlGraceSeconds,
-      },
-      nowEpochSeconds,
+    expect(beginRuntimeWork).toHaveBeenCalledWith("pending_admission");
+    const result = await resultPromise;
+    expect(result.kind).toBe("admitted");
+    expect(mockedRenewActiveMeetingLease.mock.calls.length).toBeGreaterThan(0);
+    expect(reserveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        history: undefined,
+        lease: expect.objectContaining({
+          executionVersion: 1,
+          sessionMode: "tts_only",
+          leaseExpiresAt: Math.floor(Date.now() / 1000) + 30,
+        }),
+      }),
     );
-    const leaseCall = mockedTryAcquireActiveMeetingLease.mock.calls[0];
-    expect(leaseCall?.[0].leaseExpiresAt).toBe(
-      nowEpochSeconds + expectedLeaseSeconds,
-    );
-    expect(leaseCall?.[0].expiresAt).toBe(
-      nowEpochSeconds + expectedLeaseSeconds + expectedTtlGraceSeconds,
-    );
-    expect(leaseCall?.[0].leaseExpiresAt).toBeLessThan(nowMs);
   });
 
   test("reports active lease status by epoch seconds", () => {
@@ -215,6 +222,12 @@ describe("activeMeetingLeaseService", () => {
 
     expect(lease).toBeUndefined();
     expect(released).toBe(true);
+  });
+  test("recording reads exclude a TTS-only guild lease", async () => {
+    mockedGetActiveMeetingLease.mockResolvedValue({
+      sessionMode: "tts_only",
+    } as Awaited<ReturnType<typeof getActiveMeetingLease>>);
+    expect(await getActiveMeetingLeaseForGuild("tts-guild")).toBeUndefined();
   });
 
   test("requests meeting end with user id and timestamp", async () => {

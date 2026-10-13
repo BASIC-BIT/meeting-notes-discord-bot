@@ -8,6 +8,7 @@ import {
   ensureMeetingSummaries,
 } from "../services/meetingNotesService";
 import { trimNotesForHistory } from "../utils/notesHistory";
+import { transitionMeetingHistory } from "../db";
 
 function buildNotesMetadata(
   meeting: MeetingData,
@@ -202,6 +203,24 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
 export async function saveMeetingStartToDatabase(
   meeting: MeetingData,
 ): Promise<void> {
+  if (meeting.reservation) {
+    const reservation = meeting.reservation;
+    if (reservation.sessionMode === "tts_only") return;
+    const result = await transitionMeetingHistory({
+      key: reservation.historyKey,
+      expectedMeetingId: reservation.meetingId,
+      expectedOwnerInstanceId: reservation.ownerInstanceId,
+      expectedExecutionVersion: reservation.executionVersion,
+      expectedStatus: MEETING_STATUS.STARTING,
+      patch: {
+        status: MEETING_STATUS.IN_PROGRESS,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+    if (result !== "applied")
+      throw new Error("Meeting initialization lost history ownership");
+    return;
+  }
   if (!meeting.transcribeMeeting) return;
   try {
     const timestamp = meeting.startTime.toISOString();

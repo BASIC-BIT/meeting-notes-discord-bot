@@ -7,15 +7,21 @@ import {
   User,
   VoiceBasedChannel,
 } from "discord.js";
+import { NoSubscriberBehavior, createAudioPlayer } from "@discordjs/voice";
+import type { SessionReservation } from "./types/deploymentControl";
 import {
-  NoSubscriberBehavior,
-  createAudioPlayer,
-  joinVoiceChannel,
-} from "@discordjs/voice";
-import { DiscordGatewayAdapterCreator } from "@discordjs/voice/dist";
+  attachMeetingReservation,
+  getReservationSignal,
+  tryAcquireMeetingLease,
+  unwindSessionInitialization,
+  releaseSessionReservation,
+} from "./services/activeMeetingLeaseService";
+import { joinOwnedVoiceSession } from "./services/guildVoiceOperationService";
+import { saveMeetingStartToDatabase } from "./commands/saveMeetingHistory";
 import { AudioSnippet } from "./types/audio";
 import {
   openOutputFile,
+  closeOutputFile,
   subscribeToUserVoice,
   userStartTalking,
   userStopTalking,
@@ -57,6 +63,7 @@ import { DEFAULT_CHAT_TTS_SPEAKER_PREFIX_MODE as DEFAULT_PREFIX_MODE } from "./u
 import { resolveMeetingActorId } from "./utils/meetingLifecycle";
 
 const meetings = new Map<string, MeetingData>();
+const meetingInitializations = new Map<string, Promise<MeetingData>>();
 
 // Since the bot can't be in multiple channels at once, we can just track a single meeting per guild, that's good enough.
 // This actually solves a separate issue of having to track meeting by both voice channel and text channel
@@ -101,6 +108,8 @@ export function deleteMeetingSetup(key: string) {
 
 export interface MeetingInitOptions {
   meetingId?: string;
+  reservedAt?: number;
+  suppressionCheck?: { channelId: string; expectedVersion?: number };
   sessionMode?: "meeting" | "tts_only";
   captureAudio?: boolean;
   recordBotAudio?: boolean;
@@ -266,8 +275,8 @@ export async function endTtsOnlySession(meeting: MeetingData) {
   meeting.endTime = new Date();
   meeting.ttsQueue?.stopAndClear();
   try {
-    meeting.connection.disconnect();
-    meeting.connection.destroy();
+    if (meeting.reservation)
+      await releaseSessionReservation(meeting.reservation);
   } catch (error) {
     console.warn("Failed to disconnect TTS-only voice session.", error);
   }
@@ -285,8 +294,121 @@ export async function endTtsOnlySession(meeting: MeetingData) {
  * @returns The initialized MeetingData object
  * @throws Error if voice connection fails or if meeting setup encounters issues
  */
-export async function initializeMeeting(
+export function initializeMeeting(
   options: MeetingInitOptions,
+): Promise<MeetingData> {
+  const meetingId = options.meetingId ?? uuidv4();
+  const key = `${options.guild.id}:${meetingId}`;
+  const pending = meetingInitializations.get(key);
+  if (pending) return pending;
+  const existing = getMeeting(options.guild.id);
+  if (existing?.meetingId === meetingId && !existing.finished)
+    return Promise.resolve(existing);
+  const initialization = initializeNewMeeting({ ...options, meetingId });
+  meetingInitializations.set(key, initialization);
+  void initialization.then(
+    () => meetingInitializations.delete(key),
+    () => meetingInitializations.delete(key),
+  );
+  return initialization;
+}
+async function initializeNewMeeting(
+  options: MeetingInitOptions & { meetingId: string },
+): Promise<MeetingData> {
+  const reservedAt = options.reservedAt ?? Date.now();
+  const meetingId = options.meetingId;
+  const timestamp = new Date(reservedAt).toISOString();
+  const shared = {
+    guildId: options.guild.id,
+    meetingId,
+    voiceChannelId: options.voiceChannel.id,
+    voiceChannelName: options.voiceChannel.name,
+    textChannelId: options.textChannel.id,
+    isAutoRecording: options.isAutoRecording ?? false,
+    startReason: options.startReason,
+    startTriggeredByUserId: options.startTriggeredByUserId,
+    autoRecordRule: options.autoRecordRule,
+    reservedAt,
+  };
+  const input =
+    options.sessionMode === "tts_only"
+      ? { ...shared, sessionMode: "tts_only" as const }
+      : {
+          ...shared,
+          sessionMode: "meeting" as const,
+          suppression:
+            options.suppressionCheck ??
+            (options.isAutoRecording
+              ? { channelId: options.voiceChannel.id }
+              : undefined),
+          history: {
+            guildId: options.guild.id,
+            channelId_timestamp: `${options.voiceChannel.id}#${timestamp}`,
+            meetingId,
+            channelId: options.voiceChannel.id,
+            textChannelId: options.textChannel.id,
+            timestamp,
+            participants: [],
+            duration: 0,
+            transcribeMeeting: options.transcribeMeeting,
+            generateNotes: options.generateNotes,
+            meetingCreatorId: options.creator.id,
+            isAutoRecording: options.isAutoRecording ?? false,
+            context: options.meetingContext,
+            tags: options.tags,
+            startReason: options.startReason,
+            startTriggeredByUserId: options.startTriggeredByUserId,
+            autoRecordRule: options.autoRecordRule,
+          },
+        };
+  const admission = await tryAcquireMeetingLease(input);
+  if (admission.kind === "blocked")
+    throw new Error(`Voice session admission blocked: ${admission.reason}`);
+  const initialization: { meeting?: MeetingData; cleanup: Array<() => void> } =
+    { cleanup: [] };
+  try {
+    const meeting = await initializeReservedMeeting({
+      ...options,
+      meetingId,
+      reservation: admission.reservation,
+      initialization,
+    });
+    await saveMeetingStartToDatabase(meeting);
+    return meeting;
+  } catch (error) {
+    try {
+      await disposeFailedInitialization(initialization);
+    } finally {
+      await unwindSessionInitialization(admission.reservation);
+    }
+    throw error;
+  }
+}
+
+async function disposeFailedInitialization(initialization: {
+  meeting?: MeetingData;
+  cleanup: Array<() => void>;
+}): Promise<void> {
+  const meeting = initialization.meeting;
+  if (!meeting) return;
+  meeting.finishing = true;
+  meeting.finished = true;
+  const closeAudio = meeting.captureAudio || meeting.recordBotAudio;
+  meeting.captureAudio = false;
+  meeting.recordBotAudio = false;
+  meeting.ttsQueue?.stopAndClear();
+  for (const cleanup of initialization.cleanup) cleanup();
+  if (meeting.timeoutTimer) clearTimeout(meeting.timeoutTimer);
+  if (getMeeting(meeting.guildId) === meeting) deleteMeeting(meeting.guildId);
+  meeting.setFinished();
+  if (closeAudio) await closeOutputFile(meeting);
+}
+
+async function initializeReservedMeeting(
+  options: MeetingInitOptions & {
+    reservation: SessionReservation;
+    initialization: { meeting?: MeetingData; cleanup: Array<() => void> };
+  },
 ): Promise<MeetingData> {
   const {
     meetingId,
@@ -294,7 +416,6 @@ export async function initializeMeeting(
     captureAudio = sessionMode === "meeting",
     recordBotAudio = captureAudio,
     storeChatLog = sessionMode === "meeting",
-    leaseOwnerInstanceId,
     voiceChannel,
     textChannel,
     guild,
@@ -327,16 +448,16 @@ export async function initializeMeeting(
       : MEETING_START_REASONS.MANUAL_COMMAND);
   const canCaptureAudio = captureAudio && sessionMode === "meeting";
 
-  // Join the voice channel
+  const signal = getReservationSignal(options.reservation);
+  signal.throwIfAborted();
+  // The reservation and its heartbeat exist before the SDK can issue a join.
   let connection;
   try {
-    connection = joinVoiceChannel({
-      channelId: voiceChannel.id,
-      guildId: guild.id,
-      adapterCreator:
-        guild.voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
-      selfDeaf: !canCaptureAudio,
-      selfMute: false, // must be unmuted to play TTS into the channel
+    connection = await joinOwnedVoiceSession(options.reservation, {
+      voiceChannel,
+      guild,
+      captureAudio: canCaptureAudio,
+      signal,
     });
   } catch (error) {
     console.error("Failed to join voice channel:", error);
@@ -377,6 +498,7 @@ export async function initializeMeeting(
   });
 
   const meeting: MeetingData = {
+    reservation: options.reservation,
     meetingId: meetingId ?? uuidv4(),
     sessionMode,
     captureAudio: canCaptureAudio,
@@ -393,7 +515,7 @@ export async function initializeMeeting(
     voiceChannel,
     guildId: guild.id,
     channelId: textChannel.id,
-    startTime: new Date(),
+    startTime: new Date(options.reservation.reservedAt),
     creator,
     liveAudioPlayer,
     liveVoiceEnabled,
@@ -420,8 +542,10 @@ export async function initializeMeeting(
     participants: new Map(),
     tags,
     subscriptionTier,
-    leaseOwnerInstanceId,
+    leaseOwnerInstanceId: options.reservation.ownerInstanceId,
   };
+  options.initialization.meeting = meeting;
+  attachMeetingReservation(meeting, options.reservation);
 
   if (meeting.sessionMode === "tts_only") {
     meeting.resetTtsOnlyIdleTimer = () => resetTtsOnlyIdleTimeout(meeting);
@@ -457,6 +581,7 @@ export async function initializeMeeting(
     }),
   );
 
+  signal.throwIfAborted();
   if (meeting.captureAudio) {
     await Promise.all(
       voiceChannel.members.map((member) =>
@@ -475,7 +600,9 @@ export async function initializeMeeting(
 
   if (meeting.storeChatLog || meeting.chatTtsEnabled) {
     const collector = voiceChannel.createMessageCollector();
+    options.initialization.cleanup.push(() => collector.stop());
     collector.on("collect", (message) => {
+      if (meeting.finishing || meeting.finished) return;
       if (message.author.bot) return;
 
       const participant =
@@ -523,6 +650,7 @@ export async function initializeMeeting(
     });
   }
 
+  signal.throwIfAborted();
   // Add meeting to the global map
   addMeeting(meeting);
   if (meeting.sessionMode === "meeting") {
@@ -561,6 +689,8 @@ export async function initializeMeeting(
       console.warn("Failed to load dictionary entries:", error);
     }
   }
+
+  signal.throwIfAborted();
 
   // Set a timer to automatically end the meeting after the specified duration
   if (onTimeout) {

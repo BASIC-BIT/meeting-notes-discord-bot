@@ -1,4 +1,5 @@
 import { waitForGuildInstaller } from "./services/guildInstallerOnboardingService";
+import { buildOwnedVoiceStrategy } from "./services/guildVoiceOperationService";
 import {
   ButtonInteraction,
   ChatInputCommandInteraction,
@@ -170,7 +171,8 @@ const TTS_PREFIX_MODE_CHOICES = USER_CHAT_TTS_SPEAKER_PREFIX_MODE_OPTIONS.map(
   }),
 );
 
-const client = new Client({
+const client: Client = new Client({
+  ws: { buildStrategy: (manager) => buildOwnedVoiceStrategy(client, manager) },
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,

@@ -1,4 +1,5 @@
 import { ButtonInteraction, Client, EmbedBuilder } from "discord.js";
+import { settleOwnedVoiceSession } from "../services/guildVoiceOperationService";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -370,8 +371,8 @@ async function runEndMeetingFlow(options: EndMeetingFlowOptions) {
     maybeSuppressAutoRecordRejoin(meeting, initialEndReason);
 
     if (meeting.connection) {
-      meeting.connection.disconnect();
-      meeting.connection.destroy();
+      if (meeting.reservation)
+        await settleOwnedVoiceSession(meeting.reservation);
     }
     await runMeetingEndStep(meeting, "restore-bot-nickname", () =>
       restoreVoiceSessionNickname(meeting),

@@ -84,6 +84,7 @@ export function getDeploymentControlRepository() {
     return createMockDeploymentControlRepository(
       store.deploymentControlRecords,
       store.meetingHistoryByGuild,
+      store.activeMeetingLeases,
     );
   }
   return createDynamoDeploymentControlRepository(
@@ -91,6 +92,7 @@ export function getDeploymentControlRepository() {
     {
       deploymentControl: tableName("DeploymentControlTable"),
       meetingHistory: tableName("MeetingHistoryTable"),
+      activeMeeting: tableName("ActiveMeetingTable"),
     },
     { localBootstrap: config.database.useLocalDynamoDB && !config.runtime.ecs },
   );
@@ -543,7 +545,21 @@ export async function renewActiveMeetingLease(
     cancellationReason?: ActiveMeetingLease["cancellationReason"];
     endedAt?: ActiveMeetingLease["endedAt"];
   },
+  ownership?: { executionVersion: number; sessionMode: "meeting" | "tts_only" },
 ): Promise<boolean> {
+  if (config.mock.enabled) {
+    const lease = getMockStore().activeMeetingLeases.get(guildId);
+    if (
+      !lease ||
+      lease.meetingId !== meetingId ||
+      lease.ownerInstanceId !== ownerInstanceId ||
+      lease.executionVersion !== ownership?.executionVersion ||
+      lease.sessionMode !== ownership?.sessionMode
+    )
+      return false;
+    Object.assign(lease, { leaseExpiresAt, updatedAt, expiresAt, ...snapshot });
+    return true;
+  }
   const updateParts = [
     "#leaseExpiresAt = :leaseExpiresAt",
     "#updatedAt = :updatedAt",
@@ -557,6 +573,7 @@ export async function renewActiveMeetingLease(
     "#status": "status",
     "#meetingId": "meetingId",
     "#ownerInstanceId": "ownerInstanceId",
+    "#executionVersion": "executionVersion",
   };
   const expressionAttributeValues: Record<string, unknown> = {
     ":leaseExpiresAt": leaseExpiresAt,
@@ -598,11 +615,25 @@ export async function renewActiveMeetingLease(
     Key: marshall({ guildId }),
     UpdateExpression: `SET ${updateParts.join(", ")}`,
     ConditionExpression:
-      "#meetingId = :meetingId AND #ownerInstanceId = :ownerInstanceId",
+      "#meetingId = :meetingId AND #ownerInstanceId = :ownerInstanceId AND " +
+      (ownership
+        ? "#executionVersion = :executionVersion AND sessionMode = :sessionMode"
+        : "attribute_not_exists(#executionVersion)"),
     ExpressionAttributeNames: expressionAttributeNames,
-    ExpressionAttributeValues: marshall(expressionAttributeValues, {
-      removeUndefinedValues: true,
-    }),
+    ExpressionAttributeValues: marshall(
+      {
+        ...expressionAttributeValues,
+        ...(ownership
+          ? {
+              ":executionVersion": ownership.executionVersion,
+              ":sessionMode": ownership.sessionMode,
+            }
+          : {}),
+      },
+      {
+        removeUndefinedValues: true,
+      },
+    ),
   };
   const command = new UpdateItemCommand(params);
   try {
@@ -622,19 +653,42 @@ export async function releaseActiveMeetingLease(
   guildId: string,
   meetingId: string,
   ownerInstanceId: string,
+  ownership?: { executionVersion: number; sessionMode: "meeting" | "tts_only" },
 ): Promise<boolean> {
+  if (config.mock.enabled) {
+    const lease = getMockStore().activeMeetingLeases.get(guildId);
+    if (
+      !lease ||
+      lease.meetingId !== meetingId ||
+      lease.ownerInstanceId !== ownerInstanceId ||
+      lease.executionVersion !== ownership?.executionVersion ||
+      lease.sessionMode !== ownership?.sessionMode
+    )
+      return false;
+    return getMockStore().activeMeetingLeases.delete(guildId);
+  }
   const params: DeleteItemCommand["input"] = {
     TableName: tableName("ActiveMeetingTable"),
     Key: marshall({ guildId }),
     ConditionExpression:
-      "#meetingId = :meetingId AND #ownerInstanceId = :ownerInstanceId",
+      "#meetingId = :meetingId AND #ownerInstanceId = :ownerInstanceId AND " +
+      (ownership
+        ? "#executionVersion = :executionVersion AND sessionMode = :sessionMode"
+        : "attribute_not_exists(#executionVersion)"),
     ExpressionAttributeNames: {
       "#meetingId": "meetingId",
       "#ownerInstanceId": "ownerInstanceId",
+      "#executionVersion": "executionVersion",
     },
     ExpressionAttributeValues: marshall({
       ":meetingId": meetingId,
       ":ownerInstanceId": ownerInstanceId,
+      ...(ownership
+        ? {
+            ":executionVersion": ownership.executionVersion,
+            ":sessionMode": ownership.sessionMode,
+          }
+        : {}),
     }),
   };
   const command = new DeleteItemCommand(params);
@@ -654,6 +708,8 @@ export async function releaseActiveMeetingLease(
 export async function getActiveMeetingLease(
   guildId: string,
 ): Promise<ActiveMeetingLease | undefined> {
+  if (config.mock.enabled)
+    return getMockStore().activeMeetingLeases.get(guildId);
   const params: GetItemCommand["input"] = {
     TableName: tableName("ActiveMeetingTable"),
     Key: marshall({ guildId }),
