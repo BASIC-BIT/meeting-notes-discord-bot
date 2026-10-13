@@ -18,7 +18,7 @@ import { planLocalBootstrap } from "../services/runtimeLocalBootstrapPlan";
 import type { ActiveMeetingLease, MeetingHistory } from "../types/db";
 import {
   buildHistoryTransition,
-  buildTerminalCheckpointTransition,
+  buildOwnedCheckpointTransition,
   buildInitialMeetingHistoryPut,
   buildPromotionTransaction,
   buildRuntimeAdmissionChecks,
@@ -381,10 +381,10 @@ export function createDynamoDeploymentControlRepository(
       ),
     transitionMeetingHistory: (input) =>
       conditional(() =>
-        input.terminalPreservation
+        input.terminalPreservation || input.checkpointPublication
           ? client.send(
               new TransactWriteItemsCommand(
-                buildTerminalCheckpointTransition(input, tables),
+                buildOwnedCheckpointTransition(input, tables),
               ),
               { abortSignal: input.signal },
             )
@@ -885,7 +885,7 @@ export function createMockDeploymentControlRepository(
         meetingHistory: "mock",
       });
       const row = getHistory(input.key);
-      if (!terminalPreservationAllowed(input, records, leases)) return "stale";
+      if (!checkpointLeaseAllowed(input, records, leases)) return "stale";
       if (
         !row ||
         row.meetingId !== input.expectedMeetingId ||
@@ -931,12 +931,12 @@ export function isPendingRecordingRecovery(row: MeetingHistory): boolean {
   );
 }
 
-function terminalPreservationAllowed(
+function checkpointLeaseAllowed(
   input: HistoryTransition,
   records: Map<string, DeploymentControlRecord>,
   leases: Map<string, ActiveMeetingLease>,
 ) {
-  const proof = input.terminalPreservation;
+  const proof = input.terminalPreservation ?? input.checkpointPublication;
   return (
     !proof ||
     (leases.get(proof.ownership.guildId)?.sessionMode === "meeting" &&

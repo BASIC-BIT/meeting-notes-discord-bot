@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { getDeploymentControlRepository } from "../db";
 import type { DeploymentControlRepository } from "../repositories/deploymentControlRepository";
-import type { TerminalCheckpointPreservation } from "../types/deploymentControl";
+import type {
+  TerminalCheckpointPreservation,
+  CheckpointPublication,
+} from "../types/deploymentControl";
 import type { MeetingHistory } from "../types/db";
 import type { MeetingData } from "../types/meeting-data";
 import type { MeetingStatus } from "../types/meetingLifecycle";
@@ -50,6 +53,7 @@ type Objects = {
   read: typeof fetchObjectBytesFromS3;
 };
 export type CheckpointFlushInput = {
+  ownership?: CheckpointPublication["ownership"];
   capture: RecordingCaptureProvenance;
   captureState?: RecordingCaptureState;
   expectedStatus: MeetingStatus;
@@ -126,7 +130,12 @@ function artifactRef(
     sequence: input.sequence,
     coverage: input.coverage,
     contentType: input.contentType,
-    ...(input.kind === "audio" ? { format: input.format } : {}),
+    ...(input.kind === "audio"
+      ? {
+          format: input.format,
+          ...(input.timing ? { timing: input.timing } : {}),
+        }
+      : {}),
     object: objectRef(key, input.bytes),
   });
   if (artifact.kind === "audio") validatePcm(artifact);
@@ -158,7 +167,14 @@ function validatePcm(artifact: Extract<CheckpointArtifact, { kind: "audio" }>) {
 }
 function audioCoverage(artifacts: CheckpointArtifact[]): RecordingCoverage {
   const audio = artifacts.filter((item) => item.kind === "audio");
-  if (audio.some((item) => item.coverage.kind === "unknown"))
+  // Reconciled sample positions preserve duration, not exact physical wall time.
+  if (
+    audio.some(
+      (item) =>
+        item.coverage.kind === "unknown" ||
+        (item.timing?.maxCursorAdjustmentMs ?? 0) > 0,
+    )
+  )
     return { kind: "unknown" };
   return {
     kind: "known",
@@ -293,6 +309,7 @@ export function createRecordingCheckpointService(
     | { checkpoint: RecordingCheckpoint; manifest: RecordingManifest }
     | undefined;
   let pinnedCapture: RecordingCaptureProvenance | undefined;
+  let pinnedOwnership: CheckpointPublication["ownership"] | undefined;
   let publishing = false;
   async function verifiedBytes(
     reference: CheckpointObject,
@@ -473,6 +490,15 @@ export function createRecordingCheckpointService(
       expectedCheckpointRevision: input.previous?.revision ?? 0,
       patch,
       signal: input.signal,
+      ...(input.ownership && !proof
+        ? {
+            checkpointPublication: {
+              kind: "checkpoint_publication" as const,
+              ownership: input.ownership,
+              now: Math.floor(Date.now() / 1000),
+            },
+          }
+        : {}),
       ...(proof
         ? {
             terminalPreservation: {
@@ -593,6 +619,9 @@ export function createRecordingCheckpointService(
     if (!producerSession) return flushInternal(input);
     if (
       publishing ||
+      !input.ownership ||
+      (pinnedOwnership &&
+        !isDeepStrictEqual(pinnedOwnership, input.ownership)) ||
       (pinnedCapture && !isDeepStrictEqual(pinnedCapture, input.capture)) ||
       (acknowledged && !sameCheckpoint(acknowledged.checkpoint, input.previous))
     )
@@ -601,6 +630,7 @@ export function createRecordingCheckpointService(
         coverage: unknownCoverage("verification_failed"),
       };
     pinnedCapture ??= recordingCaptureProvenanceSchema.parse(input.capture);
+    pinnedOwnership ??= { ...input.ownership };
     publishing = true;
     try {
       return await flushInternal(input);
@@ -628,16 +658,17 @@ export function createRecordingCheckpointService(
     artifacts: CheckpointArtifactInput[],
     signal?: AbortSignal,
   ): Promise<CheckpointAppendResult> {
-    const reservation = meeting.reservation;
+    const originalReservation = meeting.reservation;
     if (
-      !reservation ||
-      reservation.sessionMode !== "meeting" ||
+      !originalReservation ||
+      originalReservation.sessionMode !== "meeting" ||
       !meeting.ownershipSignal
     )
       return {
         kind: "preservation_failed",
         coverage: unknownCoverage("verification_failed"),
       };
+    const reservation = { ...originalReservation };
     if (
       meeting.meetingId !== reservation.meetingId ||
       meeting.guildId !== reservation.guildId
@@ -676,6 +707,14 @@ export function createRecordingCheckpointService(
         coverage: unknownCoverage("verification_failed"),
       };
     const result = await flush({
+      ownership: {
+        guildId: reservation.guildId,
+        meetingId: reservation.meetingId,
+        ownerInstanceId: reservation.ownerInstanceId,
+        executionVersion: reservation.executionVersion,
+        voiceOperationAttemptId: reservation.voiceOperationAttemptId,
+        sessionMode: reservation.sessionMode,
+      },
       capture: {
         ...reservation.historyKey,
         meetingId: reservation.meetingId,

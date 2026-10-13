@@ -133,6 +133,14 @@ export const checkpointPcmFormatSchema = z
     channels: z.number().int().positive(),
   })
   .strict();
+const checkpointAudioTimingSchema = z
+  .object({
+    basis: z.literal("sample_cursor_with_observed_gaps"),
+    observedFirstOffsetMs: z.number(),
+    observedLastOffsetMs: z.number(),
+    maxCursorAdjustmentMs: z.number().nonnegative(),
+  })
+  .strict();
 const artifactBase = z.object({
   sourceId: id,
   sequence: ordinal,
@@ -143,7 +151,11 @@ const artifactBase = z.object({
 export const checkpointArtifactSchema = z
   .discriminatedUnion("kind", [
     artifactBase
-      .extend({ kind: z.literal("audio"), format: checkpointPcmFormatSchema })
+      .extend({
+        kind: z.literal("audio"),
+        format: checkpointPcmFormatSchema,
+        timing: checkpointAudioTimingSchema.optional(),
+      })
       .strict(),
     artifactBase.extend({ kind: z.literal("transcription") }).strict(),
     artifactBase.extend({ kind: z.literal("context") }).strict(),

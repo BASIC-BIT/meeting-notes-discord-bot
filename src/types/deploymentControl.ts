@@ -467,7 +467,13 @@ export type TerminalCheckpointPreservation = {
   ownership: SessionOwnership & { sessionMode: "meeting" };
   now: number;
 };
+export type CheckpointPublication = {
+  kind: "checkpoint_publication";
+  ownership: SessionOwnership & { sessionMode: "meeting" };
+  now: number;
+};
 export type HistoryTransition = {
+  checkpointPublication?: CheckpointPublication;
   terminalPreservation?: TerminalCheckpointPreservation;
   signal?: AbortSignal;
   expectedCheckpointRevision?: number;
@@ -508,9 +514,34 @@ export function validateHistoryTransition(input: HistoryTransition): void {
   if (input.patch.recovery)
     recoveryDispositionSchema.parse(input.patch.recovery);
   if (input.terminalPreservation) validateTerminalCheckpointPreservation(input);
+  if (input.checkpointPublication) validateCheckpointPublication(input);
   const target = input.patch.status;
   if (target && !legalTransitions[input.expectedStatus].includes(target))
     throw new Error("Illegal history status transition");
+}
+
+function validateCheckpointPublication(input: HistoryTransition) {
+  const proof = input.checkpointPublication!;
+  const owner = proof.ownership;
+  id.parse(owner.voiceOperationAttemptId);
+  epochSecond.parse(proof.now);
+  z.number().int().nonnegative().parse(input.expectedCheckpointRevision);
+  if (
+    proof.kind !== "checkpoint_publication" ||
+    input.terminalPreservation ||
+    !input.signal ||
+    Object.keys(input.patch).some(
+      (field) => !["checkpoint", "updatedAt"].includes(field),
+    ) ||
+    owner.guildId !== input.key.guildId ||
+    owner.meetingId !== input.expectedMeetingId ||
+    owner.ownerInstanceId !== input.expectedOwnerInstanceId ||
+    owner.executionVersion !== input.expectedExecutionVersion ||
+    owner.sessionMode !== "meeting"
+  )
+    throw new Error(
+      "Checkpoint publication requires original session authority and metadata only",
+    );
 }
 
 function validateTerminalCheckpointPreservation(input: HistoryTransition) {

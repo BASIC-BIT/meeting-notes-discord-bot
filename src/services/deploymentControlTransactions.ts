@@ -730,15 +730,15 @@ export function buildHistoryTransition(
   };
 }
 
-/** Failed-session preservation continues the original lease, including after promotion. */
-export function buildTerminalCheckpointTransition(
+/** Checkpoint publication continues the original lease, including after promotion. */
+export function buildOwnedCheckpointTransition(
   input: HistoryTransition,
   tables: ControlTableNames,
 ): TransactWriteItemsCommandInput {
   const update = buildHistoryTransition(input, tables);
-  const proof = input.terminalPreservation;
+  const proof = input.terminalPreservation ?? input.checkpointPublication;
   if (!proof || !tables.activeMeeting)
-    throw new Error("Terminal preservation requires its active lease table");
+    throw new Error("Checkpoint publication requires its active lease table");
   const checks = buildWorkAdmissionChecks(
     { kind: "session", ownership: proof.ownership, now: proof.now },
     tables,

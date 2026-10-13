@@ -11,6 +11,7 @@ import { marshall } from "@aws-sdk/util-dynamodb";
 import { createDynamoDeploymentControlRepository } from "../../src/repositories/deploymentControlRepository";
 import {
   type CheckpointFlushInput,
+  type RecordingCheckpointMeeting,
   createRecordingCheckpointService,
 } from "../../src/services/recordingCheckpointService";
 import { history, control, runtime, promotion } from "./controlFixtures";
@@ -617,3 +618,158 @@ test.each([
     }
   },
 );
+
+async function originalProducerFixture() {
+  const lease = {
+    ...ownership,
+    leaseExpiresAt: Math.floor(Date.now() / 1000) + 120,
+  };
+  await client.send(
+    new PutItemCommand({
+      TableName: tables.activeMeeting,
+      Item: marshall(lease),
+    }),
+  );
+  const meeting: RecordingCheckpointMeeting = {
+    meetingId: history.meetingId,
+    guildId: history.guildId,
+    channelId: history.channelId,
+    ownershipSignal: new AbortController().signal,
+    captureStartedAt: new Date("2026-01-01T00:00:02Z"),
+    recordingCaptureState: {
+      kind: "complete",
+      startedAt: "2026-01-01T00:00:02.000Z",
+      endedAt: "2026-01-01T00:00:03.000Z",
+    },
+    transcribeMeeting: true,
+    generateNotes: true,
+    reservation: {
+      ...ownership,
+      reservedAt: Date.parse(history.timestamp),
+      historyKey: {
+        guildId: history.guildId,
+        channelId_timestamp: history.channelId_timestamp,
+      },
+      workHandle: {
+        settle: jest.fn(),
+        transition: jest.fn(),
+        beginOwnedControl: () => ({ settle: jest.fn() }),
+      },
+    },
+  };
+  const producer = service.createProducerSession();
+  expect(
+    (await producer.appendArtifactsRecordingCheckpoint(meeting, [])).kind,
+  ).toBe("committed");
+  const bytes = Buffer.from("late completed speech");
+  const text = {
+    kind: "transcription" as const,
+    sourceId: "text",
+    sequence: 0,
+    contentType: "application/json",
+    coverage: { kind: "unknown" as const },
+    bytes,
+    checksumSha256: createHash("sha256").update(bytes).digest("hex"),
+  };
+  return { lease, meeting, producer, text };
+}
+
+test.each(["missing", "expired", "replaced", "mode", "attempt", "version"])(
+  "ordinary late content publication rejects %s original lease atomically",
+  async (kind) => {
+    const f = await originalProducerFixture();
+    const before = await repository.getMeetingHistory({
+      guildId: history.guildId,
+      channelId_timestamp: history.channelId_timestamp,
+    });
+    if (kind === "missing")
+      await client.send(
+        new DeleteItemCommand({
+          TableName: tables.activeMeeting,
+          Key: marshall({ guildId: history.guildId }),
+        }),
+      );
+    else
+      await client.send(
+        new PutItemCommand({
+          TableName: tables.activeMeeting,
+          Item: marshall({
+            ...f.lease,
+            ...(kind === "expired"
+              ? { leaseExpiresAt: Math.floor(Date.now() / 1000) - 1 }
+              : {}),
+            ...(kind === "replaced" ? { ownerInstanceId: "replacement" } : {}),
+            ...(kind === "mode" ? { sessionMode: "tts_only" } : {}),
+            ...(kind === "attempt" ? { voiceOperationAttemptId: "next" } : {}),
+            ...(kind === "version" ? { executionVersion: 2 } : {}),
+          }),
+        }),
+      );
+    expect(
+      (await f.producer.appendArtifactsRecordingCheckpoint(f.meeting, [f.text]))
+        .kind,
+    ).toBe("stale_owner");
+    expect(
+      await repository.getMeetingHistory({
+        guildId: history.guildId,
+        channelId_timestamp: history.channelId_timestamp,
+      }),
+    ).toEqual(before);
+  },
+);
+
+test("ordinary producer transaction refuses lease replacement at actual publication barrier", async () => {
+  const f = await originalProducerFixture();
+  const before = f.meeting.recordingCheckpoint;
+  const apply = repository.transitionMeetingHistory.bind(repository);
+  const barrier = jest
+    .spyOn(repository, "transitionMeetingHistory")
+    .mockImplementationOnce(async (request) => {
+      await client.send(
+        new PutItemCommand({
+          TableName: tables.activeMeeting,
+          Item: marshall({
+            ...f.lease,
+            voiceOperationAttemptId: "barrier-replacement",
+          }),
+        }),
+      );
+      return apply(request);
+    });
+  try {
+    expect(
+      (await f.producer.appendArtifactsRecordingCheckpoint(f.meeting, [f.text]))
+        .kind,
+    ).toBe("stale_owner");
+    expect(
+      (
+        await repository.getMeetingHistory({
+          guildId: history.guildId,
+          channelId_timestamp: history.channelId_timestamp,
+        })
+      )?.checkpoint,
+    ).toEqual(before);
+  } finally {
+    barrier.mockRestore();
+  }
+});
+
+test("ordinary producer can preserve late content under its original lease after promotion", async () => {
+  const f = await originalProducerFixture();
+  for (const record of [control, runtime("old"), runtime("new", "candidate")])
+    await client.send(
+      new PutItemCommand({
+        TableName: tables.deploymentControl,
+        Item: marshall(record),
+      }),
+    );
+  expect(await repository.promote(promotion)).toBe("applied");
+  expect(
+    (await f.producer.appendArtifactsRecordingCheckpoint(f.meeting, [f.text]))
+      .kind,
+  ).toBe("committed");
+  const saved = await f.producer.read(f.meeting.recordingCheckpoint!);
+  expect(saved.manifest.captureState).toEqual(f.meeting.recordingCaptureState);
+  expect(saved.manifest.capture.executionVersion).toBe(1);
+  expect(saved.verified).toHaveLength(1);
+});

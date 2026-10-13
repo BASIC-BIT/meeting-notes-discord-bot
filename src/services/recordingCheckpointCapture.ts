@@ -31,6 +31,9 @@ type Piece = {
   receivedAt: number;
   bytes: number;
   chunks: Buffer[];
+  observedFirstOffsetMs: number;
+  observedLastOffsetMs: number;
+  maxCursorAdjustmentMs: number;
 };
 type Closed = {
   artifact: CheckpointArtifactInput;
@@ -53,6 +56,7 @@ type Input = {
 export function createRecordingCheckpointCapture(input: Input) {
   const open = new Map<string, Piece>();
   const sequences = new Map<string, number>();
+  const sampleEnds = new Map<string, number>();
   const closed: Closed[] = [];
   let queuedBytes = 0;
   let stopped = false;
@@ -80,6 +84,12 @@ export function createRecordingCheckpointCapture(input: Input) {
       sequence: piece.sequence,
       format: { encoding: "pcm_s16le", sampleRate: 48000, channels: 2 },
       contentType: "application/octet-stream",
+      timing: {
+        basis: "sample_cursor_with_observed_gaps",
+        observedFirstOffsetMs: piece.observedFirstOffsetMs,
+        observedLastOffsetMs: piece.observedLastOffsetMs,
+        maxCursorAdjustmentMs: piece.maxCursorAdjustmentMs,
+      },
       bytes,
       checksumSha256: createHash("sha256").update(bytes).digest("hex"),
       coverage: {
@@ -88,7 +98,7 @@ export function createRecordingCheckpointCapture(input: Input) {
           {
             sourceId,
             startOffsetMs: piece.at - input.startedAt,
-            durationMs: (piece.bytes / RATE) * 1000,
+            durationMs: (piece.bytes * 1000) / RATE,
           },
         ],
       },
@@ -199,7 +209,7 @@ export function createRecordingCheckpointCapture(input: Input) {
     if (
       chunk.length % 4 ||
       chunk.length > RATE * 30 ||
-      at < input.startedAt ||
+      !Number.isFinite(at) ||
       sourceBytes + chunk.length > RATE * 60 ||
       Date.now() >= oldest() + UNSAVED_MS ||
       !reserveCheckpointPcm(chunk.length)
@@ -207,10 +217,11 @@ export function createRecordingCheckpointCapture(input: Input) {
       interrupt();
       return false;
     }
+    const sampleAt = Math.max(at, sampleEnds.get(sourceId) ?? input.startedAt);
     let piece = open.get(sourceId);
     if (
       piece &&
-      (at > piece.at + (piece.bytes / RATE) * 1000 + 1 ||
+      (sampleAt > piece.at + (piece.bytes * 1000) / RATE ||
         piece.bytes + chunk.length > RATE * 30)
     ) {
       close(sourceId);
@@ -226,15 +237,24 @@ export function createRecordingCheckpointCapture(input: Input) {
       piece = {
         sourceId,
         sequence,
-        at,
+        at: sampleAt,
+        observedFirstOffsetMs: at - input.startedAt,
+        observedLastOffsetMs: at - input.startedAt,
+        maxCursorAdjustmentMs: 0,
         receivedAt: Date.now(),
         bytes: 0,
         chunks: [],
       };
       open.set(sourceId, piece);
     }
+    piece.observedLastOffsetMs = at - input.startedAt;
+    piece.maxCursorAdjustmentMs = Math.max(
+      piece.maxCursorAdjustmentMs,
+      sampleAt - at,
+    );
     piece.chunks.push(Buffer.from(chunk));
     piece.bytes += chunk.length;
+    sampleEnds.set(sourceId, piece.at + (piece.bytes * 1000) / RATE);
     queuedBytes += chunk.length;
     if (piece.bytes >= RATE * 30 || reservedBytes >= PRESSURE) closeAll();
     startWorker();

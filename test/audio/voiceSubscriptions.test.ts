@@ -309,6 +309,26 @@ describe("actual capture preservation cutoff handoff", () => {
       const repo = createMockDeploymentControlRepository(
         new Map(),
         new Map([[history.guildId, [row]]]),
+        new Map([
+          [
+            history.guildId,
+            {
+              guildId: history.guildId,
+              meetingId: history.meetingId,
+              ownerInstanceId: "old",
+              executionVersion: 1,
+              voiceOperationAttemptId: "voice",
+              sessionMode: "meeting",
+              voiceChannelId: history.channelId,
+              textChannelId: "text",
+              isAutoRecording: false,
+              leaseExpiresAt: Math.floor(Date.now() / 1000) + 120,
+              createdAt: row.timestamp,
+              updatedAt: row.timestamp,
+              expiresAt: 0,
+            },
+          ],
+        ]),
       );
       const objects = new Map<string, Buffer>();
       const service = checkpoints
@@ -359,6 +379,7 @@ describe("actual capture preservation cutoff handoff", () => {
           meetingId: history.meetingId,
           ownerInstanceId: "old",
           executionVersion: 1,
+          voiceOperationAttemptId: "voice",
           reservedAt: Date.parse(history.timestamp),
           historyKey: {
             guildId: history.guildId,
@@ -445,6 +466,7 @@ test("receiver PCM commit serializes its synchronous context checkpoint", async 
   });
   try {
     await subscribeToUserVoice(meeting, "user-1");
+    userStartTalking(meeting, "user-1");
     streams[0].write(Buffer.alloc(3840));
     await jest.advanceTimersByTimeAsync(30000);
     await meeting.recordingCapture!.settled();

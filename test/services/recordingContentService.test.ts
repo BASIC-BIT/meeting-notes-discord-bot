@@ -63,6 +63,7 @@ async function fixture(transcribeMeeting = true) {
       guildId: "generated",
       ownerInstanceId: "owner",
       executionVersion: 1,
+      voiceOperationAttemptId: "voice",
       reservedAt: 1000,
       historyKey: {
         guildId: "generated",
@@ -186,6 +187,26 @@ test("late usable transcript caller publishes after PCM completion without chang
   const repository = createMockDeploymentControlRepository(
     new Map(),
     new Map([[meeting.guildId, [row]]]),
+    new Map([
+      [
+        meeting.guildId,
+        {
+          guildId: meeting.guildId,
+          meetingId: meeting.meetingId,
+          ownerInstanceId: "owner",
+          executionVersion: 1,
+          voiceOperationAttemptId: "voice",
+          sessionMode: "meeting",
+          voiceChannelId: meeting.channelId,
+          textChannelId: "text",
+          isAutoRecording: false,
+          leaseExpiresAt: Math.floor(Date.now() / 1000) + 120,
+          createdAt: row.timestamp,
+          updatedAt: row.timestamp,
+          expiresAt: 0,
+        },
+      ],
+    ]),
   );
   const objects = new Map<string, Buffer>();
   const producer = createRecordingCheckpointService({

@@ -215,3 +215,60 @@ test("synchronous context enqueue cannot reenter the active PCM publisher", asyn
   expect(kinds).toEqual(["audio", "context"]);
   expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
 });
+
+test.each(["size", "age", "pressure"])(
+  "sample cursor survives %s rotation, jitter and a real observed gap",
+  async (rotation) => {
+    const f = fixture();
+    const duration =
+      rotation === "age" ? 20 : rotation === "pressure" ? 15000 : 30000;
+    f.capture.push("user", Buffer.alloc(192 * duration), 0);
+    if (rotation === "age") await jest.advanceTimersByTimeAsync(30000);
+    if (rotation === "pressure")
+      f.capture.push("other", Buffer.alloc(5760000), 0);
+    f.capture.push("user", pcm(), duration - 1);
+    f.capture.push("user", pcm(), duration - 1);
+    f.capture.push("user", pcm(), duration + 1000);
+    expect(await f.capture.finish()).toBe(true);
+    const artifacts = f.commit.mock.calls
+      .flatMap(([items]) => items)
+      .filter((a) => a.sourceId === "user");
+    const intervals = artifacts.flatMap((a) =>
+      a.coverage.kind === "known" ? a.coverage.intervals : [],
+    );
+    for (let i = 1; i < intervals.length; i++)
+      expect(intervals[i].startOffsetMs).toBeGreaterThanOrEqual(
+        intervals[i - 1].startOffsetMs + intervals[i - 1].durationMs,
+      );
+    expect(intervals.reduce((sum, item) => sum + item.durationMs, 0)).toBe(
+      duration + 60,
+    );
+    expect(intervals.at(-1)!.startOffsetMs).toBe(duration + 1000);
+    const adjusted = artifacts.find(
+      (a) => a.kind === "audio" && a.timing?.maxCursorAdjustmentMs === 21,
+    );
+    expect(adjusted).toBeDefined();
+    f.capture.releaseSettledBuffers();
+  },
+);
+
+test("backward observed clock is retained honestly without overlapping PCM", async () => {
+  const f = fixture();
+  f.capture.push("user", pcm(), 0);
+  expect(f.capture.push("user", pcm(), -10)).toBe(true);
+  expect(await f.capture.finish()).toBe(true);
+  const artifact = f.commit.mock.calls.flatMap(([items]) => items)[0];
+  expect(artifact.coverage).toEqual({
+    kind: "known",
+    intervals: [{ sourceId: "user", startOffsetMs: 0, durationMs: 40 }],
+  });
+  expect(artifact).toMatchObject({
+    timing: {
+      basis: "sample_cursor_with_observed_gaps",
+      observedFirstOffsetMs: 0,
+      observedLastOffsetMs: -10,
+      maxCursorAdjustmentMs: 30,
+    },
+  });
+  f.capture.releaseSettledBuffers();
+});

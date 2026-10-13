@@ -38,11 +38,35 @@ const segment = {
   bytes,
   checksumSha256: digest(bytes),
 };
+const ownership = {
+  guildId: history.guildId,
+  meetingId: history.meetingId,
+  ownerInstanceId: "old",
+  executionVersion: 1,
+  voiceOperationAttemptId: "voice",
+  sessionMode: "meeting" as const,
+};
 function fixture() {
   const histories = new Map([[history.guildId, [{ ...history }]]]);
+  const leases = new Map([
+    [
+      history.guildId,
+      {
+        ...ownership,
+        voiceChannelId: "channel",
+        textChannelId: "text",
+        isAutoRecording: false,
+        leaseExpiresAt: Math.floor(Date.now() / 1000) + 60,
+        createdAt: history.timestamp,
+        updatedAt: history.timestamp,
+        expiresAt: 0,
+      },
+    ],
+  ]);
   const repository = createMockDeploymentControlRepository(
     new Map(),
     histories,
+    leases,
   );
   const objects = new Map<string, Buffer>();
   const upload = jest.fn(
@@ -59,7 +83,7 @@ function fixture() {
     repository,
     objects: { upload, read },
   });
-  return { service, repository, objects, upload, read, histories };
+  return { service, repository, objects, upload, read, histories, leases };
 }
 const input = {
   capture,
@@ -261,6 +285,7 @@ test("context is independently verified and text retains its own source coverage
     "context",
   ]);
   expect(surviving.verified[0].coverage).toEqual(segment.coverage);
+  expect(surviving.verified[0]).not.toHaveProperty("timing");
   expect(
     await f.service.readVerifiedObject(surviving.verified[1].object),
   ).toEqual(contextBytes);
@@ -615,6 +640,8 @@ test("producer session verifies new bytes only and recovery still detects old co
   for (let sequence = 0; sequence < 12; sequence++) {
     const result = await producer.flush({
       ...input,
+      ownership,
+      signal: new AbortController().signal,
       previous,
       artifacts: [{ ...segment, sequence }],
     });
@@ -635,12 +662,18 @@ test("producer session verifies new bytes only and recovery still detects old co
 test("producer session refuses a changed pointer and cannot adopt later ownership", async () => {
   const f = fixture();
   const producer = f.service.createProducerSession();
-  const first = await producer.flush(input);
+  const first = await producer.flush({
+    ...input,
+    ownership,
+    signal: new AbortController().signal,
+  });
   if (first.kind !== "committed") throw new Error("Expected commit");
   expect(
     (
       await producer.flush({
         ...input,
+        ownership,
+        signal: new AbortController().signal,
         artifacts: [{ ...segment, sequence: 1 }],
       })
     ).kind,
@@ -650,6 +683,8 @@ test("producer session refuses a changed pointer and cannot adopt later ownershi
   row.ownerInstanceId = "recovery";
   const next = await producer.flush({
     ...input,
+    ownership,
+    signal: new AbortController().signal,
     previous: first.checkpoint,
     capture: { ...capture, executionVersion: 2, ownerInstanceId: "recovery" },
     artifacts: [],
@@ -665,7 +700,12 @@ test("producer late text retains complete capture and refuses changed end facts 
     startedAt: capture.captureStartedAt!,
     endedAt: "2026-01-01T00:00:03.000Z",
   };
-  const first = await producer.flush({ ...input, captureState: complete });
+  const first = await producer.flush({
+    ...input,
+    ownership,
+    signal: new AbortController().signal,
+    captureState: complete,
+  });
   if (first.kind !== "committed") throw new Error("Expected capture commit");
   const text = Buffer.from("completed usable text");
   const artifact = {
@@ -679,6 +719,8 @@ test("producer late text retains complete capture and refuses changed end facts 
   };
   const second = await producer.flush({
     ...input,
+    ownership,
+    signal: new AbortController().signal,
     previous: first.checkpoint,
     captureState: complete,
     artifacts: [artifact],
@@ -692,6 +734,8 @@ test("producer late text retains complete capture and refuses changed end facts 
     (
       await producer.flush({
         ...input,
+        ownership,
+        signal: new AbortController().signal,
         previous: second.checkpoint,
         captureState: { ...complete, endedAt: "2026-01-01T00:00:04.000Z" },
         artifacts: [],
@@ -704,6 +748,7 @@ test("producer late text retains complete capture and refuses changed end facts 
     (
       await producer.flush({
         ...input,
+        ownership,
         previous: second.checkpoint,
         artifacts: [],
         signal: controller.signal,
@@ -717,6 +762,8 @@ test("producer late text retains complete capture and refuses changed end facts 
     (
       await producer.flush({
         ...input,
+        ownership,
+        signal: new AbortController().signal,
         previous: second.checkpoint,
         artifacts: [{ ...artifact, sequence: 1 }],
       })
@@ -738,16 +785,163 @@ test("ambiguous producer acknowledgement never advances its verified reference s
       return result;
     });
   expect(
-    (await producer.flush({ ...input, signal: controller.signal })).kind,
+    (
+      await producer.flush({
+        ...input,
+        ownership,
+        signal: controller.signal,
+      })
+    ).kind,
   ).toBe("preservation_failed");
   transition.mockRestore();
   const actual = (await f.repository.getMeetingHistory(history))!.checkpoint!;
   // Reopening the uncertain pointer must fully reverify old artifacts, never trust the lost ACK.
   const count = f.read.mock.calls.length;
   expect(
-    (await producer.flush({ ...input, previous: actual, artifacts: [] })).kind,
+    (
+      await producer.flush({
+        ...input,
+        ownership,
+        signal: new AbortController().signal,
+        previous: actual,
+        artifacts: [],
+      })
+    ).kind,
   ).toBe("committed");
   expect(
     f.read.mock.calls.slice(count).some(([key]) => key.includes("/audio/")),
   ).toBe(true);
+});
+
+test.each(["missing", "expired", "replaced", "attempt", "mode"])(
+  "live producer refuses %s lease with unchanged history",
+  async (kind) => {
+    const f = fixture();
+    const producer = f.service.createProducerSession();
+    const meeting = meetingFixture();
+    expect(
+      (await producer.appendArtifactsRecordingCheckpoint(meeting, [segment]))
+        .kind,
+    ).toBe("committed");
+    const before = meeting.recordingCheckpoint;
+    const lease = f.leases.get(history.guildId)!;
+    if (kind === "missing") f.leases.delete(history.guildId);
+    else if (kind === "expired")
+      lease.leaseExpiresAt = Math.floor(Date.now() / 1000) - 1;
+    else if (kind === "replaced") lease.ownerInstanceId = "replacement";
+    else if (kind === "attempt") lease.voiceOperationAttemptId = "next";
+    else Object.assign(lease, { sessionMode: "tts_only" });
+    expect(
+      (
+        await producer.appendArtifactsRecordingCheckpoint(meeting, [
+          { ...segment, sequence: 1 },
+        ])
+      ).kind,
+    ).toBe("stale_owner");
+    expect(meeting.recordingCheckpoint).toBe(before);
+    expect(f.histories.get(history.guildId)![0].checkpoint).toEqual(before);
+  },
+);
+
+test("live producer checks lease at actual publication after PCM completes", async () => {
+  const f = fixture();
+  const producer = f.service.createProducerSession();
+  const meeting = meetingFixture();
+  meeting.recordingCaptureState = {
+    kind: "complete",
+    startedAt: capture.captureStartedAt!,
+    endedAt: "2026-01-01T00:00:03.000Z",
+  };
+  expect(
+    (await producer.appendArtifactsRecordingCheckpoint(meeting, [segment]))
+      .kind,
+  ).toBe("committed");
+  const before = meeting.recordingCheckpoint;
+  const apply = f.repository.transitionMeetingHistory.bind(f.repository);
+  jest
+    .spyOn(f.repository, "transitionMeetingHistory")
+    .mockImplementationOnce(async (request) => {
+      f.leases.get(history.guildId)!.voiceOperationAttemptId =
+        "replaced-at-barrier";
+      return apply(request);
+    });
+  const text = Buffer.from("late completed speech");
+  expect(
+    (
+      await producer.appendArtifactsRecordingCheckpoint(meeting, [
+        {
+          kind: "transcription",
+          sourceId: "text",
+          sequence: 0,
+          bytes: text,
+          checksumSha256: digest(text),
+          contentType: "application/json",
+          coverage: { kind: "unknown" },
+        },
+      ])
+    ).kind,
+  ).toBe("stale_owner");
+  expect(meeting.recordingCheckpoint).toBe(before);
+  expect((await producer.read(before!)).manifest.captureState).toEqual(
+    meeting.recordingCaptureState,
+  );
+});
+
+test("producer uses the publication-time clock after artifact verification", async () => {
+  const f = fixture();
+  const producer = f.service.createProducerSession();
+  const meeting = meetingFixture();
+  const started = Date.now();
+  const clock = jest.spyOn(Date, "now").mockReturnValue(started);
+  f.upload.mockImplementation(async (key, body) => {
+    f.objects.set(key, Buffer.from(body));
+    clock.mockReturnValue(started + 61000);
+    return key;
+  });
+  try {
+    expect(
+      (await producer.appendArtifactsRecordingCheckpoint(meeting, [segment]))
+        .kind,
+    ).toBe("stale_owner");
+    expect(meeting.recordingCheckpoint).toBeUndefined();
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test("producer cannot adopt a later voice attempt with unchanged capture provenance", async () => {
+  const f = fixture();
+  const producer = f.service.createProducerSession();
+  const meeting = meetingFixture();
+  expect(
+    (await producer.appendArtifactsRecordingCheckpoint(meeting, [segment]))
+      .kind,
+  ).toBe("committed");
+  meeting.reservation!.voiceOperationAttemptId = "later";
+  f.leases.get(history.guildId)!.voiceOperationAttemptId = "later";
+  expect(
+    (await producer.appendArtifactsRecordingCheckpoint(meeting, [])).kind,
+  ).toBe("stale_owner");
+});
+
+test("first live publication snapshots the original voice attempt before an asynchronous history read", async () => {
+  const f = fixture();
+  const meeting = meetingFixture();
+  const read = f.repository.getMeetingHistory.bind(f.repository);
+  jest
+    .spyOn(f.repository, "getMeetingHistory")
+    .mockImplementationOnce(async (...args) => {
+      const row = await read(...args);
+      meeting.reservation!.voiceOperationAttemptId = "replacement";
+      f.leases.get(history.guildId)!.voiceOperationAttemptId = "replacement";
+      return row;
+    });
+  expect(
+    (
+      await f.service
+        .createProducerSession()
+        .appendArtifactsRecordingCheckpoint(meeting, [segment])
+    ).kind,
+  ).toBe("stale_owner");
+  expect(meeting.recordingCheckpoint).toBeUndefined();
 });
