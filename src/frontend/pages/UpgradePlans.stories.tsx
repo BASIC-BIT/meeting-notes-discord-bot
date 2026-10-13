@@ -37,17 +37,19 @@ function previewBilling(
   tier: "free" | "basic" | "pro",
   billingSource?: "free" | "stripe" | "manual_comp" | "forced",
 ) {
+  const source = billingSource ?? (tier === "free" ? "free" : "stripe");
   return {
     tier,
-    status: tier === "free" ? "free" : "active",
-    billingSource: billingSource ?? (tier === "free" ? "free" : "stripe"),
-    stripeTier: tier === "free" ? null : tier,
-    grantTier: null,
+    status:
+      source === "manual_comp" ? "comped" : tier === "free" ? "free" : "active",
+    billingSource: source,
+    stripeTier: source === "stripe" && tier !== "free" ? tier : null,
+    grantTier: source === "manual_comp" ? tier : null,
     activeGrant: null,
     nextBillingDate: null,
     stripeCustomerId: null,
-    hasStripeBilling: tier !== "free" || billingSource === "stripe",
-    canManageBillingPortal: tier !== "free" || billingSource === "stripe",
+    hasStripeBilling: source === "stripe",
+    canManageBillingPortal: source === "stripe",
     upgradeUrl: null,
     portalUrl: null,
     billingEnabled: true,
@@ -72,6 +74,7 @@ export function UpgradePreview({
   loadingBilling = false,
   staleQuote = false,
   pendingCheckout = false,
+  missingPrices = false,
 }: {
   path?: string;
   tier?: "free" | "basic" | "pro";
@@ -84,6 +87,7 @@ export function UpgradePreview({
   loadingBilling?: boolean;
   staleQuote?: boolean;
   pendingCheckout?: boolean;
+  missingPrices?: boolean;
 }) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => setColorScheme(colorScheme), [colorScheme, setColorScheme]);
@@ -181,6 +185,7 @@ export function UpgradePreview({
                   priceId: "stale-price",
                 },
               };
+            if (missingPrices) data["pricing.plans"] = { plans: [] };
             const paths = new URL(String(url), window.location.origin).pathname
               .split("/")
               .at(-1)!
@@ -356,7 +361,51 @@ export const ExplicitProAnnual: Story = {
 export const ExistingBasic: Story = { args: { tier: "basic" } };
 export const ExistingPro: Story = { args: { tier: "pro" } };
 export const Complimentary: Story = {
+  tags: ["billing-comp-pricing"],
   args: { tier: "basic", billingSource: "manual_comp" },
+};
+export const BillingCompedKnownPrice: Story = {
+  tags: ["billing-comp-pricing"],
+  args: {
+    tier: "basic",
+    billingSource: "manual_comp",
+    introStatus: "ineligible",
+    colorScheme: "light",
+    path: "/portal/server/example/billing",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText(/This is normally \$10 \/ mo\./),
+    ).toBeVisible();
+    await expect(
+      canvas.getByRole("button", { name: "Start paying for Basic" }),
+    ).toBeEnabled();
+    await expect(
+      canvas.queryByRole("button", { name: "Manage billing" }),
+    ).toBeNull();
+  },
+};
+export const BillingCompedMissingPrice: Story = {
+  ...BillingCompedKnownPrice,
+  tags: ["billing-comp-pricing"],
+  args: {
+    ...BillingCompedKnownPrice.args,
+    missingPrices: true,
+    colorScheme: "dark",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText(/Regular pricing is unavailable right now\./),
+    ).toBeVisible();
+    await expect(
+      canvas.getByRole("button", { name: "Start paying for Basic" }),
+    ).toBeDisabled();
+    await expect(
+      canvas.queryByRole("button", { name: "Manage billing" }),
+    ).toBeNull();
+  },
 };
 export const BillingUnavailable: Story = { args: { errorFor: "billing.me" } };
 export const PricingUnavailable: Story = {

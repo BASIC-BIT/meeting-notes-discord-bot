@@ -84,7 +84,7 @@ type BillingPaidProps = BillingBaseProps & {
   isPortalPending: boolean;
   canManage: boolean;
   onPortal: () => void;
-  normalPrice: string;
+  normalPrice: string | null;
 };
 
 type BillingPlansProps = {
@@ -294,9 +294,11 @@ const BillingPaidPanel = ({
               </Group>
               {isComped ? (
                 <Stack gap={4}>
-                  <Text c="dimmed" size="sm">
-                    Chronote has granted this server {planName} for free. This
-                    is normally {normalPrice}.
+                  <Text c="var(--mantine-color-text)" size="sm">
+                    Chronote has granted this server {planName} for free.{" "}
+                    {normalPrice
+                      ? `This is normally ${normalPrice}.`
+                      : "Regular pricing is unavailable right now."}
                   </Text>
                   <Text c="dimmed" size="sm">
                     {expiryLine}
@@ -679,6 +681,11 @@ export function Billing() {
   const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
   const basicPlan = resolvePaidPlan(planLookup, "basic", interval);
   const proPlan = resolvePaidPlan(planLookup, "pro", interval);
+  const normalPlan = resolvePaidPlan(
+    planLookup,
+    data?.tier === "pro" ? "pro" : "basic",
+    "month",
+  );
   const offer =
     frozenOffer ??
     resolveIntroOffer(
@@ -845,14 +852,7 @@ export function Billing() {
             Boolean(selectedGuildId) && data.canManageBillingPortal && !busy
           }
           onPortal={handlePortal}
-          normalPrice={formatPlanPrice(
-            resolvePaidPlan(
-              planLookup,
-              data.tier === "pro" ? "pro" : "basic",
-              "month",
-            ),
-            "month",
-          )}
+          normalPrice={normalPlan ? formatPlanPrice(normalPlan, "month") : null}
         />
       )}
       <BillingPlansSection
