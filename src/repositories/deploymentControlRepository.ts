@@ -411,7 +411,6 @@ export function createMockDeploymentControlRepository(
       for (const [field, value] of Object.entries(input.patch))
         if (value !== undefined)
           Object.assign(row, { [field]: structuredClone(value) });
-      row.executionVersion += 1;
       return "applied";
     },
     async getMeetingHistory(key) {

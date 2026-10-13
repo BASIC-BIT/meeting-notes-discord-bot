@@ -71,6 +71,49 @@ test("lateInitialHistoryCannotOverwriteProgress", async () => {
   );
 });
 
+test("ordinary history progress preserves the execution attempt fence", async () => {
+  const repository = createMockDeploymentControlRepository();
+  await repository.createInitialMeetingHistory(history);
+  const key = {
+    guildId: history.guildId,
+    channelId_timestamp: history.channelId_timestamp,
+  };
+  for (const [expectedStatus, status] of [
+    ["starting", "in_progress"],
+    ["in_progress", "processing"],
+  ] as const) {
+    const transition = {
+      key,
+      expectedMeetingId: "meeting",
+      expectedOwnerInstanceId: "old",
+      expectedExecutionVersion: 1,
+      expectedStatus,
+      patch: { status },
+    };
+    expect(
+      await repository.transitionMeetingHistory({
+        ...transition,
+        expectedExecutionVersion: 2,
+      }),
+    ).toBe("stale");
+    expect(
+      await repository.transitionMeetingHistory({
+        ...transition,
+        expectedOwnerInstanceId: "former-owner",
+      }),
+    ).toBe("stale");
+    expect(await repository.transitionMeetingHistory(transition)).toBe(
+      "applied",
+    );
+    expect(await repository.getMeetingHistory(key)).toMatchObject({
+      status,
+      executionVersion: 1,
+      ownerInstanceId: "old",
+    });
+    expect(await repository.transitionMeetingHistory(transition)).toBe("stale");
+  }
+});
+
 test("ttlNeverDeletesUnsettledVoice", () => {
   const voice = {
     pk: "VOICE#guild",

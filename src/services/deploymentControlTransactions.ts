@@ -163,9 +163,10 @@ export function buildHistoryTransition(
     ":owner": input.expectedOwnerInstanceId,
     ":version": input.expectedExecutionVersion,
     ":prior": input.expectedStatus,
-    ":nextVersion": input.expectedExecutionVersion + 1,
   });
-  const updates = ["executionVersion = :nextVersion"];
+  // The version fences the execution attempt shared with its lease. Only an
+  // ownership/recovery transaction may advance it, never lifecycle progress.
+  const updates: string[] = [];
   Object.entries(input.patch).forEach(([field, value], index) => {
     if (value === undefined) return;
     names[`#field${index}`] = field;
