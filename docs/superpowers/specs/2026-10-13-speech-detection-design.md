@@ -1,6 +1,6 @@
 # Speech detection before Discord transcription
 
-Status: proposed design for review. No production speech-detector code, dependencies, configuration changes, or deployment have been added. The existing Python experiment is diagnostic code, not the production runtime.
+Status: approved by the user on October 13, 2026, including running detection on a side thread. Implementation planning is authorized; product execution and rollout are separate stages. No production speech-detector code, dependencies, configuration changes, or deployment have been added. The existing Python experiment is diagnostic code, not the production runtime.
 
 ## Purpose and scope
 
@@ -96,6 +96,8 @@ Unavailable results always continue through the existing transcription path. Rep
 
 Add one typed registry setting, `transcription.speechDetection.mode`, with `off`, `shadow`, and `enforce`. Default is `off`. Use the existing global superadmin configuration and meeting runtime snapshot, in the Experimental group. Do not add a second environment-only permission/configuration model or expose tuning knobs broadly.
 
+Implementation-plan tracing confirmed that runtime configuration is resolved at meeting start. Preserve that behavior: changing the mode affects newly started meetings; active meetings retain their snapshot. An immediate in-progress kill switch would require a separate config-refresh design. Do not present a mode change as instant rollback for an active recording.
+
 `shadow` evaluates but never suppresses transcription. Schedule the assessment alongside provider work so shadow mode does not introduce model latency before ASR. Aggregate disagreements are signals for review, not ground-truth false rejections: a nonempty ASR result may itself be a hallucination.
 
 `enforce` skips provider submission only for a completed `non_speech` assessment. `speech`, `uncertain`, and `unavailable` proceed normally. Forced live-command transcription explicitly bypasses this gate. Keep the existing duration and amplitude gate behavior unchanged in this first scope, and measure their contribution separately.
@@ -117,6 +119,8 @@ A final enforced nonspeech result marks the file authoritatively rejected. The c
 Existing successful-empty provider responses keep their existing policy in this focused change. Provider failure may retain a previously usable fast result and must remain marked as failure for partial-processing reporting. A shared authoritative-rejection mechanism can later address reject-both voting too, but do not change all empty-result semantics incidentally.
 
 The current local SSE/UI work supports removal events. Verify an enforced final rejection removes an already-visible fast guess from the standalone live view and the meeting dashboard. At meeting end, compilation, notes input, history transcript, and final-pass baseline agree on exclusion. Preserve timing offsets and audio playback because the recording is not trimmed.
+
+Implementation-plan tracing also found direct transcript reads in `uploadService` and `autoRecordCancellationService`. Apply the same authoritative rejection check there, while preserving their existing text-selection rules for non-rejected files. In particular, do not accidentally replace the uploader's nullish fallback with the compiler's usable-text fallback and change successful-empty behavior when the detector is off.
 
 ## Capture and user flow
 
@@ -188,6 +192,6 @@ Product scope includes a detector service and worker, pinned model assets, `tran
 
 No table migration, new cloud service, Docker base-image replacement, UI redesign, automatic recording deletion, or retrospective transcript rewrite is included. Dependency/eval changes must be isolated from the earlier UI work in reviewable commits.
 
-## Decisions requested
+## Approved direction and next stage
 
-Approve or adjust the recommended WASM/worker architecture, default-off shadow-first rollout, shared whole-snippet boundary after existing conversion, and the proposed acceptance criteria. After this design is approved, use the Superpowers writing-plans skill to produce exact files, tests, commands, checkpoint order, and failure stop conditions before product implementation.
+The user approved the recommended WASM/worker architecture, default-off shadow-first rollout, shared whole-snippet boundary after existing conversion, and the proposed acceptance criteria. Use the Superpowers writing-plans skill to produce exact files, tests, commands, checkpoint order, and failure stop conditions. Review that plan and select its execution method before product implementation.
