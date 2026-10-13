@@ -27,6 +27,7 @@ type ButtonVariant =
   | "gradient";
 
 type PricingCtaProps = Omit<ButtonProps, "children"> & {
+  "data-testid"?: string;
   variant?: ButtonVariant;
   onClick?: MouseEventHandler<HTMLButtonElement>;
 };

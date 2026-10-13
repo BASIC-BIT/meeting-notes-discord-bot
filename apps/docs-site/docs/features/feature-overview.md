@@ -20,7 +20,7 @@ Pro** to open checkout for that plan. One subscription covers the server.
 
 When an introductory offer is available, eligible servers starting their first
 paid subscription can choose Basic at $6/month for the first three months, then
-$10/month. Annual Basic is $60 paid upfront for the first year, then $100/year.
+$10/month. Annual Basic is $60 for the first year, then $100/year.
 Annual billing is one yearly payment. Prices are in US dollars. Tax may apply. Subscriptions renew
 automatically unless canceled.
 

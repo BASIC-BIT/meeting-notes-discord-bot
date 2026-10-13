@@ -115,10 +115,10 @@ it("shows verified monthly terms and protects the quoted offer at checkout", asy
     screen.getByText("$6/month for your first 3 months, then $10/month"),
   ).toBeVisible();
   expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
-    "During the 3-month discount, plan and billing-period changes are restricted across all subscriptions on your billing account.",
+    "This discount pauses account-wide plan changes for 3 months. Payment methods and cancellation stay available.",
   );
   expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
-    "Payment methods and cancellation remain available.",
+    "Payment methods and cancellation stay available.",
   );
   await userEvent.click(button("Basic"));
   expect(screen.getByText("40% off")).toBeVisible();
@@ -138,7 +138,7 @@ it("shows verified monthly terms and protects the quoted offer at checkout", asy
     expect.objectContaining({ offer: "basic_intro_v1", promo_present: false }),
   );
 });
-it("uses only the selected annual quote and actual upfront terms", async () => {
+it("uses only the selected annual quote and actual yearly terms", async () => {
   mockSearch.mockReturnValue({ interval: "year" });
   mockPricingQuery.mockReturnValue({
     data: {
@@ -170,17 +170,17 @@ it("uses only the selected annual quote and actual upfront terms", async () => {
   });
   renderSelector();
   expect(
-    screen.getByText("$60 upfront for your first year, then $100/year"),
+    screen.getByText("$60 for your first year, then $100/year"),
   ).toBeVisible();
   expect(screen.queryByText(/months free/)).not.toBeInTheDocument();
   expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
-    "all subscriptions on your billing account",
+    "account-wide plan changes until the first invoice is finalized",
   );
   expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
-    "Once the first invoice is finalized, this annual offer does not restrict plan changes for the rest of the year.",
+    "This offer pauses account-wide plan changes until the first invoice is finalized.",
   );
   expect(screen.getByTestId("basic-intro-terms")).toHaveTextContent(
-    "Payment methods and cancellation remain available.",
+    "Payment methods and cancellation stay available.",
   );
   await userEvent.click(button("Basic"));
   expect(mockCheckout).toHaveBeenCalledWith(

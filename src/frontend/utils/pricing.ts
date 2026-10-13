@@ -66,7 +66,7 @@ export const introOfferTerms = (
   const regular = formatCurrency(offer.regularUnitAmount, offer.currency);
   return offer.id === "basic_intro_v1"
     ? `${discounted}/month for your first ${offer.durationMonths} months, then ${regular}/month`
-    : `${discounted} upfront for your first year, then ${regular}/year`;
+    : `${discounted} for your first year, then ${regular}/year`;
 };
 
 export const introOfferPrice = (
@@ -75,7 +75,7 @@ export const introOfferPrice = (
   interval: BillingInterval,
 ) =>
   offer.status === "available"
-    ? `${formatCurrency(offer.discountedUnitAmount, offer.currency)}${interval === "year" ? " upfront" : " / mo"}`
+    ? `${formatCurrency(offer.discountedUnitAmount, offer.currency)} / ${interval === "year" ? "yr" : "mo"}`
     : formatPlanPrice(plan, interval);
 
 export const resolvePaidPlan = (

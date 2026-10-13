@@ -39,18 +39,40 @@ beforeEach(() => {
 function Page({
   offer = "basic_intro_v1",
   entry = "upgrade:server-a",
+  observationKey,
 }: {
   offer?: ExpectedIntroOffer;
   entry?: string;
+  observationKey?: string;
 }) {
   useIntroOfferExposure({
     offer,
     entry,
     surface: "upgrade",
     guildId: entry.split(":")[1],
+    observationKey,
   });
-  return <div data-testid="basic-intro-terms">Actual purchase terms</div>;
+  return (
+    <div key={observationKey} data-testid="basic-intro-terms">
+      Actual purchase terms
+    </div>
+  );
 }
+
+test("rebinds responsive terms without counting an offer twice", () => {
+  const view = render(<Page observationKey="table" />);
+  const original = document.querySelector('[data-testid="basic-intro-terms"]');
+  view.rerender(<Page observationKey="cards" />);
+  const cards = document.querySelector('[data-testid="basic-intro-terms"]');
+  expect(cards).not.toBe(original);
+  expect(disconnect).toHaveBeenCalled();
+  expect(observe).toHaveBeenLastCalledWith(cards);
+  visibility(1);
+  expect(track).toHaveBeenCalledTimes(1);
+  view.rerender(<Page observationKey="table" />);
+  visibility(1);
+  expect(track).toHaveBeenCalledTimes(1);
+});
 
 function visibility(ratio: number) {
   const target = document.querySelector('[data-testid="basic-intro-terms"]')!;

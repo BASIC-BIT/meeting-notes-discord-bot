@@ -8,6 +8,122 @@ import { expect, test } from "./fixtures";
 import { mockBilling, mockGuilds } from "./mockData";
 import type { Locator } from "@playwright/test";
 
+test("mobile Home stacks complete plans and keeps direct purchase actions", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await useIntroBilling(page);
+  await page.goto("/");
+  const cards = page.getByTestId("home-pricing-cards");
+  await expect(cards).toBeVisible();
+  const values = [
+    [
+      "free",
+      "Free",
+      "$0",
+      "4 hours a week",
+      "90 minutes",
+      "Last 5 meetings",
+      "50 a month",
+      "No",
+    ],
+    [
+      "basic",
+      "Basic",
+      "$6 / mo",
+      "20 hours a week",
+      "2 hours",
+      "Last 25 meetings",
+      "1,000 a month",
+      "Yes",
+    ],
+    [
+      "pro",
+      "Pro",
+      "$24 / mo",
+      "No weekly limit",
+      "2 hours",
+      "Last 100 meetings",
+      "Unlimited",
+      "Yes",
+    ],
+  ];
+  const labels = [
+    "Recording",
+    "Longest meeting",
+    "Ask searches",
+    "Text to speech",
+    "Live voice",
+  ];
+  for (const [tier, title, price, ...features] of values) {
+    const card = page.getByTestId(`home-plan-${tier}`);
+    await expect(
+      card.getByRole("heading", { name: title, exact: true }),
+    ).toBeVisible();
+    await expect(card.getByText(price, { exact: true })).toBeVisible();
+    for (const [index, value] of features.entries())
+      await expect(
+        card.getByText(`${labels[index]}: ${value}`, { exact: true }),
+      ).toBeVisible();
+  }
+  await expect(page.getByTestId("basic-intro-terms")).toHaveCount(1);
+  await expect(page.getByTestId("home-cta-basic")).toHaveCount(1);
+  await expect(page.getByTestId("home-cta-pro")).toHaveCount(1);
+  await expect(
+    page.getByText("Scroll sideways to compare all plans."),
+  ).toHaveCount(0);
+  const bounds = await cards
+    .locator(":scope > [data-testid]")
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          top: box.top,
+          bottom: box.bottom,
+          left: box.left,
+          right: box.right,
+        };
+      }),
+    );
+  expect(bounds).toHaveLength(3);
+  expect(bounds[1].top).toBeGreaterThan(bounds[0].bottom);
+  expect(bounds[2].top).toBeGreaterThan(bounds[1].bottom);
+  expect(bounds.every((box) => box.left >= 0 && box.right <= 390)).toBe(true);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  const scroll = await page.evaluate(() => {
+    const element = document.scrollingElement!;
+    const before = element.scrollTop;
+    element.scrollTop = before + 100;
+    return {
+      height: element.scrollHeight,
+      client: element.clientHeight,
+      before,
+      after: element.scrollTop,
+    };
+  });
+  expect(scroll.height).toBeGreaterThan(scroll.client);
+  expect(scroll.after).toBeGreaterThan(scroll.before);
+  await page.getByTestId("home-cta-pro").click();
+  await expect(page).toHaveURL(
+    /plan=pro.*interval=month.*source=homepage_pricing/,
+  );
+  await page.goto("/");
+  await page
+    .getByTestId("home-billing-period")
+    .getByText("Annual", { exact: true })
+    .click();
+  await expect(page.getByTestId("home-plan-basic")).toContainText("$60 / yr");
+  await expect(page.getByTestId("home-plan-pro")).toContainText("$240 / yr");
+  await page.getByTestId("home-cta-basic").click();
+  await expect(page).toHaveURL(
+    /plan=basic.*interval=year.*source=homepage_pricing/,
+  );
+});
+
 async function expectReadableText(locator: Locator) {
   const ratios = await locator.evaluateAll((elements) =>
     elements.map((element) => {
@@ -519,18 +635,18 @@ for (const interval of ["month", "year"] as const) {
     await expect(page.getByTestId("basic-intro-terms")).toContainText(
       interval === "month"
         ? "$6/month for your first 3 months, then $10/month"
-        : "$60 upfront for your first year, then $100/year",
+        : "$60 for your first year, then $100/year",
     );
     await expect(page.getByTestId("basic-intro-terms")).toContainText(
-      "all subscriptions on your billing account",
+      "account-wide plan changes",
     );
     await expect(page.getByTestId("basic-intro-terms")).toContainText(
-      "Payment methods and cancellation remain available.",
+      "Payment methods and cancellation stay available.",
     );
     await expect(page.getByTestId("basic-intro-terms")).toContainText(
       interval === "month"
-        ? "During the 3-month discount"
-        : "Once the first invoice is finalized",
+        ? "for 3 months"
+        : "until the first invoice is finalized",
     );
     await page.getByRole("button", { name: "Continue with Basic" }).click();
     await expect(

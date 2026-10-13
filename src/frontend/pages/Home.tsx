@@ -13,12 +13,15 @@ import {
   Table,
   Text,
   Title,
+  useMantineTheme,
 } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import { useNavigate } from "@tanstack/react-router";
 import AddToDiscordButton from "../components/AddToDiscordButton";
 import SampleSummary from "../components/SampleSummary";
 import BasicIntroTerms from "../components/BasicIntroTerms";
 import IntroPriceComparison from "../components/IntroPriceComparison";
+import PricingCard from "../components/PricingCard";
 import classes from "./UpgradeServerSelect.module.css";
 import Wordmark from "../components/Wordmark";
 import { trpc } from "../services/trpc";
@@ -96,6 +99,8 @@ const recommendedCell = { backgroundColor: RECOMMENDED_TIER_TINT };
 
 export default function Home() {
   const navigate = useNavigate();
+  const theme = useMantineTheme();
+  const showCards = !useMediaQuery(`(min-width: ${theme.breakpoints.sm})`);
   const [billingInterval, setBillingInterval] =
     useState<BillingInterval>("month");
   const pricingQuery = trpc.pricing.plans.useQuery(undefined, {
@@ -130,6 +135,7 @@ export default function Home() {
     offer: offer.status === "available" ? offer.id : "none",
     entry: "homepage_pricing",
     surface: "homepage_pricing",
+    observationKey: showCards ? "cards" : "table",
   });
 
   return (
@@ -211,88 +217,142 @@ export default function Home() {
           <Text size="sm" c="dimmed">
             Per server, not per member.
           </Text>
-          <Paper withBorder radius="md" p={{ base: "sm", sm: "lg" }}>
-            <Text size="xs" c="dimmed" hiddenFrom="sm" mb="sm">
-              Scroll sideways to compare all plans.
-            </Text>
-            <Table.ScrollContainer
-              minWidth={PRICING_TABLE_MIN_WIDTH}
-              data-testid="home-pricing-scroll"
-              type="native"
-            >
-              <Table verticalSpacing="sm" horizontalSpacing="md" fz="sm">
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th />
-                    <Table.Th>Free</Table.Th>
-                    <Table.Th style={recommendedCell}>
-                      <Group gap="xs" wrap="nowrap">
-                        <span>Basic</span>
-                        <Badge size="xs" variant="light">
-                          Best value
-                        </Badge>
-                      </Group>
-                    </Table.Th>
-                    <Table.Th>Pro</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  <Table.Tr>
-                    <Table.Td c="dimmed">Price</Table.Td>
-                    <Table.Td fw={700} fz="lg">
-                      $0
-                    </Table.Td>
-                    <Table.Td fw={700} fz="lg" style={recommendedCell}>
-                      <IntroPriceComparison offer={offer} />
-                      {introOfferPrice(offer, basicPlan, billingInterval)}
-                    </Table.Td>
-                    <Table.Td fw={700} fz="lg">
-                      {formatPlanPrice(proPlan, billingInterval)}
-                    </Table.Td>
-                  </Table.Tr>
-                  {PRICING_ROWS.map((row) => (
-                    <Table.Tr key={row.label}>
-                      <Table.Td c="dimmed">{row.label}</Table.Td>
-                      <Table.Td>{row.free}</Table.Td>
-                      <Table.Td style={recommendedCell}>{row.basic}</Table.Td>
-                      <Table.Td>{row.pro}</Table.Td>
+          {showCards ? (
+            <Stack gap="md" data-testid="home-pricing-cards">
+              {(["free", "basic", "pro"] as const).map((tier) => (
+                <PricingCard
+                  key={tier}
+                  name={
+                    tier === "free"
+                      ? "Free"
+                      : tier === "basic"
+                        ? "Basic"
+                        : "Pro"
+                  }
+                  price={
+                    tier === "free"
+                      ? "$0"
+                      : tier === "basic"
+                        ? introOfferPrice(offer, basicPlan, billingInterval)
+                        : formatPlanPrice(proPlan, billingInterval)
+                  }
+                  description="Per server, not per member."
+                  features={PRICING_ROWS.map(
+                    (row) => `${row.label}: ${row[tier]}`,
+                  )}
+                  highlighted={tier === "basic"}
+                  billingLabel={
+                    tier === "free"
+                      ? "No subscription needed"
+                      : billingInterval === "year"
+                        ? "Billed yearly"
+                        : "Billed monthly"
+                  }
+                  introOffer={tier === "basic" ? offer : undefined}
+                  terms={
+                    tier === "basic" ? (
+                      <BasicIntroTerms offer={offer} />
+                    ) : undefined
+                  }
+                  cta={
+                    tier === "free"
+                      ? undefined
+                      : `Upgrade to ${tier === "basic" ? "Basic" : "Pro"}`
+                  }
+                  ctaDisabled={tier === "basic" ? !basicPlan : !proPlan}
+                  ctaProps={
+                    tier === "free"
+                      ? undefined
+                      : {
+                          onClick: () => startUpgrade(tier),
+                          "data-testid": `home-cta-${tier}`,
+                        }
+                  }
+                  testId={`home-plan-${tier}`}
+                />
+              ))}
+            </Stack>
+          ) : (
+            <Paper withBorder radius="md" p="lg">
+              <Table.ScrollContainer
+                minWidth={PRICING_TABLE_MIN_WIDTH}
+                data-testid="home-pricing-scroll"
+                type="native"
+              >
+                <Table verticalSpacing="sm" horizontalSpacing="md" fz="sm">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th />
+                      <Table.Th>Free</Table.Th>
+                      <Table.Th style={recommendedCell}>
+                        <Group gap="xs" wrap="nowrap">
+                          <span>Basic</span>
+                          <Badge size="xs" variant="light">
+                            Best value
+                          </Badge>
+                        </Group>
+                      </Table.Th>
+                      <Table.Th>Pro</Table.Th>
                     </Table.Tr>
-                  ))}
-                  <Table.Tr>
-                    <Table.Td />
-                    <Table.Td />
-                    <Table.Td style={recommendedCell}>
-                      <BasicIntroTerms offer={offer} conditional />
-                      <Button
-                        size="sm"
-                        radius="md"
-                        fw={600}
-                        aria-label="Upgrade to Basic"
-                        data-testid="home-cta-basic"
-                        disabled={!basicPlan}
-                        onClick={() => startUpgrade("basic")}
-                      >
-                        Upgrade
-                      </Button>
-                    </Table.Td>
-                    <Table.Td>
-                      <Button
-                        size="sm"
-                        radius="md"
-                        variant="default"
-                        aria-label="Upgrade to Pro"
-                        data-testid="home-cta-pro"
-                        disabled={!proPlan}
-                        onClick={() => startUpgrade("pro")}
-                      >
-                        Upgrade
-                      </Button>
-                    </Table.Td>
-                  </Table.Tr>
-                </Table.Tbody>
-              </Table>
-            </Table.ScrollContainer>
-          </Paper>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    <Table.Tr>
+                      <Table.Td c="dimmed">Price</Table.Td>
+                      <Table.Td fw={700} fz="lg">
+                        $0
+                      </Table.Td>
+                      <Table.Td fw={700} fz="lg" style={recommendedCell}>
+                        <IntroPriceComparison offer={offer} />
+                        {introOfferPrice(offer, basicPlan, billingInterval)}
+                      </Table.Td>
+                      <Table.Td fw={700} fz="lg">
+                        {formatPlanPrice(proPlan, billingInterval)}
+                      </Table.Td>
+                    </Table.Tr>
+                    {PRICING_ROWS.map((row) => (
+                      <Table.Tr key={row.label}>
+                        <Table.Td c="dimmed">{row.label}</Table.Td>
+                        <Table.Td>{row.free}</Table.Td>
+                        <Table.Td style={recommendedCell}>{row.basic}</Table.Td>
+                        <Table.Td>{row.pro}</Table.Td>
+                      </Table.Tr>
+                    ))}
+                    <Table.Tr>
+                      <Table.Td />
+                      <Table.Td />
+                      <Table.Td style={recommendedCell}>
+                        <BasicIntroTerms offer={offer} />
+                        <Button
+                          size="sm"
+                          radius="md"
+                          fw={600}
+                          aria-label="Upgrade to Basic"
+                          data-testid="home-cta-basic"
+                          disabled={!basicPlan}
+                          onClick={() => startUpgrade("basic")}
+                        >
+                          Upgrade
+                        </Button>
+                      </Table.Td>
+                      <Table.Td>
+                        <Button
+                          size="sm"
+                          radius="md"
+                          variant="default"
+                          aria-label="Upgrade to Pro"
+                          data-testid="home-cta-pro"
+                          disabled={!proPlan}
+                          onClick={() => startUpgrade("pro")}
+                        >
+                          Upgrade
+                        </Button>
+                      </Table.Td>
+                    </Table.Tr>
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            </Paper>
+          )}
         </Stack>
 
         <Group justify="center">

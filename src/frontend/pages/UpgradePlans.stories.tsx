@@ -496,21 +496,22 @@ async function expectAccountTerms(
   const canvas = within(canvasElement);
   const terms = await canvas.findByTestId("basic-intro-terms");
   await expect(terms).toHaveTextContent(
-    "all subscriptions on your billing account",
+    "First paid subscription per server. Cannot combine with other offers. Auto-renews. Tax may apply.",
   );
+  await expect(terms).toHaveTextContent("account-wide plan changes");
   await expect(terms).toHaveTextContent(
-    "Payment methods and cancellation remain available.",
+    "Payment methods and cancellation stay available.",
   );
   await expect(terms).toHaveTextContent(
     interval === "month"
-      ? "During the 3-month discount"
-      : "Once the first invoice is finalized",
+      ? "for 3 months"
+      : "until the first invoice is finalized",
   );
 }
 
 const saleTags = ["basic-intro"];
 export const IntroMonthly: Story = {
-  tags: saleTags,
+  tags: ["basic-intro", "ui-jam-revision"],
   args: { introStatus: "available" },
   play: async ({ canvasElement }) => expectAccountTerms(canvasElement, "month"),
 };
@@ -519,7 +520,7 @@ export const IntroMonthlyLight: Story = {
   args: { ...IntroMonthly.args, colorScheme: "light" },
 };
 export const IntroAnnual: Story = {
-  tags: saleTags,
+  tags: ["basic-intro", "ui-jam-revision"],
   args: {
     introStatus: "available",
     path: "/upgrade/select-server?serverId=example&interval=year",
@@ -615,26 +616,27 @@ export const IntroPromotionChosen: Story = {
   },
 };
 export const IntroHome: Story = {
-  tags: saleTags,
+  tags: ["basic-intro", "ui-jam-revision"],
   args: { introStatus: "available", path: "/" },
   play: async ({ canvasElement }) => expectAccountTerms(canvasElement, "month"),
 };
 export const IntroHomeAnnual: Story = {
+  tags: ["basic-intro", "ui-jam-revision"],
   ...IntroHome,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByText("Annual"));
-    await expect(await canvas.findByText("$60 upfront")).toBeVisible();
+    await expect(await canvas.findByText("$60 / yr")).toBeVisible();
     await expectAccountTerms(canvasElement, "year");
   },
 };
 export const IntroBillingFree: Story = {
-  tags: saleTags,
+  tags: ["basic-intro", "ui-jam-revision"],
   args: { introStatus: "available", path: "/portal/server/example/billing" },
   play: async ({ canvasElement }) => expectAccountTerms(canvasElement, "month"),
 };
 export const IntroBillingAnnual: Story = {
-  tags: saleTags,
+  tags: ["basic-intro", "ui-jam-revision"],
   args: {
     introStatus: "available",
     path: "/portal/server/example/billing?interval=year",

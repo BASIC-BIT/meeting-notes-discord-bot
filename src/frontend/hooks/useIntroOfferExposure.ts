@@ -8,12 +8,14 @@ export function useIntroOfferExposure({
   surface,
   guildId,
   enabled = true,
+  observationKey,
 }: {
   offer: ExpectedIntroOffer;
   entry: string;
   surface: "homepage_pricing" | "upgrade" | "portal_billing";
   guildId?: string;
   enabled?: boolean;
+  observationKey?: string;
 }) {
   const exposures = useRef({ entry, offers: new Set<ExpectedIntroOffer>() });
   useEffect(() => {
@@ -78,5 +80,5 @@ export function useIntroOfferExposure({
       observer.disconnect();
       document.removeEventListener("visibilitychange", refreshVisibility);
     };
-  }, [offer, entry, surface, guildId, enabled]);
+  }, [offer, entry, surface, guildId, enabled, observationKey]);
 }

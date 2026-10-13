@@ -215,18 +215,18 @@ test.describe("visual regression", () => {
             await expect(page.getByTestId("basic-intro-terms")).toContainText(
               interval === "month"
                 ? "$6/month for your first 3 months, then $10/month"
-                : "$60 upfront for your first year, then $100/year",
+                : "$60 for your first year, then $100/year",
             );
             await expect(page.getByTestId("basic-intro-terms")).toContainText(
-              "all subscriptions on your billing account",
+              "account-wide plan changes",
             );
             await expect(page.getByTestId("basic-intro-terms")).toContainText(
-              "Payment methods and cancellation remain available.",
+              "Payment methods and cancellation stay available.",
             );
             await expect(page.getByTestId("basic-intro-terms")).toContainText(
               interval === "month"
-                ? "During the 3-month discount"
-                : "Once the first invoice is finalized",
+                ? "for 3 months"
+                : "until the first invoice is finalized",
             );
             const heights = await selector
               .locator("label")
@@ -252,18 +252,29 @@ test.describe("visual regression", () => {
             await expect(action).toBeVisible();
             await expect(action).toBeEnabled();
             if (surface === "home" && viewport.width === 390) {
-              const scroll = page.getByTestId("home-pricing-scroll");
-              const movement = await scroll.evaluate((element) => {
-                const before = element.scrollLeft;
-                const overflow = element.scrollWidth > element.clientWidth;
-                element.scrollLeft = 160;
-                return { overflow, before, after: element.scrollLeft };
-              });
-              expect(movement.overflow).toBe(true);
-              expect(movement.after).toBeGreaterThan(movement.before);
-              await scroll.evaluate((element) => {
-                element.scrollLeft = 0;
-              });
+              const cards = page.getByTestId("home-pricing-cards");
+              await expect(cards).toBeVisible();
+              const bounds = await cards
+                .locator(":scope > [data-testid]")
+                .evaluateAll((elements) =>
+                  elements.map((element) => {
+                    const box = element.getBoundingClientRect();
+                    return {
+                      top: box.top,
+                      bottom: box.bottom,
+                      left: box.left,
+                      right: box.right,
+                    };
+                  }),
+                );
+              expect(bounds).toHaveLength(3);
+              expect(bounds[1].top).toBeGreaterThan(bounds[0].bottom);
+              expect(bounds[2].top).toBeGreaterThan(bounds[1].bottom);
+              expect(
+                bounds.every(
+                  (box) => box.left >= 0 && box.right <= viewport.width,
+                ),
+              ).toBe(true);
             }
             const scroll = await page.evaluate(() => {
               const elements = [
@@ -309,7 +320,7 @@ test.describe("visual regression", () => {
                 })
                 .click();
               await expect(page.getByTestId("basic-intro-terms")).toContainText(
-                interval === "month" ? "$6/month" : "$60 upfront",
+                interval === "month" ? "$6/month" : "$60 for your first year",
               );
               await expectVisualScreenshot(
                 page,
