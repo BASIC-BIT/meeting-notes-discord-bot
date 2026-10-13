@@ -61,20 +61,29 @@ export async function getBasicIntroOffer(params: {
   const settings = { ...config.stripe.basicIntroOffer };
   const values = Object.values(settings);
   if (values.every((value) => !value)) return { status: "inactive" };
-  if (values.some((value) => !value.trim())) return { status: "unavailable" };
+  if (
+    [settings.couponId, settings.startsAt, settings.portalConfigurationId].some(
+      (value) => !value.trim(),
+    )
+  )
+    return { status: "unavailable" };
+  const enrollmentEndsAt = settings.enrollmentEndsAt.trim() || null;
   if (
     !z.iso.datetime({ offset: true }).safeParse(settings.startsAt).success ||
-    !z.iso.datetime({ offset: true }).safeParse(settings.enrollmentEndsAt)
-      .success
+    (enrollmentEndsAt !== null &&
+      !z.iso.datetime({ offset: true }).safeParse(enrollmentEndsAt).success)
   )
     return { status: "unavailable" };
   const start = Date.parse(settings.startsAt);
-  const end = Date.parse(settings.enrollmentEndsAt);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end)
+  const end = enrollmentEndsAt === null ? null : Date.parse(enrollmentEndsAt);
+  if (
+    !Number.isFinite(start) ||
+    (end !== null && (!Number.isFinite(end) || start >= end))
+  )
     return { status: "unavailable" };
   const now = params.now ?? Date.now();
   if (now < start) return { status: "inactive" };
-  if (now >= end) return { status: "expired" };
+  if (end !== null && now >= end) return { status: "expired" };
   const plan = params.plans.find(
     (candidate) => candidate.tier === "basic" && candidate.interval === "month",
   );
@@ -124,16 +133,20 @@ export async function getBasicIntroOffer(params: {
       coupon.duration !== "repeating" ||
       coupon.duration_in_months !== BASIC_INTRO_TERMS.durationMonths ||
       (coupon.redeem_by !== null &&
-        coupon.redeem_by < Math.ceil(end / 1000) + CHECKOUT_LIFETIME_SECONDS) ||
+        (end === null ||
+          !Number.isFinite(coupon.redeem_by) ||
+          coupon.redeem_by <
+            Math.ceil(end / 1000) + CHECKOUT_LIFETIME_SECONDS)) ||
       (coupon.applies_to && !coupon.applies_to.products.includes(productId))
     )
       return { status: "unavailable" };
-    if ((params.now ?? Date.now()) >= end) return { status: "expired" };
+    if (end !== null && (params.now ?? Date.now()) >= end)
+      return { status: "expired" };
     return {
       status: "available",
       ...BASIC_INTRO_TERMS,
       priceId: price.id,
-      enrollmentEndsAt: settings.enrollmentEndsAt,
+      enrollmentEndsAt,
     };
   } catch {
     return { status: "unavailable" };
@@ -180,12 +193,12 @@ function frozenIntroOffer(
   const priceId = current.checkout.line_items?.[0]?.price;
   const enrollmentEndsAt =
     current.checkout.metadata.intro_offer_enrollment_ends_at;
-  if (!priceId || !enrollmentEndsAt) return null;
+  if (!priceId) return null;
   return {
     status: "available",
     ...BASIC_INTRO_TERMS,
     priceId,
-    enrollmentEndsAt: String(enrollmentEndsAt),
+    enrollmentEndsAt: enrollmentEndsAt ? String(enrollmentEndsAt) : null,
   };
 }
 
@@ -227,6 +240,36 @@ export async function getGuildBasicIntroOffer(params: {
   }
 }
 
+async function assertRegularAlternativePrice(
+  stripe: StripeClient,
+  priceId: string | undefined,
+): Promise<void> {
+  if (!priceId) throw unavailableOffer();
+  try {
+    const price = await stripe.prices.retrieve(priceId);
+    const lookup = config.stripe.lookupKeys;
+    const monthlyPro =
+      price.lookup_key === lookup.proMonthly &&
+      price.recurring?.interval === "month";
+    const annual =
+      (price.lookup_key === lookup.basicAnnual ||
+        price.lookup_key === lookup.proAnnual) &&
+      price.recurring?.interval === "year";
+    if (
+      price.id !== priceId ||
+      price.lookup_key === lookup.basicMonthly ||
+      !price.active ||
+      price.livemode !== (config.subscription.stripeMode === "live") ||
+      price.type !== "recurring" ||
+      price.recurring?.interval_count !== 1 ||
+      (!monthlyPro && !annual)
+    )
+      throw unavailableOffer();
+  } catch {
+    throw unavailableOffer();
+  }
+}
+
 export async function prepareBasicIntroCheckout(params: {
   stripe: StripeClient;
   guildId: string;
@@ -265,34 +308,26 @@ export async function prepareBasicIntroCheckout(params: {
       "BAD_REQUEST",
       "Enter a promotion code before choosing a promotion.",
     );
-  let plans: PaidPlan[] = [];
   let offer: BasicIntroOffer = { status: "inactive" };
   if (Object.values(config.stripe.basicIntroOffer).some(Boolean)) {
     try {
-      plans = await getPaidPlans(params.stripe);
+      const plans = await getPaidPlans(params.stripe);
       offer = await getBasicIntroOffer({ stripe: params.stripe, plans });
     } catch {
       offer = { status: "unavailable" };
     }
   }
   const selectedPrice = params.checkout.line_items?.[0]?.price;
-  const basicMonthly = plans.find(
-    (plan) => plan.tier === "basic" && plan.interval === "month",
-  );
-  const relevant =
-    selectedPrice === basicMonthly?.priceId ||
-    selectedPrice === config.stripe.priceBasic ||
-    (!plans.length &&
-      params.checkout.metadata?.purchase_tier === "basic" &&
-      params.checkout.metadata?.purchase_interval === "month");
   const eligible = await serverIsEligible(params.guildId, params.expected);
   if (
     offer.status === "available" &&
+    offer.enrollmentEndsAt !== null &&
     Date.now() >= Date.parse(offer.enrollmentEndsAt)
   )
     offer = { status: "expired" };
-  if (eligible && relevant && offer.status === "unavailable")
-    throw unavailableOffer();
+  if (eligible && offer.status === "unavailable") {
+    await assertRegularAlternativePrice(params.stripe, selectedPrice);
+  }
   const applies =
     choice === "automatic" &&
     eligible &&
@@ -312,7 +347,9 @@ export async function prepareBasicIntroCheckout(params: {
           intro_offer_coupon_id: config.stripe.basicIntroOffer.couponId,
           intro_offer_portal_configuration_id:
             config.stripe.basicIntroOffer.portalConfigurationId,
-          intro_offer_enrollment_ends_at: offer.enrollmentEndsAt,
+          ...(offer.enrollmentEndsAt
+            ? { intro_offer_enrollment_ends_at: offer.enrollmentEndsAt }
+            : {}),
         }
       : {}),
   };

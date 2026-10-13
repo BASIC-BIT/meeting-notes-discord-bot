@@ -141,8 +141,8 @@ ANALYTICS_PROXY_CNAME_TARGET=""              # CNAME target PostHog issues for t
 # - ${project_name}-${environment}/langfuse-public-key
 # - ${project_name}-${environment}/langfuse-secret-key
 
-# Inert until existing native Stripe objects and enrollment dates are approved.
+# Inert until existing native Stripe objects and an enrollment start are approved.
 STRIPE_BASIC_INTRO_COUPON_ID=""
 STRIPE_BASIC_INTRO_STARTS_AT=""
-STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT=""
+STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT="" # Optional; empty means open-ended once the offer is enabled.
 STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID=""

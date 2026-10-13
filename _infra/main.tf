@@ -407,7 +407,7 @@ variable "STRIPE_BASIC_INTRO_STARTS_AT" {
 }
 
 variable "STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT" {
-  description = "Basic intro enrollment cutoff as ISO timestamp; no deadline is selected by default"
+  description = "Optional Basic intro enrollment cutoff as ISO timestamp; empty means open-ended when enabled"
   type        = string
   default     = ""
 }

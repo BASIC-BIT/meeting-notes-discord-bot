@@ -36,7 +36,7 @@ test.each([true, false])(
     Object.assign(config.stripe.basicIntroOffer, {
       couponId: "coupon_intro",
       startsAt: "2026-10-01T00:00:00Z",
-      enrollmentEndsAt: "2026-11-01T00:00:00Z",
+      enrollmentEndsAt: "",
       portalConfigurationId: "bpc_intro",
     });
     const price = {
@@ -95,6 +95,8 @@ test.each([true, false])(
     expect(result.introOffer).toMatchObject({
       status: valid ? "available" : "unavailable",
     });
+    if (valid)
+      expect(result.introOffer).toMatchObject({ enrollmentEndsAt: null });
     expect(result.introOffer).not.toHaveProperty("couponId");
   },
 );

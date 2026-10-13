@@ -67,7 +67,9 @@ function fixture() {
     currency: null,
     duration: "repeating",
     duration_in_months: 3,
-    redeem_by: Date.parse(settings.enrollmentEndsAt) / 1000 + 3600,
+    redeem_by: settings.enrollmentEndsAt
+      ? Date.parse(settings.enrollmentEndsAt) / 1000 + 3600
+      : null,
     applies_to: { products: ["prod_basic"] },
   };
   const portal = {
@@ -117,17 +119,15 @@ test("verifies native terms before exposing the exact public offer", async () =>
   });
 });
 
-test.each([
-  "couponId",
-  "startsAt",
-  "enrollmentEndsAt",
-  "portalConfigurationId",
-])("partial config missing %s is unavailable", async (missing) => {
-  Object.assign(config.stripe.basicIntroOffer, settings, { [missing]: "" });
-  await expect(
-    getBasicIntroOffer({ stripe: fixture().client, plans, now }),
-  ).resolves.toEqual({ status: "unavailable" });
-});
+test.each(["couponId", "startsAt", "portalConfigurationId"])(
+  "partial config missing %s is unavailable",
+  async (missing) => {
+    Object.assign(config.stripe.basicIntroOffer, settings, { [missing]: "" });
+    await expect(
+      getBasicIntroOffer({ stripe: fixture().client, plans, now }),
+    ).resolves.toEqual({ status: "unavailable" });
+  },
+);
 
 test.each(["invalid", "2026-10-01T00:00:00Z"])(
   "invalid or inverted end %s is unavailable",
@@ -271,6 +271,26 @@ function purchaseFixture() {
     ...offer.stripe,
     prices: {
       ...offer.stripe.prices,
+      retrieve: jest.fn(async (priceId: string) => {
+        if (priceId === "price_pro")
+          return {
+            ...offer.price,
+            id: priceId,
+            lookup_key: config.stripe.lookupKeys.proMonthly,
+          };
+        if (priceId === "price_annual")
+          return {
+            ...offer.price,
+            id: priceId,
+            lookup_key: config.stripe.lookupKeys.basicAnnual,
+            recurring: {
+              interval: "year",
+              interval_count: 1,
+              usage_type: "licensed",
+            },
+          };
+        return offer.price;
+      }),
       list: jest.fn(async () => ({
         data: [
           { ...offer.price, lookup_key: config.stripe.lookupKeys.basicMonthly },
@@ -795,6 +815,45 @@ describe("existing native introductory discount", () => {
     expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
   });
 
+  test.each(["invalid", "deleted", "retrieval_failed"])(
+    "applied coupon %s retains actual term and safe management",
+    async (lifecycle) => {
+      const { request, stripe, coupon, discount } = subscriberFixture();
+      if (lifecycle === "invalid") coupon.valid = false;
+      else if (lifecycle === "deleted")
+        Object.assign(discount.source, {
+          coupon: { id: "coupon_intro", object: "coupon", deleted: true },
+        });
+      else {
+        Object.assign(discount.source, { coupon: "coupon_intro" });
+        stripe.coupons.retrieve.mockRejectedValue(
+          new Error("coupon details unavailable"),
+        );
+      }
+      const result = await getBillingSnapshot({
+        stripe: request.stripe,
+        guildId: request.guildId,
+      });
+      if (lifecycle === "invalid")
+        expect(result.subscriptionDetails).toMatchObject({
+          status: "available",
+          discount: { endsAt: "2027-01-12T12:00:00.000Z", introductory: true },
+          planChangesRestricted: true,
+          planChangeRestrictionEndsAt: "2027-01-12T12:00:00.000Z",
+        });
+      else
+        expect(result.subscriptionDetails).toEqual({ status: "unavailable" });
+      await createPortalSession(request);
+      expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
+        expect.objectContaining({ configuration: "bpc_intro" }),
+      );
+      await expect(
+        createCheckoutSession({ ...request, priceId: "price_pro" }),
+      ).rejects.toThrow("discount ends");
+      expect(discount.end).toBe(Date.parse("2027-01-12T12:00:00Z") / 1000);
+    },
+  );
+
   test("unsafe remaining-term portal never falls back to default management", async () => {
     const { request, stripe, portal } = subscriberFixture();
     portal.features.subscription_update.enabled = true;
@@ -913,4 +972,206 @@ test("an entitlement read crossing cutoff cannot create a new introductory reser
     eligible.mockRestore();
     jest.useRealTimers();
   }
+});
+
+describe("configured-offer price classification failures", () => {
+  const originalFallback = config.stripe.priceBasic;
+  beforeEach(() => {
+    resetMockStore();
+    clearGuildSubscriptionCache();
+    jest.useFakeTimers({ now });
+    Object.assign(config.stripe.basicIntroOffer, settings);
+    config.stripe.priceBasic = "";
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    config.stripe.priceBasic = originalFallback;
+    clearGuildSubscriptionCache();
+  });
+
+  test("priceId-only Basic caller cannot lose its offer during catalog failure", async () => {
+    const { request, stripe } = purchaseFixture();
+    stripe.prices.list.mockRejectedValue(new Error("catalog unavailable"));
+    await expect(createCheckoutSession(request)).rejects.toThrow("unavailable");
+    expect(getMockStore().purchaseAttempts.size).toBe(0);
+    expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+
+  test("Pro-only catalog cannot let an actual Basic price fall through at regular price", async () => {
+    const { request, stripe, price } = purchaseFixture();
+    stripe.prices.list.mockResolvedValue({
+      data: [
+        {
+          ...price,
+          id: "price_pro",
+          lookup_key: config.stripe.lookupKeys.proMonthly,
+        },
+      ],
+    });
+    await expect(
+      createCheckoutSession({ ...request, tier: "basic", interval: "month" }),
+    ).rejects.toThrow("unavailable");
+    expect(getMockStore().purchaseAttempts.size).toBe(0);
+    expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["price_pro", "proMonthly", "month"],
+    ["price_basic_annual", "basicAnnual", "year"],
+    ["price_pro_annual", "proAnnual", "year"],
+  ] as const)(
+    "native %s remains purchasable during catalog failure",
+    async (priceId, lookup, interval) => {
+      const { request, stripe, price } = purchaseFixture();
+      stripe.prices.list.mockRejectedValue(new Error("catalog unavailable"));
+      Object.assign(price, {
+        id: priceId,
+        lookup_key: config.stripe.lookupKeys[lookup],
+        recurring: { interval, interval_count: 1, usage_type: "licensed" },
+      });
+      await createCheckoutSession({
+        ...request,
+        priceId,
+        tier: "basic",
+        interval: "month",
+      });
+      expect(
+        getMockStore().purchaseAttempts.get(request.guildId)?.checkout
+          .discounts,
+      ).toBeUndefined();
+      expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test("ambiguous Basic and Pro lookup configuration cannot authorize regular-price fallback", async () => {
+    const previous = config.stripe.lookupKeys.proMonthly;
+    config.stripe.lookupKeys.proMonthly = config.stripe.lookupKeys.basicMonthly;
+    try {
+      const { request, stripe } = purchaseFixture();
+      stripe.prices.list.mockRejectedValue(new Error("catalog unavailable"));
+      await expect(createCheckoutSession(request)).rejects.toThrow(
+        "unavailable",
+      );
+      expect(getMockStore().purchaseAttempts.size).toBe(0);
+      expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+    } finally {
+      config.stripe.lookupKeys.proMonthly = previous;
+    }
+  });
+
+  test("unclassifiable selected native price fails closed during catalog failure", async () => {
+    const { request, stripe } = purchaseFixture();
+    stripe.prices.list.mockRejectedValue(new Error("catalog unavailable"));
+    stripe.prices.retrieve.mockRejectedValue(new Error("price unavailable"));
+    await expect(createCheckoutSession(request)).rejects.toThrow("unavailable");
+    expect(getMockStore().purchaseAttempts.size).toBe(0);
+    expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("open-ended introductory enrollment", () => {
+  beforeEach(() => {
+    resetMockStore();
+    clearGuildSubscriptionCache();
+    jest.useFakeTimers({ now });
+    Object.assign(config.stripe.basicIntroOffer, settings, {
+      enrollmentEndsAt: "",
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    clearGuildSubscriptionCache();
+  });
+  function openFixture() {
+    const value = purchaseFixture();
+    value.coupon.redeem_by = null;
+    return value;
+  }
+
+  test("no enrollment end means a verified open-ended offer, with a three-month individual term", async () => {
+    const { request } = openFixture();
+    await expect(
+      getBasicIntroOffer({ stripe: request.stripe, plans }),
+    ).resolves.toMatchObject({
+      status: "available",
+      enrollmentEndsAt: null,
+      durationMonths: 3,
+      percentOff: 40,
+    });
+    jest.setSystemTime(Date.parse("2030-01-01T00:00:00Z"));
+    await expect(
+      getBasicIntroOffer({ stripe: request.stripe, plans }),
+    ).resolves.toMatchObject({
+      status: "available",
+      enrollmentEndsAt: null,
+      durationMonths: 3,
+    });
+  });
+
+  test("a finite provider redemption deadline is unsafe for open-ended enrollment", async () => {
+    const { request, coupon, stripe } = openFixture();
+    coupon.redeem_by = Date.parse(settings.enrollmentEndsAt) / 1000 + 3600;
+    await expect(
+      getBasicIntroOffer({ stripe: request.stripe, plans }),
+    ).resolves.toEqual({ status: "unavailable" });
+    await expect(createCheckoutSession(request)).rejects.toThrow("unavailable");
+    expect(getMockStore().purchaseAttempts.size).toBe(0);
+    expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+
+  test.each(["disabled", "ended"])(
+    "deliberately %s enrollment preserves frozen attempts and refuses a fresh coupon",
+    async (decision) => {
+      const { request, stripe } = openFixture();
+      stripe.checkout.sessions.create.mockRejectedValueOnce(
+        new Error("lost response"),
+      );
+      await expect(
+        createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      ).rejects.toThrow("lost response");
+      const frozen = structuredClone(
+        getMockStore().purchaseAttempts.get(request.guildId)?.checkout,
+      );
+      expect(frozen?.discounts).toEqual([{ coupon: "coupon_intro" }]);
+      expect(frozen?.metadata).not.toHaveProperty(
+        "intro_offer_enrollment_ends_at",
+      );
+      expect(frozen?.subscription_data?.metadata).not.toHaveProperty(
+        "intro_offer_enrollment_ends_at",
+      );
+      if (decision === "disabled")
+        Object.assign(config.stripe.basicIntroOffer, empty);
+      else
+        config.stripe.basicIntroOffer.enrollmentEndsAt = new Date(
+          now,
+        ).toISOString();
+      await expect(
+        getGuildBasicIntroOffer({
+          stripe: request.stripe,
+          guildId: request.guildId,
+          payerId: "payer",
+        }),
+      ).resolves.toMatchObject({ status: "available", enrollmentEndsAt: null });
+      await expect(
+        createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      ).resolves.toContain("checkout.stripe.com");
+      expect(
+        getMockStore().purchaseAttempts.get(request.guildId)?.checkout,
+      ).toEqual(frozen);
+      expect(stripe.checkout.sessions.create.mock.calls[1]).toEqual(
+        stripe.checkout.sessions.create.mock.calls[0],
+      );
+      await expect(
+        createCheckoutSession({
+          ...request,
+          guildId: "222222222222222222",
+          expectedOffer: "basic_intro_v1",
+        }),
+      ).rejects.toThrow("changed");
+      expect(getMockStore().purchaseAttempts.has("222222222222222222")).toBe(
+        false,
+      );
+      expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(2);
+    },
+  );
 });

@@ -21,7 +21,7 @@ export type BasicIntroOffer =
       discountedUnitAmount: 600;
       percentOff: 40;
       durationMonths: 3;
-      enrollmentEndsAt: string;
+      enrollmentEndsAt: string | null;
     };
 export type ExpectedIntroOffer = "none" | "basic_intro_v1";
 export type IntroOfferChoice = "automatic" | "promotion";

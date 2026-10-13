@@ -362,6 +362,7 @@ class ConfigService {
     basicIntroOffer: {
       couponId: process.env.STRIPE_BASIC_INTRO_COUPON_ID || "",
       startsAt: process.env.STRIPE_BASIC_INTRO_STARTS_AT || "",
+      // Empty leaves enrollment open-ended once the required offer inputs are set.
       enrollmentEndsAt: process.env.STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT || "",
       portalConfigurationId:
         process.env.STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID || "",
