@@ -248,6 +248,16 @@ function sameCheckpoint(
     recordingCheckpointSchema.parse(right),
   );
 }
+function assertCompleteCapturePreserved(
+  state: RecordingCaptureState,
+  known: RecordingCaptureState | undefined,
+) {
+  if (
+    known?.kind === "complete" &&
+    !isDeepStrictEqual(recordingCaptureStateSchema.parse(known), state)
+  )
+    throw new Error("Known complete capture cannot be relabeled");
+}
 function captureState(
   input: CheckpointFlushInput,
   previous?: RecordingManifest,
@@ -377,18 +387,15 @@ export function createRecordingCheckpointService(
   ): Promise<CheckpointAppendResult> {
     const capture = input.capture;
     const state = captureState(input, previous);
+    assertCompleteCapturePreserved(state, previous?.captureState);
     const key = {
       guildId: capture.guildId,
       channelId_timestamp: capture.channelId_timestamp,
     };
-    const row = await repository.getMeetingHistory(key);
+    const row = await repository.getMeetingHistory(key, input.signal);
     input.signal?.throwIfAborted();
     validateCaptureHistory(row, capture);
-    if (
-      row?.capture?.kind === "complete" &&
-      !isDeepStrictEqual(recordingCaptureStateSchema.parse(row.capture), state)
-    )
-      throw new Error("Known complete capture cannot be relabeled");
+    assertCompleteCapturePreserved(state, row?.capture);
     const verified = await verifyArtifacts(artifacts, input.signal);
     const coverage = confirmedCoverage(capture, verified.verified, state);
     if (!sameCheckpoint(row?.checkpoint, input.previous))
@@ -504,10 +511,13 @@ export function createRecordingCheckpointService(
     );
     let row: MeetingHistory | undefined;
     try {
-      row = await repository.getMeetingHistory({
-        guildId: input.capture.guildId,
-        channelId_timestamp: input.capture.channelId_timestamp,
-      });
+      row = await repository.getMeetingHistory(
+        {
+          guildId: input.capture.guildId,
+          channelId_timestamp: input.capture.channelId_timestamp,
+        },
+        input.signal,
+      );
     } catch {
       return { kind: "preservation_failed", coverage };
     }
@@ -575,7 +585,10 @@ export function createRecordingCheckpointService(
       };
     let row: MeetingHistory | undefined;
     try {
-      row = await repository.getMeetingHistory(reservation.historyKey);
+      row = await repository.getMeetingHistory(
+        reservation.historyKey,
+        effectiveSignal,
+      );
     } catch {
       return {
         kind: "preservation_failed",

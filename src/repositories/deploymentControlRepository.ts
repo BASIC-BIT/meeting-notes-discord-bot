@@ -150,7 +150,10 @@ export type DeploymentControlRepository = {
   transitionMeetingHistory(
     input: HistoryTransition,
   ): Promise<ConditionalResult>;
-  getMeetingHistory(key: HistoryKey): Promise<MeetingHistory | undefined>;
+  getMeetingHistory(
+    key: HistoryKey,
+    signal?: AbortSignal,
+  ): Promise<MeetingHistory | undefined>;
   listPendingRecordingRecoveries(guildId: string): Promise<MeetingHistory[]>;
 };
 
@@ -412,13 +415,15 @@ export function createDynamoDeploymentControlRepository(
       } while (cursor);
       return rows;
     },
-    async getMeetingHistory(key) {
+    async getMeetingHistory(key, signal) {
+      signal?.throwIfAborted();
       const result = await client.send(
         new GetItemCommand({
           TableName: tables.meetingHistory,
           Key: marshall(key),
           ConsistentRead: true,
         }),
+        { abortSignal: signal },
       );
       return result.Item
         ? (unmarshall(result.Item) as MeetingHistory)
@@ -901,7 +906,8 @@ export function createMockDeploymentControlRepository(
         (histories.get(guildId) ?? []).filter(isPendingRecordingRecovery),
       );
     },
-    async getMeetingHistory(key) {
+    async getMeetingHistory(key, signal) {
+      signal?.throwIfAborted();
       const row = getHistory(key);
       return row ? structuredClone(row) : undefined;
     },

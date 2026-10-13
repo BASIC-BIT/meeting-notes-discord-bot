@@ -6,9 +6,13 @@ import {
   DynamoDBClient,
   PutItemCommand,
 } from "@aws-sdk/client-dynamodb";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { marshall } from "@aws-sdk/util-dynamodb";
 import { createDynamoDeploymentControlRepository } from "../../src/repositories/deploymentControlRepository";
-import { createRecordingCheckpointService } from "../../src/services/recordingCheckpointService";
+import {
+  type CheckpointFlushInput,
+  createRecordingCheckpointService,
+} from "../../src/services/recordingCheckpointService";
 import { history, control, runtime, promotion } from "./controlFixtures";
 
 const prefix = `checkpoint-test-${randomUUID()}-`;
@@ -264,8 +268,8 @@ const recovery = {
   stage: "verification" as const,
   retry: { maxAttempts: 3, nextAttemptAt: null },
 };
-async function failedFixture() {
-  const first = await service.flush(input);
+async function failedFixture(initial: CheckpointFlushInput = input) {
+  const first = await service.flush(initial);
   if (first.kind !== "committed") throw new Error("fixture commit failed");
   await repository.transitionMeetingHistory({
     key: {
@@ -288,7 +292,7 @@ async function failedFixture() {
     }),
   );
   return {
-    ...input,
+    ...initial,
     artifacts: [
       {
         kind: "context" as const,
@@ -458,3 +462,158 @@ test("terminal transition only permits checkpoint/capture/recovery metadata", as
     }),
   ).rejects.toThrow();
 });
+
+test("terminal failure cannot relabel complete capture recorded only in the manifest", async () => {
+  const complete = {
+    kind: "complete" as const,
+    startedAt: "2026-01-01T00:00:02.000Z",
+    endedAt: "2026-01-01T00:00:03.000Z",
+  };
+  const terminal = await failedFixture({
+    ...input,
+    capture: { ...capture, captureStartedAt: complete.startedAt },
+    captureState: complete,
+  });
+  const key = {
+    guildId: history.guildId,
+    channelId_timestamp: history.channelId_timestamp,
+  };
+  expect((await repository.getMeetingHistory(key))?.capture).toBeUndefined();
+  expect(
+    (
+      await service.preserveTerminalRecordingCheckpoint({
+        ...terminal,
+        captureState: {
+          kind: "interrupted",
+          startedAt: complete.startedAt,
+          endedAt: null,
+          detectedAt: "2026-01-01T00:00:04.000Z",
+        },
+      })
+    ).kind,
+  ).toBe("preservation_failed");
+  const rejected = await repository.getMeetingHistory(key);
+  expect(rejected?.checkpoint).toEqual(terminal.previous);
+  expect(rejected?.recovery).toBeUndefined();
+  expect(rejected?.status).toBe("failed");
+  const preserved = await service.preserveTerminalRecordingCheckpoint({
+    ...terminal,
+    captureState: complete,
+  });
+  expect(preserved.kind).toBe("committed");
+  if (preserved.kind !== "committed")
+    throw new Error("fixture preservation failed");
+  const row = await repository.getMeetingHistory(key);
+  expect(row?.capture).toEqual(complete);
+  expect(row?.recovery).toEqual(recovery);
+  expect(row?.status).toBe("failed");
+  expect(
+    (await service.read(preserved.checkpoint)).manifest.captureState,
+  ).toEqual(complete);
+  expect(preserved.checkpoint.capture).toEqual(terminal.previous.capture);
+});
+
+test.each([
+  [1, "abort"],
+  [2, "abort"],
+  [1, "deadline"],
+  [2, "deadline"],
+] as const)(
+  "terminal %s history read settles on SDK %s cancellation",
+  async (heldRead, cancellation) => {
+    const terminal = await failedFixture();
+    const controller = new AbortController();
+    const handler = new NodeHttpHandler();
+    const handle = handler.handle.bind(handler);
+    let entered!: () => void;
+    const atRead = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let readCount = 0;
+    let readSettled = false;
+    let aborted = false;
+    let watchdogFired = false;
+    const signals: unknown[] = [];
+    jest
+      .spyOn(handler, "handle")
+      .mockImplementation(async (request, options) => {
+        if (request.headers["x-amz-target"] !== "DynamoDB_20120810.GetItem")
+          return handle(request, options);
+        signals.push(options?.abortSignal);
+        if (++readCount !== heldRead) return handle(request, options);
+        try {
+          return await new Promise<never>((_resolve, reject) => {
+            const signal = options?.abortSignal;
+            const onAbort = () => {
+              aborted = true;
+              clearTimeout(watchdog);
+              if (signal) signal.onabort = null;
+              reject(
+                Object.assign(new Error("generated read aborted"), {
+                  name: "AbortError",
+                }),
+              );
+            };
+            const watchdog = setTimeout(() => {
+              watchdogFired = true;
+              if (signal) signal.onabort = null;
+              reject(
+                Object.assign(new Error("generated held read watchdog"), {
+                  name: "AbortError",
+                }),
+              );
+            }, 1500);
+            if (signal) signal.onabort = onAbort;
+            entered();
+            if (signal?.aborted) onAbort();
+          });
+        } finally {
+          readSettled = true;
+        }
+      });
+    const heldClient = new DynamoDBClient({
+      endpoint: process.env.DEPLOYMENT_TEST_DYNAMODB_ENDPOINT,
+      region: "local",
+      credentials: { accessKeyId: "dummy", secretAccessKey: "dummy" },
+      requestHandler: handler,
+      maxAttempts: 1,
+    });
+    const heldService = createRecordingCheckpointService({
+      repository: createDynamoDeploymentControlRepository(heldClient, tables),
+      objects: {
+        upload: async (key, body) => {
+          if (!objects.has(key)) objects.set(key, Buffer.from(body));
+          return key;
+        },
+        read: async (key) => objects.get(key),
+      },
+    });
+    try {
+      const pending = heldService.preserveTerminalRecordingCheckpoint({
+        ...terminal,
+        preservation: {
+          ...terminal.preservation,
+          signal: controller.signal,
+          deadlineEpochMs:
+            Date.now() + (cancellation === "deadline" ? 500 : 10000),
+        },
+      });
+      await atRead;
+      if (cancellation === "abort") controller.abort();
+      expect((await pending).kind).toBe("preservation_failed");
+      expect(readSettled).toBe(true);
+      expect(watchdogFired).toBe(false);
+      expect(aborted).toBe(true);
+      expect(signals).toHaveLength(heldRead);
+      expect(signals.every((signal) => signal === signals[0])).toBe(true);
+      const row = await repository.getMeetingHistory({
+        guildId: history.guildId,
+        channelId_timestamp: history.channelId_timestamp,
+      });
+      expect(row?.checkpoint).toEqual(terminal.previous);
+      expect(row?.recovery).toBeUndefined();
+    } finally {
+      heldClient.destroy();
+    }
+  },
+);

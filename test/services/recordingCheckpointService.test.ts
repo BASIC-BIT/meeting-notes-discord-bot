@@ -550,3 +550,60 @@ test("aborted publication acknowledgment cannot report committed", async () => {
     (await f.repository.getMeetingHistory(history))?.checkpoint,
   ).toBeDefined();
 });
+
+test.each(["append", "flush"] as const)(
+  "%s preserves complete capture known only by the previous manifest",
+  async (operation) => {
+    const f = fixture();
+    const complete = {
+      kind: "complete" as const,
+      startedAt: capture.captureStartedAt!,
+      endedAt: "2026-01-01T00:00:03.000Z",
+    };
+    const first = await f.service.flush({ ...input, captureState: complete });
+    if (first.kind !== "committed") throw new Error("fixture commit failed");
+    expect(
+      (await f.repository.getMeetingHistory(history))?.capture,
+    ).toBeUndefined();
+    for (const captureState of [
+      {
+        kind: "interrupted" as const,
+        startedAt: complete.startedAt,
+        endedAt: null,
+        detectedAt: "2026-01-01T00:00:04.000Z",
+      },
+      { kind: "unknown" as const },
+      { ...complete, endedAt: "2026-01-01T00:00:04.000Z" },
+    ]) {
+      const next = { ...input, previous: first.checkpoint, captureState };
+      const result =
+        operation === "append"
+          ? await f.service.append({ ...next, artifact: segment })
+          : await f.service.flush(next);
+      expect(result.kind).toBe("preservation_failed");
+      expect(
+        (await f.repository.getMeetingHistory(history))?.checkpoint,
+      ).toEqual(first.checkpoint);
+    }
+    const unchanged = await f.service.flush({
+      ...input,
+      previous: first.checkpoint,
+    });
+    expect(unchanged).toEqual(first);
+    expect(
+      (await f.service.read(first.checkpoint)).manifest.captureState,
+    ).toEqual(complete);
+  },
+);
+
+test("mock history read honors optional cancellation and preserves ordinary reads", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  controller.abort();
+  await expect(
+    f.repository.getMeetingHistory(history, controller.signal),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  await expect(f.repository.getMeetingHistory(history)).resolves.toEqual(
+    history,
+  );
+});
