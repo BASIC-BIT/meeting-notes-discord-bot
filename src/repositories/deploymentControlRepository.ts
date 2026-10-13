@@ -13,6 +13,7 @@ import {
   buildInitialMeetingHistoryPut,
   buildPromotionTransaction,
   buildRuntimeAdmissionChecks,
+  buildRuntimeRoleTransition,
 } from "../services/deploymentControlTransactions";
 import {
   admissionContextSchema,
@@ -21,6 +22,8 @@ import {
   promotionInputSchema,
   runtimeRecordSchema,
   sameRuntimeIdentity,
+  validateRuntimeRoleTransition,
+  type RuntimeRoleTransition,
   voiceRecordSchema,
   type AdmissionCheckResult,
   type AdmissionContext,
@@ -97,6 +100,9 @@ export type DeploymentControlRepository = {
   ): Promise<DeploymentControlRecord | undefined>;
   initializeControl(record: ControlRecord): Promise<ConditionalResult>;
   writeRuntime(record: RuntimeRecord): Promise<ConditionalResult>;
+  transitionRuntimeRole(
+    input: RuntimeRoleTransition,
+  ): Promise<ConditionalResult>;
   writeVoice(
     record: VoiceRecord,
     expected?: ExpectedVoiceState,
@@ -164,6 +170,14 @@ export function createDynamoDeploymentControlRepository(
         ),
       );
     },
+    transitionRuntimeRole: (input) =>
+      conditional(() =>
+        client.send(
+          new TransactWriteItemsCommand(
+            buildRuntimeRoleTransition(input, tables),
+          ),
+        ),
+      ),
     async writeVoice(record, expected) {
       voiceRecordSchema.parse(record);
       if (
@@ -244,14 +258,14 @@ export function createDynamoDeploymentControlRepository(
 
 function proofReady(
   row: RuntimeRecord,
-  epoch: number,
+  epoch: number | undefined,
   generation: number,
   now: number,
 ): boolean {
   return (
-    row.readiness.observedEpoch === epoch &&
+    (epoch === undefined || row.readiness.observedEpoch === epoch) &&
     row.readiness.observedGeneration === generation &&
-    row.readiness.gatewayReady &&
+    (row.readiness.runtimeMode === "api" || row.readiness.gatewayReady) &&
     row.readiness.cacheReady &&
     row.readiness.dependenciesReady &&
     row.readiness.provenAt <= now &&
@@ -303,6 +317,22 @@ export function createMockDeploymentControlRepository(
         return "stale";
       return store(record);
     },
+    async transitionRuntimeRole(input) {
+      validateRuntimeRoleTransition(input);
+      const control = getControl();
+      const row = getRuntime(input.record.identity.instanceId);
+      if (
+        !control ||
+        control.coordinatorEpoch !== input.retirementEpoch ||
+        control.servingMembers[input.record.identity.instanceId] ||
+        !row ||
+        !sameRuntimeIdentity(row.identity, input.record.identity) ||
+        row.role !== input.expectedRole ||
+        row.authorizedGeneration !== input.expectedGeneration
+      )
+        return "stale";
+      return store(input.record);
+    },
     async writeVoice(record, expected) {
       voiceRecordSchema.parse(record);
       if (
@@ -331,14 +361,18 @@ export function createMockDeploymentControlRepository(
       return control &&
         runtime &&
         control.protocolVersion === context.protocolVersion &&
-        control.servingInstanceId === context.instanceId &&
+        control.servingMembers[context.instanceId] &&
+        sameRuntimeIdentity(
+          control.servingMembers[context.instanceId],
+          context.identity,
+        ) &&
+        sameRuntimeIdentity(runtime.identity, context.identity) &&
         control.servingGeneration === context.authorizedGeneration &&
-        control.coordinatorEpoch === context.observedEpoch &&
         runtime.role === "serving" &&
         runtime.authorizedGeneration === context.authorizedGeneration &&
         proofReady(
           runtime,
-          context.observedEpoch,
+          undefined,
           context.authorizedGeneration,
           context.now,
         )
@@ -349,6 +383,9 @@ export function createMockDeploymentControlRepository(
       promotionInputSchema.parse(input);
       const control = getControl();
       const candidate = getRuntime(input.candidate.instanceId);
+      const retained = (input.retainedMembers ?? []).map((identity) =>
+        getRuntime(identity.instanceId),
+      );
       if (
         !control ||
         !candidate ||
@@ -356,7 +393,34 @@ export function createMockDeploymentControlRepository(
         control.coordinatorToken !== input.coordinatorToken ||
         control.coordinatorExpiresAt <= input.now ||
         control.servingGeneration !== input.expectedServingGeneration ||
+        Object.keys(control.servingMembers).length !==
+          input.expectedServingMembers.length ||
+        !input.expectedServingMembers.every(
+          (identity) =>
+            control.servingMembers[identity.instanceId] &&
+            sameRuntimeIdentity(
+              control.servingMembers[identity.instanceId],
+              identity,
+            ),
+        ) ||
+        !retained.every(
+          (row, index) =>
+            row &&
+            row.role === "serving" &&
+            row.authorizedGeneration === input.expectedServingGeneration &&
+            sameRuntimeIdentity(
+              row.identity,
+              (input.retainedMembers ?? [])[index],
+            ) &&
+            proofReady(
+              row,
+              input.coordinatorEpoch,
+              input.expectedServingGeneration,
+              input.now,
+            ),
+        ) ||
         candidate.role !== "candidate" ||
+        candidate.readiness.runtimeMode !== input.candidateRuntimeMode ||
         !sameRuntimeIdentity(candidate.identity, input.candidate) ||
         !proofReady(
           candidate,
@@ -369,7 +433,11 @@ export function createMockDeploymentControlRepository(
       store({
         ...control,
         servingGeneration: input.proposedGeneration,
-        servingInstanceId: input.candidate.instanceId,
+        servingMembers: Object.fromEntries(
+          [input.candidate, ...(input.retainedMembers ?? [])].map(
+            (identity) => [identity.instanceId, identity],
+          ),
+        ),
       });
       store({
         ...candidate,
@@ -380,6 +448,17 @@ export function createMockDeploymentControlRepository(
           observedGeneration: input.proposedGeneration,
         },
       });
+      for (const row of retained) {
+        if (!row) throw new Error("Retained runtime disappeared");
+        store({
+          ...row,
+          authorizedGeneration: input.proposedGeneration,
+          readiness: {
+            ...row.readiness,
+            observedGeneration: input.proposedGeneration,
+          },
+        });
+      }
       return "applied";
     },
     async createInitialMeetingHistory(history) {

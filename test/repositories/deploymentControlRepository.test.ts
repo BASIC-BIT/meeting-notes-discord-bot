@@ -34,6 +34,7 @@ test("promotionAndOldAdmissionHaveOnlyTwoLegalOrders", async () => {
       await repository.checkAdmission({
         ...context,
         instanceId: "new",
+        identity: runtime("new").identity,
         authorizedGeneration: 8,
       })
     ).kind,
@@ -47,6 +48,93 @@ test("staleEpochCannotPromote", async () => {
   expect(await repository.promote({ ...promotion, coordinatorEpoch: 2 })).toBe(
     "stale",
   );
+});
+
+test("coordinator warmup does not seal healthy serving generation", async () => {
+  const repository = createMockDeploymentControlRepository();
+  await repository.initializeControl({ ...control, coordinatorEpoch: 4 });
+  await repository.writeRuntime(runtime("old"));
+  expect((await repository.checkAdmission(context)).kind).toBe("admitted");
+  const candidate = runtime("new", "candidate");
+  await repository.writeRuntime(candidate);
+  expect(await repository.promote({ ...promotion, coordinatorEpoch: 4 })).toBe(
+    "stale",
+  );
+  await repository.writeRuntime({
+    ...candidate,
+    readiness: { ...candidate.readiness, observedEpoch: 4 },
+  });
+  expect(await repository.promote({ ...promotion, coordinatorEpoch: 4 })).toBe(
+    "applied",
+  );
+  expect((await repository.checkAdmission(context)).kind).toBe("blocked");
+});
+
+test("membership input rejects duplicate and unselected retained runtimes", async () => {
+  const repository = createMockDeploymentControlRepository();
+  await expect(
+    repository.promote({
+      ...promotion,
+      retainedMembers: [runtime("unknown").identity],
+    }),
+  ).rejects.toThrow();
+  await expect(
+    repository.promote({
+      ...promotion,
+      retainedMembers: [runtime("old").identity, runtime("old").identity],
+    }),
+  ).rejects.toThrow();
+  await expect(
+    repository.promote({
+      ...promotion,
+      expectedServingMembers: [runtime("new").identity],
+      retainedMembers: [runtime("new").identity],
+    }),
+  ).rejects.toThrow();
+});
+
+test("membership order is irrelevant and retained API requires no gateway", async () => {
+  const repository = createMockDeploymentControlRepository();
+  const api = runtime("api");
+  api.readiness.runtimeMode = "api";
+  api.readiness.gatewayReady = false;
+  await repository.initializeControl({
+    ...control,
+    servingMembers: { old: runtime("old").identity, api: api.identity },
+  });
+  await repository.writeRuntime(runtime("old"));
+  await repository.writeRuntime(runtime("new", "candidate"));
+  await repository.writeRuntime(api);
+  expect(
+    await repository.promote({
+      ...promotion,
+      expectedServingMembers: [api.identity, runtime("old").identity],
+      retainedMembers: [api.identity],
+    }),
+  ).toBe("applied");
+  expect(
+    (
+      await repository.checkAdmission({
+        ...context,
+        instanceId: "api",
+        identity: api.identity,
+        authorizedGeneration: 8,
+      })
+    ).kind,
+  ).toBe("admitted");
+});
+
+test("API readiness cannot satisfy combined runtime mode", async () => {
+  const repository = createMockDeploymentControlRepository();
+  await repository.initializeControl(control);
+  const candidate = runtime("new", "candidate");
+  candidate.readiness.runtimeMode = "api";
+  candidate.readiness.gatewayReady = false;
+  await repository.writeRuntime(candidate);
+  expect(await repository.promote(promotion)).toBe("stale");
+  expect(
+    await repository.promote({ ...promotion, candidateRuntimeMode: "api" }),
+  ).toBe("applied");
 });
 
 test("lateInitialHistoryCannotOverwriteProgress", async () => {

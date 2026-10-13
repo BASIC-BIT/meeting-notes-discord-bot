@@ -10,6 +10,8 @@ import {
   admissionContextSchema,
   promotionInputSchema,
   validateHistoryTransition,
+  validateRuntimeRoleTransition,
+  type RuntimeRoleTransition,
   type AdmissionContext,
   type ControlTableNames,
   type HistoryTransition,
@@ -20,9 +22,8 @@ const runtimeProofCondition = [
   "#identity = readiness.#identity",
   "#identity = protection.#identity",
   "#identity.protocolVersion = :protocol",
-  "readiness.observedEpoch = :epoch",
   "readiness.observedGeneration = :generation",
-  "readiness.gatewayReady = :ready",
+  "(readiness.runtimeMode = :api OR readiness.gatewayReady = :ready)",
   "readiness.cacheReady = :ready",
   "readiness.dependenciesReady = :ready",
   "readiness.provenAt <= :now",
@@ -44,12 +45,12 @@ export function buildRuntimeAdmissionChecks(
         TableName: tables.deploymentControl,
         Key: marshall({ pk: "ENV", sk: "CONTROL" }),
         ConditionExpression:
-          "protocolVersion = :protocol AND servingGeneration = :generation AND servingInstanceId = :instance AND coordinatorEpoch = :epoch",
+          "protocolVersion = :protocol AND servingGeneration = :generation AND servingMembers.#instance = :identity",
+        ExpressionAttributeNames: { "#instance": context.instanceId },
         ExpressionAttributeValues: marshall({
           ":protocol": context.protocolVersion,
           ":generation": context.authorizedGeneration,
-          ":instance": context.instanceId,
-          ":epoch": context.observedEpoch,
+          ":identity": context.identity,
         }),
       },
     },
@@ -57,15 +58,15 @@ export function buildRuntimeAdmissionChecks(
       ConditionCheck: {
         TableName: tables.deploymentControl,
         Key: marshall({ pk: "ENV", sk: `RUNTIME#${context.instanceId}` }),
-        ConditionExpression: `#role = :serving AND #identity.instanceId = :instance AND authorizedGeneration = :generation AND ${runtimeProofCondition}`,
+        ConditionExpression: `#role = :serving AND #identity = :identity AND authorizedGeneration = :generation AND ${runtimeProofCondition}`,
         ExpressionAttributeNames: { "#role": "role", "#identity": "identity" },
         ExpressionAttributeValues: marshall({
           ":protocol": context.protocolVersion,
           ":generation": context.authorizedGeneration,
-          ":instance": context.instanceId,
-          ":epoch": context.observedEpoch,
+          ":identity": context.identity,
           ":now": context.now,
           ":serving": "serving",
+          ":api": "api",
           ":ready": true,
         }),
       },
@@ -87,9 +88,9 @@ export function buildPromotionTransaction({
           TableName: tables.deploymentControl,
           Key: marshall({ pk: "ENV", sk: "CONTROL" }),
           ConditionExpression:
-            "protocolVersion = :protocol AND coordinatorToken = :token AND coordinatorEpoch = :epoch AND coordinatorExpiresAt > :now AND servingGeneration = :generation",
+            "protocolVersion = :protocol AND coordinatorToken = :token AND coordinatorEpoch = :epoch AND coordinatorExpiresAt > :now AND servingGeneration = :generation AND servingMembers = :expectedMembers",
           UpdateExpression:
-            "SET servingGeneration = :next, servingInstanceId = :instance",
+            "SET servingGeneration = :next, servingMembers = :members",
           ExpressionAttributeValues: marshall({
             ":protocol": 1,
             ":token": input.coordinatorToken,
@@ -97,7 +98,17 @@ export function buildPromotionTransaction({
             ":now": input.now,
             ":generation": input.expectedServingGeneration,
             ":next": input.proposedGeneration,
-            ":instance": input.candidate.instanceId,
+            ":members": Object.fromEntries(
+              [input.candidate, ...(input.retainedMembers ?? [])].map(
+                (identity) => [identity.instanceId, identity],
+              ),
+            ),
+            ":expectedMembers": Object.fromEntries(
+              input.expectedServingMembers.map((identity) => [
+                identity.instanceId,
+                identity,
+              ]),
+            ),
           }),
         },
       },
@@ -108,7 +119,7 @@ export function buildPromotionTransaction({
             pk: "ENV",
             sk: `RUNTIME#${input.candidate.instanceId}`,
           }),
-          ConditionExpression: `#role = :candidate AND #identity = :identity AND ${runtimeProofCondition}`,
+          ConditionExpression: `#role = :candidate AND #identity = :identity AND readiness.runtimeMode = :mode AND readiness.observedEpoch = :epoch AND ${runtimeProofCondition}`,
           UpdateExpression:
             "SET #role = :serving, authorizedGeneration = :next, readiness.observedGeneration = :next",
           ExpressionAttributeNames: {
@@ -123,8 +134,77 @@ export function buildPromotionTransaction({
             ":next": input.proposedGeneration,
             ":identity": input.candidate,
             ":candidate": "candidate",
+            ":api": "api",
+            ":mode": input.candidateRuntimeMode,
             ":serving": "serving",
             ":ready": true,
+          }),
+        },
+      },
+      ...(input.retainedMembers ?? []).map((identity) => ({
+        Update: {
+          TableName: tables.deploymentControl,
+          Key: marshall({ pk: "ENV", sk: `RUNTIME#${identity.instanceId}` }),
+          ConditionExpression: `#role = :serving AND #identity = :identity AND authorizedGeneration = :generation AND readiness.observedEpoch = :epoch AND ${runtimeProofCondition}`,
+          UpdateExpression:
+            "SET authorizedGeneration = :next, readiness.observedGeneration = :next",
+          ExpressionAttributeNames: {
+            "#role": "role",
+            "#identity": "identity",
+          },
+          ExpressionAttributeValues: marshall({
+            ":serving": "serving",
+            ":api": "api",
+            ":identity": identity,
+            ":generation": input.expectedServingGeneration,
+            ":epoch": input.coordinatorEpoch,
+            ":protocol": 1,
+            ":now": input.now,
+            ":ready": true,
+            ":next": input.proposedGeneration,
+          }),
+        },
+      })),
+    ],
+  };
+}
+
+/** Retirement and rearming are owned by this runtime, guarded against promotion. */
+export function buildRuntimeRoleTransition(
+  input: RuntimeRoleTransition,
+  tables: ControlTableNames,
+): TransactWriteItemsCommandInput {
+  validateRuntimeRoleTransition(input);
+  return {
+    TransactItems: [
+      {
+        ConditionCheck: {
+          TableName: tables.deploymentControl,
+          Key: marshall({ pk: "ENV", sk: "CONTROL" }),
+          ConditionExpression:
+            "coordinatorEpoch = :epoch AND attribute_not_exists(servingMembers.#instance)",
+          ExpressionAttributeNames: {
+            "#instance": input.record.identity.instanceId,
+          },
+          ExpressionAttributeValues: marshall({
+            ":epoch": input.retirementEpoch,
+          }),
+        },
+      },
+      {
+        Put: {
+          TableName: tables.deploymentControl,
+          Item: marshall(input.record, { removeUndefinedValues: true }),
+          ConditionExpression:
+            "#identity = :identity AND #role = :role AND authorizedGeneration = :generation",
+          ExpressionAttributeNames: {
+            "#identity": "identity",
+            "#role": "role",
+          },
+          ExpressionAttributeValues: marshall({
+            ":identity": input.record.identity,
+            ":role": input.expectedRole,
+            ":generation": input.expectedGeneration,
           }),
         },
       },

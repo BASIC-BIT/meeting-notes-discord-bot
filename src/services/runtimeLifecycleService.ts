@@ -1,0 +1,403 @@
+import type { DeploymentControlRepository } from "../repositories/deploymentControlRepository";
+import {
+  sameRuntimeIdentity,
+  type RuntimeIdentity,
+  type RuntimeReadiness,
+  type RuntimeRecord,
+  type RuntimeWorkKind,
+  type RuntimeWorkHandle,
+  type AdmissionContext,
+  type RetirementResult,
+} from "../types/deploymentControl";
+import {
+  RUNTIME_PROTECTION_MARGIN_SECONDS,
+  type RuntimeProtectionService,
+} from "./runtimeProtectionService";
+
+export const RUNTIME_HEARTBEAT_MS = 10_000;
+export const RUNTIME_READINESS_SECONDS = 30;
+export type RuntimeReadinessProbe = Pick<
+  RuntimeReadiness,
+  "gatewayReady" | "cacheReady" | "dependenciesReady"
+>;
+export type RuntimeWorkRegistration = RuntimeWorkHandle & {
+  transition(kind: RuntimeWorkKind): void;
+};
+export type RuntimeLifecycle = ReturnType<typeof createRuntimeLifecycle>;
+
+export function createRuntimeLifecycle(options: {
+  identity: RuntimeIdentity;
+  runtimeMode?: RuntimeReadiness["runtimeMode"];
+  repository: DeploymentControlRepository;
+  protection: RuntimeProtectionService;
+  now?: () => number;
+  probeReadiness: () => Promise<RuntimeReadinessProbe>;
+  checkpointAndFence?: () => Promise<void>;
+}) {
+  const { identity, repository, protection } = options;
+  const now = options.now ?? (() => Math.floor(Date.now() / 1000));
+  let row: RuntimeRecord | undefined;
+  let allowed = false;
+  let ineligible = false;
+  let unsafe = false;
+  let releaseUncertain = false;
+  let started = false;
+  let safetyHandler = options.checkpointAndFence;
+  const servingListeners = new Set<() => void>();
+  const counts: Record<RuntimeWorkKind, number> = {
+    pending_admission: 0,
+    recording: 0,
+    finalization: 0,
+    personal_processing: 0,
+    recovery_processing: 0,
+    voice_operation: 0,
+    ancillary_delivery: 0,
+  };
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let tail: Promise<unknown> = Promise.resolve();
+  function serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const next = tail.then(operation);
+    tail = next.catch(() => undefined);
+    return next;
+  }
+  protection.setUnsafeHandler(async () => {
+    allowed = false;
+    unsafe = true;
+    // Safety must run before expiry, independently of a pending network heartbeat.
+    await safetyHandler?.();
+  });
+  async function readRuntime() {
+    const stored = await repository.getRecord(
+      "ENV",
+      `RUNTIME#${identity.instanceId}`,
+    );
+    if (
+      stored &&
+      (stored.recordType !== "runtime" ||
+        !sameRuntimeIdentity(stored.identity, identity))
+    )
+      throw new Error("Runtime identity mismatch");
+    return stored;
+  }
+  async function refresh(): Promise<RuntimeReadiness> {
+    const control = await repository.getRecord("ENV", "CONTROL");
+    if (control?.recordType !== "control")
+      throw new Error("Deployment control unavailable");
+    const proofTime = now();
+    const flags = await options.probeReadiness();
+    const readiness: RuntimeReadiness = {
+      identity,
+      runtimeMode: options.runtimeMode ?? "all",
+      observedEpoch: control.coordinatorEpoch,
+      observedGeneration: control.servingGeneration,
+      ...flags,
+      gatewayReady: options.runtimeMode === "api" ? false : flags.gatewayReady,
+      dependenciesReady:
+        flags.dependenciesReady &&
+        Boolean(safetyHandler) &&
+        !unsafe &&
+        !ineligible,
+      provenAt: proofTime,
+      expiresAt: proofTime + RUNTIME_READINESS_SECONDS,
+    };
+    const proof = protection.getConfirmation();
+    if (!proof) throw new Error("Runtime protection unavailable");
+    // Expire the published admission/promotion proof before ECS protection does.
+    readiness.expiresAt = Math.min(
+      readiness.expiresAt,
+      proof.expiresAt - RUNTIME_PROTECTION_MARGIN_SECONDS,
+    );
+    const stored = await readRuntime();
+    const next: RuntimeRecord = {
+      pk: "ENV",
+      sk: `RUNTIME#${identity.instanceId}`,
+      recordType: "runtime",
+      identity,
+      role: stored?.role ?? "candidate",
+      authorizedGeneration:
+        stored?.authorizedGeneration ?? control.servingGeneration,
+      heartbeatAt: now(),
+      readiness,
+      protection: proof,
+      workCounts: { ...counts },
+    };
+    if (next.role === "stale") throw new Error("Stale runtime cannot restart");
+    if ((await repository.writeRuntime(next)) !== "applied")
+      throw new Error("Runtime changed during heartbeat");
+    row = next;
+    const selected = control.servingMembers[identity.instanceId];
+    allowed =
+      !ineligible &&
+      !unsafe &&
+      row.role === "serving" &&
+      Boolean(selected && sameRuntimeIdentity(selected, identity)) &&
+      control.servingGeneration === row.authorizedGeneration &&
+      (readiness.runtimeMode === "api" || readiness.gatewayReady) &&
+      readiness.cacheReady &&
+      readiness.dependenciesReady &&
+      readiness.expiresAt > now() &&
+      protection.isSafe();
+    if (allowed)
+      for (const listener of servingListeners) {
+        servingListeners.delete(listener);
+        listener();
+      }
+    return structuredClone(readiness);
+  }
+  function refreshRuntimeReadiness() {
+    return serialize(async () => {
+      try {
+        return await refresh();
+      } catch (error) {
+        allowed = false;
+        throw error;
+      }
+    });
+  }
+  async function start() {
+    if (started) throw new Error("Runtime lifecycle already started");
+    started = true;
+    await protection.start();
+    try {
+      if (await readRuntime())
+        throw new Error("Runtime identity is already registered");
+      await refreshRuntimeReadiness();
+    } catch (error) {
+      protection.stop();
+      throw error;
+    }
+    heartbeat = setInterval(() => {
+      void refreshRuntimeReadiness().catch(() => {
+        allowed = false;
+      });
+    }, RUNTIME_HEARTBEAT_MS);
+    heartbeat.unref();
+  }
+  function beginRuntimeWork(kind: RuntimeWorkKind): RuntimeWorkRegistration {
+    if (
+      !allowed ||
+      ineligible ||
+      unsafe ||
+      !safetyHandler ||
+      !protection.isSafe() ||
+      !row ||
+      row.readiness.expiresAt <= now()
+    )
+      throw new Error("Runtime is not accepting work");
+    counts[kind]++;
+    let settled = false;
+    return {
+      settle() {
+        if (!settled) {
+          settled = true;
+          counts[kind]--;
+        }
+      },
+      // A finalizer keeps the same ownership handle while the runtime drains.
+      transition(next) {
+        if (settled) throw new Error("Work is already settled");
+        counts[kind]--;
+        counts[next]++;
+        kind = next;
+      },
+    };
+  }
+  function getRuntimeAdmissionContext(): Promise<AdmissionContext> {
+    return serialize(async () => {
+      try {
+        await refresh();
+      } catch (error) {
+        allowed = false;
+        throw error;
+      }
+      if (!allowed || !row) throw new Error("Runtime is not serving");
+      return {
+        instanceId: identity.instanceId,
+        identity,
+        authorizedGeneration: row.authorizedGeneration,
+        observedEpoch: row.readiness.observedEpoch,
+        protocolVersion: 1,
+        now: now(),
+      };
+    });
+  }
+  async function changeRole(
+    stored: RuntimeRecord,
+    role: RuntimeRecord["role"],
+    retirementEpoch: number,
+  ) {
+    const next: RuntimeRecord = {
+      ...stored,
+      role,
+      workCounts: { ...counts },
+      heartbeatAt: now(),
+      readiness: { ...stored.readiness, dependenciesReady: false },
+    };
+    if (
+      (await repository.transitionRuntimeRole({
+        record: next,
+        expectedRole: stored.role,
+        expectedGeneration: stored.authorizedGeneration,
+        retirementEpoch,
+      })) !== "applied"
+    )
+      throw new Error("Runtime role changed");
+    row = next;
+    return next;
+  }
+  function prepareRuntimeRetirement({
+    retirementEpoch,
+  }: {
+    retirementEpoch: number;
+  }): Promise<RetirementResult> {
+    // Close locally before the first await, including a heartbeat already pending.
+    ineligible = true;
+    allowed = false;
+    return serialize(async () => {
+      try {
+        let stored = await readRuntime();
+        if (!stored) throw new Error("Runtime missing");
+        if (stored.role !== "draining" && stored.role !== "retired")
+          stored = await changeRole(stored, "draining", retirementEpoch);
+        if (Object.values(counts).some((count) => count > 0))
+          return {
+            kind: "busy",
+            counts: { ...counts },
+            reason: "work_remaining",
+          };
+        if (releaseUncertain)
+          return {
+            kind: "uncertain",
+            counts: { ...counts },
+            reason: "dependency_unavailable",
+          };
+        if (stored.role !== "retired")
+          await changeRole(stored, "retired", retirementEpoch);
+        try {
+          await protection.release();
+        } catch {
+          releaseUncertain = true;
+          throw new Error("Protection release uncertain");
+        }
+        return { kind: "retired", counts: { ...counts } };
+      } catch {
+        return {
+          kind: "uncertain",
+          counts: { ...counts },
+          reason: "dependency_unavailable",
+        };
+      }
+    });
+  }
+  function reauthorizeRuntime({
+    retirementEpoch,
+  }: {
+    retirementEpoch: number;
+  }): Promise<void> {
+    return serialize(async () => {
+      if (releaseUncertain)
+        throw new Error("Protection release has not been confirmed");
+      const stored = await readRuntime();
+      if (
+        stored?.role !== "retired" ||
+        Object.values(counts).some((count) => count > 0)
+      )
+        throw new Error("Runtime is not retired");
+      await protection.start();
+      await changeRole(stored, "candidate", retirementEpoch);
+      unsafe = false;
+      ineligible = false;
+      await refresh();
+    });
+  }
+  return {
+    start,
+    refreshRuntimeReadiness,
+    beginRuntimeWork,
+    getRuntimeAdmissionContext,
+    prepareRuntimeRetirement,
+    reauthorizeRuntime,
+    registerSafetyHandler(handler: (() => Promise<void>) | undefined) {
+      if (Object.values(counts).some((count) => count > 0))
+        throw new Error("Cannot replace safety handler while work is owned");
+      safetyHandler = handler;
+      if (!handler) allowed = false;
+    },
+    getWorkCounts: () => ({ ...counts }),
+    isAcceptingWork: () =>
+      allowed &&
+      !ineligible &&
+      !unsafe &&
+      protection.isSafe() &&
+      Boolean(row && row.readiness.expiresAt > now()),
+    getReadiness: () => (row ? structuredClone(row.readiness) : undefined),
+    getRole: () => row?.role,
+    whenServing(listener: () => void) {
+      if (allowed) listener();
+      else servingListeners.add(listener);
+    },
+    confirmRuntimeProtection: () =>
+      serialize(async () => {
+        if (ineligible || releaseUncertain)
+          throw new Error("Runtime is ineligible");
+        return protection.confirm();
+      }),
+    closeAdmission() {
+      allowed = false;
+      ineligible = true;
+    },
+    stop() {
+      clearInterval(heartbeat);
+      protection.stop();
+      allowed = false;
+    },
+  };
+}
+
+let runtime: RuntimeLifecycle | undefined;
+const pendingServingListeners: Array<() => void> = [];
+export function installRuntimeLifecycle(value: RuntimeLifecycle) {
+  if (runtime) throw new Error("Runtime lifecycle already installed");
+  runtime = value;
+  for (const listener of pendingServingListeners.splice(0))
+    value.whenServing(listener);
+}
+export function getRuntimeLifecycle(): RuntimeLifecycle {
+  if (!runtime) throw new Error("Runtime lifecycle has not started");
+  return runtime;
+}
+export const beginRuntimeWork = (kind: RuntimeWorkKind) =>
+  getRuntimeLifecycle().beginRuntimeWork(kind);
+export const getRuntimeAdmissionContext = () =>
+  getRuntimeLifecycle().getRuntimeAdmissionContext();
+export const refreshRuntimeReadiness = () =>
+  getRuntimeLifecycle().refreshRuntimeReadiness();
+export const prepareRuntimeRetirement = (input: { retirementEpoch: number }) =>
+  getRuntimeLifecycle().prepareRuntimeRetirement(input);
+export const reauthorizeRuntime = (input: { retirementEpoch: number }) =>
+  getRuntimeLifecycle().reauthorizeRuntime(input);
+export const registerRuntimeSafetyHandler = (handler: () => Promise<void>) =>
+  getRuntimeLifecycle().registerSafetyHandler(handler);
+export const closeRuntimeAdmission = () => runtime?.closeAdmission();
+export const getRuntimeReadiness = () => runtime?.getReadiness();
+export const confirmRuntimeProtection = () =>
+  getRuntimeLifecycle().confirmRuntimeProtection();
+export const whenRuntimeServing = (listener: () => void) =>
+  runtime
+    ? runtime.whenServing(listener)
+    : pendingServingListeners.push(listener);
+export const isRuntimeWarm = () =>
+  !runtime ||
+  runtime.getRole() === "candidate" ||
+  runtime.getRole() === "retired";
+export async function startRuntimeLifecycle(
+  identity: RuntimeIdentity,
+): Promise<void> {
+  const current = getRuntimeLifecycle();
+  await current.start();
+  const readiness = current.getReadiness();
+  if (!readiness || !sameRuntimeIdentity(readiness.identity, identity)) {
+    current.stop();
+    throw new Error("Runtime startup identity mismatch");
+  }
+}

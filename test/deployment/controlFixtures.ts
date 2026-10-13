@@ -8,6 +8,7 @@ import type {
 
 export const context: AdmissionContext = {
   instanceId: "old",
+  identity: runtime("old").identity,
   authorizedGeneration: 7,
   observedEpoch: 3,
   protocolVersion: 1,
@@ -22,7 +23,7 @@ export const control: ControlRecord = {
   coordinatorEpoch: 3,
   coordinatorExpiresAt: 200,
   servingGeneration: 7,
-  servingInstanceId: "old",
+  servingMembers: { old: runtime("old").identity },
 };
 export function runtime(
   instanceId: string,
@@ -46,6 +47,7 @@ export function runtime(
     heartbeatAt: 100,
     readiness: {
       identity,
+      runtimeMode: "all",
       observedEpoch: 3,
       observedGeneration: 7,
       gatewayReady: true,
@@ -58,6 +60,8 @@ export function runtime(
   };
 }
 export const promotion: PromotionInput = {
+  candidateRuntimeMode: "all",
+  expectedServingMembers: Object.values(control.servingMembers),
   coordinatorToken: "coordinator",
   coordinatorEpoch: 3,
   expectedServingGeneration: 7,

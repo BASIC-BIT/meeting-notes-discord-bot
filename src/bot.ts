@@ -128,6 +128,11 @@ import { removeGuildInstaller } from "./services/guildInstallerService";
 import { captureEvent, shutdownAnalytics } from "./services/analyticsService";
 import { setDiscordClient } from "./services/discordClientAccessor";
 import { startMeetingControlCommandWorker } from "./services/meetingControlWorkerService";
+import {
+  closeRuntimeAdmission,
+  isRuntimeWarm,
+  whenRuntimeServing,
+} from "./services/runtimeLifecycleService";
 import { autoRecordJoinSuppressionService } from "./services/autoRecordJoinSuppressionService";
 import {
   MEETING_END_REASONS,
@@ -480,7 +485,7 @@ export async function setupBot() {
   client.once(Events.ClientReady, () => {
     console.log(`Logged in as ${client.user?.tag}!`);
     setDiscordClient(client);
-    startMeetingControlCommandWorker(client);
+    whenRuntimeServing(() => startMeetingControlCommandWorker(client));
 
     client.on("voiceStateUpdate", handleVoiceStateUpdate);
   });
@@ -593,6 +598,7 @@ export async function setupBot() {
   });
 
   client.on("interactionCreate", async (interaction) => {
+    if (config.runtime.ecs && isRuntimeWarm()) return;
     if (isShuttingDown) {
       // Assume another instance has already been spun up to handle traffic, and don't handle it
       console.log(
@@ -638,14 +644,17 @@ export async function setupBot() {
 
   setupApplicationCommands();
 
-  client.login(TOKEN);
+  await client.login(TOKEN);
 }
+
+export const isBotGatewayReady = () => client.isReady();
 
 async function handleVoiceStateUpdate(
   oldState: VoiceState,
   newState: VoiceState,
 ) {
   recordSuppressionVoiceState(oldState, newState);
+  if (config.runtime.ecs && isRuntimeWarm()) return;
   const botId = client.user?.id;
   if (
     botId &&
@@ -1455,6 +1464,7 @@ async function setupApplicationCommands() {
 
 // Signal listener to start graceful shutdown
 process.on("SIGTERM", async () => {
+  closeRuntimeAdmission();
   console.log("Received SIGTERM, initiating graceful shutdown");
 
   // Stop accepting new meetings/requests

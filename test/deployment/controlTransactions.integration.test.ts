@@ -79,6 +79,200 @@ beforeEach(async () => {
   }
 });
 
+test("coordinator warmup preserves old admission until generation promotion", async () => {
+  await client.send(
+    new PutItemCommand({
+      TableName: tables.deploymentControl,
+      Item: marshall({ ...control, coordinatorEpoch: 4 }),
+    }),
+  );
+  expect((await oldStart("epoch-refresh")).kind).toBe("admitted");
+  expect(await repository.promote({ ...promotion, coordinatorEpoch: 4 })).toBe(
+    "stale",
+  );
+  const candidate = runtime("new", "candidate");
+  await repository.writeRuntime({
+    ...candidate,
+    readiness: { ...candidate.readiness, observedEpoch: 4 },
+  });
+  expect(await repository.promote({ ...promotion, coordinatorEpoch: 4 })).toBe(
+    "applied",
+  );
+  expect((await oldStart("epoch-promoted")).kind).toBe("blocked");
+});
+
+test("runtime retirement CAS rejects serving and stale generation writes", async () => {
+  const old = runtime("old");
+  const draining = { ...old, role: "draining" as const };
+  const input = {
+    record: draining,
+    expectedRole: old.role,
+    expectedGeneration: 7,
+    retirementEpoch: 3,
+  };
+  expect(await repository.transitionRuntimeRole(input)).toBe("stale");
+  expect(await repository.promote(promotion)).toBe("applied");
+  expect(
+    await repository.transitionRuntimeRole({ ...input, retirementEpoch: 2 }),
+  ).toBe("stale");
+  expect(await repository.transitionRuntimeRole(input)).toBe("applied");
+  expect(await repository.writeRuntime(old)).toBe("stale");
+  const retired = { ...draining, role: "retired" as const };
+  expect(
+    await repository.transitionRuntimeRole({
+      record: retired,
+      expectedRole: "draining",
+      expectedGeneration: 7,
+      retirementEpoch: 3,
+    }),
+  ).toBe("applied");
+  expect(await repository.transitionRuntimeRole(input)).toBe("stale");
+  expect(
+    await repository.transitionRuntimeRole({
+      record: { ...retired, role: "candidate" },
+      expectedRole: "retired",
+      expectedGeneration: 7,
+      retirementEpoch: 3,
+    }),
+  ).toBe("applied");
+});
+
+test("targeted bot promotion retains an explicitly selected API runtime", async () => {
+  const api = runtime("api");
+  api.readiness.runtimeMode = "api";
+  api.readiness.gatewayReady = false;
+  const expectedServingMembers = [runtime("old").identity, api.identity];
+  await client.send(
+    new PutItemCommand({
+      TableName: tables.deploymentControl,
+      Item: marshall({
+        ...control,
+        servingMembers: Object.fromEntries(
+          expectedServingMembers.map((identity) => [
+            identity.instanceId,
+            identity,
+          ]),
+        ),
+      }),
+    }),
+  );
+  await repository.writeRuntime(api);
+  expect(
+    await repository.promote({
+      ...promotion,
+      expectedServingMembers: [...expectedServingMembers].reverse(),
+      retainedMembers: [api.identity],
+    }),
+  ).toBe("applied");
+  expect(
+    (
+      await repository.checkAdmission({
+        ...context,
+        identity: api.identity,
+        instanceId: "api",
+        authorizedGeneration: 8,
+      })
+    ).kind,
+  ).toBe("admitted");
+  expect(
+    (
+      await repository.checkAdmission({
+        ...context,
+        identity: api.identity,
+        instanceId: "api",
+      })
+    ).kind,
+  ).toBe("blocked");
+  expect((await oldStart("targeted-old")).kind).toBe("blocked");
+});
+
+test.each(["draining", "protection", "readiness", "image", "epoch"] as const)(
+  "retained %s proof blocks whole promotion",
+  async (failure) => {
+    const api = runtime("api");
+    const expectedServingMembers = [runtime("old").identity, api.identity];
+    await client.send(
+      new PutItemCommand({
+        TableName: tables.deploymentControl,
+        Item: marshall({
+          ...control,
+          servingMembers: Object.fromEntries(
+            expectedServingMembers.map((identity) => [
+              identity.instanceId,
+              identity,
+            ]),
+          ),
+        }),
+      }),
+    );
+    if (failure === "draining") api.role = "draining";
+    if (failure === "protection") api.protection.expiresAt = 100;
+    if (failure === "readiness") api.readiness.expiresAt = 100;
+    if (failure === "image" && api.identity.kind === "ecs")
+      api.identity = { ...api.identity, imageDigest: "sha256:other" };
+    if (failure === "image") {
+      api.readiness.identity = api.identity;
+      api.protection.identity = api.identity;
+    }
+    if (failure === "epoch") api.readiness.observedEpoch = 2;
+    await client.send(
+      new PutItemCommand({
+        TableName: tables.deploymentControl,
+        Item: marshall(api),
+      }),
+    );
+    expect(
+      await repository.promote({
+        ...promotion,
+        expectedServingMembers,
+        retainedMembers: [expectedServingMembers[1]],
+      }),
+    ).toBe("stale");
+    expect(await repository.getRecord("ENV", "CONTROL")).toMatchObject({
+      servingGeneration: 7,
+    });
+  },
+);
+
+test("exact membership CAS and identity admission reject mismatches", async () => {
+  expect(
+    await repository.promote({ ...promotion, expectedServingMembers: [] }),
+  ).toBe("stale");
+  const impostor = { ...context.identity, candidateId: "other" };
+  expect(
+    (await repository.checkAdmission({ ...context, identity: impostor })).kind,
+  ).toBe("blocked");
+  expect(
+    await repository.promote({
+      ...promotion,
+      candidate: { ...promotion.candidate, imageDigest: "sha256:other" },
+    }),
+  ).toBe("stale");
+});
+
+test("API candidate cannot stand in for a bot replacement", async () => {
+  const candidate = runtime("new", "candidate");
+  await client.send(
+    new PutItemCommand({
+      TableName: tables.deploymentControl,
+      Item: marshall({
+        ...candidate,
+        readiness: {
+          ...candidate.readiness,
+          runtimeMode: "api",
+          gatewayReady: false,
+        },
+      }),
+    }),
+  );
+  expect(
+    await repository.promote({ ...promotion, candidateRuntimeMode: "all" }),
+  ).toBe("stale");
+  expect(
+    await repository.promote({ ...promotion, candidateRuntimeMode: "api" }),
+  ).toBe("applied");
+});
+
 async function oldStart(guild: string) {
   try {
     await client.send(
@@ -131,6 +325,7 @@ test("promotionAndOldAdmissionHaveOnlyTwoLegalOrders", async () => {
       await repository.checkAdmission({
         ...context,
         instanceId: "new",
+        identity: runtime("new").identity,
         authorizedGeneration: 8,
       })
     ).kind,
@@ -288,12 +483,6 @@ test.each([
     },
   },
   {
-    name: "wrong epoch",
-    change: (row: ReturnType<typeof runtime>) => {
-      row.readiness.observedEpoch = 2;
-    },
-  },
-  {
     name: "wrong generation",
     change: (row: ReturnType<typeof runtime>) => {
       row.readiness.observedGeneration = 6;
@@ -335,6 +524,7 @@ test("a stale heartbeat cannot undo promotion", async () => {
       await repository.checkAdmission({
         ...context,
         instanceId: "new",
+        identity: runtime("new").identity,
         authorizedGeneration: 8,
       })
     ).kind,
