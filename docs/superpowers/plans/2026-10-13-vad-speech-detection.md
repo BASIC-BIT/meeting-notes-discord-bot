@@ -151,6 +151,8 @@ type SpeechPolicy = {
   maxGain: 100;
   cancellationRmsRatio: 0.1;
   normalizationVersion: "peak-v1";
+  impulsePeakRatio: 10;
+  negativeGuardVersion: "brief-peak-v1";
   modelSha256: string;
   engineVersion: string;
   policyFingerprint: string;
@@ -164,6 +166,8 @@ interface SileroSession {
 ```
 
 Task 4 defines `SpeechDetectionMode` in the shared, runtime-free config module. Task 5 extends `SnippetTranscriptionResult`: successful results carry `admission: SpeechAdmission`; `skipped` results carry `reason: "non_speech"` and `coverage: SpeechCoverage`; failed results retain existing conversion/transcription reasons. Update existing typed mocks deliberately. Task 6 adds `AudioSnippet.lastFastSpeechCoverage?: SpeechCoverage` and `AudioFileData.finalSpeechRejection?: SpeechCoverage`. These are ephemeral state, not new history fields.
+
+Implementation discovery, October 13, 2026: Task 2 adds the fingerprinted negative-only `brief-peak-v1` safeguard after synthetic impulse tests showed speech attenuation under whole-clip peak normalization. A complete negative scan becomes uncertain when 1 through `frameSamples` samples exceed whole-clip peak / `impulsePeakRatio`, and at least `minSpeechFrames` consecutive nonzero frames remain outside all frames containing those high samples. This covers the tested single, frame-boundary and separated impulses without changing audio, positive thresholds or normalization. The occupancy bound is aggregate high samples, not transient duration. Larger occupancy, peaks in every residual frame and insufficient residual frames remain limitations; impulse plus quiet noise may require ASR. All nine known controls retain their decisions. Default remains off, and reviewed real-speech acceptance is still required before activation.
 
 Task 3 defines the following transport contracts in `speechDetectionTypes.ts`; the production adapter and controlled test transport implement the same boundary:
 
