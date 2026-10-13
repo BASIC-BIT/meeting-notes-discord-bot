@@ -1,4 +1,9 @@
 import { notifyRecordingLimit } from "../../src/services/recordingLimitService";
+// This suite replaces the trace wrapper, so it also replaces span updates at that boundary.
+jest.mock("@langfuse/tracing", () => ({
+  ...jest.requireActual("@langfuse/tracing"),
+  updateActiveObservation: jest.fn(),
+}));
 import { settleOwnedVoiceSession } from "../../src/services/guildVoiceOperationService";
 jest.mock("../../src/services/guildVoiceOperationService", () => ({
   settleOwnedVoiceSession: jest.fn(async () => "settled"),
@@ -218,8 +223,10 @@ const successfulArtifactUpload = {
 };
 
 describe("handleEndMeetingOther", () => {
+  let warning: jest.SpiedFunction<typeof console.warn>;
   beforeEach(() => {
     jest.clearAllMocks();
+    warning = jest.spyOn(console, "warn");
     jest.mocked(ensureMeetingNotes).mockReset();
     jest.mocked(updateMeetingSummaryMessage).mockReset();
     mockedCleanupSpeakerTracks.mockResolvedValue(undefined);
@@ -241,6 +248,17 @@ describe("handleEndMeetingOther", () => {
       repetitionFilteredSegments: 0,
       fallbackApplied: false,
     });
+  });
+
+  afterEach(() => {
+    expect(
+      warning.mock.calls.some(
+        ([message]) =>
+          String(message).includes("Failed to capture meeting_completed") ||
+          String(message).includes("No active OTEL span"),
+      ),
+    ).toBe(false);
+    warning.mockRestore();
   });
 
   it.each([
@@ -285,6 +303,7 @@ describe("handleEndMeetingOther", () => {
       };
 
       const meeting = {
+        attendance: new Set<string>(),
         reservation: {
           guildId: "guild-1",
           meetingId: "meeting-1",
@@ -371,6 +390,12 @@ describe("handleEndMeetingOther", () => {
       expect(meeting.setFinished).toHaveBeenCalled();
       expect(deleteMeeting).toHaveBeenCalledWith(meeting.guildId);
       expect(mockedSaveMeetingHistoryToDatabase).toHaveBeenCalledWith(meeting);
+      expect(captureEvent).toHaveBeenCalledWith(
+        "meeting_completed",
+        expect.objectContaining({
+          properties: expect.objectContaining({ attendee_count: 0 }),
+        }),
+      );
       expect(mockedCleanupMeetingTempDir).toHaveBeenCalledWith(meeting);
       expect(mockedReleaseMeetingLeaseForMeeting).toHaveBeenCalledWith(meeting);
       expect(events.indexOf("flush")).toBeGreaterThanOrEqual(0);
@@ -413,6 +438,7 @@ describe("handleEndMeetingOther", () => {
     ]);
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
       meetingId: "meeting-1",
@@ -489,6 +515,7 @@ describe("handleEndMeetingOther", () => {
     mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
       meetingId: "meeting-1",
@@ -613,6 +640,7 @@ describe("handleEndMeetingOther", () => {
       });
 
       const meeting = {
+        attendance: new Set<string>(),
         guildId: "guild-1",
         channelId: "text-1",
         meetingId: "meeting-1",
@@ -714,6 +742,7 @@ describe("handleEndMeetingOther", () => {
     mockedGetGuildLimits.mockResolvedValue({ limits: {} } as never);
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
       meetingId: "meeting-1",
@@ -765,10 +794,13 @@ describe("handleEndMeetingOther", () => {
     );
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       meetingId: "meeting-1",
       setFinished: jest.fn(),
       finished: false,
+      creator: { id: "user-1" },
+      startTime: new Date("2025-01-01T00:00:00Z"),
     } as unknown as MeetingData;
 
     await expect(handleEndMeetingOther({} as Client, meeting)).resolves.toBe(
@@ -795,6 +827,7 @@ describe("handleEndMeetingOther", () => {
     mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
       meetingId: "meeting-1",
@@ -872,6 +905,7 @@ describe("handleEndMeetingOther", () => {
     mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
       meetingId: "meeting-1",
@@ -933,6 +967,7 @@ describe("handleEndMeetingOther", () => {
 
     const send = jest.fn().mockResolvedValue(undefined);
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
       meetingId: "meeting-1",
@@ -985,11 +1020,14 @@ describe("handleEndMeetingOther", () => {
     mockedHasMeeting.mockReturnValue(true);
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       meetingId: "meeting-1",
       finishing: true,
       finished: false,
       setFinished: jest.fn(),
+      creator: { id: "user-1" },
+      startTime: new Date("2025-01-01T00:00:00Z"),
     } as unknown as MeetingData;
 
     await expect(handleEndMeetingOther({} as Client, meeting)).resolves.toBe(
@@ -1059,6 +1097,7 @@ describe("handleEndMeetingButton", () => {
     );
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
       meetingId: "meeting-1",
@@ -1134,6 +1173,7 @@ describe("handleEndMeetingButton", () => {
     ]);
 
     const meeting = {
+      attendance: new Set<string>(),
       guildId: "guild-1",
       channelId: "text-1",
       meetingId: "meeting-1",

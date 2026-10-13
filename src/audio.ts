@@ -841,6 +841,7 @@ export async function subscribeToUserVoice(
   };
 
   subscriptions.set(userId, subscriptionState);
+  meeting.captureStartedAt ??= new Date();
 
   // Prevent decoder errors (often caused by malformed or partial packets) from crashing the process.
   opusDecoder.on("error", (err: Error) => {
@@ -1087,6 +1088,9 @@ export async function compileTranscriptions(
   }
 }
 
+type OutputCompletion = { kind: "closed" } | { kind: "failed"; error: Error };
+const outputCompletions = new WeakMap<MeetingData, Promise<OutputCompletion>>();
+
 export function openOutputFile(meeting: MeetingData) {
   const tempDir = ensureMeetingTempDirSync(meeting);
   const outputFileName = path.join(tempDir, "recording.mp3");
@@ -1094,39 +1098,70 @@ export function openOutputFile(meeting: MeetingData) {
 
   meeting.audioData.audioPassThrough = new PassThrough();
 
-  meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
-    .inputOptions([
-      "-f s16le", // PCM format
-      `-ar ${RECORD_SAMPLE_RATE}`, // Sample rate
-      `-ac ${CHANNELS}`, // Number of audio channels
-    ])
-    .audioCodec("libmp3lame") // Use LAME codec for MP3
-    .outputOptions([
-      `-b:a 128k`, // Bitrate for lossy compression
-      `-ac ${CHANNELS}`, // Ensure stereo output
-      `-ar ${RECORD_SAMPLE_RATE}`, // Ensure output sample rate
-    ])
-    .toFormat("mp3") // Output format as MP3
-    .on("error", (err) => {
-      console.error("ffmpeg error:", err);
-    })
-    .save(outputFileName);
+  let complete: (result: OutputCompletion) => void = () => {};
+  outputCompletions.set(
+    meeting,
+    new Promise((resolve) => {
+      complete = resolve;
+    }),
+  );
+  try {
+    meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
+      .inputOptions([
+        "-f s16le", // PCM format
+        `-ar ${RECORD_SAMPLE_RATE}`, // Sample rate
+        `-ac ${CHANNELS}`, // Number of audio channels
+      ])
+      .audioCodec("libmp3lame") // Use LAME codec for MP3
+      .outputOptions([
+        `-b:a 128k`, // Bitrate for lossy compression
+        `-ac ${CHANNELS}`, // Ensure stereo output
+        `-ar ${RECORD_SAMPLE_RATE}`, // Ensure output sample rate
+      ])
+      .toFormat("mp3") // Output format as MP3
+      .on("error", (err) => {
+        complete({ kind: "failed", error: err });
+        console.error("ffmpeg error:", err);
+      })
+      .on("end", () => complete({ kind: "closed" }));
+    meeting.audioData.ffmpegProcess.save(outputFileName);
+  } catch (error) {
+    complete({ kind: "failed", error: error as Error });
+    throw error;
+  }
 }
 
-export function closeOutputFile(meeting: MeetingData): Promise<void> {
-  return new Promise((resolve) => {
-    if (meeting.audioData.audioPassThrough) {
-      meeting.audioData.audioPassThrough.end(); // End the PassThrough stream
-    }
-    if (meeting.audioData.ffmpegProcess) {
-      meeting.audioData.ffmpegProcess.on("end", () => {
-        console.log(
-          `Final MP3 file created as ${meeting.audioData.outputFileName}`,
-        );
-        resolve();
-      });
-    }
-  });
+function finishOutput(meeting: MeetingData): Promise<OutputCompletion> {
+  // Terminal listeners were installed before save, including synchronous setup errors.
+  const completion = outputCompletions.get(meeting);
+  meeting.audioData.audioPassThrough?.end();
+  if (completion) return completion;
+  if (!meeting.audioData.ffmpegProcess)
+    return Promise.resolve({ kind: "closed" });
+  // An untracked encoder is not evidence that cleanup finished.
+  return new Promise(() => {});
+}
+
+export async function closeOutputFile(meeting: MeetingData): Promise<void> {
+  const result = await finishOutput(meeting);
+  if (result.kind === "failed") throw result.error;
+}
+
+/** Partial startup cleanup is bounded; false retains owned work for later reconciliation. */
+export async function closeFailedInitializationOutput(
+  meeting: MeetingData,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      finishOutput(meeting).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), 5_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function waitForSpeakerTrackWrites(meeting: MeetingData) {

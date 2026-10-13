@@ -86,6 +86,21 @@ describe("voice subscriptions", () => {
   afterEach(() => {
     jest.useRealTimers();
   });
+  test("capture start is stamped at actual subscription and never replaces reservation time", async () => {
+    const { meeting } = createMeeting([]);
+    meeting.startTime = new Date(100);
+    meeting.finishing = true;
+    await subscribeToUserVoice(meeting, "user-1");
+    expect(meeting.captureStartedAt).toBeUndefined();
+    meeting.finishing = false;
+    await subscribeToUserVoice(meeting, "user-1");
+    const captured = meeting.captureStartedAt;
+    expect(captured).toEqual(new Date());
+    await jest.advanceTimersByTimeAsync(1_000);
+    await subscribeToUserVoice(meeting, "user-1");
+    expect(meeting.captureStartedAt).toBe(captured);
+    expect(meeting.startTime.getTime()).toBe(100);
+  });
 
   test("reports the failing queued input, not the most recently received packet", async () => {
     const streams: PassThrough[] = [];

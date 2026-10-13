@@ -57,6 +57,8 @@ type OwnedReservation = {
   timer?: ReturnType<typeof setInterval>;
   meeting?: MeetingData;
   renewing: boolean;
+  initializationUnresolved?: boolean;
+  initializationCleanup?: Promise<boolean>;
 };
 const reservations = new Map<string, OwnedReservation>();
 const pendingReservations = new Map<string, Promise<SessionAdmissionResult>>();
@@ -313,7 +315,7 @@ async function renewReservation(owned: OwnedReservation): Promise<void> {
       leaseExpiresAt,
       updatedAt,
       expiresAt,
-      meeting
+      meeting && !owned.initializationUnresolved
         ? buildMeetingLeaseSnapshot(meeting)
         : { status: MEETING_STATUS.STARTING },
       reservation,
@@ -361,6 +363,7 @@ export async function releaseSessionReservation(
 ): Promise<boolean> {
   const key = reservationKey(reservation.guildId, reservation.meetingId);
   const owned = reservations.get(key);
+  if (owned?.initializationUnresolved) return false;
   if (owned?.timer) clearInterval(owned.timer);
   const outcome = await settleOwnedVoiceSession(reservation);
   if (outcome !== "settled") {
@@ -381,33 +384,98 @@ export async function releaseSessionReservation(
 }
 export async function unwindSessionInitialization(
   reservation: SessionReservation,
+  cleanup?: Promise<boolean>,
 ): Promise<void> {
+  const owned = reservations.get(
+    reservationKey(reservation.guildId, reservation.meetingId),
+  );
+  if (!owned || owned.reservation !== reservation) return;
+  owned.initializationCleanup =
+    cleanup ?? owned.initializationCleanup ?? Promise.resolve(true);
+  owned.initializationUnresolved = true;
+  reservation.workHandle.transition("finalization");
+  // Close external voice independently; an encoder or storage wait must not hold it open.
+  const voice = settleOwnedVoiceSession(reservation).catch(
+    () => "uncertain" as const,
+  );
+  const [historySettled, cleanupSettled] = await Promise.all([
+    reconcileFailedInitialization(reservation),
+    owned.initializationCleanup.catch(() => false),
+  ]);
+  await voice;
+  if (!historySettled || !cleanupSettled) return;
+  owned.initializationUnresolved = false;
+  await releaseSessionReservation(reservation);
+}
+
+async function failInitializationHistory(
+  reservation: Extract<SessionReservation, { sessionMode: "meeting" }>,
+  expectedStatus: "starting" | "in_progress",
+): Promise<boolean> {
   try {
-    if (reservation.sessionMode === "meeting")
-      await transitionMeetingHistory({
+    return (
+      (await transitionMeetingHistory({
         key: reservation.historyKey,
         expectedMeetingId: reservation.meetingId,
         expectedOwnerInstanceId: reservation.ownerInstanceId,
         expectedExecutionVersion: reservation.executionVersion,
-        expectedStatus: MEETING_STATUS.STARTING,
+        expectedStatus,
         patch: {
           status: MEETING_STATUS.FAILED,
           updatedAt: new Date().toISOString(),
         },
-      });
-  } finally {
-    await releaseSessionReservation(reservation);
+      })) === "applied"
+    );
+  } catch {
+    return false;
   }
+}
+
+async function reconcileFailedInitialization(
+  reservation: SessionReservation,
+): Promise<boolean> {
+  if (reservation.sessionMode === "tts_only") return true;
+  if (await failInitializationHistory(reservation, "starting")) return true;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const row = await getDeploymentControlRepository().getMeetingHistory(
+        reservation.historyKey,
+      );
+      if (
+        !row ||
+        row.guildId !== reservation.guildId ||
+        row.meetingId !== reservation.meetingId ||
+        row.ownerInstanceId !== reservation.ownerInstanceId ||
+        row.executionVersion !== reservation.executionVersion
+      )
+        return false;
+      if (row.status === MEETING_STATUS.FAILED) return true;
+      if (
+        attempt > 0 ||
+        (row.status !== MEETING_STATUS.STARTING &&
+          row.status !== MEETING_STATUS.IN_PROGRESS)
+      )
+        return false;
+      if (await failInitializationHistory(reservation, row.status)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 /** H4/R3 compose these owned sessions with processing and delivery before installing the runtime safety handler. */
 export function getOwnedSessionReservations(): ReadonlyArray<{
   reservation: SessionReservation;
   meeting?: MeetingData;
+  initializationUnresolved?: boolean;
 }> {
-  return [...reservations.values()].map(({ reservation, meeting }) => ({
-    reservation,
-    meeting,
-  }));
+  return [...reservations.values()].map(
+    ({ reservation, meeting, initializationUnresolved }) => ({
+      reservation,
+      meeting,
+      initializationUnresolved,
+    }),
+  );
 }
 export function getUncertainSessionAdmissions() {
   return [...uncertainAdmissions.values()];

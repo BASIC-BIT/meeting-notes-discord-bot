@@ -58,7 +58,7 @@ jest.mock("@discordjs/voice", () => ({
 
 jest.mock("../audio", () => ({
   openOutputFile: jest.fn(),
-  closeOutputFile: jest.fn(),
+  closeFailedInitializationOutput: jest.fn(async () => true),
   subscribeToUserVoice: jest.fn(),
   userStartTalking: jest.fn(),
   userStopTalking: jest.fn(),
@@ -122,6 +122,7 @@ jest.mock("../utils/participants", () => ({
 import { createAudioPlayer, joinVoiceChannel } from "@discordjs/voice";
 import {
   openOutputFile,
+  closeFailedInitializationOutput,
   subscribeToUserVoice,
   userStartTalking,
   userStopTalking,
@@ -231,7 +232,30 @@ describe("initializeMeeting", () => {
     ).rejects.toThrow("fixture initialization failed");
     expect(unwindSessionInitialization).toHaveBeenCalledWith(
       expect.objectContaining({ sessionMode: "meeting", executionVersion: 1 }),
+      expect.any(Promise),
     );
+  });
+  it("output setup failure starts owned unwind without waiting for encoder cleanup", async () => {
+    jest.mocked(openOutputFile).mockImplementationOnce(() => {
+      throw new Error("fixture output setup failed");
+    });
+    jest
+      .mocked(closeFailedInitializationOutput)
+      .mockReturnValueOnce(new Promise(() => {}));
+    await expect(
+      initializeMeeting({
+        ...buildMeetingOptions(),
+        transcribeMeeting: true,
+        generateNotes: true,
+      }),
+    ).rejects.toThrow("fixture output setup failed");
+    expect(unwindSessionInitialization).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionMode: "meeting" }),
+      expect.any(Promise),
+    );
+    const meeting = jest.mocked(openOutputFile).mock.calls[0][0];
+    expect(meeting.captureStartedAt).toBeUndefined();
+    expect(meeting.finished).toBe(true);
   });
   it("stable concurrent initialization retries share one reservation and one join", async () => {
     const options = {

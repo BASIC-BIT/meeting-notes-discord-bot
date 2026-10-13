@@ -56,6 +56,8 @@ export interface MeetingData {
   channelId: string;
   audioData: AudioData;
   startTime: Date;
+  /** Actual receive setup time, separate from the stable reservation/history timestamp. */
+  captureStartedAt?: Date;
   endTime?: Date;
   timeoutTimer?: ReturnType<typeof setTimeout>;
   creator: User;

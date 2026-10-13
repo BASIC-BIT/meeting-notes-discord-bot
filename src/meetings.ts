@@ -21,7 +21,7 @@ import { saveMeetingStartToDatabase } from "./commands/saveMeetingHistory";
 import { AudioSnippet } from "./types/audio";
 import {
   openOutputFile,
-  closeOutputFile,
+  closeFailedInitializationOutput,
   subscribeToUserVoice,
   userStartTalking,
   userStopTalking,
@@ -376,11 +376,8 @@ async function initializeNewMeeting(
     await saveMeetingStartToDatabase(meeting);
     return meeting;
   } catch (error) {
-    try {
-      await disposeFailedInitialization(initialization);
-    } finally {
-      await unwindSessionInitialization(admission.reservation);
-    }
+    const cleanup = disposeFailedInitialization(initialization);
+    await unwindSessionInitialization(admission.reservation, cleanup);
     throw error;
   }
 }
@@ -388,9 +385,9 @@ async function initializeNewMeeting(
 async function disposeFailedInitialization(initialization: {
   meeting?: MeetingData;
   cleanup: Array<() => void>;
-}): Promise<void> {
+}): Promise<boolean> {
   const meeting = initialization.meeting;
-  if (!meeting) return;
+  if (!meeting) return true;
   meeting.finishing = true;
   meeting.finished = true;
   const closeAudio = meeting.captureAudio || meeting.recordBotAudio;
@@ -401,7 +398,7 @@ async function disposeFailedInitialization(initialization: {
   if (meeting.timeoutTimer) clearTimeout(meeting.timeoutTimer);
   if (getMeeting(meeting.guildId) === meeting) deleteMeeting(meeting.guildId);
   meeting.setFinished();
-  if (closeAudio) await closeOutputFile(meeting);
+  return closeAudio ? closeFailedInitializationOutput(meeting) : true;
 }
 
 async function initializeReservedMeeting(

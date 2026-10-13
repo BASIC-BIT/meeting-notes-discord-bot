@@ -15,6 +15,9 @@ import {
   releaseMeetingLeaseForMeeting,
   startMeetingLeaseHeartbeat,
   tryAcquireMeetingLease,
+  unwindSessionInitialization,
+  getOwnedSessionReservations,
+  releaseSessionReservation,
 } from "../../src/services/activeMeetingLeaseService";
 import {
   getActiveMeetingLease,
@@ -22,8 +25,11 @@ import {
   releaseActiveMeetingLease,
   renewActiveMeetingLease,
   getDeploymentControlRepository,
+  transitionMeetingHistory,
 } from "../../src/db";
 import { MEETING_END_REASONS } from "../../src/types/meetingLifecycle";
+import { settleOwnedVoiceSession } from "../../src/services/guildVoiceOperationService";
+import { randomUUID } from "node:crypto";
 
 jest.mock("../../src/db", () => ({
   getActiveMeetingLease: jest.fn(),
@@ -81,6 +87,140 @@ describe("activeMeetingLeaseService", () => {
   afterEach(() => {
     jest.useRealTimers();
     jest.restoreAllMocks();
+  });
+
+  async function recordingReservation() {
+    const id = randomUUID();
+    const getMeetingHistory =
+      jest.fn<
+        ReturnType<typeof getDeploymentControlRepository>["getMeetingHistory"]
+      >();
+    jest.mocked(getDeploymentControlRepository).mockReturnValue({
+      reserveSession: jest.fn(async () => ({ kind: "admitted" as const })),
+      getMeetingHistory,
+    } as unknown as ReturnType<typeof getDeploymentControlRepository>);
+    mockedRenewActiveMeetingLease.mockResolvedValue(true);
+    mockedReleaseActiveMeetingLease.mockResolvedValue(true);
+    const admitted = await tryAcquireMeetingLease({
+      guildId: id,
+      meetingId: id,
+      voiceChannelId: "voice",
+      textChannelId: "text",
+      isAutoRecording: false,
+      sessionMode: "meeting",
+      reservedAt: Date.now(),
+      history: {
+        guildId: id,
+        meetingId: id,
+        channelId_timestamp: "voice#start",
+        channelId: "voice",
+        timestamp: "start",
+        participants: [],
+        duration: 0,
+        transcribeMeeting: true,
+        generateNotes: true,
+      },
+    });
+    if (admitted.kind !== "admitted")
+      throw new Error("fixture admission failed");
+    return { reservation: admitted.reservation, getMeetingHistory };
+  }
+
+  test("rejected history unwind retains counted ownership but still settles voice", async () => {
+    const { reservation, getMeetingHistory } = await recordingReservation();
+    jest
+      .mocked(transitionMeetingHistory)
+      .mockRejectedValue(new Error("fixture storage unavailable"));
+    getMeetingHistory.mockRejectedValue(new Error("fixture read unavailable"));
+    await unwindSessionInitialization(reservation);
+    expect(settleOwnedVoiceSession).toHaveBeenCalledWith(reservation);
+    expect(releaseActiveMeetingLease).not.toHaveBeenCalled();
+    expect(reservation.workHandle.settle).not.toHaveBeenCalled();
+    expect(
+      getOwnedSessionReservations().map((entry) => entry.reservation),
+    ).toContain(reservation);
+  });
+
+  test("applied initial progress with lost response reconciles exact in_progress before release", async () => {
+    const { reservation, getMeetingHistory } = await recordingReservation();
+    jest
+      .mocked(transitionMeetingHistory)
+      .mockResolvedValueOnce("stale")
+      .mockResolvedValueOnce("applied");
+    getMeetingHistory.mockResolvedValue({
+      guildId: reservation.guildId,
+      meetingId: reservation.meetingId,
+      ownerInstanceId: reservation.ownerInstanceId,
+      executionVersion: reservation.executionVersion,
+      status: "in_progress",
+    } as Awaited<
+      ReturnType<
+        ReturnType<typeof getDeploymentControlRepository>["getMeetingHistory"]
+      >
+    >);
+    await unwindSessionInitialization(reservation);
+    expect(transitionMeetingHistory).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        expectedStatus: "in_progress",
+        expectedOwnerInstanceId: reservation.ownerInstanceId,
+        expectedExecutionVersion: 1,
+        patch: expect.objectContaining({ status: "failed" }),
+      }),
+    );
+    expect(reservation.workHandle.settle).toHaveBeenCalledTimes(1);
+  });
+
+  test("stale history owned by a newer attempt cannot be changed or released", async () => {
+    const { reservation, getMeetingHistory } = await recordingReservation();
+    jest.mocked(transitionMeetingHistory).mockResolvedValue("stale");
+    getMeetingHistory.mockResolvedValue({
+      guildId: reservation.guildId,
+      meetingId: reservation.meetingId,
+      ownerInstanceId: "new-owner",
+      executionVersion: 2,
+      status: "in_progress",
+    } as Awaited<
+      ReturnType<
+        ReturnType<typeof getDeploymentControlRepository>["getMeetingHistory"]
+      >
+    >);
+    await unwindSessionInitialization(reservation);
+    expect(transitionMeetingHistory).toHaveBeenCalledTimes(1);
+    expect(releaseActiveMeetingLease).not.toHaveBeenCalled();
+    expect(reservation.workHandle.settle).not.toHaveBeenCalled();
+  });
+  test("unresolved encoder cleanup retains ownership after voice and history settle", async () => {
+    const { reservation } = await recordingReservation();
+    jest.mocked(transitionMeetingHistory).mockResolvedValue("applied");
+    await unwindSessionInitialization(reservation, Promise.resolve(false));
+    await unwindSessionInitialization(reservation);
+    expect(settleOwnedVoiceSession).toHaveBeenCalledWith(reservation);
+    expect(await releaseSessionReservation(reservation)).toBe(false);
+    expect(releaseActiveMeetingLease).not.toHaveBeenCalled();
+    expect(reservation.workHandle.settle).not.toHaveBeenCalled();
+    expect(getOwnedSessionReservations()).toContainEqual(
+      expect.objectContaining({ reservation, initializationUnresolved: true }),
+    );
+  });
+  test("lost failed-transition response is established by exact failed readback", async () => {
+    const { reservation, getMeetingHistory } = await recordingReservation();
+    jest
+      .mocked(transitionMeetingHistory)
+      .mockRejectedValueOnce(new Error("fixture response lost"));
+    getMeetingHistory.mockResolvedValue({
+      guildId: reservation.guildId,
+      meetingId: reservation.meetingId,
+      ownerInstanceId: reservation.ownerInstanceId,
+      executionVersion: 1,
+      status: "failed",
+    } as Awaited<
+      ReturnType<
+        ReturnType<typeof getDeploymentControlRepository>["getMeetingHistory"]
+      >
+    >);
+    await unwindSessionInitialization(reservation);
+    expect(transitionMeetingHistory).toHaveBeenCalledTimes(1);
+    expect(reservation.workHandle.settle).toHaveBeenCalledTimes(1);
   });
 
   test("reservationHeartbeatsBeforeInitialization and synchronous pending work", async () => {

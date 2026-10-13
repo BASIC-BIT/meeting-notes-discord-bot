@@ -159,6 +159,20 @@ test("reservation with no attempted external send can settle without a gateway e
   expect(f.sendPayload).not.toHaveBeenCalled();
 });
 
+test("caller abort after send drain wins before final leave continuation", async () => {
+  const f = fixture();
+  await f.joinOwnedVoiceSession(f.reservation, f.options);
+  await flush();
+  f.packet("channel", 1);
+  const caller = new AbortController();
+  const settlement = f.settleOwnedVoiceSession(f.reservation, {
+    signal: caller.signal,
+  });
+  queueMicrotask(() => caller.abort());
+  expect(await settlement).toBe("uncertain");
+  expect(f.sendPayload).toHaveBeenCalledTimes(1);
+});
+
 test("held send completes before the sole leave and only a later gateway event settles", async () => {
   let finish = () => {};
   const pending = new Promise<void>((resolve) => {

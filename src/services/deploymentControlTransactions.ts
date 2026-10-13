@@ -24,11 +24,11 @@ import {
   type SessionReservationInput,
 } from "../types/deploymentControl";
 
-export function buildSessionReservationTransaction(
-  input: SessionReservationInput,
-  tables: ControlTableNames,
-): TransactWriteItemsCommandInput {
-  const { context, lease, voice, history, suppression } = input;
+function validateReservationIdentity({
+  context,
+  lease,
+  voice,
+}: SessionReservationInput): void {
   voiceRecordSchema.parse(voice);
   if (
     lease.voiceOperationAttemptId !== voice.attemptId ||
@@ -37,7 +37,6 @@ export function buildSessionReservationTransaction(
   )
     throw new Error("Reservation attempt identity mismatch");
   if (
-    !tables.activeMeeting ||
     lease.guildId !== voice.guildId ||
     lease.meetingId !== voice.meetingId ||
     lease.ownerInstanceId !== context.instanceId ||
@@ -46,6 +45,11 @@ export function buildSessionReservationTransaction(
     lease.executionVersion !== 1
   )
     throw new Error("Invalid session reservation");
+}
+function validateReservationHistory({
+  lease,
+  history,
+}: SessionReservationInput): void {
   if (
     lease.sessionMode === "meeting"
       ? !history ||
@@ -56,6 +60,16 @@ export function buildSessionReservationTransaction(
       : Boolean(history)
   )
     throw new Error("Invalid reservation history");
+}
+export function buildSessionReservationTransaction(
+  input: SessionReservationInput,
+  tables: ControlTableNames,
+): TransactWriteItemsCommandInput {
+  const { context, lease, voice, history, suppression } = input;
+  validateReservationIdentity(input);
+  validateReservationHistory(input);
+  if (!tables.activeMeeting)
+    throw new Error("Active meeting table is required");
   const items: TransactWriteItem[] = [
     ...buildRuntimeAdmissionChecks(context, tables),
     {

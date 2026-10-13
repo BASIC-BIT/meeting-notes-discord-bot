@@ -309,7 +309,8 @@ export function createGuildVoiceOperationService(
           operation.connection?.destroy(false);
       } else {
         // No delayed continuation may issue this leave after the deadline.
-        if (Date.now() < deadline) closeOperations.get(operation)?.();
+        if (Date.now() < deadline && !options.signal?.aborted)
+          closeOperations.get(operation)?.();
         else {
           operation.ambiguous = true;
           if (
