@@ -86,10 +86,14 @@ export function getDeploymentControlRepository() {
       store.meetingHistoryByGuild,
     );
   }
-  return createDynamoDeploymentControlRepository(dynamoDbClient, {
-    deploymentControl: tableName("DeploymentControlTable"),
-    meetingHistory: tableName("MeetingHistoryTable"),
-  });
+  return createDynamoDeploymentControlRepository(
+    dynamoDbClient,
+    {
+      deploymentControl: tableName("DeploymentControlTable"),
+      meetingHistory: tableName("MeetingHistoryTable"),
+    },
+    { localBootstrap: config.database.useLocalDynamoDB && !config.runtime.ecs },
+  );
 }
 
 export const createInitialMeetingHistory = (history: MeetingHistory) =>

@@ -18,6 +18,7 @@ export const control: ControlRecord = {
   pk: "ENV",
   sk: "CONTROL",
   recordType: "control",
+  runtimeEnvironment: "ecs",
   protocolVersion: 1,
   coordinatorToken: "coordinator",
   coordinatorEpoch: 3,

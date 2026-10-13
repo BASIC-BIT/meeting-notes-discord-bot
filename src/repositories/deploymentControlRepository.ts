@@ -7,6 +7,8 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
+import { planLocalBootstrap } from "../services/runtimeLocalBootstrapPlan";
 import type { MeetingHistory } from "../types/db";
 import {
   buildHistoryTransition,
@@ -14,6 +16,7 @@ import {
   buildPromotionTransaction,
   buildRuntimeAdmissionChecks,
   buildRuntimeRoleTransition,
+  buildLocalBootstrapTransaction,
 } from "../services/deploymentControlTransactions";
 import {
   admissionContextSchema,
@@ -35,6 +38,7 @@ import {
   type PromotionInput,
   type RuntimeRecord,
   type VoiceRecord,
+  type LocalBootstrapInput,
 } from "../types/deploymentControl";
 
 export type ConditionalResult = "applied" | "stale";
@@ -94,6 +98,8 @@ async function conditional(
   }
 }
 export type DeploymentControlRepository = {
+  supportsLocalBootstrap(): Promise<boolean>;
+  bootstrapLocal(input: LocalBootstrapInput): Promise<ConditionalResult>;
   getRecord(
     pk: string,
     sk: string,
@@ -122,8 +128,31 @@ export type DeploymentControlRepository = {
 export function createDynamoDeploymentControlRepository(
   client: DynamoDBClient,
   tables: ControlTableNames,
+  options: { localBootstrap?: boolean } = {},
 ): DeploymentControlRepository {
+  async function supportsLocalBootstrap() {
+    if (!options.localBootstrap || !client.config.endpoint) return false;
+    const endpoint = await client.config.endpoint();
+    const credentials = await client.config.credentials();
+    return (
+      ["localhost", "127.0.0.1", "[::1]", "::1"].includes(endpoint.hostname) &&
+      endpoint.protocol === "http:" &&
+      (await client.config.region()) === "local" &&
+      credentials.accessKeyId === "dummy" &&
+      credentials.secretAccessKey === "dummy" &&
+      !credentials.sessionToken
+    );
+  }
   return {
+    supportsLocalBootstrap,
+    async bootstrapLocal(input) {
+      if (!(await supportsLocalBootstrap()))
+        throw new Error("Local bootstrap requires explicit local storage");
+      const transaction = buildLocalBootstrapTransaction(input, tables);
+      return conditional(() =>
+        client.send(new TransactWriteItemsCommand(transaction)),
+      );
+    },
     async getRecord(pk, sk) {
       const result = await client.send(
         new GetItemCommand({
@@ -136,8 +165,13 @@ export function createDynamoDeploymentControlRepository(
         ? parseDeploymentControlRecord(unmarshall(result.Item))
         : undefined;
     },
-    initializeControl(record) {
+    async initializeControl(record) {
       controlRecordSchema.parse(record);
+      if (
+        record.runtimeEnvironment === "local" &&
+        !(await supportsLocalBootstrap())
+      )
+        throw new Error("Local control requires explicit local storage");
       return conditional(() =>
         client.send(
           new PutItemCommand({
@@ -297,6 +331,23 @@ export function createMockDeploymentControlRepository(
     return "applied";
   };
   return {
+    supportsLocalBootstrap: async () => true,
+    async bootstrapLocal(input) {
+      const next = planLocalBootstrap(input);
+      if (
+        !isDeepStrictEqual(getControl(), structuredClone(input.control)) ||
+        ![input.candidate, ...input.members].every((row) =>
+          isDeepStrictEqual(
+            getRuntime(row.identity.instanceId),
+            structuredClone(row),
+          ),
+        )
+      )
+        return "stale";
+      store(next.control);
+      next.authorized.forEach(store);
+      return "applied";
+    },
     async getRecord(pk, sk) {
       const row = records.get(recordKey(pk, sk));
       return row ? structuredClone(row) : undefined;
@@ -389,6 +440,7 @@ export function createMockDeploymentControlRepository(
       if (
         !control ||
         !candidate ||
+        control.runtimeEnvironment !== input.candidate.kind ||
         control.coordinatorEpoch !== input.coordinatorEpoch ||
         control.coordinatorToken !== input.coordinatorToken ||
         control.coordinatorExpiresAt <= input.now ||

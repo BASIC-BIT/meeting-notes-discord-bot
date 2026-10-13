@@ -12,12 +12,24 @@ import {
 } from "./runtimeLifecycleService";
 import { isRuntimeCacheReady } from "./cacheService";
 import type { RuntimeReadiness } from "../types/deploymentControl";
+import {
+  bootstrapLocalRuntime,
+  initializeLocalControl,
+} from "./runtimeLocalBootstrapService";
 
 /** Startup installs protection before login, HTTP listeners, or worker startup. */
 export async function initializeRuntimeLifecycle(
   gatewayReady: () => boolean,
   runtimeMode: RuntimeReadiness["runtimeMode"],
 ) {
+  if (
+    !config.runtime.ecs &&
+    !config.mock.enabled &&
+    !config.database.useLocalDynamoDB
+  )
+    throw new Error(
+      "Local runtime requires explicit mock or local DynamoDB storage",
+    );
   const identity = await resolveRuntimeIdentity(
     config.runtime.ecs
       ? {
@@ -49,17 +61,11 @@ export async function initializeRuntimeLifecycle(
       : {}),
   });
   if (identity.kind === "local")
-    await repository.initializeControl({
-      pk: "ENV",
-      sk: "CONTROL",
-      recordType: "control",
-      protocolVersion: 1,
-      coordinatorToken: identity.localId,
-      coordinatorEpoch: 0,
-      coordinatorExpiresAt: Math.floor(Date.now() / 1000) + 900,
-      servingGeneration: 0,
-      servingMembers: {},
-    });
+    await initializeLocalControl(
+      repository,
+      identity,
+      Math.floor(Date.now() / 1000),
+    );
   installRuntimeLifecycle(lifecycle);
   await startRuntimeLifecycle(identity);
   return {
@@ -67,25 +73,12 @@ export async function initializeRuntimeLifecycle(
       dependenciesReady = true;
       await lifecycle.refreshRuntimeReadiness();
       if (identity.kind === "local") {
-        const control = await repository.getRecord("ENV", "CONTROL");
-        if (
-          control?.recordType !== "control" ||
-          control.coordinatorToken !== identity.localId
-        )
-          throw new Error("Local runtime requires its own deployment control");
-        if (
-          (await repository.promote({
-            coordinatorToken: control.coordinatorToken,
-            coordinatorEpoch: control.coordinatorEpoch,
-            expectedServingGeneration: control.servingGeneration,
-            expectedServingMembers: Object.values(control.servingMembers),
-            candidate: identity,
-            candidateRuntimeMode: runtimeMode,
-            proposedGeneration: control.servingGeneration + 1,
-            now: Math.floor(Date.now() / 1000),
-          })) !== "applied"
-        )
-          throw new Error("Local runtime is not ready");
+        await bootstrapLocalRuntime(
+          repository,
+          identity,
+          () => lifecycle.refreshRuntimeReadiness(),
+          () => Math.floor(Date.now() / 1000),
+        );
         await lifecycle.refreshRuntimeReadiness();
       }
     },

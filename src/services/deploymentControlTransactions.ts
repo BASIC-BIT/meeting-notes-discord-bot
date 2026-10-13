@@ -5,6 +5,7 @@ import type {
   PutItemCommandInput,
 } from "@aws-sdk/client-dynamodb";
 import { marshall } from "@aws-sdk/util-dynamodb";
+import { planLocalBootstrap } from "./runtimeLocalBootstrapPlan";
 import type { MeetingHistory } from "../types/db";
 import {
   admissionContextSchema,
@@ -16,7 +17,75 @@ import {
   type ControlTableNames,
   type HistoryTransition,
   type PromotionInput,
+  type LocalBootstrapInput,
+  type ControlRecord,
+  type RuntimeRecord,
 } from "../types/deploymentControl";
+
+/** Snapshot equality includes absent optional fields, so a renewed proof wins CAS. */
+function snapshotCondition(record: ControlRecord | RuntimeRecord) {
+  const names: Record<string, string> = {};
+  const values: Record<string, unknown> = {};
+  const fields = [
+    ...new Set([
+      ...Object.keys(record),
+      ...(record.recordType === "runtime" ? ["expiresAt", "workCounts"] : []),
+    ]),
+  ].filter((key) => key !== "pk" && key !== "sk");
+  const conditions = fields.map((field, index) => {
+    const name = `#s${index}`;
+    names[name] = field;
+    const value = Object.entries(record).find(([key]) => key === field)?.[1];
+    if (value === undefined) return `attribute_not_exists(${name})`;
+    values[`:s${index}`] = value;
+    return `${name} = :s${index}`;
+  });
+  return {
+    ConditionExpression: conditions.join(" AND "),
+    ExpressionAttributeNames: names,
+    ExpressionAttributeValues: marshall(values),
+  };
+}
+
+/** Local-only eligibility replacement; no lease, history or voice row is mutated. */
+export function buildLocalBootstrapTransaction(
+  input: LocalBootstrapInput,
+  tables: ControlTableNames,
+): TransactWriteItemsCommandInput {
+  const next = planLocalBootstrap(input);
+  const snapshots = [input.candidate, ...input.members];
+  return {
+    TransactItems: [
+      {
+        Put: {
+          TableName: tables.deploymentControl,
+          Item: marshall(next.control),
+          ...snapshotCondition(input.control),
+        },
+      },
+      ...snapshots.map((row) => {
+        const authorized = next.authorized.find(
+          (item) => item.identity.instanceId === row.identity.instanceId,
+        );
+        return authorized
+          ? {
+              Put: {
+                TableName: tables.deploymentControl,
+                Item: marshall(authorized, { removeUndefinedValues: true }),
+                ...snapshotCondition(row),
+              },
+            }
+          : {
+              ConditionCheck: {
+                TableName: tables.deploymentControl,
+                Key: marshall({ pk: row.pk, sk: row.sk }),
+                ...snapshotCondition(row),
+              },
+            };
+      }),
+    ],
+  };
+}
 
 const runtimeProofCondition = [
   "#identity = readiness.#identity",
@@ -88,11 +157,12 @@ export function buildPromotionTransaction({
           TableName: tables.deploymentControl,
           Key: marshall({ pk: "ENV", sk: "CONTROL" }),
           ConditionExpression:
-            "protocolVersion = :protocol AND coordinatorToken = :token AND coordinatorEpoch = :epoch AND coordinatorExpiresAt > :now AND servingGeneration = :generation AND servingMembers = :expectedMembers",
+            "protocolVersion = :protocol AND runtimeEnvironment = :environment AND coordinatorToken = :token AND coordinatorEpoch = :epoch AND coordinatorExpiresAt > :now AND servingGeneration = :generation AND servingMembers = :expectedMembers",
           UpdateExpression:
             "SET servingGeneration = :next, servingMembers = :members",
           ExpressionAttributeValues: marshall({
             ":protocol": 1,
+            ":environment": input.candidate.kind,
             ":token": input.coordinatorToken,
             ":epoch": input.coordinatorEpoch,
             ":now": input.now,

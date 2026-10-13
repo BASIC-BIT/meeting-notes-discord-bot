@@ -71,6 +71,7 @@ export const controlRecordSchema = z
     pk: z.literal("ENV"),
     sk: z.literal("CONTROL"),
     recordType: z.literal("control"),
+    runtimeEnvironment: z.enum(["local", "ecs"]),
     protocolVersion: z.literal(1),
     coordinatorToken: id,
     coordinatorEpoch: generation,
@@ -87,7 +88,14 @@ export const controlRecordSchema = z
         "Serving membership must bind instance keys to exact identities",
       ),
   })
-  .strict();
+  .strict()
+  .refine(
+    (row) =>
+      Object.values(row.servingMembers).every(
+        (member) => member.kind === row.runtimeEnvironment,
+      ),
+    "Control environment must match every serving identity",
+  );
 export type ControlRecord = z.infer<typeof controlRecordSchema>;
 export const runtimeRecordSchema = z
   .object({
@@ -95,7 +103,14 @@ export const runtimeRecordSchema = z
     sk: id,
     recordType: z.literal("runtime"),
     identity: runtimeIdentitySchema,
-    role: z.enum(["candidate", "serving", "draining", "retired", "stale"]),
+    role: z.enum([
+      "candidate",
+      "serving",
+      "draining",
+      "releasing",
+      "retired",
+      "stale",
+    ]),
     authorizedGeneration: generation,
     heartbeatAt: epochSecond,
     readiness: runtimeReadinessSchema,
@@ -127,6 +142,12 @@ export const runtimeRecordSchema = z
       });
   });
 export type RuntimeRecord = z.infer<typeof runtimeRecordSchema>;
+export type LocalBootstrapInput = {
+  control: ControlRecord;
+  candidate: RuntimeRecord;
+  members: RuntimeRecord[];
+  now: number;
+};
 export type RuntimeRoleTransition = {
   record: RuntimeRecord;
   expectedRole: RuntimeRecord["role"];
@@ -142,7 +163,8 @@ export function validateRuntimeRoleTransition(
   const legal =
     (input.record.role === "draining" &&
       ["candidate", "serving"].includes(input.expectedRole)) ||
-    (input.record.role === "retired" && input.expectedRole === "draining") ||
+    (input.record.role === "releasing" && input.expectedRole === "draining") ||
+    (input.record.role === "retired" && input.expectedRole === "releasing") ||
     (input.record.role === "candidate" && input.expectedRole === "retired");
   if (!legal || input.record.authorizedGeneration !== input.expectedGeneration)
     throw new Error("Invalid runtime role transition");
@@ -264,6 +286,9 @@ export const promotionInputSchema = z
     const retained = input.retainedMembers ?? [];
     return (
       retained.length < 98 &&
+      input.expectedServingMembers.every(
+        (member) => member.kind === input.candidate.kind,
+      ) &&
       !retained.some(
         (member) => member.instanceId === input.candidate.instanceId,
       ) &&

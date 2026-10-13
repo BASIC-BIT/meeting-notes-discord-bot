@@ -83,6 +83,8 @@ export function createRuntimeLifecycle(options: {
     const control = await repository.getRecord("ENV", "CONTROL");
     if (control?.recordType !== "control")
       throw new Error("Deployment control unavailable");
+    if (control.runtimeEnvironment !== identity.kind)
+      throw new Error("Runtime identity does not match control environment");
     const proofTime = now();
     const flags = await options.probeReadiness();
     const readiness: RuntimeReadiness = {
@@ -257,7 +259,7 @@ export function createRuntimeLifecycle(options: {
       try {
         let stored = await readRuntime();
         if (!stored) throw new Error("Runtime missing");
-        if (stored.role !== "draining" && stored.role !== "retired")
+        if (!["draining", "releasing", "retired"].includes(stored.role))
           stored = await changeRole(stored, "draining", retirementEpoch);
         if (Object.values(counts).some((count) => count > 0))
           return {
@@ -271,14 +273,17 @@ export function createRuntimeLifecycle(options: {
             counts: { ...counts },
             reason: "dependency_unavailable",
           };
-        if (stored.role !== "retired")
-          await changeRole(stored, "retired", retirementEpoch);
+        if (stored.role === "retired")
+          return { kind: "retired", counts: { ...counts } };
+        if (stored.role !== "releasing")
+          stored = await changeRole(stored, "releasing", retirementEpoch);
         try {
           await protection.release();
         } catch {
           releaseUncertain = true;
           throw new Error("Protection release uncertain");
         }
+        await changeRole(stored, "retired", retirementEpoch);
         return { kind: "retired", counts: { ...counts } };
       } catch {
         return {

@@ -18,12 +18,15 @@ function barrier<T>() {
   });
   return { promise, resolve };
 }
-async function fixture() {
+async function repositoryFixture(
+  runtimeEnvironment: "local" | "ecs" = "local",
+) {
   const repository = createMockDeploymentControlRepository();
   await repository.initializeControl({
     pk: "ENV",
     sk: "CONTROL",
     recordType: "control",
+    runtimeEnvironment,
     protocolVersion: 1,
     coordinatorToken: "coordinator",
     coordinatorEpoch: 1,
@@ -31,6 +34,10 @@ async function fixture() {
     servingGeneration: 0,
     servingMembers: {},
   });
+  return repository;
+}
+async function fixture() {
+  const repository = await repositoryFixture();
   const protection = createRuntimeProtectionService({
     identity,
     now,
@@ -142,8 +149,7 @@ test("retirementCannotUnprotectOtherOwnedWork", async () => {
 });
 
 test("reauthorizationWaitsForPendingProtectionRelease", async () => {
-  const { repository, lifecycle: unused } = await fixture();
-  unused.stop();
+  const repository = await repositoryFixture("ecs");
   const ecs: RuntimeIdentity = {
     kind: "ecs",
     instanceId: "ecs",
@@ -193,19 +199,32 @@ test("reauthorizationWaitsForPendingProtectionRelease", async () => {
   await lifecycle.getRuntimeAdmissionContext();
   const work = lifecycle.beginRuntimeWork("personal_processing");
   // Publish a fresh candidate for the next generation before retiring ECS.
-  const old = await repository.getRecord("ENV", "RUNTIME#candidate");
+  const old = await repository.getRecord("ENV", "RUNTIME#ecs");
   if (old?.recordType !== "runtime") throw new Error("missing fixture");
+  const replacement = { ...ecs, instanceId: "replacement" };
   await repository.writeRuntime({
     ...old,
-    readiness: { ...old.readiness, observedGeneration: 1 },
+    sk: "RUNTIME#replacement",
+    identity: replacement,
+    role: "candidate",
+    readiness: {
+      ...old.readiness,
+      identity: replacement,
+      observedGeneration: 1,
+    },
+    protection: { ...old.protection, identity: replacement },
   });
-  await promote(repository, identity, 2);
+  await promote(repository, replacement, 2);
   await lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 });
   const unprotectCallsWhileOwnedWorkRemains = unprotectCalls;
   expect(unprotectCallsWhileOwnedWorkRemains).toBe(0);
   work.settle();
   const retirement = lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 });
   await releaseStarted.promise;
+  expect(await repository.getRecord("ENV", "RUNTIME#ecs")).toMatchObject({
+    role: "releasing",
+    readiness: { dependenciesReady: false },
+  });
   let rearmed = false;
   const reauthorization = lifecycle
     .reauthorizeRuntime({ retirementEpoch: 1 })
@@ -218,7 +237,7 @@ test("reauthorizationWaitsForPendingProtectionRelease", async () => {
       coordinatorToken: "coordinator",
       coordinatorEpoch: 1,
       expectedServingGeneration: 2,
-      expectedServingMembers: [identity],
+      expectedServingMembers: [replacement],
       candidate: ecs,
       proposedGeneration: 3,
       now: now(),
@@ -391,8 +410,7 @@ test("retained API runtime adopts only its explicitly authorized generation", as
 });
 
 test("protection loss closes admission and fences owned API work before expiry", async () => {
-  const { lifecycle: unused, repository } = await fixture();
-  unused.stop();
+  const repository = await repositoryFixture("ecs");
   const ecs: RuntimeIdentity = {
     kind: "ecs",
     instanceId: "bounded",
@@ -448,8 +466,7 @@ test("protection loss closes admission and fences owned API work before expiry",
 });
 
 test("uncertain release cannot reauthorize", async () => {
-  const { lifecycle: unused, repository } = await fixture();
-  unused.stop();
+  const repository = await repositoryFixture("ecs");
   const ecs: RuntimeIdentity = {
     kind: "ecs",
     instanceId: "uncertain",
@@ -490,6 +507,13 @@ test("uncertain release cannot reauthorize", async () => {
     checkpointAndFence: jest.fn(),
   });
   await lifecycle.start();
+  expect(
+    (await lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 })).kind,
+  ).toBe("uncertain");
+  expect(await repository.getRecord("ENV", "RUNTIME#uncertain")).toMatchObject({
+    role: "releasing",
+    readiness: { dependenciesReady: false },
+  });
   expect(
     (await lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 })).kind,
   ).toBe("uncertain");

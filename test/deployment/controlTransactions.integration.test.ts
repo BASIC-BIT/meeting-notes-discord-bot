@@ -14,6 +14,8 @@ import {
   DeploymentControlError,
 } from "../../src/repositories/deploymentControlRepository";
 import { buildRuntimeAdmissionChecks } from "../../src/services/deploymentControlTransactions";
+import { localControl, localRuntime } from "./localBootstrapFixtures";
+import { initializeLocalControl } from "../../src/services/runtimeLocalBootstrapService";
 import {
   context,
   control,
@@ -33,6 +35,11 @@ const client = new DynamoDBClient({
   credentials: { accessKeyId: "dummy", secretAccessKey: "dummy" },
 });
 const repository = createDynamoDeploymentControlRepository(client, tables);
+const localRepository = createDynamoDeploymentControlRepository(
+  client,
+  tables,
+  { localBootstrap: true },
+);
 const created: string[] = [];
 
 beforeAll(async () => {
@@ -79,6 +86,188 @@ beforeEach(async () => {
   }
 });
 
+async function localBootstrapFixture() {
+  const old = { ...localRuntime("local-old", "bot"), role: "serving" as const };
+  old.readiness.expiresAt = 100;
+  const api = { ...localRuntime("local-api", "api"), role: "serving" as const };
+  const candidate = localRuntime("local-new", "bot");
+  const expected = localControl([old, api]);
+  for (const row of [expected, old, api, candidate])
+    await client.send(
+      new PutItemCommand({
+        TableName: tables.deploymentControl,
+        Item: marshall(row),
+      }),
+    );
+  return { control: expected, candidate, members: [old, api], now: 100 };
+}
+
+test("local restart atomically retains API, seals old bot and preserves voice and history", async () => {
+  const input = await localBootstrapFixture();
+  const voice = {
+    pk: "VOICE#local-guard",
+    sk: "STATE",
+    recordType: "voice" as const,
+    protocolVersion: 1 as const,
+    guildId: "local-guard",
+    meetingId: "local-meeting",
+    ownerInstanceId: "local-old",
+    attemptId: "unsettled-local-join",
+    state: "uncertain" as const,
+    updatedAt: 90,
+  };
+  await repository.writeVoice(voice);
+  const localHistory = {
+    ...history,
+    guildId: "local-history",
+    ownerInstanceId: "local-old",
+  };
+  await repository.createInitialMeetingHistory(localHistory);
+  expect(await localRepository.bootstrapLocal(input)).toBe("applied");
+  expect(await repository.getRecord("ENV", "CONTROL")).toMatchObject({
+    runtimeEnvironment: "local",
+    servingGeneration: 8,
+    coordinatorEpoch: 4,
+    servingMembers: {
+      "local-new": input.candidate.identity,
+      "local-api": input.members[1].identity,
+    },
+  });
+  expect(
+    await repository.checkAdmission({
+      ...context,
+      instanceId: "local-api",
+      identity: input.members[1].identity,
+      authorizedGeneration: 8,
+      observedEpoch: 4,
+    }),
+  ).toEqual({ kind: "admitted" });
+  expect(
+    await repository.checkAdmission({
+      ...context,
+      instanceId: "local-old",
+      identity: input.members[0].identity,
+    }),
+  ).toMatchObject({ kind: "blocked" });
+  expect(await repository.getRecord("ENV", "RUNTIME#local-old")).toEqual(
+    input.members[0],
+  );
+  expect(await repository.getRecord(voice.pk, voice.sk)).toEqual(voice);
+  expect(
+    await repository.getMeetingHistory({
+      guildId: localHistory.guildId,
+      channelId_timestamp: localHistory.channelId_timestamp,
+    }),
+  ).toEqual(localHistory);
+});
+test("local restart loses to a refreshed outgoing heartbeat", async () => {
+  const input = await localBootstrapFixture();
+  const old = input.members[0];
+  await repository.writeRuntime({
+    ...old,
+    heartbeatAt: 101,
+    readiness: { ...old.readiness, expiresAt: 130 },
+  });
+  expect(await localRepository.bootstrapLocal(input)).toBe("stale");
+  expect(await repository.getRecord("ENV", "CONTROL")).toEqual(input.control);
+});
+test("fresh local owner refusal stays actionable through the real repository", async () => {
+  const input = await localBootstrapFixture();
+  input.members[0].readiness.expiresAt = 130;
+  await repository.writeRuntime(input.members[0]);
+  await expect(localRepository.bootstrapLocal(input)).rejects.toThrow(
+    "Fresh local owner",
+  );
+  expect(await repository.getRecord("ENV", "CONTROL")).toEqual(input.control);
+});
+test("local restart loses to retained runtime proof or work changes", async () => {
+  const input = await localBootstrapFixture();
+  const api = input.members[1];
+  await repository.writeRuntime({
+    ...api,
+    readiness: { ...api.readiness, dependenciesReady: false },
+  });
+  expect(await localRepository.bootstrapLocal(input)).toBe("stale");
+});
+test.each([
+  "coordinatorToken",
+  "coordinatorEpoch",
+  "coordinatorExpiresAt",
+  "servingGeneration",
+  "servingMembers",
+] as const)("local restart CAS checks %s", async (field) => {
+  const input = await localBootstrapFixture();
+  const changed = {
+    ...input.control,
+    [field]:
+      field === "coordinatorToken"
+        ? "another"
+        : field === "servingMembers"
+          ? {}
+          : 999,
+  };
+  await client.send(
+    new PutItemCommand({
+      TableName: tables.deploymentControl,
+      Item: marshall(changed),
+    }),
+  );
+  expect(await localRepository.bootstrapLocal(input)).toBe("stale");
+});
+test("concurrent local restart snapshots authorize exactly one same-mode candidate", async () => {
+  const input = await localBootstrapFixture();
+  const other = localRuntime("local-other", "bot");
+  await client.send(
+    new PutItemCommand({
+      TableName: tables.deploymentControl,
+      Item: marshall(other),
+    }),
+  );
+  const results = await Promise.allSettled(
+    [input, { ...input, candidate: other }].map((snapshot) =>
+      localRepository.bootstrapLocal(snapshot),
+    ),
+  );
+  expect(
+    results.filter(
+      (result) => result.status === "fulfilled" && result.value === "applied",
+    ),
+  ).toHaveLength(1);
+  const stored = await repository.getRecord("ENV", "CONTROL");
+  expect(
+    stored?.recordType === "control" && Object.keys(stored.servingMembers),
+  ).toHaveLength(2);
+});
+test("empty ECS and unmarked persisted controls cannot be converted to local", async () => {
+  for (const row of [
+    { ...control, servingMembers: {} },
+    { ...control, servingMembers: {}, runtimeEnvironment: undefined },
+  ]) {
+    await client.send(
+      new PutItemCommand({
+        TableName: tables.deploymentControl,
+        Item: marshall(row, { removeUndefinedValues: true }),
+      }),
+    );
+    await expect(
+      initializeLocalControl(
+        localRepository,
+        localRuntime("bootstrap").identity,
+        100,
+      ),
+    ).rejects.toThrow(/local|unmarked/);
+    const result = await client.send(
+      new GetItemCommand({
+        TableName: tables.deploymentControl,
+        Key: marshall({ pk: "ENV", sk: "CONTROL" }),
+      }),
+    );
+    expect(result.Item && unmarshall(result.Item)).toEqual(
+      JSON.parse(JSON.stringify(row)),
+    );
+  }
+});
+
 test("coordinator warmup preserves old admission until generation promotion", async () => {
   await client.send(
     new PutItemCommand({
@@ -117,11 +306,19 @@ test("runtime retirement CAS rejects serving and stale generation writes", async
   ).toBe("stale");
   expect(await repository.transitionRuntimeRole(input)).toBe("applied");
   expect(await repository.writeRuntime(old)).toBe("stale");
-  const retired = { ...draining, role: "retired" as const };
+  const releasing = { ...draining, role: "releasing" as const };
+  expect(
+    await repository.transitionRuntimeRole({
+      ...input,
+      record: releasing,
+      expectedRole: "draining",
+    }),
+  ).toBe("applied");
+  const retired = { ...releasing, role: "retired" as const };
   expect(
     await repository.transitionRuntimeRole({
       record: retired,
-      expectedRole: "draining",
+      expectedRole: "releasing",
       expectedGeneration: 7,
       retirementEpoch: 3,
     }),
