@@ -5,6 +5,7 @@ import {
   ControlledSpeechWorker,
   FakeSpeechClock,
 } from "../helpers/speechDetectionHarness";
+import { metricsRegistry } from "../../src/metrics";
 
 it("settlesTimedOutWorkWithoutRejectingSpeech", async () => {
   const clock = new FakeSpeechClock();
@@ -175,6 +176,7 @@ it("settles pending readiness and all jobs on shutdown without restarting", asyn
   await expect(warming).resolves.toBe(false);
 });
 it("doesNotRestartDuringCooldown", async () => {
+  metricsRegistry.resetMetrics();
   const r = rig();
   const worker = await r.ready();
   const job = r.detector.assess(Uint8Array.of(1), "fast");
@@ -188,9 +190,23 @@ it("doesNotRestartDuringCooldown", async () => {
     await expect(r.detector.warm()).resolves.toBe(false);
   }
   expect(r.workers).toHaveLength(1);
+  expect(
+    (
+      await metricsRegistry
+        .getSingleMetric("chronote_speech_detection_worker_restarts_total")
+        ?.get()
+    )?.values[0].value,
+  ).toBe(0);
   r.clock.advance(3);
   const ready = r.detector.warm();
   expect(r.workers).toHaveLength(2);
+  expect(
+    (
+      await metricsRegistry
+        .getSingleMetric("chronote_speech_detection_worker_restarts_total")
+        ?.get()
+    )?.values[0].value,
+  ).toBe(1);
   worker.reply({
     type: "assessment",
     requestId: worker.requests[0].requestId,
@@ -198,6 +214,30 @@ it("doesNotRestartDuringCooldown", async () => {
   });
   r.workers[1].reply({ type: "ready", policyFingerprint: fingerprint });
   await expect(ready).resolves.toBe(true);
+});
+
+it("does not load an ONNX runtime or spawn when imported, obtained or shut down unused", async () => {
+  const workerSpawn = jest.fn(() => {
+    throw Error("Unexpected worker creation");
+  });
+  const runtimeLoad = jest.fn(() => {
+    throw Error("Unexpected ONNX import");
+  });
+  jest.doMock("node:worker_threads", () => ({ Worker: workerSpawn }));
+  jest.doMock("onnxruntime-web", runtimeLoad);
+  try {
+    await jest.isolateModulesAsync(async () => {
+      const { getSpeechDetector, shutdownSpeechDetector } =
+        await import("../../src/services/speechDetectionService");
+      getSpeechDetector();
+      await shutdownSpeechDetector();
+    });
+    expect(workerSpawn).not.toHaveBeenCalled();
+    expect(runtimeLoad).not.toHaveBeenCalled();
+  } finally {
+    jest.dontMock("node:worker_threads");
+    jest.dontMock("onnxruntime-web");
+  }
 });
 it.each(["asset_error", "worker_error"] as const)(
   "cools down after initialization %s",

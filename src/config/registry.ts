@@ -1,4 +1,9 @@
 import type { ConfigEntry, ConfigScopeConfig } from "./types";
+import { CONFIG_KEYS } from "./keys";
+import {
+  DEFAULT_SPEECH_DETECTION_MODE,
+  SPEECH_DETECTION_MODES,
+} from "./speechDetection";
 import {
   FAST_SILENCE_THRESHOLD,
   MAX_SNIPPET_LENGTH,
@@ -141,6 +146,20 @@ const buildModelSelectionEntries = (): ConfigEntry[] =>
   });
 
 export const CONFIG_REGISTRY: ConfigEntry[] = [
+  {
+    key: CONFIG_KEYS.transcription.speechDetectionMode,
+    label: "Speech detection mode",
+    description:
+      "Off preserves transcription. Shadow measures speech detection without skipping requests. Enforce may skip verified nonspeech.",
+    notes:
+      "Captured when a meeting starts. Global changes apply to new meetings.",
+    category: "Transcription",
+    group: "Experimental",
+    valueType: "select",
+    defaultValue: DEFAULT_SPEECH_DETECTION_MODE,
+    scopes: { global: scope(true, true, "superadmin", "select") },
+    ui: { type: "select", options: [...SPEECH_DETECTION_MODES] },
+  },
   {
     key: "features.experimental",
     label: "Experimental features",

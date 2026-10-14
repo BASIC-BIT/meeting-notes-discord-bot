@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { DEFAULT_SPEECH_POLICY } from "./speechDetectionPolicy";
+import { recordSpeechWorkerRestart } from "../metrics";
 import type {
   SpeechPolicy,
   SpeechWorkerReply,
@@ -99,6 +100,7 @@ export function createSpeechDetector(
   let nextId = 0;
   let cooldownUntil = 0;
   let stopped = false;
+  let hasStartedWorker = false;
   const unavailable = (reason: SpeechUnavailableReason): SpeechAssessment => ({
     kind: "unavailable",
     reason,
@@ -163,6 +165,8 @@ export function createSpeechDetector(
       cooldownUntil = bindings.now() + 30000;
       return undefined;
     }
+    if (hasStartedWorker) recordSpeechWorkerRestart();
+    hasStartedWorker = true;
     let finishWarm: (ready: boolean) => void = () => {};
     const readiness = new Promise<boolean>((resolve) => {
       finishWarm = resolve;
