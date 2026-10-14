@@ -1,3 +1,13 @@
+import {
+  BASIC_INTRO_OFFER_ID,
+  BASIC_ANNUAL_INTRO_OFFER_ID,
+  BASIC_INTRO_TERMS,
+  BASIC_ANNUAL_INTRO_TERMS,
+} from "../types/basicIntroOffers";
+export {
+  BASIC_INTRO_OFFER_ID,
+  BASIC_ANNUAL_INTRO_OFFER_ID,
+} from "../types/basicIntroOffers";
 import type Stripe from "stripe";
 import type { GuildSubscription } from "../types/db";
 import type { PurchaseAttempt } from "../types/purchase";
@@ -21,25 +31,6 @@ import type { StripeClient } from "../types/stripe";
 import { config } from "./configService";
 
 const CHECKOUT_LIFETIME_SECONDS = 3600;
-export const BASIC_INTRO_OFFER_ID = "basic_intro_v1";
-export const BASIC_ANNUAL_INTRO_OFFER_ID = "basic_annual_intro_v1";
-const BASIC_INTRO_TERMS = {
-  id: BASIC_INTRO_OFFER_ID,
-  currency: "usd",
-  regularUnitAmount: 1000,
-  discountedUnitAmount: 600,
-  percentOff: 40,
-  durationMonths: 3,
-} as const;
-const BASIC_ANNUAL_INTRO_TERMS = {
-  id: BASIC_ANNUAL_INTRO_OFFER_ID,
-  currency: "usd",
-  regularUnitAmount: 10000,
-  discountedUnitAmount: 6000,
-  percentOff: 40,
-  durationMonths: 12,
-} as const;
-
 export async function verifyBasicIntroPortalConfiguration(
   stripe: StripeClient,
   configurationId: string,
@@ -117,7 +108,8 @@ function unsupportedIntroCoupon(
     coupon.amount_off !== null ||
     coupon.currency !== null ||
     coupon.duration !== (interval === "year" ? "once" : "repeating") ||
-    coupon.duration_in_months !== (interval === "year" ? null : 3) ||
+    coupon.duration_in_months !==
+      (interval === "year" ? null : BASIC_INTRO_TERMS.durationMonths) ||
     couponRedemptionEndsTooSoon(coupon.redeem_by, end) ||
     (coupon.applies_to && !coupon.applies_to.products.includes(productId)),
   );
@@ -689,10 +681,11 @@ function hasUnsupportedAnnualPaymentEvidence(
     invoice.status !== "paid" ||
     invoice.billing_reason !== "subscription_create" ||
     invoice.currency !== "usd" ||
-    invoice.subtotal !== 10000 ||
-    invoice.total_excluding_tax !== 6000 ||
+    invoice.subtotal !== BASIC_ANNUAL_INTRO_TERMS.regularUnitAmount ||
+    invoice.total_excluding_tax !==
+      BASIC_ANNUAL_INTRO_TERMS.discountedUnitAmount ||
     !Number.isSafeInteger(invoice.amount_paid) ||
-    invoice.amount_paid < 6000 ||
+    invoice.amount_paid < BASIC_ANNUAL_INTRO_TERMS.discountedUnitAmount ||
     invoice.amount_paid !== invoice.total ||
     invoice.amount_remaining !== 0 ||
     invoice.starting_balance !== 0 ||
@@ -705,7 +698,7 @@ function hasUnsupportedAnnualPaymentEvidence(
     line.invoice !== invoice.id ||
     line.currency !== "usd" ||
     line.livemode !== invoice.livemode ||
-    line.subtotal !== 10000 ||
+    line.subtotal !== BASIC_ANNUAL_INTRO_TERMS.regularUnitAmount ||
     line.quantity !== 1 ||
     lineParent?.subscription !== subscription.id ||
     lineParent.subscription_item !== item.id ||
@@ -713,7 +706,7 @@ function hasUnsupportedAnnualPaymentEvidence(
     priceId !== item.price.id ||
     item.quantity !== 1 ||
     item.price.currency !== "usd" ||
-    item.price.unit_amount !== 10000 ||
+    item.price.unit_amount !== BASIC_ANNUAL_INTRO_TERMS.regularUnitAmount ||
     item.price.type !== "recurring" ||
     item.price.billing_scheme !== "per_unit" ||
     item.price.transform_quantity ||
@@ -729,16 +722,20 @@ function hasUnsupportedAnnualPaymentEvidence(
     coupon.id !== subscription.metadata.intro_offer_coupon_id ||
     coupon.duration !== "once" ||
     coupon.duration_in_months !== null ||
-    coupon.percent_off !== 40 ||
+    coupon.percent_off !== BASIC_ANNUAL_INTRO_TERMS.percentOff ||
     coupon.amount_off !== null ||
     coupon.currency !== null ||
     coupon.livemode !== invoice.livemode ||
     discount.promotion_code ||
     line.discount_amounts?.length !== 1 ||
-    lineDiscount?.amount !== 4000 ||
+    lineDiscount?.amount !==
+      BASIC_ANNUAL_INTRO_TERMS.regularUnitAmount -
+        BASIC_ANNUAL_INTRO_TERMS.discountedUnitAmount ||
     lineDiscountId !== discount.id ||
     invoice.total_discount_amounts?.length !== 1 ||
-    invoiceDiscount?.amount !== 4000 ||
+    invoiceDiscount?.amount !==
+      BASIC_ANNUAL_INTRO_TERMS.regularUnitAmount -
+        BASIC_ANNUAL_INTRO_TERMS.discountedUnitAmount ||
     invoiceDiscountId !== discount.id ||
     line.pretax_credit_amounts?.some((credit) => credit.type !== "discount"),
   );
@@ -865,7 +862,7 @@ export async function getAnnualIntroFirstYearPayment(
     return {
       status: "available",
       currency: "usd",
-      discountedSubtotal: 6000,
+      discountedSubtotal: BASIC_ANNUAL_INTRO_TERMS.discountedUnitAmount,
       amountPaid: invoice.amount_paid,
       periodStartsAt: new Date(line.period.start * 1000).toISOString(),
       periodEndsAt: new Date(line.period.end * 1000).toISOString(),

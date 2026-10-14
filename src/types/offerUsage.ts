@@ -1,13 +1,16 @@
+import type { IntroOfferId } from "./basicIntroOffers";
+import {
+  BASIC_INTRO_OFFER_ID,
+  BASIC_INTRO_TERMS,
+  BASIC_ANNUAL_INTRO_TERMS,
+  introOfferIdSchema,
+} from "./basicIntroOffers";
+export { introOfferIdSchema, type IntroOfferId } from "./basicIntroOffers";
 import { z } from "zod";
 import { isDeepStrictEqual } from "node:util";
 import type { PurchaseAttempt } from "./purchase";
 import type { GuildSubscription } from "./db";
 
-export const introOfferIdSchema = z.enum([
-  "basic_intro_v1",
-  "basic_annual_intro_v1",
-]);
-export type IntroOfferId = z.infer<typeof introOfferIdSchema>;
 export const providerModeSchema = z.enum(["live", "test"]);
 export type ProviderMode = z.infer<typeof providerModeSchema>;
 const nonempty = z.string().min(1);
@@ -15,23 +18,25 @@ const timestamp = z.number().int().nonnegative();
 const termsBase = z.object({
   priceId: nonempty,
   couponId: nonempty,
-  currency: z.literal("usd"),
+  currency: z.literal(BASIC_INTRO_TERMS.currency),
 });
 const offerTermsSchema = z.discriminatedUnion("interval", [
   termsBase
     .extend({
       interval: z.literal("month"),
-      regularUnitAmount: z.literal(1000),
-      discountedUnitAmount: z.literal(600),
-      durationMonths: z.literal(3),
+      regularUnitAmount: z.literal(BASIC_INTRO_TERMS.regularUnitAmount),
+      discountedUnitAmount: z.literal(BASIC_INTRO_TERMS.discountedUnitAmount),
+      durationMonths: z.literal(BASIC_INTRO_TERMS.durationMonths),
     })
     .strict(),
   termsBase
     .extend({
       interval: z.literal("year"),
-      regularUnitAmount: z.literal(10000),
-      discountedUnitAmount: z.literal(6000),
-      durationMonths: z.literal(12),
+      regularUnitAmount: z.literal(BASIC_ANNUAL_INTRO_TERMS.regularUnitAmount),
+      discountedUnitAmount: z.literal(
+        BASIC_ANNUAL_INTRO_TERMS.discountedUnitAmount,
+      ),
+      durationMonths: z.literal(BASIC_ANNUAL_INTRO_TERMS.durationMonths),
     })
     .strict(),
 ]);
@@ -155,7 +160,7 @@ function assertSettlement(next: OfferUsage, expected: OfferUsage | undefined) {
   if (next.state === "unused") return;
   if (
     next.terms.interval !==
-    (next.offerId === "basic_intro_v1" ? "month" : "year")
+    (next.offerId === BASIC_INTRO_OFFER_ID ? "month" : "year")
   )
     throw new Error("Offer terms do not match its identity");
   if (

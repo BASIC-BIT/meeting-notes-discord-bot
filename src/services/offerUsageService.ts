@@ -1,3 +1,4 @@
+import { BASIC_INTRO_OFFERS } from "../types/basicIntroOffers";
 import type { StripeCheckoutSession } from "../types/stripe";
 import { assertSessionAssociation } from "./purchaseSession";
 import { randomUUID } from "node:crypto";
@@ -38,20 +39,7 @@ export async function prepareInitialOfferReservation(
       "The selected offer is already used or reserved for this server.",
       expected.state === "used" ? "offer_changed_terms" : "purchase_pending",
     );
-  const terms =
-    offerId === "basic_intro_v1"
-      ? {
-          interval: "month",
-          regularUnitAmount: 1000,
-          discountedUnitAmount: 600,
-          durationMonths: 3,
-        }
-      : {
-          interval: "year",
-          regularUnitAmount: 10000,
-          discountedUnitAmount: 6000,
-          durationMonths: 12,
-        };
+  const { interval, terms } = BASIC_INTRO_OFFERS[offerId];
   return {
     expected,
     next: offerUsageSchema.parse({
@@ -62,7 +50,15 @@ export async function prepareInitialOfferReservation(
       state: "reserved",
       operationId: attempt.attemptId,
       reservedAt: attempt.createdAt,
-      terms: { ...terms, currency: "usd", priceId, couponId },
+      terms: {
+        interval,
+        currency: terms.currency,
+        regularUnitAmount: terms.regularUnitAmount,
+        discountedUnitAmount: terms.discountedUnitAmount,
+        durationMonths: terms.durationMonths,
+        priceId,
+        couponId,
+      },
     }),
   };
 }

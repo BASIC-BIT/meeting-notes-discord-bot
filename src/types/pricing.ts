@@ -1,3 +1,8 @@
+import type {
+  BasicIntroTerms,
+  IntroOfferId,
+  BASIC_ANNUAL_INTRO_TERMS,
+} from "./basicIntroOffers";
 export type PaidTier = "basic" | "pro";
 export type BillingInterval = "month" | "year";
 
@@ -15,31 +20,15 @@ export type BasicIntroOffer =
   | ({
       status: "available";
       priceId: string;
-      currency: "usd";
-      percentOff: 40;
       enrollmentEndsAt: string | null;
-    } & (
-      | {
-          id: "basic_intro_v1";
-          regularUnitAmount: 1000;
-          discountedUnitAmount: 600;
-          durationMonths: 3;
-        }
-      | {
-          id: "basic_annual_intro_v1";
-          regularUnitAmount: 10000;
-          discountedUnitAmount: 6000;
-          durationMonths: 12;
-        }
-    ));
-export type ExpectedIntroOffer =
-  "none" | "basic_intro_v1" | "basic_annual_intro_v1";
+    } & BasicIntroTerms);
+export type ExpectedIntroOffer = "none" | IntroOfferId;
 export type FirstYearPayment =
   | { status: "unavailable" }
   | {
       status: "available";
       currency: "usd";
-      discountedSubtotal: 6000;
+      discountedSubtotal: (typeof BASIC_ANNUAL_INTRO_TERMS)["discountedUnitAmount"];
       amountPaid: number;
       periodStartsAt: string;
       periodEndsAt: string;
