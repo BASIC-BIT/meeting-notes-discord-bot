@@ -45,6 +45,8 @@ export function createRuntimeProtectionService(options: {
   let renewal: ReturnType<typeof setInterval> | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let unsafeHandler = options.onUnsafe;
+  let stopped = false;
+  let closing = false;
   let tail: Promise<unknown> = Promise.resolve();
   function serialize<T>(operation: () => Promise<T>): Promise<T> {
     const next = tail.then(operation);
@@ -52,6 +54,7 @@ export function createRuntimeProtectionService(options: {
     return next;
   }
   function stop() {
+    stopped = true;
     clearInterval(renewal);
     clearTimeout(deadline);
     renewal = undefined;
@@ -59,7 +62,7 @@ export function createRuntimeProtectionService(options: {
   }
   function armDeadline() {
     clearTimeout(deadline);
-    if (!confirmation) return;
+    if (!confirmation || stopped) return;
     deadline = setTimeout(
       () => {
         void Promise.resolve()
@@ -157,7 +160,9 @@ export function createRuntimeProtectionService(options: {
     signal?: AbortSignal,
   ): Promise<ProtectionConfirmation> {
     return serialize(async () => {
+      if (stopped) throw new Error("Runtime protection is stopped");
       const proof = await update(true, signal);
+      if (stopped) throw new Error("Runtime protection is stopped");
       if (!proof) throw new Error("Protection confirmation missing");
       confirmation = proof;
       armDeadline();
@@ -165,6 +170,8 @@ export function createRuntimeProtectionService(options: {
     });
   }
   async function start() {
+    if (closing) throw new Error("Runtime protection is shutting down");
+    stopped = false;
     const signal = AbortSignal.any([
       AbortSignal.timeout(900_000),
       ...(options.signal ? [options.signal] : []),
@@ -206,6 +213,12 @@ export function createRuntimeProtectionService(options: {
   return {
     start,
     stop,
+    async shutdown() {
+      closing = true;
+      stop();
+      await tail;
+      stop();
+    },
     release,
     confirm,
     getConfirmation: () =>

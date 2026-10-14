@@ -1,3 +1,4 @@
+import { InitiatingStopInterruption } from "./services/meetingStopInterruption";
 import { waitForGuildInstaller } from "./services/guildInstallerOnboardingService";
 import { randomUUID } from "node:crypto";
 import type { WorkAdmissionAuthority } from "./types/deploymentControl";
@@ -27,12 +28,7 @@ import {
 } from "discord.js";
 import { Routes } from "discord-api-types/v10";
 import { CONFIG_KEYS } from "./config/keys";
-import {
-  endTtsOnlySession,
-  getAllMeetings,
-  getMeeting,
-  initializeMeeting,
-} from "./meetings";
+import { endTtsOnlySession, getMeeting, initializeMeeting } from "./meetings";
 import {
   handleRequestStartMeeting,
   handleAutoStartMeeting,
@@ -135,11 +131,10 @@ import {
   onboardCommand,
 } from "./commands/onboard";
 import { removeGuildInstaller } from "./services/guildInstallerService";
-import { captureEvent, shutdownAnalytics } from "./services/analyticsService";
+import { captureEvent } from "./services/analyticsService";
 import { setDiscordClient } from "./services/discordClientAccessor";
 import { startMeetingControlCommandWorker } from "./services/meetingControlWorkerService";
 import {
-  closeRuntimeAdmission,
   isRuntimeWarm,
   getRuntimeAdmissionContext,
   whenRuntimeServing,
@@ -259,8 +254,14 @@ const commandHandlers: Record<
 
 const handleCommandInteraction = async (
   interaction: ChatInputCommandInteraction,
+  signal?: AbortSignal,
 ) => {
   const { commandName } = interaction;
+  signal?.throwIfAborted();
+  if (commandName === "leave") {
+    await handleLeaveCommand(client, interaction, signal);
+    return;
+  }
   if (commandName === "startmeeting") {
     await handleRequestStartMeeting(interaction);
     return;
@@ -396,6 +397,7 @@ const buttonHandlers: Array<{
 const handleButtonInteraction = async (
   interaction: ButtonInteraction,
   signal?: AbortSignal,
+  work?: RuntimeWorkClaim,
 ) => {
   signal?.throwIfAborted();
   for (const entry of buttonHandlers) {
@@ -409,7 +411,7 @@ const handleButtonInteraction = async (
   }
 
   if (interaction.customId === "end_meeting") {
-    await handleEndMeetingButton(client, interaction);
+    await handleEndMeetingButton(client, interaction, work);
     return;
   }
   if (interaction.customId === "generate_image") {
@@ -431,10 +433,11 @@ const handleChannelSelectInteraction = async (
 const handleInteractionCreate = async (
   interaction: RepliableInteraction,
   signal?: AbortSignal,
+  work?: RuntimeWorkClaim,
 ) => {
   signal?.throwIfAborted();
   if (interaction.isChatInputCommand()) {
-    await handleCommandInteraction(interaction);
+    await handleCommandInteraction(interaction, signal);
     return;
   }
   if (interaction.isUserContextMenuCommand()) {
@@ -443,7 +446,7 @@ const handleInteractionCreate = async (
       return;
     }
     if (interaction.commandName === DISMISS_AUTORECORD_COMMAND_NAME) {
-      await handleDismissAutoRecord(client, interaction);
+      await handleDismissAutoRecord(client, interaction, signal);
       return;
     }
     await interaction.reply({
@@ -457,7 +460,7 @@ const handleInteractionCreate = async (
     return;
   }
   if (interaction.isButton()) {
-    await handleButtonInteraction(interaction, signal);
+    await handleButtonInteraction(interaction, signal, work);
     return;
   }
   if (interaction.isChannelSelectMenu()) {
@@ -690,7 +693,9 @@ async function executeInteractionWork(
         return;
       const authority = await work.authority();
       receiptAttempted = true;
-      const claimed = await tryClaimInteraction(interaction, authority);
+      const claimed = await work.trackEffect(() =>
+        tryClaimInteraction(interaction, authority),
+      );
       if (!claimed) {
         console.log("Skipping duplicate interaction", {
           interactionId: interaction.id,
@@ -698,10 +703,13 @@ async function executeInteractionWork(
         });
         return;
       }
+      work.acknowledgeInteractionReceipt();
       work.claimed();
-      await handleInteractionCreate(interaction, work.signal);
+      await handleInteractionCreate(interaction, work.signal, work);
     }
   } catch (e) {
+    if (e instanceof InitiatingStopInterruption)
+      work.acknowledgeInteractionStop(e.original, e.signal, e.deadline);
     if (receiptAttempted) work.fence();
     console.error("Unknown error processing command: ", e);
     if (work.signal.aborted) return;
@@ -1665,39 +1673,10 @@ async function setupApplicationCommands() {
   }
 }
 
-// Signal listener to start graceful shutdown
-process.on("SIGTERM", async () => {
-  closeRuntimeAdmission();
-  console.log("Received SIGTERM, initiating graceful shutdown");
-
-  // Stop accepting new meetings/requests
-  stopHandlingNewMeetings();
-
-  // Wait for ongoing meetings to finish
-  await completeOngoingMeetings();
-
-  // Flush buffered analytics before the task goes away. posthog-node batches,
-  // so anything still in the buffer is lost otherwise, and a dropped event is
-  // never reconstructed. This handler is registered at module scope, so it
-  // covers the api-only runtime too.
-  await shutdownAnalytics();
-
-  // Shut down the bot gracefully
-  console.log("Shutting down...");
-  process.exit(0); // Exit the process when all meetings are done
-});
 let isShuttingDown = false;
-
-function stopHandlingNewMeetings() {
+export function stopBotAdmission() {
   isShuttingDown = true;
 }
-
-async function completeOngoingMeetings() {
-  const meetings = getAllMeetings();
-  if (meetings.length > 0) {
-    console.log("Waiting for ongoing meetings to finish...");
-    await Promise.all(meetings.map((meeting) => meeting.isFinished));
-  } else {
-    console.log("No ongoing meetings, ready to shut down.");
-  }
+export async function destroyBot(): Promise<void> {
+  await client.destroy();
 }

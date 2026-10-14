@@ -2,15 +2,21 @@
 export function createPreservationBudget(initialDeadline: number) {
   const controller = new AbortController();
   let deadline = initialDeadline;
+  let elapsedDeadline = performance.now() + Math.max(0, deadline - Date.now());
   let timer: ReturnType<typeof setTimeout>;
   function arm() {
     clearTimeout(timer);
-    if (deadline <= Date.now())
+    elapsedDeadline = Math.min(
+      elapsedDeadline,
+      performance.now() + Math.max(0, deadline - Date.now()),
+    );
+    const remaining = elapsedDeadline - performance.now();
+    if (remaining <= 0)
       controller.abort(new Error("Preservation deadline reached"));
     else
       timer = setTimeout(
         () => controller.abort(new Error("Preservation deadline reached")),
-        deadline - Date.now(),
+        remaining,
       );
   }
   arm();

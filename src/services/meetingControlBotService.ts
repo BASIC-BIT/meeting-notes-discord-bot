@@ -1,3 +1,4 @@
+import { initiatingStopInterruption } from "./meetingStopInterruption";
 import {
   PermissionFlagsBits,
   type Client,
@@ -317,7 +318,20 @@ const executeStopLocalMeeting = async (
   if (!meeting.onEndMeeting) {
     throw new MeetingControlExecutionError("End meeting handler unavailable.");
   }
-  await meeting.onEndMeeting(meeting);
+  const original = meeting.reservation
+    ? {
+        guildId: meeting.reservation.guildId,
+        meetingId: meeting.reservation.meetingId,
+        ownerInstanceId: meeting.reservation.ownerInstanceId,
+        executionVersion: meeting.reservation.executionVersion,
+        voiceOperationAttemptId: meeting.reservation.voiceOperationAttemptId,
+      }
+    : undefined;
+  try {
+    await meeting.onEndMeeting(meeting);
+  } catch (error) {
+    throw initiatingStopInterruption(meeting, original, error);
+  }
   return { status: "ended", serverId: guildId, meetingId: meeting.meetingId };
 };
 

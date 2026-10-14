@@ -171,3 +171,64 @@ test("protectionUncertaintyFencesBeforeConfirmedExpiry", async () => {
   service.stop();
   warn.mockRestore();
 });
+
+test("stop during an issued confirmation cannot rearm an unsafe timer after its response", async () => {
+  let release!: (value: Response) => void;
+  const issued = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  const unsafe = jest.fn();
+  const request = jest
+    .fn()
+    .mockResolvedValueOnce(response())
+    .mockReturnValueOnce(issued);
+  const service = createRuntimeProtectionService({
+    identity,
+    agentUri: "http://agent",
+    request,
+    now,
+    onUnsafe: unsafe,
+  });
+  await service.start();
+  const confirmation = service.confirm().catch(() => undefined);
+  await Promise.resolve();
+  service.stop();
+  release(response());
+  await confirmation;
+  await jest.advanceTimersByTimeAsync(500_000);
+  expect(unsafe).not.toHaveBeenCalled();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+test("shutdown observes the actual held protection response before settling", async () => {
+  let release!: (value: Response) => void;
+  const issued = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  const request = jest
+    .fn()
+    .mockResolvedValueOnce(response())
+    .mockReturnValueOnce(issued);
+  const service = createRuntimeProtectionService({
+    identity,
+    agentUri: "http://agent",
+    request,
+    now,
+    onUnsafe: jest.fn(),
+  });
+  await service.start();
+  const confirmation = service.confirm().catch(() => undefined);
+  await Promise.resolve();
+  let settled = false;
+  const stopping = service.shutdown().then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  release(response());
+  await confirmation;
+  await stopping;
+  expect(settled).toBe(true);
+  await expect(service.confirm()).rejects.toThrow();
+  expect(request).toHaveBeenCalledTimes(2);
+});

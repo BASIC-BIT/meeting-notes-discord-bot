@@ -1,3 +1,4 @@
+import type { RuntimeApiOperation } from "./runtimeApiOperationService";
 import { assertNotionOutcomeKnown } from "./notionOperationLifetime";
 import type { MeetingData } from "../types/meeting-data";
 import {
@@ -115,10 +116,13 @@ export async function updateMeetingNotesService(
     metadata?: { notesMessageIds?: string[]; notesChannelId?: string };
   },
   signal?: AbortSignal,
+  operation?: RuntimeApiOperation,
 ) {
   signal?.throwIfAborted();
   const repository = getMeetingHistoryRepository();
-  const ok = await repository.updateNotes(params);
+  const ok = await (operation
+    ? operation.mutate(() => repository.updateNotes(params))
+    : repository.updateNotes(params));
   signal?.throwIfAborted();
   if (!ok) return false;
   try {
@@ -150,9 +154,14 @@ export async function updateMeetingNotesMessageMetadataService(
     expectedNotesVersion: number;
   },
   signal?: AbortSignal,
+  operation?: RuntimeApiOperation,
 ) {
   signal?.throwIfAborted();
-  return getMeetingHistoryRepository().updateNotesMessageMetadata(params);
+  return operation
+    ? operation.mutate(() =>
+        getMeetingHistoryRepository().updateNotesMessageMetadata(params),
+      )
+    : getMeetingHistoryRepository().updateNotesMessageMetadata(params);
 }
 
 export async function updateMeetingNameService(params: {

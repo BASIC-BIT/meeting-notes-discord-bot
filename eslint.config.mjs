@@ -11,7 +11,7 @@ export default [
   eslintConfigPrettier,
   // Special configuration for Node.js scripts
   {
-    files: ["scripts/**/*.{js,cjs}"],
+    files: ["scripts/**/*.{js,cjs}", "test/deployment/**/*.cjs"],
     languageOptions: { globals: globals.node },
     rules: {
       "@typescript-eslint/no-require-imports": "off",

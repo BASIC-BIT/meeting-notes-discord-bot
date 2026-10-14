@@ -1,7 +1,6 @@
 import {
   runNotionMutation,
   assertNotionOutcomeKnown,
-  UnresolvedNotionMutation,
 } from "./notionOperationLifetime";
 import { z } from "zod";
 import { config } from "./configService";
@@ -121,11 +120,31 @@ const buildBasicAuthHeader = () =>
     `${config.notion.clientId}:${config.notion.clientSecret}`,
   ).toString("base64")}`;
 
+// Successful bodies and explicit client rejections are terminal acknowledgments.
+// Server failures, lost bodies, and malformed success responses remain uncertain.
+async function readNotionAcknowledgment<T>(
+  response: Response,
+  schema: z.ZodType<T>,
+) {
+  const payload: unknown = await response.json();
+  if (response.ok) return { value: schema.parse(payload) };
+  const parsed = notionErrorResponseSchema.safeParse(payload);
+  const error = new NotionApiError(
+    response.status,
+    parsed.success ? (parsed.data.code ?? "notion_error") : "notion_error",
+    parsed.success
+      ? (parsed.data.message ?? "Notion request failed.")
+      : "Notion request failed.",
+  );
+  if (response.status >= 500) throw error;
+  return { error };
+}
+
 const postNotionToken = async (
   body: Record<string, string>,
   signal?: AbortSignal,
 ) => {
-  const { response, payload } = await runNotionMutation(signal, async () => {
+  const token = await runNotionMutation(signal, async () => {
     const response = await notionFetch(NOTION_TOKEN_URL, {
       signal,
       method: "POST",
@@ -137,22 +156,11 @@ const postNotionToken = async (
       },
       body: JSON.stringify(body),
     });
-
-    const payload: unknown = await response.json();
-    return { response, payload };
+    return readNotionAcknowledgment(response, notionTokenResponseSchema);
   });
   signal?.throwIfAborted();
-  if (!response.ok) {
-    const parsed = notionErrorResponseSchema.safeParse(payload);
-    throw new NotionApiError(
-      response.status,
-      parsed.success ? (parsed.data.code ?? "notion_error") : "notion_error",
-      parsed.success
-        ? (parsed.data.message ?? "Notion request failed.")
-        : "Notion request failed.",
-    );
-  }
-  return notionTokenResponseSchema.parse(payload);
+  if (token.error) throw token.error;
+  return token.value!;
 };
 
 const requestNotionApi = async <T>(params: {
@@ -163,43 +171,27 @@ const requestNotionApi = async <T>(params: {
   schema: z.ZodType<T>;
   signal?: AbortSignal;
 }): Promise<T> => {
-  const { response, payload } = await runNotionMutation(
-    params.signal,
-    async () => {
-      const response = await notionFetch(`${NOTION_API_ORIGIN}${params.path}`, {
-        signal: params.signal,
-        method: params.method,
-        headers: {
-          Authorization: `Bearer ${params.accessToken}`,
-          "Content-Type": "application/json",
-          "Notion-Version": config.notion.apiVersion,
-        },
-        body:
-          params.body === undefined ? undefined : JSON.stringify(params.body),
-      });
-
-      const payload: unknown = await response.json();
-      return { response, payload };
-    },
-  );
+  const request = async () => {
+    params.signal?.throwIfAborted();
+    const response = await notionFetch(`${NOTION_API_ORIGIN}${params.path}`, {
+      signal: params.signal,
+      method: params.method,
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        "Content-Type": "application/json",
+        "Notion-Version": config.notion.apiVersion,
+      },
+      body: params.body === undefined ? undefined : JSON.stringify(params.body),
+    });
+    return readNotionAcknowledgment(response, params.schema);
+  };
+  const result =
+    params.method === "GET"
+      ? await request()
+      : await runNotionMutation(params.signal, request);
   params.signal?.throwIfAborted();
-  if (params.signal && response.status >= 500)
-    throw new UnresolvedNotionMutation(
-      new Error("Notion server outcome unknown"),
-    );
-  if (!response.ok) {
-    const parsed = notionErrorResponseSchema.safeParse(payload);
-    throw new NotionApiError(
-      response.status,
-      parsed.success ? (parsed.data.code ?? "notion_error") : "notion_error",
-      parsed.success
-        ? (parsed.data.message ?? "Notion request failed.")
-        : "Notion request failed.",
-    );
-  }
-  return runNotionMutation(params.signal, async () =>
-    params.schema.parse(payload),
-  );
+  if (result.error) throw result.error;
+  return result.value!;
 };
 
 const refreshConnection = async (

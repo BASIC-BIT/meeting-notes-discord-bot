@@ -22,6 +22,7 @@ export async function initializeRuntimeLifecycle(
   gatewayReady: () => boolean,
   runtimeMode: RuntimeReadiness["runtimeMode"],
   signal?: AbortSignal,
+  checkpointAndFence?: () => Promise<void>,
 ) {
   if (
     !config.runtime.ecs &&
@@ -40,6 +41,7 @@ export async function initializeRuntimeLifecycle(
         }
       : { kind: "local", localId: getRuntimeInstanceId() },
   );
+  signal?.throwIfAborted();
   const repository = getDeploymentControlRepository();
   let dependenciesReady = false;
   const protection = createRuntimeProtectionService({
@@ -58,9 +60,7 @@ export async function initializeRuntimeLifecycle(
       cacheReady: await isRuntimeCacheReady(),
       dependenciesReady,
     }),
-    ...(identity.kind === "local"
-      ? { checkpointAndFence: async () => undefined }
-      : {}),
+    checkpointAndFence,
   });
   if (identity.kind === "local")
     await initializeLocalControl(
@@ -68,10 +68,12 @@ export async function initializeRuntimeLifecycle(
       identity,
       Math.floor(Date.now() / 1000),
     );
+  signal?.throwIfAborted();
   installRuntimeLifecycle(lifecycle);
   await startRuntimeLifecycle(identity);
   return {
     async ready() {
+      signal?.throwIfAborted();
       dependenciesReady = true;
       await lifecycle.refreshRuntimeReadiness();
       if (identity.kind === "local") {

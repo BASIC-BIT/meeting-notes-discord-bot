@@ -21,7 +21,8 @@ import {
 import { getRuntimeInstanceId } from "./runtimeInstanceService";
 
 let workerTimer: ReturnType<typeof setInterval> | undefined;
-let pollInProgress = false;
+let pendingPoll: Promise<void> | undefined;
+let workerStopped = false;
 
 const epochSeconds = () => Math.floor(Date.now() / 1000);
 const nowIso = () => new Date().toISOString();
@@ -146,9 +147,21 @@ async function runUploadJob(
     await work.settle();
   }
 }
-async function pollPersonalMediaUploadJobs() {
-  if (pollInProgress) return;
-  pollInProgress = true;
+function pollPersonalMediaUploadJobs(): Promise<void> {
+  if (workerStopped) return Promise.resolve();
+  if (pendingPoll) return pendingPoll;
+  let complete!: () => void;
+  const owned = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  pendingPoll = owned;
+  void runPoll().finally(() => {
+    pendingPoll = undefined;
+    complete();
+  });
+  return owned;
+}
+async function runPoll() {
   try {
     const jobs = await getPersonalMediaUploadRepository().listClaimable({
       instanceId: getRuntimeInstanceId(),
@@ -156,24 +169,26 @@ async function pollPersonalMediaUploadJobs() {
       maxAttempts: PERSONAL_MEDIA_UPLOAD_MAX_PROCESSING_ATTEMPTS,
       limit: PERSONAL_MEDIA_UPLOAD_WORKER_BATCH_SIZE,
     });
-    for (const job of jobs) await processPersonalMediaUploadJob(job);
+    for (const job of jobs) {
+      if (workerStopped) break;
+      await processPersonalMediaUploadJob(job);
+    }
   } catch (error) {
     console.error("Personal media upload worker failed", error);
-  } finally {
-    pollInProgress = false;
   }
 }
 
 export function startPersonalMediaUploadWorker() {
-  if (workerTimer) return;
+  if (workerTimer || workerStopped) return;
   void pollPersonalMediaUploadJobs();
   workerTimer = setInterval(() => {
     void pollPersonalMediaUploadJobs();
   }, PERSONAL_MEDIA_UPLOAD_WORKER_POLL_INTERVAL_MS);
 }
 
-export function stopPersonalMediaUploadWorker() {
-  if (!workerTimer) return;
+export function stopPersonalMediaUploadWorker(): Promise<void> {
+  workerStopped = true;
   clearInterval(workerTimer);
   workerTimer = undefined;
+  return pendingPoll ?? Promise.resolve();
 }

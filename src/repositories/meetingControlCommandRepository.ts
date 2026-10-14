@@ -72,7 +72,10 @@ export type MeetingControlCommandRepository = {
   completeCommand: (
     input: CompleteMeetingControlCommandInput,
   ) => Promise<boolean>;
-  failCommand: (input: FailMeetingControlCommandInput) => Promise<boolean>;
+  failCommand: (
+    input: FailMeetingControlCommandInput,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
 };
 
 const tableName = `${config.database.tablePrefix ?? ""}MeetingControlCommandTable`;
@@ -291,8 +294,9 @@ export function createDynamoMeetingControlCommandRepository(
         throw error;
       }
     },
-    async failCommand(input) {
+    async failCommand(input, signal) {
       try {
+        signal?.throwIfAborted();
         await dynamoDbClient.send(
           new UpdateItemCommand({
             TableName: tableName,
@@ -318,6 +322,7 @@ export function createDynamoMeetingControlCommandRepository(
               ":now": input.nowEpochSeconds,
             }),
           }),
+          signal ? { abortSignal: signal } : undefined,
         );
         return true;
       } catch (error) {

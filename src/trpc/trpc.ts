@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { runRuntimeApiOperation } from "../services/runtimeApiOperationService";
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { TrpcContext } from "./context";
 import {
@@ -99,6 +101,11 @@ const isSuperAdminAccess = t.middleware(({ ctx, next }) => {
 export const router = t.router;
 export const publicProcedure = t.procedure;
 export const authedProcedure = t.procedure.use(isAuthed);
+export const correctionProcedure = authedProcedure.use(({ next, path }) =>
+  runRuntimeApiOperation(`api:${path}:${randomUUID()}`, (operation) =>
+    next({ ctx: { operation } }),
+  ),
+);
 export const manageGuildProcedure = authedProcedure.use(isManageGuild);
 export const guildMemberProcedure = authedProcedure.use(isGuildMember);
 export const superAdminProcedure = authedProcedure.use(isSuperAdminAccess);

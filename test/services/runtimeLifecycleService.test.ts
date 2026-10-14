@@ -1,4 +1,6 @@
 /** @jest-environment node */
+import { RUNTIME_WORK_KINDS } from "../../src/types/deploymentControl";
+import { createProcessShutdownOwner } from "../../src/services/processShutdownService";
 import { createRuntimeLifecycle } from "../../src/services/runtimeLifecycleService";
 import { createRuntimeProtectionService } from "../../src/services/runtimeProtectionService";
 import { createMockDeploymentControlRepository } from "../../src/repositories/deploymentControlRepository";
@@ -569,4 +571,91 @@ test("uncertain release cannot reauthorize", async () => {
   ).rejects.toThrow("not been confirmed");
   expect(request).toHaveBeenCalledTimes(2);
   lifecycle.stop();
+});
+
+test("shutdown closes admission immediately and observes an actual pending runtime heartbeat", async () => {
+  const { lifecycle, repository } = await fixture();
+  const pending = barrier<void>();
+  const entered = barrier<void>();
+  const original = repository.getRecord.bind(repository);
+  jest
+    .spyOn(repository, "getRecord")
+    .mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await pending.promise;
+      return original(...args);
+    });
+  const heartbeat = lifecycle.refreshRuntimeReadiness().catch(() => undefined);
+  await entered.promise;
+  let settled = false;
+  const stopping = lifecycle.shutdown().then(() => {
+    settled = true;
+  });
+  expect(lifecycle.isAcceptingWork()).toBe(false);
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  pending.resolve();
+  await heartbeat;
+  await stopping;
+  expect(lifecycle.isAcceptingWork()).toBe(false);
+});
+
+test("all seven real work handles share one deadline and pending recovery cannot certify retirement", async () => {
+  const { lifecycle, repository } = await fixture();
+  await promote(repository);
+  await lifecycle.getRuntimeAdmissionContext();
+  const held = RUNTIME_WORK_KINDS.map((kind) => {
+    const handle = lifecycle.beginRuntimeWork(kind);
+    const tail = barrier<void>();
+    return { kind, tail, actual: tail.promise.then(() => handle.settle()) };
+  });
+  await replace(repository);
+  expect(
+    (await lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 })).kind,
+  ).toBe("busy");
+  expect(Object.values(lifecycle.getWorkCounts())).toEqual(
+    RUNTIME_WORK_KINDS.map(() => 1),
+  );
+  const exit = jest.fn();
+  const owner = createProcessShutdownOwner({
+    closeAdmission: () => lifecycle.closeAdmission(),
+    async preserve(budget) {
+      await Promise.all([
+        lifecycle.shutdown(),
+        ...held.map((entry) => entry.actual),
+      ]);
+      budget.signal.throwIfAborted();
+      return Object.values(lifecycle.getWorkCounts()).every(
+        (count) => count === 0,
+      );
+    },
+    flush: async () => {},
+    exit,
+  });
+  try {
+    const first = owner.request("protection_loss");
+    const deadline = owner.checkpoint().deadline;
+    for (const entry of held)
+      if (entry.kind !== "recovery_processing") entry.tail.resolve();
+    await jest.advanceTimersByTimeAsync(90_000);
+    expect(lifecycle.getWorkCounts().recovery_processing).toBe(1);
+    expect(
+      (await lifecycle.prepareRuntimeRetirement({ retirementEpoch: 1 })).kind,
+    ).toBe("busy");
+    expect(owner.request("signal")).toBe(first);
+    expect(owner.checkpoint().deadline).toBe(deadline);
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(await first).toEqual({ kind: "unresolved" });
+    expect(owner.checkpoint().actualSettled).toBe(false);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lifecycle.getWorkCounts().recovery_processing).toBe(1);
+    expect(
+      Object.values(lifecycle.getWorkCounts()).reduce((a, b) => a + b, 0),
+    ).toBe(1);
+  } finally {
+    for (const entry of held) entry.tail.resolve();
+    await owner.checkpoint().actual;
+    owner.dispose();
+    lifecycle.stop();
+  }
 });

@@ -13,8 +13,14 @@ import {
 } from "../meetings";
 import { fenceAndSettleSessionWork } from "./runtimeWorkAdmissionService";
 import { stopMeetingProcessing } from "./meetingProcessingLifetime";
-import { settleOwnedVoiceSession } from "./guildVoiceOperationService";
-import { reconcilePreservedRecordingReservation } from "./activeMeetingLeaseService";
+import {
+  settleOwnedVoiceSession,
+  waitOwnedVoiceEffects,
+} from "./guildVoiceOperationService";
+import {
+  reconcilePreservedRecordingReservation,
+  reconcilePreservedTtsReservation,
+} from "./activeMeetingLeaseService";
 import { createRecordingCheckpointService } from "./recordingCheckpointService";
 import {
   createMeetingInterruptionService,
@@ -27,30 +33,34 @@ type RecordingReservation = Extract<
   { sessionMode: "meeting" }
 >;
 type Stopped = {
-  reservation?: RecordingReservation;
-  original?: RecordingReservation;
+  reservation?: SessionReservation;
+  original?: SessionReservation;
+  ancillarySettled: boolean;
   local: Promise<void>;
   voice: Promise<"settled" | "uncertain">;
   children: Promise<boolean>;
 };
 type Disposition =
   | { kind: "unresolved" }
+  | { kind: "preserved"; sessionMode: "tts_only" }
   | {
+      sessionMode: "meeting";
       kind: "preserved";
       checkpoint: RecordingCheckpoint;
       status: "failed" | "interrupted" | "complete";
     };
 const stopped = new WeakMap<MeetingData, Stopped>();
 function stop(meeting: MeetingData, budget: PreservationBudget): Promise<void> {
-  const reservation =
-    meeting.reservation?.sessionMode === "meeting"
-      ? meeting.reservation
-      : undefined;
+  const reservation = meeting.reservation;
   const work: Stopped = {
     reservation,
     original: reservation
-      ? { ...reservation, historyKey: { ...reservation.historyKey } }
+      ? reservation.sessionMode === "meeting"
+        ? { ...reservation, historyKey: { ...reservation.historyKey } }
+        : { ...reservation }
       : undefined,
+    ancillarySettled:
+      !meeting.finalization || meeting.finalization.disposition === "durable",
     local: Promise.resolve(),
     voice: Promise.resolve("uncertain"),
     children: Promise.resolve(false),
@@ -73,6 +83,7 @@ function stop(meeting: MeetingData, budget: PreservationBudget): Promise<void> {
     waitForCaptureStreamSettlement(meeting),
     meeting.recordingCapture?.settled(),
     work.voice,
+    reservation ? waitOwnedVoiceEffects(reservation) : undefined,
     work.children,
   ]).then(() => {});
   return work.local;
@@ -180,6 +191,13 @@ function preservationInput(
     },
   };
 }
+function terminalPreservationStatus(
+  status: MeetingHistory["status"],
+  reason: InterruptionReason,
+) {
+  if (status === "failed" || status === "interrupted") return status;
+  return reason === "shutdown" ? "interrupted" : "failed";
+}
 async function preserve(
   meeting: MeetingData,
   budget: PreservationBudget,
@@ -187,6 +205,10 @@ async function preserve(
 ): Promise<Disposition> {
   const original = stopped.get(meeting)?.original;
   if (!original) return { kind: "unresolved" };
+  if (original.sessionMode === "tts_only")
+    return stopped.get(meeting)!.ancillarySettled
+      ? { kind: "preserved", sessionMode: "tts_only" }
+      : { kind: "unresolved" };
   const row = await getDeploymentControlRepository().getMeetingHistory(
     original.historyKey,
     budget.signal,
@@ -202,7 +224,12 @@ async function preserve(
   );
   if (row.status === "complete")
     return row.checkpoint
-      ? { kind: "preserved", checkpoint: row.checkpoint, status: "complete" }
+      ? {
+          kind: "preserved",
+          sessionMode: "meeting",
+          checkpoint: row.checkpoint,
+          status: "complete",
+        }
       : { kind: "unresolved" };
   if (
     !row.status ||
@@ -215,12 +242,7 @@ async function preserve(
     ].includes(row.status)
   )
     return { kind: "unresolved" };
-  const status =
-    row.status === "failed" || row.status === "interrupted"
-      ? row.status
-      : reason === "shutdown"
-        ? "interrupted"
-        : "failed";
+  const status = terminalPreservationStatus(row.status, reason);
   const input = preservationInput(meeting, original, row, captureState, budget);
   const result =
     row.status === "failed" || row.status === "interrupted"
@@ -236,7 +258,12 @@ async function preserve(
         });
   if (result.kind !== "committed") return { kind: "unresolved" };
   meeting.recordingCheckpoint = result.checkpoint;
-  return { kind: "preserved", checkpoint: result.checkpoint, status };
+  return {
+    kind: "preserved",
+    sessionMode: "meeting",
+    checkpoint: result.checkpoint,
+    status,
+  };
 }
 async function release(
   meeting: MeetingData,
@@ -257,16 +284,26 @@ async function release(
   if (!(await restoreVoiceSessionNickname(meeting, budget.signal)))
     return false;
   budget.signal.throwIfAborted();
-  const released = await reconcilePreservedRecordingReservation(
-    work.reservation,
-    {
-      checkpoint: disposition.checkpoint,
-      status: disposition.status,
-      localWork: work.local,
-      deadline: budget.deadline,
-      signal: budget.signal,
-    },
-  );
+  const proof = {
+    localWork: work.local,
+    deadline: budget.deadline,
+    signal: budget.signal,
+  };
+  const released =
+    work.reservation.sessionMode === "tts_only" &&
+    disposition.sessionMode === "tts_only"
+      ? await reconcilePreservedTtsReservation(work.reservation, {
+          ...proof,
+          ancillarySettled: work.ancillarySettled,
+        })
+      : work.reservation.sessionMode === "meeting" &&
+          disposition.sessionMode === "meeting"
+        ? await reconcilePreservedRecordingReservation(work.reservation, {
+            ...proof,
+            checkpoint: disposition.checkpoint,
+            status: disposition.status,
+          })
+        : false;
   if (!released) return false;
   meeting.recordingCapture?.releaseSettledBuffers();
   meeting.finished = true;

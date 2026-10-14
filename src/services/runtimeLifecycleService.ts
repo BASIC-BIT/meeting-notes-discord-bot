@@ -460,6 +460,13 @@ export function createRuntimeLifecycle(options: {
       allowed = false;
       ineligible = true;
     },
+    async shutdown() {
+      allowed = false;
+      ineligible = true;
+      clearInterval(heartbeat);
+      await Promise.allSettled([tail, protection.shutdown()]);
+      clearInterval(heartbeat);
+    },
     stop() {
       clearInterval(heartbeat);
       protection.stop();
@@ -515,3 +522,8 @@ export async function startRuntimeLifecycle(
     throw new Error("Runtime startup identity mismatch");
   }
 }
+
+export const shutdownRuntimeLifecycle = async () => {
+  await runtime?.shutdown();
+};
+export const getRuntimeWorkCounts = () => runtime?.getWorkCounts();

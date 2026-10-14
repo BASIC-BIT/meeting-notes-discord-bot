@@ -231,3 +231,30 @@ test("missingTaskDoesNotSettleVoice: no local operation cannot manufacture proof
   );
   expect(reservation.workHandle.settle).not.toHaveBeenCalled();
 });
+
+test("bounded voice uncertainty does not settle an issued transport promise", async () => {
+  jest.useFakeTimers();
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = fixture(() => pending);
+  await f.joinOwnedVoiceSession(f.reservation, f.options);
+  f.packet("channel", 1);
+  const disposition = f.settleOwnedVoiceSession(f.reservation, {
+    deadline: Date.now() + 100,
+  });
+  let effectsSettled = false;
+  const effects = f.waitOwnedVoiceEffects(f.reservation).then(() => {
+    effectsSettled = true;
+  });
+  await jest.advanceTimersByTimeAsync(100);
+  expect(await disposition).toBe("uncertain");
+  expect(effectsSettled).toBe(false);
+  finish();
+  await effects;
+  expect(effectsSettled).toBe(true);
+  expect(f.sendPayload).toHaveBeenCalledTimes(1);
+  expect(await f.settleOwnedVoiceSession(f.reservation)).toBe("uncertain");
+  expect(f.reservation.workHandle.settle).not.toHaveBeenCalled();
+});

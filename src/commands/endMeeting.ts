@@ -1,3 +1,5 @@
+import type { RuntimeWorkClaim } from "../services/runtimeWorkAdmissionService";
+import { initiatingStopInterruption } from "../services/meetingStopInterruption";
 import { acknowledgeRecordingDeliveryHistory } from "../services/recordingDeliveryService";
 import { interruptOwnedMeeting } from "../services/ownedMeetingInterruption";
 import {
@@ -225,12 +227,18 @@ async function retainLocalMeetingArtifacts(
 export async function handleEndMeetingButton(
   client: Client,
   interaction: ButtonInteraction,
+  work?: RuntimeWorkClaim,
 ) {
   const guildId = interaction.guildId!;
 
   const meeting = getMeeting(guildId);
+  const original = meeting?.reservation
+    ? { ...meeting.reservation }
+    : undefined;
 
+  let finalizationAttempted = false;
   try {
+    work?.signal.throwIfAborted();
     if (!meeting) {
       await interaction.reply("No active meeting to end in this channel.");
       return;
@@ -255,9 +263,15 @@ export async function handleEndMeetingButton(
       return;
     }
 
-    if (!interaction.deferred && !interaction.replied)
-      await interaction.deferUpdate();
+    if (!interaction.deferred && !interaction.replied) {
+      if (work) {
+        await work.trackEffect(() => interaction.deferUpdate());
+        work.acknowledgeInteractionDefer();
+      } else await interaction.deferUpdate();
+    }
+    work?.signal.throwIfAborted();
     await persistExplicitMeetingStop(meeting, MEETING_END_REASONS.BUTTON);
+    work?.signal.throwIfAborted();
     if (meeting.finishing) {
       await interaction.followUp({
         content: "Meeting is already finishing!",
@@ -269,10 +283,15 @@ export async function handleEndMeetingButton(
     meeting.endReason = MEETING_END_REASONS.BUTTON;
     meeting.endTriggeredByUserId = interaction.user.id;
 
+    finalizationAttempted = true;
     await withMeetingEndTrace(meeting, async () => {
       await runEndMeetingFlow({ client, meeting });
     });
   } catch (error) {
+    if (work)
+      throw meeting && finalizationAttempted
+        ? initiatingStopInterruption(meeting, original, error)
+        : error;
     console.error("Error during meeting end:", error);
     await interaction.followUp({
       content: "Meeting stop could not be confirmed. Please retry.",
@@ -284,12 +303,15 @@ export async function handleEndMeetingButton(
 export async function handleEndMeetingOther(
   client: Client,
   meeting: MeetingData,
+  signal?: AbortSignal,
 ) {
   try {
+    signal?.throwIfAborted();
     await withMeetingEndTrace(meeting, async () => {
       await runEndMeetingFlow({ client, meeting });
     });
   } catch (error) {
+    if (signal) throw error;
     console.error("Error during meeting end:", error);
   }
 }

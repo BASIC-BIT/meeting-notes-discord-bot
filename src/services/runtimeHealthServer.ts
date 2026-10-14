@@ -4,6 +4,7 @@ import { getRuntimeReadiness } from "./runtimeLifecycleService";
 /** One listener starts with liveness only; application routes attach after protection. */
 export async function startRuntimeHealthServer(port: number) {
   let application: RequestListener | undefined;
+  let closing: Promise<void> | undefined;
   const server = createServer((request, response) => {
     let path: string;
     try {
@@ -53,10 +54,12 @@ export async function startRuntimeHealthServer(port: number) {
         throw new Error("Application listener already installed");
       application = handler;
     },
-    close: () =>
-      new Promise<void>((resolve, reject) =>
+    close: () => {
+      closing ??= new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      );
+      return closing;
+    },
   };
 }
 export type RuntimeHealthServer = Awaited<

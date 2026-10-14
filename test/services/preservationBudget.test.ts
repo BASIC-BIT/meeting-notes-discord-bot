@@ -41,3 +41,26 @@ test("completion after expiry never becomes observed settlement", async () => {
   expect(await pending).toEqual({ kind: "unresolved" });
   budget.dispose();
 });
+
+test("clock rollback and a smaller absolute deadline cannot extend elapsed grace", async () => {
+  jest.useFakeTimers({ now: 4_000_000 });
+  const budget = createPreservationBudget(Date.now() + 100_000);
+  await jest.advanceTimersByTimeAsync(30_000);
+  jest.setSystemTime(Date.now() - 3_600_000);
+  budget.shorten(budget.deadline - 1);
+  await jest.advanceTimersByTimeAsync(69_999);
+  expect(budget.signal.aborted).toBe(false);
+  await jest.advanceTimersByTimeAsync(1);
+  expect(budget.signal.aborted).toBe(true);
+  budget.dispose();
+});
+
+test("clock forward jump tightens immediately instead of granting new elapsed grace", async () => {
+  jest.useFakeTimers({ now: 4_000_000 });
+  const budget = createPreservationBudget(Date.now() + 100_000);
+  await jest.advanceTimersByTimeAsync(30_000);
+  jest.setSystemTime(Date.now() + 3_600_000);
+  budget.shorten(budget.deadline - 1);
+  expect(budget.signal.aborted).toBe(true);
+  budget.dispose();
+});

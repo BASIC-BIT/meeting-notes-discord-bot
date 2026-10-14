@@ -362,10 +362,23 @@ export function createGuildVoiceOperationService(
     })();
     return operation.settlement;
   }
+  async function waitOwnedVoiceEffects(
+    reservation: SessionReservation,
+  ): Promise<void> {
+    const operation = operations.get(reservation.guildId);
+    if (!operation || operation.reservation !== reservation) return;
+    if (!operation.closed)
+      throw new Error("Voice operation must be sealed before draining effects");
+    await operation.settlement;
+    while (operation.pending.size)
+      await Promise.allSettled([...operation.pending]);
+    await Promise.allSettled([operation.writes]);
+  }
   return {
     prepareOwnedVoiceSession,
     joinOwnedVoiceSession,
     settleOwnedVoiceSession,
+    waitOwnedVoiceEffects,
   };
 }
 function observeJoin(operation: Operation, sessionId: string): void {
@@ -445,3 +458,5 @@ const service = createGuildVoiceOperationService({
 export const joinOwnedVoiceSession = service.joinOwnedVoiceSession;
 export const settleOwnedVoiceSession = service.settleOwnedVoiceSession;
 export const prepareOwnedVoiceSession = service.prepareOwnedVoiceSession;
+
+export const waitOwnedVoiceEffects = service.waitOwnedVoiceEffects;

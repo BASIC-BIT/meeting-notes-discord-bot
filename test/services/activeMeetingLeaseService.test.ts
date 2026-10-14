@@ -21,6 +21,7 @@ import {
   getOwnedSessionReservations,
   releaseSessionReservation,
   reconcilePreservedRecordingReservation,
+  reconcilePreservedTtsReservation,
   attachMeetingReservation,
   isReservationControlEligible,
 } from "../../src/services/activeMeetingLeaseService";
@@ -133,6 +134,75 @@ describe("activeMeetingLeaseService", () => {
       throw new Error("fixture admission failed");
     return { reservation: admitted.reservation, getMeetingHistory };
   }
+
+  test.each(["absent", "newer", "initialization_unknown"] as const)(
+    "TTS reconciliation requires original lease and actual cleanup: %s",
+    async (remote) => {
+      const getMeetingHistory = jest.fn();
+      jest.mocked(getDeploymentControlRepository).mockReturnValue({
+        reserveSession: jest.fn(async () => ({ kind: "admitted" })),
+        getMeetingHistory,
+      } as unknown as ReturnType<typeof getDeploymentControlRepository>);
+      const id = randomUUID();
+      const result = await tryAcquireMeetingLease({
+        guildId: id,
+        meetingId: id,
+        voiceChannelId: "voice",
+        textChannelId: "text",
+        isAutoRecording: false,
+        sessionMode: "tts_only",
+        reservedAt: Date.now(),
+      });
+      if (
+        result.kind !== "admitted" ||
+        result.reservation.sessionMode !== "tts_only"
+      )
+        throw new Error("Fixture admission failed");
+      const reservation = result.reservation;
+      if (remote === "initialization_unknown")
+        await unwindSessionInitialization(reservation, Promise.resolve(false));
+      mockedGetActiveMeetingLease.mockResolvedValue(
+        remote === "newer"
+          ? {
+              ...reservation,
+              ownerInstanceId: "newer-owner",
+              executionVersion: 2,
+              voiceChannelId: "voice",
+              textChannelId: "text",
+              isAutoRecording: false,
+              leaseExpiresAt: 9999999999,
+            }
+          : undefined,
+      );
+      let release!: () => void;
+      const localWork = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const proof = {
+        localWork,
+        signal: new AbortController().signal,
+        deadline: Date.now() + 100000,
+        ancillarySettled: true,
+      };
+      expect(
+        await reconcilePreservedTtsReservation(
+          { ...reservation },
+          { ...proof, localWork: Promise.resolve() },
+        ),
+      ).toBe(false);
+      const reconciling = reconcilePreservedTtsReservation(reservation, proof);
+      await Promise.resolve();
+      expect(reservation.workHandle.settle).not.toHaveBeenCalled();
+      expect(mockedGetActiveMeetingLease).not.toHaveBeenCalled();
+      release();
+      expect(await reconciling).toBe(remote === "absent");
+      expect(reservation.workHandle.settle).toHaveBeenCalledTimes(
+        remote === "absent" ? 1 : 0,
+      );
+      expect(mockedReleaseActiveMeetingLease).not.toHaveBeenCalled();
+      expect(getMeetingHistory).not.toHaveBeenCalled();
+    },
+  );
 
   test("reservation exposes the actual held renewal before meeting initialization", async () => {
     const { reservation } = await recordingReservation();
@@ -413,6 +483,37 @@ describe("activeMeetingLeaseService", () => {
       expect.objectContaining({ reservation, initializationUnresolved: true }),
     );
   });
+  test("terminal checkpoint cannot erase earlier failed initialization cleanup", async () => {
+    const { reservation, getMeetingHistory } = await recordingReservation();
+    if (reservation.sessionMode !== "meeting") throw new Error("fixture mode");
+    jest.mocked(transitionMeetingHistory).mockResolvedValue("applied");
+    await unwindSessionInitialization(reservation, Promise.resolve(false));
+    const checkpoint = {
+      revision: 1,
+    } as import("../../src/types/recordingCheckpoint").RecordingCheckpoint;
+    getMeetingHistory.mockResolvedValue({
+      guildId: reservation.guildId,
+      meetingId: reservation.meetingId,
+      ownerInstanceId: reservation.ownerInstanceId,
+      executionVersion: reservation.executionVersion,
+      status: "complete",
+      checkpoint,
+    } as import("../../src/types/db").MeetingHistory);
+    mockedGetActiveMeetingLease.mockResolvedValue(undefined);
+    const released = await reconcilePreservedRecordingReservation(reservation, {
+      checkpoint,
+      status: "complete",
+      localWork: Promise.resolve(),
+      signal: new AbortController().signal,
+      deadline: Date.now() + 100_000,
+    });
+    expect(released).toBe(false);
+    expect(reservation.workHandle.settle).not.toHaveBeenCalled();
+    expect(getOwnedSessionReservations()).toContainEqual(
+      expect.objectContaining({ reservation, initializationUnresolved: true }),
+    );
+  });
+
   test("lost failed-transition response is established by exact failed readback", async () => {
     const { reservation, getMeetingHistory } = await recordingReservation();
     jest

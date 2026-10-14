@@ -1,4 +1,25 @@
 /** @jest-environment node */
+import { createProcessShutdownOwner } from "../../src/services/processShutdownService";
+import { createRuntimeShutdown } from "../../src/services/runtimeShutdownService";
+const mockExit = jest.fn();
+const mockOwners: ReturnType<typeof createProcessShutdownOwner>[] = [];
+jest.mock(
+  "../../src/services/runtimeShutdownService",
+  () => ({
+    createRuntimeShutdown: jest.fn(() => {
+      const owner = createProcessShutdownOwner({
+        closeAdmission: jest.fn(),
+        preserve: async () => true,
+        flush: async () => {},
+        exit: mockExit,
+      });
+      owner.installSignalHandlers(process);
+      mockOwners.push(owner);
+      return owner;
+    }),
+  }),
+  { virtual: true },
+);
 jest.mock("../../src/observability/langfuseInstrumentation", () => ({}));
 jest.mock("../../src/voiceUdpGuard", () => ({}));
 jest.mock("../../src/ipv4first", () => ({}));
@@ -33,6 +54,10 @@ import { initializeRuntimeLifecycle } from "../../src/services/runtimeStartupSer
 import { startRuntimeHealthServer } from "../../src/services/runtimeHealthServer";
 import { config } from "../../src/services/configService";
 import { verifyLangfusePrompts } from "../../src/services/langfusePromptService";
+
+afterEach(() => {
+  for (const owner of mockOwners.splice(0)) owner.dispose();
+});
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -132,4 +157,78 @@ test("API-only mode has no gateway login dependency", async () => {
   expect(setupBot).not.toHaveBeenCalled();
   expect(setupWebServer).toHaveBeenCalledTimes(1);
   expect(ready).toHaveBeenCalledTimes(1);
+});
+
+test("signal owner is installed before held health listen and waits late server close before exit", async () => {
+  config.runtime.ecs = true;
+  let listen!: (
+    server: Awaited<ReturnType<typeof startRuntimeHealthServer>>,
+  ) => void;
+  const health = {
+    server: {} as Awaited<
+      ReturnType<typeof startRuntimeHealthServer>
+    >["server"],
+    activate: jest.fn(),
+    close: jest.fn(async () => {}),
+  };
+  jest.mocked(startRuntimeHealthServer).mockReturnValue(
+    new Promise((resolve) => {
+      listen = resolve;
+    }),
+  );
+  jest
+    .mocked(initializeRuntimeLifecycle)
+    .mockResolvedValue({ ready: jest.fn(), failed: jest.fn() });
+  const boot = bootstrapApp("api");
+  const rejected = boot.catch((error: unknown) => error);
+  try {
+    expect(createRuntimeShutdown).toHaveBeenCalledTimes(1);
+    process.emit("SIGTERM");
+    expect(mockOwners[0].startupSignal.aborted).toBe(true);
+    expect(mockExit).not.toHaveBeenCalled();
+  } finally {
+    listen(health);
+    await rejected;
+  }
+  await mockOwners[0].request("signal");
+  expect(initializeRuntimeLifecycle).not.toHaveBeenCalled();
+  expect(setupWebServer).not.toHaveBeenCalled();
+  expect(health.close).toHaveBeenCalledTimes(1);
+  expect(mockExit).toHaveBeenCalledTimes(1);
+});
+
+test("startup failure starts the budget before a held server close can finish", async () => {
+  config.runtime.ecs = true;
+  let close!: () => void;
+  let closing!: () => void;
+  const started = new Promise<void>((resolve) => {
+    closing = resolve;
+  });
+  const health = {
+    server: {} as Awaited<
+      ReturnType<typeof startRuntimeHealthServer>
+    >["server"],
+    activate: jest.fn(),
+    close: jest.fn(() => {
+      closing();
+      return new Promise<void>((resolve) => {
+        close = resolve;
+      });
+    }),
+  };
+  jest.mocked(startRuntimeHealthServer).mockResolvedValue(health);
+  jest
+    .mocked(initializeRuntimeLifecycle)
+    .mockRejectedValue(new Error("Synthetic protection failure"));
+  const boot = bootstrapApp("api").catch((error: unknown) => error);
+  await started;
+  try {
+    expect(mockOwners[0].startupSignal.aborted).toBe(true);
+    expect(mockExit).not.toHaveBeenCalled();
+  } finally {
+    close();
+    await boot;
+  }
+  await mockOwners[0].request("startup_failure");
+  expect(mockExit).toHaveBeenCalledWith(1);
 });

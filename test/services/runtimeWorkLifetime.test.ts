@@ -3,6 +3,7 @@ import {
   beginRuntimeWorkClaim,
   getRuntimeWorkAdmissionCheckpoints,
   fenceAndSettleSessionWork,
+  releaseAcknowledgedRuntimeWork,
 } from "../../src/services/runtimeWorkAdmissionService";
 const mockReservations: Array<{
   reservation: import("../../src/types/deploymentControl").SessionReservation;
@@ -103,5 +104,38 @@ test.each([true, false])(
         ({ id }) => id === `child-${terminalAck}`,
       ),
     ).toBe(!terminalAck);
+  },
+);
+
+test.each(["known", "unknown", "cancelled"] as const)(
+  "personal terminal ACK cannot certify later ancillary delivery: %s",
+  async (outcome) => {
+    const id = `synthetic-delivery-${outcome}`;
+    const work = beginRuntimeWorkClaim("personal", id);
+    const claim = {
+      claimId: id,
+      instanceId: "synthetic",
+      attempt: 1,
+      expiresAt: 100,
+    };
+    work.recordClaim(claim);
+    await work.trackPromise(async () => {
+      work.acknowledgeTerminal();
+      work.delivering();
+      // Unknown post-claim mutation fences itself even without external shutdown.
+      if (outcome !== "known") work.fence();
+      await work.settle();
+    });
+    expect(releaseAcknowledgedRuntimeWork(id)).toBe(outcome === "known");
+    const checkpoint = getRuntimeWorkAdmissionCheckpoints().find(
+      (entry) => entry.id === id,
+    );
+    if (outcome === "known") expect(checkpoint).toBeUndefined();
+    else
+      expect(checkpoint).toMatchObject({
+        domain: "ancillary",
+        localSettled: true,
+        terminalAcknowledged: claim,
+      });
   },
 );

@@ -10,13 +10,17 @@ import {
   waitForCaptureStreamSettlement,
 } from "../../src/audio";
 import { fenceAndSettleSessionWork } from "../../src/services/runtimeWorkAdmissionService";
+import { waitOwnedVoiceEffects } from "../../src/services/guildVoiceOperationService";
 import { stopMeetingProcessing } from "../../src/services/meetingProcessingLifetime";
 import {
   getActiveMeetingLease,
   getDeploymentControlRepository,
 } from "../../src/db";
 import { createRecordingCheckpointService } from "../../src/services/recordingCheckpointService";
-import { reconcilePreservedRecordingReservation } from "../../src/services/activeMeetingLeaseService";
+import {
+  reconcilePreservedTtsReservation,
+  reconcilePreservedRecordingReservation,
+} from "../../src/services/activeMeetingLeaseService";
 const mockPreserve = jest.fn(async () => ({
   kind: "committed",
   checkpoint: { revision: 2 },
@@ -44,9 +48,11 @@ jest.mock("../../src/services/meetingProcessingLifetime", () => ({
 }));
 jest.mock("../../src/services/guildVoiceOperationService", () => ({
   settleOwnedVoiceSession: jest.fn(async () => "settled"),
+  waitOwnedVoiceEffects: jest.fn(async () => {}),
 }));
 jest.mock("../../src/services/activeMeetingLeaseService", () => ({
   reconcilePreservedRecordingReservation: jest.fn(async () => true),
+  reconcilePreservedTtsReservation: jest.fn(async () => true),
 }));
 jest.mock("../../src/meetings", () => ({
   getMeeting: jest.fn(),
@@ -89,6 +95,10 @@ test.each([true, false])(
     const receiver = held();
     const content = held();
     const preservation = held();
+    const voiceEffects = held();
+    jest
+      .mocked(waitOwnedVoiceEffects)
+      .mockReturnValueOnce(voiceEffects.promise);
     jest.mocked(stopMeetingProcessing).mockReturnValueOnce(processing.promise);
     jest
       .mocked(waitForCaptureStreamSettlement)
@@ -155,6 +165,9 @@ test.each([true, false])(
     await new Promise<void>((done) => setImmediate(done));
     expect(mockPreserve).not.toHaveBeenCalled();
     preservation.release();
+    await new Promise<void>((done) => setImmediate(done));
+    expect(mockPreserve).not.toHaveBeenCalled();
+    voiceEffects.release();
     expect(await pending).toMatchObject({
       kind: childrenSettled ? "settled" : "unresolved",
     });
@@ -244,5 +257,58 @@ test.each(["complete", "processing"] as const)(
           lastAcknowledgedCheckpoint: checkpoint,
         }),
       );
+  },
+);
+
+test.each([false, true])(
+  "TTS interruption waits actual processing and voice effects, retaining prior finalizer uncertainty: %s",
+  async (uncertainFinalizer) => {
+    const processing = held();
+    const transport = held();
+    jest.mocked(stopMeetingProcessing).mockReturnValueOnce(processing.promise);
+    jest.mocked(waitOwnedVoiceEffects).mockReturnValueOnce(transport.promise);
+    const meeting = {
+      guildId: `synthetic-tts-${uncertainFinalizer}`,
+      meetingId: "synthetic-tts",
+      reservation: {
+        guildId: `synthetic-tts-${uncertainFinalizer}`,
+        meetingId: "synthetic-tts",
+        sessionMode: "tts_only",
+        ownerInstanceId: "original",
+        executionVersion: 1,
+        voiceOperationAttemptId: "original-tts",
+        reservedAt: 0,
+      },
+      sessionMode: "tts_only",
+      audioData: {},
+      setFinished: jest.fn(),
+      ...(uncertainFinalizer
+        ? {
+            finalization: {
+              promise: Promise.resolve(),
+              disposition: "unresolved",
+              controller: new AbortController(),
+            },
+          }
+        : {}),
+    } as unknown as MeetingData;
+    const interrupted = interruptOwnedMeeting(meeting, {
+      reason: "shutdown",
+      deadline: Date.now() + 100_000,
+    });
+    processing.release();
+    await new Promise<void>((done) => setImmediate(done));
+    expect(reconcilePreservedTtsReservation).not.toHaveBeenCalled();
+    transport.release();
+    expect(await interrupted).toEqual({
+      kind: uncertainFinalizer ? "unresolved" : "settled",
+    });
+    expect(getDeploymentControlRepository).not.toHaveBeenCalled();
+    expect(reconcilePreservedTtsReservation).toHaveBeenCalledTimes(
+      uncertainFinalizer ? 0 : 1,
+    );
+    expect(meeting.setFinished).toHaveBeenCalledTimes(
+      uncertainFinalizer ? 0 : 1,
+    );
   },
 );

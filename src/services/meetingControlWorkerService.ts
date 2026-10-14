@@ -1,3 +1,7 @@
+import {
+  InitiatingStopInterruption,
+  sameOriginalSession,
+} from "./meetingStopInterruption";
 import type { Client } from "discord.js";
 import { randomUUID } from "node:crypto";
 import type { MeetingControlCommand } from "../types/meetingControl";
@@ -17,7 +21,8 @@ const WORKER_CLAIM_RENEWAL_MS = 30_000;
 const WORKER_BATCH_SIZE = 5;
 
 let workerTimer: ReturnType<typeof setInterval> | undefined;
-let pollInProgress = false;
+let pendingPoll: Promise<void> | undefined;
+let workerStopped = false;
 
 const epochSeconds = () => Math.floor(Date.now() / 1000);
 const nowIso = () => new Date().toISOString();
@@ -49,6 +54,23 @@ export function processMeetingControlCommand(
     return Promise.resolve();
   }
   return work.trackPromise(() => runCommand(client, command, instanceId, work));
+}
+
+function isOriginalStopInterruption(
+  error: unknown,
+  command: MeetingControlCommand,
+  authority: WorkAdmissionAuthority,
+  instanceId: string,
+): error is InitiatingStopInterruption {
+  return (
+    error instanceof InitiatingStopInterruption &&
+    command.commandType === "stop_meeting" &&
+    authority.kind === "session" &&
+    sameOriginalSession(authority.ownership, error.original) &&
+    error.original.ownerInstanceId === instanceId &&
+    !error.signal.aborted &&
+    Date.now() < error.deadline
+  );
 }
 
 async function runCommand(
@@ -139,7 +161,32 @@ async function runCommand(
     if (!committed) work.fence();
     else work.acknowledgeTerminal();
   } catch (error) {
-    if (!work.signal.aborted) {
+    if (
+      work.signal.aborted &&
+      isOriginalStopInterruption(error, command, authority, instanceId)
+    ) {
+      try {
+        const committed = await work.trackTerminalEffect(
+          () =>
+            repository.failCommand(
+              {
+                requestId: command.requestId,
+                instanceId,
+                claimId,
+                nowEpochSeconds: epochSeconds(),
+                updatedAt: nowIso(),
+                error: error.message,
+              },
+              error.signal,
+            ),
+          { claimId, instanceId, expiresAt: claimInput.claimExpiresAt },
+          error.signal,
+        );
+        if (committed) work.acknowledgeTerminal();
+      } catch {
+        work.fence();
+      }
+    } else if (!work.signal.aborted) {
       try {
         if (
           !(await repository.failCommand({
@@ -163,9 +210,21 @@ async function runCommand(
   }
 }
 
-async function pollMeetingControlCommands(client: Client) {
-  if (pollInProgress) return;
-  pollInProgress = true;
+function pollMeetingControlCommands(client: Client): Promise<void> {
+  if (workerStopped) return Promise.resolve();
+  if (pendingPoll) return pendingPoll;
+  let complete!: () => void;
+  const owned = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  pendingPoll = owned;
+  void runPoll(client).finally(() => {
+    pendingPoll = undefined;
+    complete();
+  });
+  return owned;
+}
+async function runPoll(client: Client) {
   try {
     const commands =
       await getMeetingControlCommandRepository().listClaimablePendingCommands({
@@ -173,25 +232,26 @@ async function pollMeetingControlCommands(client: Client) {
         nowEpochSeconds: epochSeconds(),
         limit: WORKER_BATCH_SIZE,
       });
-    for (const command of commands)
+    for (const command of commands) {
+      if (workerStopped) break;
       await processMeetingControlCommand(client, command);
+    }
   } catch (error) {
     console.error("Meeting control command worker failed", error);
-  } finally {
-    pollInProgress = false;
   }
 }
 
 export function startMeetingControlCommandWorker(client: Client) {
-  if (workerTimer) return;
+  if (workerTimer || workerStopped) return;
   void pollMeetingControlCommands(client);
   workerTimer = setInterval(() => {
     void pollMeetingControlCommands(client);
   }, WORKER_POLL_INTERVAL_MS);
 }
 
-export function stopMeetingControlCommandWorker() {
-  if (!workerTimer) return;
+export function stopMeetingControlCommandWorker(): Promise<void> {
+  workerStopped = true;
   clearInterval(workerTimer);
   workerTimer = undefined;
+  return pendingPoll ?? Promise.resolve();
 }

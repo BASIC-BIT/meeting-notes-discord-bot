@@ -507,12 +507,48 @@ export async function reconcilePreservedRecordingReservation(
   const owned = reservations.get(key);
   if (!owned || owned.reservation !== reservation) return false;
   await proof.localWork;
+  if (
+    owned.initializationUnresolved &&
+    (await owned.initializationCleanup?.catch(() => false)) !== true
+  )
+    return false;
   proof.signal.throwIfAborted();
   const row = await getDeploymentControlRepository().getMeetingHistory(
     reservation.historyKey,
     proof.signal,
   );
   if (!matchesPreservedHistory(row, reservation, proof)) return false;
+  return reconcileSettledReservation(owned, proof);
+}
+export async function reconcilePreservedTtsReservation(
+  reservation: Extract<SessionReservation, { sessionMode: "tts_only" }>,
+  proof: Pick<
+    PreservedRecordingReleaseProof,
+    "localWork" | "signal" | "deadline"
+  > & {
+    ancillarySettled: boolean;
+  },
+): Promise<boolean> {
+  const owned = reservations.get(
+    reservationKey(reservation.guildId, reservation.meetingId),
+  );
+  if (!owned || owned.reservation !== reservation || !proof.ancillarySettled)
+    return false;
+  await proof.localWork;
+  if (
+    owned.initializationUnresolved &&
+    (await owned.initializationCleanup?.catch(() => false)) !== true
+  )
+    return false;
+  proof.signal.throwIfAborted();
+  return reconcileSettledReservation(owned, proof);
+}
+async function reconcileSettledReservation(
+  owned: OwnedReservation,
+  proof: Pick<PreservedRecordingReleaseProof, "signal" | "deadline">,
+): Promise<boolean> {
+  const { reservation } = owned;
+  const key = reservationKey(reservation.guildId, reservation.meetingId);
   if (
     (await settleOwnedVoiceSession(reservation, {
       deadline: proof.deadline,
@@ -663,6 +699,13 @@ export function getOwnedSessionReservations(): ReadonlyArray<{
       initializationCleanup,
       renewal,
     }),
+  );
+}
+export async function stopReservationRenewals(): Promise<void> {
+  const owned = [...reservations.values()];
+  for (const entry of owned) clearInterval(entry.timer);
+  await Promise.allSettled(
+    owned.flatMap((entry) => [entry.renewal, entry.release]),
   );
 }
 export function getUncertainSessionAdmissions() {

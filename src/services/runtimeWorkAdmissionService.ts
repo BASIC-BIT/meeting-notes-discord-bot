@@ -14,7 +14,8 @@ import {
   isReservationControlEligible,
 } from "./activeMeetingLeaseService";
 
-type Domain = "control" | "personal" | "interaction" | "ancillary";
+type Domain =
+  "control" | "personal" | "interaction" | "ancillary" | "api_correction";
 type ClaimCheckpoint = {
   claimId: string;
   instanceId: string;
@@ -34,6 +35,11 @@ type Checkpoint = {
   ownedSettled?: boolean;
   effects: Set<Promise<unknown>>;
   terminalAcknowledged?: ClaimCheckpoint;
+  terminalAcknowledgedDomain?: Domain;
+  apiOutcomeKnown?: boolean;
+  interactionReceiptAcknowledged?: boolean;
+  interactionDeferAcknowledged?: boolean;
+  interactionStopAcknowledged?: boolean;
 };
 const work = new Map<string, Checkpoint>();
 const closingSessions = new WeakSet<SessionReservation>();
@@ -89,6 +95,7 @@ export function beginRuntimeWorkClaim(
         }
       : undefined,
     localSettled: false,
+    apiOutcomeKnown: domain === "api_correction" ? true : undefined,
     effects: new Set(),
   };
   const parentSignal = parent ? getReservationSignal(parent) : undefined;
@@ -99,6 +106,50 @@ export function beginRuntimeWorkClaim(
   parentSignal?.addEventListener("abort", onParentFence, { once: true });
   work.set(id, checkpoint);
   let acceptingEffects = true;
+  function ownEffect<T>(
+    run: () => Promise<T>,
+    assertAllowed: () => void,
+  ): Promise<T> {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (error: unknown) => void;
+    const effect = new Promise<T>((done, failed) => {
+      resolve = done;
+      reject = failed;
+    });
+    checkpoint.effects.add(effect);
+    void effect.then(
+      () => checkpoint.effects.delete(effect),
+      () => checkpoint.effects.delete(effect),
+    );
+    try {
+      if (!acceptingEffects)
+        throw new Error("Runtime work effects are closing");
+      assertAllowed();
+      resolve(run());
+    } catch (error) {
+      reject(error);
+    }
+    return effect;
+  }
+  function releaseLocalIfSettled() {
+    if (
+      work.get(id) !== checkpoint ||
+      !checkpoint.localSettled ||
+      checkpoint.effects.size ||
+      (checkpoint.ownedPromise && !checkpoint.ownedSettled)
+    )
+      return;
+    if (checkpoint.controller.signal.aborted) {
+      releaseAcknowledgedRuntimeWork(id);
+      return;
+    }
+    handle.settle();
+    work.delete(id);
+  }
+  function completeOwnedPromise() {
+    checkpoint.ownedSettled = true;
+    releaseLocalIfSettled();
+  }
   return {
     signal: checkpoint.controller.signal,
     trackPromise<T>(run: () => Promise<T>): Promise<T> {
@@ -110,14 +161,7 @@ export function beginRuntimeWorkClaim(
       });
       checkpoint.ownedPromise = promise;
       checkpoint.ownedSettled = false;
-      void promise.then(
-        () => {
-          checkpoint.ownedSettled = true;
-        },
-        () => {
-          checkpoint.ownedSettled = true;
-        },
-      );
+      void promise.then(completeOwnedPromise, completeOwnedPromise);
       try {
         resolve(run());
       } catch (error) {
@@ -126,31 +170,82 @@ export function beginRuntimeWorkClaim(
       return promise;
     },
     trackEffect<T>(run: () => Promise<T>): Promise<T> {
-      let resolve!: (value: T | PromiseLike<T>) => void;
-      let reject!: (error: unknown) => void;
-      const effect = new Promise<T>((done, failed) => {
-        resolve = done;
-        reject = failed;
-      });
-      checkpoint.effects.add(effect);
-      void effect.then(
-        () => checkpoint.effects.delete(effect),
-        () => checkpoint.effects.delete(effect),
+      return ownEffect(run, () =>
+        checkpoint.controller.signal.throwIfAborted(),
       );
-      try {
-        if (!acceptingEffects)
-          throw new Error("Runtime work effects are closing");
-        checkpoint.controller.signal.throwIfAborted();
-        resolve(run());
-      } catch (error) {
-        reject(error);
-      }
-      return effect;
+    },
+    trackApiMutation<T>(run: () => Promise<T>): Promise<T> {
+      if (checkpoint.domain !== "api_correction")
+        throw new Error("API mutation requires API operation ownership");
+      return ownEffect(
+        async () => {
+          try {
+            return await run();
+          } catch (error) {
+            checkpoint.apiOutcomeKnown = false;
+            checkpoint.stage = "unresolved";
+            checkpoint.controller.abort();
+            throw error;
+          }
+        },
+        () => checkpoint.controller.signal.throwIfAborted(),
+      );
+    },
+    trackTerminalEffect<T>(
+      run: () => Promise<T>,
+      original: ClaimCheckpoint,
+      signal: AbortSignal,
+    ): Promise<T> {
+      return ownEffect(run, () => {
+        signal.throwIfAborted();
+        const claim = checkpoint.claim;
+        if (
+          !claim ||
+          claim.claimId !== original.claimId ||
+          claim.instanceId !== original.instanceId ||
+          claim.attempt !== original.attempt ||
+          claim.expiresAt !== original.expiresAt
+        )
+          throw new Error("Terminal effect requires the exact original claim");
+      });
+    },
+    acknowledgeInteractionReceipt() {
+      if (checkpoint.domain !== "interaction")
+        throw new Error("Interaction receipt requires interaction ownership");
+      checkpoint.interactionReceiptAcknowledged = true;
+    },
+    acknowledgeInteractionDefer() {
+      if (
+        checkpoint.domain !== "interaction" ||
+        !checkpoint.interactionReceiptAcknowledged
+      )
+        throw new Error(
+          "Interaction defer requires its original acknowledged receipt",
+        );
+      checkpoint.interactionDeferAcknowledged = true;
+    },
+    acknowledgeInteractionStop(
+      original: SessionOwnership,
+      signal: AbortSignal,
+      deadline: number,
+    ) {
+      if (
+        checkpoint.domain !== "interaction" ||
+        !checkpoint.interactionReceiptAcknowledged ||
+        !checkpoint.interactionDeferAcknowledged ||
+        !sameSession(checkpoint.session, original) ||
+        signal.aborted ||
+        Date.now() >= deadline
+      )
+        return false;
+      checkpoint.interactionStopAcknowledged = true;
+      return true;
     },
     acknowledgeTerminal() {
       if (!checkpoint.claim)
         throw new Error("Terminal acknowledgment requires the original claim");
       checkpoint.terminalAcknowledged = { ...checkpoint.claim };
+      checkpoint.terminalAcknowledgedDomain = checkpoint.domain;
     },
     recordClaim(claim: ClaimCheckpoint) {
       checkpoint.claim = claim;
@@ -189,9 +284,7 @@ export function beginRuntimeWorkClaim(
         await Promise.allSettled([...checkpoint.effects]);
       checkpoint.localSettled = true;
       parentSignal?.removeEventListener("abort", onParentFence);
-      if (checkpoint.controller.signal.aborted) return;
-      handle.settle();
-      work.delete(id);
+      releaseLocalIfSettled();
     },
   };
 }
@@ -245,22 +338,45 @@ export function fenceRuntimeWorkAdmission(id: string): void {
   entry.controller.abort();
 }
 
+function localLifetimeSettled(entry: Checkpoint): boolean {
+  return (
+    entry.localSettled &&
+    entry.ownedSettled === true &&
+    entry.effects.size === 0
+  );
+}
+function sameClaim(left: ClaimCheckpoint, right: ClaimCheckpoint): boolean {
+  return (
+    left.claimId === right.claimId &&
+    left.instanceId === right.instanceId &&
+    left.attempt === right.attempt &&
+    left.expiresAt === right.expiresAt
+  );
+}
 /** A terminal acknowledgment permits release only after its exact owner's complete local lifetime. */
 export function releaseAcknowledgedRuntimeWork(id: string): boolean {
   const entry = work.get(id);
   if (!entry) return true;
+  if (entry.domain === "api_correction") {
+    if (!localLifetimeSettled(entry) || !entry.apiOutcomeKnown) return false;
+    entry.handle.settle();
+    work.delete(id);
+    return true;
+  }
+  if (entry.domain === "interaction" && entry.interactionStopAcknowledged) {
+    if (!localLifetimeSettled(entry)) return false;
+    entry.handle.settle();
+    work.delete(id);
+    return true;
+  }
   const acknowledged = entry.terminalAcknowledged;
   const claim = entry.claim;
   if (
-    !entry.localSettled ||
-    !entry.ownedSettled ||
-    entry.effects.size ||
+    !localLifetimeSettled(entry) ||
     !acknowledged ||
+    entry.terminalAcknowledgedDomain !== entry.domain ||
     !claim ||
-    acknowledged.claimId !== claim.claimId ||
-    acknowledged.instanceId !== claim.instanceId ||
-    acknowledged.attempt !== claim.attempt ||
-    acknowledged.expiresAt !== claim.expiresAt
+    !sameClaim(acknowledged, claim)
   )
     return false;
   entry.handle.settle();
