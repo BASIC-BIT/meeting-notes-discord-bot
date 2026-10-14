@@ -43,3 +43,31 @@ export async function prepareTranscriptionFixture(
     throw error;
   }
 }
+
+export async function prepareTranscriptionAcceptanceFixture(
+  root: string,
+  dependencyRoot = root,
+): Promise<string> {
+  const fixture = await prepareTranscriptionFixture(root, dependencyRoot);
+  try {
+    const scripts = "scripts/speech-detection";
+    mkdirSync(path.join(fixture, scripts), { recursive: true });
+    for (const file of [
+      "check-acceptance.mjs",
+      "acceptance-evidence.mjs",
+      "evidence.mjs",
+    ])
+      cpSync(path.join(root, scripts, file), path.join(fixture, scripts, file));
+    // ESM package resolution does not use NODE_PATH. Copy its one script dependency
+    // into the owned fixture; CommonJS dependencies remain read-only through NODE_PATH.
+    cpSync(
+      path.join(dependencyRoot, "node_modules/zod"),
+      path.join(fixture, "node_modules/zod"),
+      { recursive: true },
+    );
+    return fixture;
+  } catch (error) {
+    removeOwnedFixture(fixture, "vad-build-contract-");
+    throw error;
+  }
+}

@@ -1,10 +1,47 @@
+/** @jest-environment node */
 import { DEFAULT_SPEECH_POLICY } from "../../src/services/speechDetectionPolicy";
 import { serialize, deserialize } from "node:v8";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  cpSync,
+  existsSync,
+} from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { prepareTranscriptionAcceptanceFixture } from "../helpers/compiledTranscriptionFixture";
+import { removeOwnedFixture } from "../helpers/compiledSpeechDetectionFixture";
+const root = path.resolve(__dirname, "../..");
+let compiled: string;
+beforeAll(async () => {
+  compiled = await prepareTranscriptionAcceptanceFixture(root);
+  const probe = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `
+    for (const file of ['speechDetectionPolicy', '../evals/transcriptionCorpus', '../evals/transcriptionMetrics'])
+      require('./dist/services/' + file + '.js');
+    require('./dist/evals/transcriptionImplementation.js').collectTranscriptionImplementation()
+      .then((record) => console.log(record.loader)).catch((error) => { console.error(error); process.exitCode = 1; });
+  `,
+    ],
+    {
+      cwd: compiled,
+      encoding: "utf8",
+      env: { ...process.env, NODE_PATH: path.join(root, "node_modules") },
+    },
+  );
+  expect(probe.stderr).toBe("");
+  expect(probe.status).toBe(0);
+  expect(probe.stdout.trim()).toBe("compiled");
+}, 60000);
+afterAll(() => {
+  if (compiled) removeOwnedFixture(compiled, "vad-build-contract-");
+});
 const hash = (v: string) => createHash("sha256").update(v).digest("hex");
 const sourceFiles = [
   "src/constants.ts",
@@ -301,7 +338,11 @@ function fixture() {
   };
   return { manifest, review, baseline, candidate, detector, benchmark };
 }
-function run(f: ReturnType<typeof fixture>, perfectFastBaseline = false) {
+function run(
+  f: ReturnType<typeof fixture>,
+  perfectFastBaseline = false,
+  checkerRoot = compiled,
+) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "acceptance-"));
   try {
     for (const [k, v] of Object.entries(f))
@@ -384,7 +425,7 @@ function run(f: ReturnType<typeof fixture>, perfectFastBaseline = false) {
     const proc = spawnSync(
       process.execPath,
       [
-        "scripts/speech-detection/check-acceptance.mjs",
+        path.join(checkerRoot, "scripts/speech-detection/check-acceptance.mjs"),
         "--manifest",
         path.join(dir, "manifest.json"),
         "--review-evidence",
@@ -400,14 +441,19 @@ function run(f: ReturnType<typeof fixture>, perfectFastBaseline = false) {
         "--output",
         out,
       ],
-      { encoding: "utf8" },
+      {
+        encoding: "utf8",
+        cwd: checkerRoot,
+        env: { ...process.env, NODE_PATH: path.join(root, "node_modules") },
+      },
     );
+    expect(proc.stderr).toBe("");
     return {
       status: proc.status,
       report: JSON.parse(readFileSync(out, "utf8")),
     };
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeOwnedFixture(dir, "acceptance-");
   }
 }
 test("complete matched evidence passes with attestation separate from verification", () => {
@@ -463,7 +509,6 @@ test.each([
       break;
     case "quality":
       f.candidate.results[0].text = "wrong";
-      f.candidate.results[0].requests = 0;
       break;
     case "empty":
       f.candidate.results[0].text = "";
@@ -489,13 +534,18 @@ test.each([
       break;
     case "budget":
       f.benchmark.overheadBytes = 128 * 1024 * 1024;
+      f.benchmark.steady.peakRss =
+        f.benchmark.baseline.peakRss + f.benchmark.overheadBytes;
       break;
     case "phase-quality":
       f.baseline.results[1].text = "wrong";
       f.candidate.results[0].text = "wrong";
       break;
     case "bucket-budget":
+      for (const row of f.benchmark.buckets[0].rows)
+        if (row.phase === "fast") row.durationMs = 501;
       f.benchmark.buckets[0].phases.fast.p95Ms = 501;
+      f.benchmark.buckets[0].phases.fast.allOutcomesP95Ms = 501;
       break;
     case "nan-budget":
       f.benchmark.addedEventLoopP95Ms = Number.NaN;
@@ -528,7 +578,41 @@ test.each([
       f.candidate.results.pop();
       break;
   }
-  expect(run(f).status).not.toBe(0);
+  const expectedProblems: Record<string, string> = {
+    leak: "no tune/holdout family leakage",
+    duplicate: "unique audio hashes",
+    profiles: "five speech profiles",
+    speech: "zero verified speech rejection",
+    rejection: "at least half baseline-admitted nonspeech rejected",
+    quality: "no wer regression",
+    empty: "no speechEmpty regression",
+    "false-positive": "no nonspeechFalsePositive regression",
+    incomplete: "candidate complete matched pipeline reports",
+    matching: "identical pipeline source/config/prompt/model/repetitions",
+    review: "review evidence bound to manifest",
+    budget: "detector overhead <128 MiB",
+    "missing-row": "candidate exact case repetition coverage",
+    "bucket-budget": "all duration buckets meet warm phase deadlines",
+    "nan-budget": "complete consistent raw benchmark measurements",
+    "missing-benchmark": "complete consistent raw benchmark measurements",
+    "insufficient-speech": "minimum unique speech/nonspeech samples",
+    "insufficient-quiet": "minimum quiet/short speech samples",
+    "missing-provenance": "human-reviewed label provenance",
+    "wrong-hash": "validated available detector assessments",
+    "duplicate-row": "candidate exact case repetition coverage",
+    preflight: "candidate complete matched pipeline reports",
+    unscored: "candidate validated rows",
+  };
+  const result = run(f);
+  expect(result.status).not.toBe(0);
+  expect([...result.report.failures, ...result.report.missing]).toContain(
+    expectedProblems[kind],
+  );
+  expect(result.report.missing).not.toContain(
+    "missing or invalid evidence input",
+  );
+  if (kind === "budget" || kind === "bucket-budget")
+    expect(result.report.benchmarkEvidence.problems).toEqual([]);
 });
 test("zero baseline reports undefined relative change and money as null", () => {
   const f = fixture();
@@ -547,6 +631,7 @@ test("zero baseline reports undefined relative change and money as null", () => 
   const r = run(f);
   expect(r.status).not.toBe(0);
   expect(r.report.status).toBe("incomplete");
+  expect(r.report.missing).toContain("baseline-admitted nonspeech denominator");
   expect(r.report.scorecard.providerRequests.relativeChange).toBeNull();
   expect(r.report.costUsd).toBeNull();
 });
@@ -691,7 +776,41 @@ test.each([
         hash("other policy");
       break;
   }
-  expect(run(f).status).not.toBe(0);
+  const expectedProblems: Record<string, string> = {
+    "raw-rows": "complete consistent raw benchmark measurements",
+    "phase-count": "complete consistent raw benchmark measurements",
+    "control-count": "complete consistent raw benchmark measurements",
+    "edited-availability": "complete consistent raw benchmark measurements",
+    "rss-summary": "complete consistent raw benchmark measurements",
+    "event-loop-summary": "complete consistent raw benchmark measurements",
+    "latency-summary": "complete consistent raw benchmark measurements",
+    "burst-rows": "complete consistent raw benchmark measurements",
+    "bucket-repeats": "complete consistent raw benchmark measurements",
+    "missing-compiled":
+      "complete matched source/build/compiled implementation identity",
+    "compiled-mismatch":
+      "complete matched source/build/compiled implementation identity",
+    "partial-source":
+      "complete matched source/build/compiled implementation identity",
+    "build-source-mismatch":
+      "complete matched source/build/compiled implementation identity",
+    "source-loader":
+      "complete matched source/build/compiled implementation identity",
+    "zero-sdk-success": "candidate validated rows",
+    "excess-phase-work": "candidate validated rows",
+    "submitted-seconds": "candidate validated rows",
+    "paid-skip": "candidate validated rows",
+    "row-policy": "candidate validated rows",
+    budget: "candidate provider budget and summary accounting",
+  };
+  const result = run(f);
+  expect(result.status).not.toBe(0);
+  expect([...result.report.failures, ...result.report.missing]).toContain(
+    expectedProblems[kind],
+  );
+  expect(result.report.missing).not.toContain(
+    "missing or invalid evidence input",
+  );
 });
 
 test("candidate rejection of already-empty verified speech fails both pipeline phase gates", () => {
@@ -707,6 +826,9 @@ test("candidate rejection of already-empty verified speech fails both pipeline p
   r.admission!.assessment = r.assessment;
   const result = run(f);
   expect(result.status).not.toBe(0);
+  expect(result.report.failures).toContain(
+    "zero verified pipeline speech rejection",
+  );
   expect(result.report.detector.pipelineSpeechRejection).toMatchObject({
     numerator: 2,
     denominator: 600,
@@ -721,3 +843,40 @@ test("candidate rejection of already-empty verified speech fails both pipeline p
     result.report.detector.pipelineSpeechRejectionByGroup.quiet.numerator,
   ).toBe(2);
 });
+
+test("positive acceptance works from an owned source-only checkout without dist", async () => {
+  const checkout = mkdtempSync(
+    path.join(os.tmpdir(), "vad-build-contract-acceptance-source-"),
+  );
+  try {
+    for (const file of [
+      "src",
+      "assets",
+      "scripts",
+      "package.json",
+      "tsconfig.json",
+      "yarn.lock",
+    ]) {
+      cpSync(path.join(root, file), path.join(checkout, file), {
+        recursive: true,
+        filter: (source) =>
+          source !== path.join(root, "src/frontend") &&
+          source !== path.join(root, "src/setupTests.ts"),
+      });
+    }
+    expect(existsSync(path.join(checkout, "dist"))).toBe(false);
+    const owned = await prepareTranscriptionAcceptanceFixture(checkout, root);
+    let result: ReturnType<typeof run>;
+    try {
+      result = run(fixture(), false, owned);
+    } finally {
+      removeOwnedFixture(owned, "vad-build-contract-");
+    }
+    expect(result.report.missing).toEqual([]);
+    expect(result.status).toBe(0);
+    expect(result.report.status).toBe("pass");
+    expect(existsSync(path.join(checkout, "dist"))).toBe(false);
+  } finally {
+    removeOwnedFixture(checkout, "vad-build-contract-");
+  }
+}, 60000);
