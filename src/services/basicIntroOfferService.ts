@@ -358,8 +358,7 @@ export async function getGuildBasicIntroOffer(params: {
     getSubscriptionRepository().get(params.guildId),
     getPurchaseRepository().get(params.guildId),
   ]);
-  if (!(await serverIsEligible(params.guildId, subscription)))
-    return { status: "ineligible" };
+  if (config.subscription.forceTier) return { status: "ineligible" };
   if (current && current.state !== "expired") {
     const frozen = frozenIntroOffer(current);
     if (
@@ -373,6 +372,8 @@ export async function getGuildBasicIntroOffer(params: {
       return frozen;
     return { status: "ineligible" };
   }
+  if (!(await serverIsEligible(params.guildId, subscription)))
+    return { status: "ineligible" };
   if (introIntervalIsUnconfigured(params.interval))
     return { status: "inactive" };
   try {
@@ -1007,6 +1008,8 @@ export async function getProviderSubscriptionDetails(
     !["month", "year"].includes(item.price.recurring?.interval ?? "")
   )
     return { status: "unavailable" };
+  if (hasUnsupportedCancellation(subscription))
+    return { status: "unavailable" };
   const price = item.price;
   const unitAmount = price.unit_amount;
   if (unitAmount === null) return { status: "unavailable" };
@@ -1116,4 +1119,10 @@ export async function getBasicIntroCustomerRestriction(
     configurationId,
     endsAt: unknownEnd ? null : new Date(latestEnd * 1000).toISOString(),
   };
+}
+
+function hasUnsupportedCancellation(
+  subscription: Stripe.Subscription,
+): boolean {
+  return Boolean(subscription.cancel_at && !subscription.cancel_at_period_end);
 }

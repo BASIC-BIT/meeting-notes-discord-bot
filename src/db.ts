@@ -1,9 +1,22 @@
+import { assertPurchaseInvoiceBinding } from "./types/purchase";
+import { z } from "zod";
+import {
+  offerUsageKey,
+  offerUsageSchema,
+  parseOfferUsageChange,
+  type OfferUsage,
+  type IntroOfferId,
+  type ProviderMode,
+  type OfferUsageWrite,
+  type OfferUsageMutation,
+} from "./types/offerUsage";
 import type { PurchaseAttempt, PurchaseIncident } from "./types/purchase";
 import { config } from "./services/configService";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   AttributeValue,
+  type Put,
   DynamoDBClient,
   TransactWriteItemsCommand,
   type TransactionCanceledException,
@@ -3106,7 +3119,12 @@ export async function compareAndWritePurchaseAttempt(
   expected: PurchaseAttempt | undefined,
   pointer: GuildSubscription | undefined,
   incident?: PurchaseIncident,
+  offerUsage?: OfferUsageMutation,
 ): Promise<boolean> {
+  assertPurchaseInvoiceBinding(next, expected);
+  const usage =
+    offerUsage &&
+    parseOfferUsageChange({ ...offerUsage, pointer, operation: next });
   const names: Record<string, string> = { "#guildId": "guildId" };
   const values: Record<string, string> = {};
   const conditions = [
@@ -3159,6 +3177,9 @@ export async function compareAndWritePurchaseAttempt(
                 : {}),
             },
           },
+          ...(usage
+            ? [{ Put: offerUsagePut(usage.next, usage.expected) }]
+            : []),
           ...(incident
             ? [
                 {
@@ -3275,5 +3296,150 @@ function purchaseIncidentUpdate(incident: PurchaseIncident) {
     UpdateExpression: `SET ${expressions.join(", ")}`,
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: marshall(values),
+  };
+}
+
+export async function readOfferUsage(
+  guildId: string,
+  offerId: IntroOfferId,
+  mode: ProviderMode,
+): Promise<OfferUsage | undefined> {
+  const key = offerUsageKey(guildId, offerId, mode);
+  const result = await dynamoDbClient.send(
+    new GetItemCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      Key: marshall({ guildId: key }),
+      ConsistentRead: true,
+    }),
+  );
+  if (!result.Item) return undefined;
+  const { guildId: storedKey, serverId, ...record } = unmarshall(result.Item);
+  if (
+    storedKey !== key ||
+    serverId !== guildId ||
+    record.offerId !== offerId ||
+    record.mode !== mode
+  )
+    throw new Error("Stored offer usage scope mismatch");
+  return offerUsageSchema.parse({ ...record, guildId });
+}
+function subscriptionRevisionFence(
+  guildId: string,
+  pointer: GuildSubscription | undefined,
+) {
+  const names: Record<string, string> = { "#guildId": "guildId" };
+  const values: Record<string, string> = {};
+  const conditions = [
+    pointer ? "attribute_exists(#guildId)" : "attribute_not_exists(#guildId)",
+  ];
+  if (pointer)
+    for (const key of ["stripeSubscriptionId", "stripeSyncRevision"] as const) {
+      names[`#${key}`] = key;
+      if (pointer[key] === undefined)
+        conditions.push(`attribute_not_exists(#${key})`);
+      else {
+        conditions.push(`#${key} = :${key}`);
+        values[`:${key}`] = pointer[key];
+      }
+    }
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId }),
+    ConditionExpression: conditions.join(" AND "),
+    ExpressionAttributeNames: names,
+    ...(Object.keys(values).length
+      ? { ExpressionAttributeValues: marshall(values) }
+      : {}),
+  };
+}
+export async function compareAndWriteOfferUsage(
+  input: OfferUsageWrite,
+): Promise<boolean> {
+  const { next, expected } = parseOfferUsageChange(input);
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand({
+        TransactItems: [
+          {
+            ConditionCheck: subscriptionRevisionFence(
+              next.guildId,
+              input.pointer,
+            ),
+          },
+          {
+            ConditionCheck: {
+              TableName: tableName("GuildSubscriptionTable"),
+              Key: marshall({ guildId: purchaseRecordKey(next.guildId) }),
+              ConditionExpression:
+                "#revision = :revision AND #attemptId = :attemptId AND #mode = :mode",
+              ExpressionAttributeNames: {
+                "#revision": "revision",
+                "#attemptId": "attemptId",
+                "#mode": "mode",
+              },
+              ExpressionAttributeValues: marshall({
+                ":revision": input.operation.revision,
+                ":attemptId": input.operation.attemptId,
+                ":mode": next.mode,
+              }),
+            },
+          },
+          { Put: offerUsagePut(next, expected) },
+        ],
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (isBillingTransactionConflict(error)) return false;
+    throw error;
+  }
+}
+function isBillingTransactionConflict(error: unknown): boolean {
+  const failure = billingCancellationSchema.safeParse(error);
+  if (!failure.success) return false;
+  const codes = failure.data.CancellationReasons.map((reason) => reason.Code);
+  return (
+    codes.some(
+      (code) =>
+        code === "ConditionalCheckFailed" || code === "TransactionConflict",
+    ) &&
+    codes.every(
+      (code) =>
+        !code ||
+        ["None", "ConditionalCheckFailed", "TransactionConflict"].includes(
+          code,
+        ),
+    )
+  );
+}
+const billingCancellationSchema = z.object({
+  name: z.literal("TransactionCanceledException"),
+  CancellationReasons: z.array(z.object({ Code: z.string().optional() })),
+});
+
+function offerUsagePut(
+  next: OfferUsage,
+  expected: OfferUsage | undefined,
+): Put {
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Item: marshall({
+      ...next,
+      guildId: offerUsageKey(next.guildId, next.offerId, next.mode),
+      serverId: next.guildId,
+    }),
+    ConditionExpression: expected
+      ? "#revision = :revision"
+      : "attribute_not_exists(#guildId)",
+    ExpressionAttributeNames: expected
+      ? { "#revision": "revision" }
+      : { "#guildId": "guildId" },
+    ...(expected
+      ? {
+          ExpressionAttributeValues: marshall({
+            ":revision": expected.revision,
+          }),
+        }
+      : {}),
   };
 }

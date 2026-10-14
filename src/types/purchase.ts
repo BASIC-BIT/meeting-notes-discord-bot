@@ -18,6 +18,7 @@ export type PurchaseAttempt = {
   customerId?: string;
   sessionId?: string;
   subscriptionId?: string;
+  initialInvoiceId?: string;
   incidentKey?: string;
 };
 export type PurchaseIncident = {
@@ -32,3 +33,15 @@ export type PurchaseIncident = {
   reason: "competing_nonterminal_subscription";
   incomingAttemptId?: string;
 };
+
+export function assertPurchaseInvoiceBinding(
+  next: PurchaseAttempt,
+  expected: PurchaseAttempt | undefined,
+) {
+  if (
+    expected?.attemptId === next.attemptId &&
+    expected.initialInvoiceId &&
+    next.initialInvoiceId !== expected.initialInvoiceId
+  )
+    throw new Error("Initial invoice binding cannot change");
+}

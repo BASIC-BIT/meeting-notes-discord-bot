@@ -1,3 +1,9 @@
+import { assertPurchaseInvoiceBinding } from "../types/purchase";
+import {
+  parseOfferUsageChange,
+  offerUsageKey,
+  type OfferUsageMutation,
+} from "../types/offerUsage";
 import { randomUUID } from "node:crypto";
 import { config } from "../services/configService";
 import { getMockStore } from "./mockStore";
@@ -30,10 +36,21 @@ export const getPurchaseRepository = () => ({
     expected: PurchaseAttempt | undefined,
     pointer: GuildSubscription | undefined,
     incident?: PurchaseIncident,
+    offerUsage?: OfferUsageMutation,
   ): Promise<boolean> {
     purchaseKey(next.guildId);
+    assertPurchaseInvoiceBinding(next, expected);
+    const usage =
+      offerUsage &&
+      parseOfferUsageChange({ ...offerUsage, pointer, operation: next });
     if (!config.mock.enabled)
-      return compareAndWritePurchaseAttempt(next, expected, pointer, incident);
+      return compareAndWritePurchaseAttempt(
+        next,
+        expected,
+        pointer,
+        incident,
+        offerUsage,
+      );
     const store = getMockStore();
     const current = store.purchaseAttempts.get(next.guildId);
     const subscription = store.subscriptions.get(next.guildId);
@@ -44,6 +61,7 @@ export const getPurchaseRepository = () => ({
       subscription?.stripeSyncRevision !== pointer?.stripeSyncRevision
     )
       return false;
+    if (usage && !writeMockUsage(usage)) return false;
     store.purchaseAttempts.set(next.guildId, structuredClone(next));
     if (incident) {
       const prior = store.purchaseIncidents.get(incident.key);
@@ -65,4 +83,19 @@ export function advanceAttempt(
   change: Partial<PurchaseAttempt>,
 ): PurchaseAttempt {
   return { ...attempt, ...change, revision: randomUUID() };
+}
+
+function writeMockUsage(
+  usage: ReturnType<typeof parseOfferUsageChange>,
+): boolean {
+  const store = getMockStore();
+  const key = offerUsageKey(
+    usage.next.guildId,
+    usage.next.offerId,
+    usage.next.mode,
+  );
+  if (store.offerUsages.get(key)?.revision !== usage.expected?.revision)
+    return false;
+  store.offerUsages.set(key, structuredClone(usage.next));
+  return true;
 }

@@ -105,10 +105,11 @@ const checkout = manageGuildProcedure
         input.savedPromotionCode?.trim() &&
         input.promotionCode.trim() !== input.savedPromotionCode.trim()
       )
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Saved and selected promotion codes do not match.",
-        });
+        throw new BillingActionError(
+          "BAD_REQUEST",
+          "Saved and selected promotion codes do not match.",
+          "discount_choice_required",
+        );
       let priceId =
         (await resolvePaidPlanPriceId({
           stripe,

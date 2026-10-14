@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { getOfferUsageRepository } from "../../src/repositories/offerUsageRepository";
 import { getPublicPricingSnapshot } from "../../src/services/publicPricingService";
 import { config } from "../../src/services/configService";
 import * as entitlementService from "../../src/services/entitlementService";
@@ -354,6 +355,161 @@ describe("authoritative initial-purchase offer", () => {
     clearGuildSubscriptionCache();
   });
 
+  test("introductory Checkout reserves the server offer before provider purchase writes", async () => {
+    const { request, stripe } = purchaseFixture();
+    stripe.checkout.sessions.create.mockImplementationOnce(async () => {
+      const attempt = getMockStore().purchaseAttempts.get(request.guildId);
+      expect(
+        await getOfferUsageRepository().get(
+          request.guildId,
+          "basic_intro_v1",
+          "test",
+        ),
+      ).toMatchObject({
+        state: "reserved",
+        operationId: attempt?.attemptId,
+        terms: { priceId: "price_basic", couponId: "coupon_intro" },
+      });
+      return {
+        id: "cs_intro",
+        status: "open",
+        url: "https://checkout.stripe.com/intro",
+        livemode: false,
+        customer: "cus_intro",
+        metadata: {
+          guild_id: request.guildId,
+          purchase_attempt_id: attempt?.attemptId,
+        },
+      };
+    });
+    await expect(
+      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+    ).resolves.toContain("checkout.stripe.com");
+    expect(
+      await getOfferUsageRepository().get(
+        request.guildId,
+        "basic_annual_intro_v1",
+        "test",
+      ),
+    ).toBeUndefined();
+  });
+
+  test("unknown introductory provider outcome retains the durable reservation", async () => {
+    const { request, stripe } = purchaseFixture();
+    stripe.checkout.sessions.create.mockRejectedValueOnce(
+      new Error("lost response"),
+    );
+    await expect(
+      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+    ).rejects.toThrow("lost response");
+    jest.setSystemTime(new Date(Date.now() + 35 * 60000));
+    await expect(
+      createCheckoutSession({ ...request, expectedOffer: "none" }),
+    ).rejects.toMatchObject({ reason: "purchase_needs_review" });
+    expect(
+      await getOfferUsageRepository().get(
+        request.guildId,
+        "basic_intro_v1",
+        "test",
+      ),
+    ).toMatchObject({ state: "reserved" });
+  });
+
+  test("verified expired introductory checkout releases use before a replacement purchase", async () => {
+    const { request, stripe } = purchaseFixture();
+    await createCheckoutSession({
+      ...request,
+      expectedOffer: "basic_intro_v1",
+    });
+    const prior = getMockStore().purchaseAttempts.get(request.guildId)!;
+    const native = await stripe.checkout.sessions.retrieve();
+    stripe.checkout.sessions.retrieve.mockResolvedValueOnce({
+      ...native,
+      status: "expired",
+    });
+    await createCheckoutSession({
+      ...request,
+      expectedOffer: "basic_intro_v1",
+    });
+    const replacement = getMockStore().purchaseAttempts.get(request.guildId)!;
+    expect(replacement.attemptId).not.toBe(prior.attemptId);
+    expect(
+      await getOfferUsageRepository().get(
+        request.guildId,
+        "basic_intro_v1",
+        "test",
+      ),
+    ).toMatchObject({ state: "reserved", operationId: replacement.attemptId });
+  });
+
+  test("an expired Checkout response releases only the verified session reservation", async () => {
+    const { request, stripe } = purchaseFixture();
+    stripe.checkout.sessions.create.mockImplementationOnce(async () => ({
+      id: "cs_intro",
+      status: "expired",
+      url: "",
+      livemode: false,
+      customer: "cus_intro",
+      metadata: {
+        guild_id: request.guildId,
+        purchase_attempt_id: getMockStore().purchaseAttempts.get(
+          request.guildId,
+        )?.attemptId,
+      },
+    }));
+    await expect(
+      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+    ).rejects.toMatchObject({ reason: "purchase_expired" });
+    expect(
+      await getOfferUsageRepository().get(
+        request.guildId,
+        "basic_intro_v1",
+        "test",
+      ),
+    ).toMatchObject({
+      state: "unused",
+      released: { resourceId: "cs_intro", reason: "checkout_expired" },
+    });
+  });
+
+  test("a new comp grant preserves the same payer's reusable frozen offer", async () => {
+    const { request, stripe } = purchaseFixture();
+    await createCheckoutSession({
+      ...request,
+      expectedOffer: "basic_intro_v1",
+    });
+    await createManualEntitlementGrant({
+      guildId: request.guildId,
+      tier: "basic",
+      createdBy: "admin",
+    });
+    expect(
+      await getGuildBasicIntroOffer({
+        stripe: request.stripe,
+        guildId: request.guildId,
+        payerId: "payer",
+      }),
+    ).toMatchObject({ status: "available", id: "basic_intro_v1" });
+    await expect(
+      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+    ).resolves.toContain("checkout.stripe.com");
+    expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
+    expect(
+      await getGuildBasicIntroOffer({
+        stripe: request.stripe,
+        guildId: request.guildId,
+        payerId: "other",
+      }),
+    ).toEqual({ status: "ineligible" });
+    expect(
+      await getGuildBasicIntroOffer({
+        stripe: request.stripe,
+        guildId: request.guildId,
+        payerId: "payer",
+        interval: "year",
+      }),
+    ).toEqual({ status: "ineligible" });
+  });
   test("Checkout revalidates provider terms even while public pricing stays cached", async () => {
     const { request, coupon, stripe } = purchaseFixture();
     expect(
@@ -878,6 +1034,22 @@ describe("existing native introductory discount", () => {
     },
   );
 
+  test.each([-86400, 0, 86400])(
+    "custom cancel_at offset %i does not promise a normal renewal",
+    async (offset) => {
+      const f = subscriberFixture();
+      Object.assign(f.subscription, {
+        cancel_at: f.subscription.items.data[0].current_period_end + offset,
+        cancel_at_period_end: false,
+      });
+      expect(
+        await getProviderSubscriptionDetails(
+          f.request.stripe,
+          await f.request.stripe.subscriptions.retrieve("sub_intro"),
+        ),
+      ).toEqual({ status: "unavailable" });
+    },
+  );
   test("known native cancellation period survives the snapshot and actual display", async () => {
     const f = subscriberFixture();
     Object.assign(f.subscription, { cancel_at_period_end: true });

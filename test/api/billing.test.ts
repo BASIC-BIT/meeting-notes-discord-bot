@@ -572,6 +572,51 @@ describe("billing webhook routes", () => {
     },
   );
 
+  test("invoice.paid reconciles credit-covered access without a positive-payment analytics event", async () => {
+    const event = {
+      id: "evt_credit_invoice_paid",
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_credit_paid",
+          status: "paid",
+          amount_paid: 0,
+          currency: "usd",
+          created: 1767225600,
+          billing_reason: "subscription_create",
+          customer: "cus_basic",
+          parent: {
+            subscription_details: {
+              subscription: "sub_basic",
+              metadata: { guild_id: guildId },
+            },
+          },
+        },
+      },
+    } as unknown as StripeEvent;
+    const { server, baseUrl } = createServer(
+      createStripe(
+        event,
+        jest.fn(async () => activeStripeSubscription),
+      ),
+    );
+    try {
+      expect((await postWebhook(baseUrl)).statusCode).toBe(200);
+      expect(await getSubscriptionRepository().get(guildId)).toMatchObject({
+        status: "active",
+        tier: "basic",
+        stripeSubscriptionId: "sub_basic",
+      });
+      expect(
+        getMockStore().paymentTransactions.get("in_credit_paid"),
+      ).toMatchObject({ amount: 0, status: "paid" });
+      expect(captureEvent).not.toHaveBeenCalled();
+      expect((await postWebhook(baseUrl)).statusCode).toBe(200);
+      expect(captureEvent).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
+  });
   test("acknowledges saved paid access when analytics qualification fails", async () => {
     const event = {
       ...failedInvoiceEvent,

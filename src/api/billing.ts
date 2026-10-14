@@ -1,3 +1,4 @@
+import { checkoutInvoiceHint } from "../services/purchaseSession";
 import type Stripe from "stripe";
 import {
   expirePurchaseAttempt,
@@ -114,7 +115,12 @@ const handleCheckoutSessionCompleted: WebhookHandler = async ({
     );
     return;
   }
-  await reconcileSubscription(stripe, guildId, subscriptionId);
+  await reconcileSubscription(
+    stripe,
+    guildId,
+    subscriptionId,
+    checkoutInvoiceHint(session),
+  );
 };
 
 const handleInvoicePaymentFailed: WebhookHandler = async ({
@@ -180,6 +186,7 @@ const handleInvoicePaymentSucceeded: WebhookHandler = async ({
         typeof invoiceSubscription === "string"
           ? invoiceSubscription
           : invoiceSubscription.id,
+        { invoiceId: invoice.id },
       )
     : undefined;
   if (
@@ -542,6 +549,7 @@ const handlersByEvent: Record<string, WebhookHandler> = {
   "checkout.session.completed": handleCheckoutSessionCompleted,
   "invoice.payment_failed": handleInvoicePaymentFailed,
   "invoice.payment_succeeded": handleInvoicePaymentSucceeded,
+  "invoice.paid": handleInvoicePaymentSucceeded,
   "customer.subscription.created": handleSubscriptionUpsert,
   "customer.subscription.updated": handleSubscriptionUpsert,
   "customer.subscription.deleted": handleSubscriptionUpsert,

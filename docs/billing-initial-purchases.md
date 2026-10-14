@@ -96,3 +96,36 @@ coalesce. Provider mode, lookup keys or campaign configuration changes invalidat
 it; campaign start and enrollment cutoff bound its lifetime. Unavailable terms
 are retained for at most one second. Server eligibility, frozen attempts and
 Checkout preparation use authoritative reads independently of this public cache.
+
+## Durable offer usage, implementation checkpoint
+
+Each Basic offer has a separate control record under
+`OFFER#<mode>#<guildId>#<offerId>` in GuildSubscriptionTable. The stable monthly
+and annual offer identities do not change when a provider coupon rotates.
+Records are validated on point reads and carry a revision. They are not
+subscription rows and have no cleanup TTL.
+
+Initial Checkout reserves the chosen offer in the same transaction that saves
+the purchase attempt. That transaction checks the prior subscription revision,
+purchase attempt revision and offer revision. A competing request cannot write
+only half of the reservation. Provider creation and unknown outcomes retain the
+reservation. Request-time and webhook expiry release it only after rereading an
+associated native session that is expired and has no subscription.
+
+Purchase acceptance finalizes a reserved offer only after rereading its first
+invoice and verifying server operation, customer, subscription, item, price,
+frozen offer terms, coupon and gross line amount. The invoice must be paid with no amount
+remaining. A zero-cash invoice covered by credit qualifies; positive-payment
+analytics remain separate. Both `invoice.paid` and `invoice.payment_succeeded`
+use the settled-invoice reconciliation handler. The original invoice is bound to
+the purchase, with native completed-Checkout recovery after a later renewal.
+Inclusive-tax line subtotals are not treated as gross plan amounts.
+Replays leave a used record
+unchanged. Replacing the subscription, payer or purchase record cannot clear it.
+
+This slice is still inactive and incomplete. Public/server eligibility still
+uses the old first-paid rule until historical evidence import and the new
+per-offer eligibility path are integrated. Active plan changes, their owned
+provider retirement, deferred schedules and the full exact-consent application
+journey are separate unfinished work. Do not activate or merge this checkpoint
+as the approved switching policy.

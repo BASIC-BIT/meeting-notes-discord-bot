@@ -1,3 +1,4 @@
+import type { OfferUsage } from "../types/offerUsage";
 import type { PurchaseAttempt, PurchaseIncident } from "../types/purchase";
 import type { AuthedProfile } from "../trpc/context";
 import type {
@@ -39,6 +40,7 @@ import type {
 
 type MockStore = {
   purchaseAttempts: Map<string, PurchaseAttempt>;
+  offerUsages: Map<string, OfferUsage>;
   purchaseIncidents: Map<string, PurchaseIncident>;
   user: AuthedProfile;
   userGuilds: DiscordGuild[];
@@ -923,6 +925,7 @@ function buildDefaultStore(): MockStore {
     paymentTransactions,
     stripeWebhookEvents,
     purchaseAttempts: new Map(),
+    offerUsages: new Map(),
     purchaseIncidents: new Map(),
     onboardingStates,
     meetingHistoryByGuild,

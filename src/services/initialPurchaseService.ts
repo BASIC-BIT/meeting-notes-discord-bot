@@ -1,4 +1,12 @@
-import { assertSessionAssociation } from "./purchaseSession";
+import type { OfferUsageMutation } from "../types/offerUsage";
+import {
+  prepareInitialOfferReservation,
+  prepareExpiredOfferRelease,
+} from "./offerUsageService";
+import {
+  assertSessionAssociation,
+  checkoutInvoiceHint,
+} from "./purchaseSession";
 import { reconcileSubscription } from "./subscriptionReconciliation";
 import { createHash, randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -51,9 +59,18 @@ async function save(
   attempt: PurchaseAttempt,
   change: Partial<PurchaseAttempt>,
   pointer: GuildSubscription | undefined,
+  usage?: OfferUsageMutation,
 ) {
   const next = advanceAttempt(attempt, change);
-  if (!(await getPurchaseRepository().compareAndWrite(next, attempt, pointer)))
+  if (
+    !(await getPurchaseRepository().compareAndWrite(
+      next,
+      attempt,
+      pointer,
+      undefined,
+      usage,
+    ))
+  )
     throw pending();
   return next;
 }
@@ -152,7 +169,17 @@ async function reserve(input: PurchaseInput) {
         },
       },
     };
-    if (await repo.compareAndWrite(next, current, input.expected)) return next;
+    const usage = await prepareInitialOfferReservation(next);
+    if (
+      await repo.compareAndWrite(
+        next,
+        current,
+        input.expected,
+        undefined,
+        usage,
+      )
+    )
+      return next;
     const pointer = await getSubscriptionRepository().get(input.guildId);
     if (subscriptionPointerChanged(pointer, input.expected)) throw pending();
   }
@@ -217,6 +244,7 @@ async function completedSessionOutcome(
     typeof session.subscription === "string"
       ? session.subscription
       : session.subscription.id,
+    checkoutInvoiceHint(session),
   );
   return currentOutcome(attempt);
 }
@@ -245,6 +273,7 @@ export async function createInitialPurchase(
       attempt,
       { sessionId: session.id, state: "expired" },
       input.expected,
+      await prepareExpiredOfferRelease(attempt, session),
     );
     throw new BillingActionError(
       "BAD_REQUEST",
@@ -336,7 +365,15 @@ async function refreshAttempt(
     assertSessionAssociation(current, session);
     if (session.status === "expired" && !session.subscription) {
       const expired = advanceAttempt(current, { state: "expired" });
-      if (!(await repo.compareAndWrite(expired, current, input.expected)))
+      if (
+        !(await repo.compareAndWrite(
+          expired,
+          current,
+          input.expected,
+          undefined,
+          await prepareExpiredOfferRelease(current, session),
+        ))
+      )
         throw pending();
       current = expired;
     } else if (session.status === "complete" && session.subscription) {

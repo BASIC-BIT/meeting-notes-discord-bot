@@ -452,7 +452,7 @@ test("a completed attempt permits repurchase only after the linked provider subs
     );
     const next = getMockStore().purchaseAttempts.get(guildId)!;
     expect(next.attemptId).not.toBe(old.attemptId);
-    await acceptPurchaseSubscription(guildId, subscription as never);
+    await acceptPurchaseSubscription(guildId, subscription as never, client);
     expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).toBe(
       next.attemptId,
     );

@@ -1,3 +1,4 @@
+import type { SettlementInvoice } from "./offerUsageSettlement";
 import { randomUUID } from "node:crypto";
 import type { GuildSubscription } from "../types/db";
 import type {
@@ -113,6 +114,7 @@ export const reconcileSubscription = async (
   stripe: StripeClient,
   guildId: string,
   subscriptionId: string,
+  settlement?: SettlementInvoice,
 ) => {
   const repo = getSubscriptionRepository();
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -168,7 +170,7 @@ export const reconcileSubscription = async (
     );
     if (!accepted) continue;
     clearGuildSubscriptionCache(guildId);
-    await acceptPurchaseSubscription(guildId, subscription);
+    await acceptPurchaseSubscription(guildId, subscription, stripe, settlement);
     await maybeAutoRevokeCoveredCompGrants({
       guildId,
       tier,

@@ -1,3 +1,6 @@
+import type { SettlementInvoice } from "./offerUsageSettlement";
+import { prepareInitialOfferSettlement } from "./offerUsageSettlement";
+import { prepareExpiredOfferRelease } from "./offerUsageService";
 import { assertSessionAssociation } from "./purchaseSession";
 import { randomUUID } from "node:crypto";
 import {
@@ -63,6 +66,8 @@ export async function recordDuplicatePurchase(
 export async function acceptPurchaseSubscription(
   guildId: string,
   subscription: StripeSubscription,
+  stripe: StripeClient,
+  settlement?: SettlementInvoice,
 ) {
   const repo = getPurchaseRepository();
   for (let i = 0; i < 3; i++) {
@@ -86,14 +91,26 @@ export async function acceptPurchaseSubscription(
     const pointer = await getSubscriptionRepository().get(guildId);
     if (pointer?.stripeSubscriptionId !== subscription.id)
       throw new Error("Purchase acceptance pointer changed; retry");
+    const prepared = await prepareInitialOfferSettlement(
+      stripe,
+      current,
+      subscription,
+      settlement,
+    );
     if (
       await repo.compareAndWrite(
         advanceAttempt(current, {
           state: "completed",
           subscriptionId: subscription.id,
+          initialInvoiceId:
+            prepared.kind === "none"
+              ? current.initialInvoiceId
+              : prepared.invoiceId,
         }),
         current,
         pointer,
+        undefined,
+        prepared.kind === "settled" ? prepared.usage : undefined,
       )
     )
       return;
@@ -150,6 +167,8 @@ export async function expirePurchaseAttempt(
       advanceAttempt(attempt, { state: "expired", sessionId: session.id }),
       attempt,
       pointer,
+      undefined,
+      await prepareExpiredOfferRelease(attempt, session),
     ))
   )
     throw new Error("Purchase expiration changed concurrently; retry");

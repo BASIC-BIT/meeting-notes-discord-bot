@@ -81,6 +81,15 @@ test("rejects conflicting saved and redeemed codes before provider work", async 
   ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   expect(resolvePromotionCodeId).not.toHaveBeenCalled();
   expect(createCheckoutSession).not.toHaveBeenCalled();
+  expect(captureEvent).toHaveBeenCalledWith(
+    "billing_checkout_rejected",
+    expect.objectContaining({
+      properties: expect.objectContaining({
+        reason: "discount_choice_required",
+      }),
+    }),
+  );
+  expect(resolvePaidPlanPriceId).not.toHaveBeenCalled();
 });
 
 test.each(["header", "input"])(

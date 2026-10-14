@@ -22,3 +22,11 @@ export function assertSessionAssociation(
       "Server purchase needs review. Contact support before purchasing again.",
     );
 }
+
+export function checkoutInvoiceHint(
+  session: Stripe.Checkout.Session,
+): { invoiceId: string } | undefined {
+  const invoiceId =
+    typeof session.invoice === "string" ? session.invoice : session.invoice?.id;
+  return invoiceId ? { invoiceId } : undefined;
+}
