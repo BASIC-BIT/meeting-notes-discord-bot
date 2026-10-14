@@ -1,3 +1,4 @@
+import { prepareInitialOfferSettlement } from "./offerUsageSettlement";
 import type { OfferUsageMutation } from "../types/offerUsage";
 import {
   prepareInitialOfferReservation,
@@ -74,19 +75,59 @@ async function save(
     throw pending();
   return next;
 }
-async function mayRetire(input: PurchaseInput, attempt: PurchaseAttempt) {
+async function prepareRetiredPurchase(
+  input: PurchaseInput,
+  attempt: PurchaseAttempt,
+) {
   if (attempt.incidentKey || attempt.state === "needs_review") throw review();
-  if (attempt.state === "expired") return true;
-  if (attempt.state !== "completed" || !attempt.subscriptionId) return false;
+  if (attempt.state === "expired") return attempt;
+  if (attempt.state !== "completed" || !attempt.subscriptionId)
+    return undefined;
   const linked = await input.stripe.subscriptions.retrieve(
     attempt.subscriptionId,
   );
+  assertRetiredAssociation(input, attempt, linked);
+  if (!terminal(linked.status)) return undefined;
+  const prepared = await prepareInitialOfferSettlement(
+    input.stripe,
+    attempt,
+    linked,
+  );
+  if (prepared.kind === "pending" || prepared.kind === "awaiting_invoice")
+    throw pending();
+  if (prepared.kind === "voided")
+    return save(
+      attempt,
+      { state: "expired", initialInvoiceId: prepared.invoiceId },
+      input.expected,
+      prepared.usage,
+    );
+  if (prepared.kind === "settled")
+    return save(
+      attempt,
+      { initialInvoiceId: prepared.invoiceId },
+      input.expected,
+      prepared.usage,
+    );
+  return attempt;
+}
+
+function assertRetiredAssociation(
+  input: PurchaseInput,
+  attempt: PurchaseAttempt,
+  linked: Awaited<ReturnType<StripeClient["subscriptions"]["retrieve"]>>,
+) {
   if (
+    linked.id !== attempt.subscriptionId ||
+    linked.metadata.purchase_attempt_id !== attempt.attemptId ||
+    linked.metadata.discord_id !== attempt.payerId ||
+    (typeof linked.customer === "string"
+      ? linked.customer
+      : linked.customer.id) !== attempt.customerId ||
     linked.metadata.guild_id !== input.guildId ||
     linked.livemode !== (input.mode === "live")
   )
     throw review();
-  return terminal(linked.status);
 }
 
 function checkoutFingerprint(checkout: PurchaseAttempt["checkout"]): string {
@@ -117,17 +158,35 @@ function subscriptionPointerChanged(
   );
 }
 
+type PurchasePreparation =
+  | { kind: "new"; previous: PurchaseAttempt | undefined }
+  | { kind: "reuse"; current: PurchaseAttempt };
+async function preparePurchaseAttempt(
+  input: PurchaseInput,
+): Promise<PurchasePreparation> {
+  const current = await refreshAttempt(
+    input,
+    await getPurchaseRepository().get(input.guildId),
+  );
+  if (!current) return { kind: "new", previous: undefined };
+  const retired = await prepareRetiredPurchase(input, current);
+  return retired
+    ? { kind: "new", previous: retired }
+    : { kind: "reuse", current };
+}
 async function reserve(input: PurchaseInput) {
   const repo = getPurchaseRepository();
   for (let i = 0; i < 3; i++) {
-    const current = await refreshAttempt(input, await repo.get(input.guildId));
-    const reusable = current && !(await mayRetire(input, current));
+    const preparation = await preparePurchaseAttempt(input);
+    const previous =
+      preparation.kind === "reuse" ? preparation.current : preparation.previous;
     const checkout = await prepareBasicIntroCheckout({
       ...input,
-      current: reusable ? current : undefined,
+      current: preparation.kind === "reuse" ? preparation.current : undefined,
     });
     const fingerprint = checkoutFingerprint(checkout);
-    if (current && reusable) {
+    if (preparation.kind === "reuse") {
+      const current = preparation.current;
       if (
         current.mode !== input.mode ||
         current.payerId !== input.user.id ||
@@ -173,7 +232,7 @@ async function reserve(input: PurchaseInput) {
     if (
       await repo.compareAndWrite(
         next,
-        current,
+        previous,
         input.expected,
         undefined,
         usage,

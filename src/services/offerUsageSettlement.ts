@@ -21,7 +21,9 @@ const invalid = () =>
 
 export type InitialOfferSettlement =
   | { kind: "none" }
+  | { kind: "awaiting_invoice" }
   | { kind: "pending"; invoiceId: string }
+  | { kind: "voided"; invoiceId: string; usage: OfferUsageMutation }
   | { kind: "settled"; invoiceId: string; usage: OfferUsageMutation };
 export type SettlementInvoice = { invoiceId: string };
 
@@ -54,11 +56,10 @@ export async function prepareInitialOfferSettlement(
     subscription,
     hint,
   );
-  if (!invoice) return { kind: "none" };
-  if (
-    invoice.status !== "paid" ||
-    ["incomplete", "incomplete_expired"].includes(subscription.status)
-  )
+  if (!invoice) return { kind: "awaiting_invoice" };
+  if (isTerminalVoidedInvoice(invoice, subscription))
+    return prepareVoidedOfferRelease(invoice, subscription, expected);
+  if (!hasSettledPaymentStatus(invoice, subscription))
     return { kind: "pending", invoiceId: invoice.id };
   assertFirstOfferInvoice(invoice, subscription, expected);
   const paidAt = invoice.status_transitions.paid_at;
@@ -256,4 +257,60 @@ function assertLineDiscount(
     referenceId(line.discount_amounts[0].discount) !== discountId
   )
     throw invalid();
+}
+
+function prepareVoidedOfferRelease(
+  invoice: StripeInvoice,
+  subscription: StripeSubscription,
+  expected: ReservedOffer,
+): Extract<InitialOfferSettlement, { kind: "voided" }> {
+  assertFirstOfferInvoice(invoice, subscription, expected);
+  const voidedAt = invoice.status_transitions.voided_at;
+  if (
+    invoice.amount_paid !== 0 ||
+    invoice.status_transitions.paid_at !== null ||
+    voidedAt === null ||
+    !Number.isInteger(voidedAt) ||
+    voidedAt * 1000 < Math.floor(expected.reservedAt / 1000) * 1000
+  )
+    throw invalid();
+  return {
+    kind: "voided",
+    invoiceId: invoice.id,
+    usage: {
+      expected,
+      next: {
+        guildId: expected.guildId,
+        mode: expected.mode,
+        offerId: expected.offerId,
+        revision: randomUUID(),
+        state: "unused",
+        released: {
+          operationId: expected.operationId,
+          reason: "initial_invoice_voided",
+          resourceId: invoice.id,
+          verifiedAt: Date.now(),
+        },
+      },
+    },
+  };
+}
+
+function isTerminalVoidedInvoice(
+  invoice: StripeInvoice,
+  subscription: StripeSubscription,
+): boolean {
+  return (
+    invoice.status === "void" &&
+    ["canceled", "incomplete_expired"].includes(subscription.status)
+  );
+}
+function hasSettledPaymentStatus(
+  invoice: StripeInvoice,
+  subscription: StripeSubscription,
+): boolean {
+  return (
+    invoice.status === "paid" &&
+    !["incomplete", "incomplete_expired"].includes(subscription.status)
+  );
 }

@@ -88,6 +88,7 @@ export async function acceptPurchaseSubscription(
       current.customerId !== customerId
     )
       throw new Error("Purchase subscription association mismatch");
+    if (retiredPurchase(current, subscription)) return;
     const pointer = await getSubscriptionRepository().get(guildId);
     if (pointer?.stripeSubscriptionId !== subscription.id)
       throw new Error("Purchase acceptance pointer changed; retry");
@@ -102,10 +103,10 @@ export async function acceptPurchaseSubscription(
         advanceAttempt(current, {
           state: "completed",
           subscriptionId: subscription.id,
-          initialInvoiceId:
-            prepared.kind === "none"
-              ? current.initialInvoiceId
-              : prepared.invoiceId,
+          initialInvoiceId: preparedInvoiceId(
+            prepared,
+            current.initialInvoiceId,
+          ),
         }),
         current,
         pointer,
@@ -183,4 +184,28 @@ export async function isPurchaseAnalyticsOptedOut(
   if (!attemptId) return false;
   const attempt = await getPurchaseRepository().get(guildId);
   return attempt?.attemptId === attemptId && Boolean(attempt?.analyticsOptOut);
+}
+
+function preparedInvoiceId(
+  prepared: Awaited<ReturnType<typeof prepareInitialOfferSettlement>>,
+  previous: PurchaseAttempt["initialInvoiceId"],
+) {
+  return prepared.kind === "pending" ||
+    prepared.kind === "settled" ||
+    prepared.kind === "voided"
+    ? prepared.invoiceId
+    : previous;
+}
+
+function retiredPurchase(
+  current: PurchaseAttempt,
+  subscription: StripeSubscription,
+): boolean {
+  if (current.state !== "expired") return false;
+  if (
+    current.subscriptionId === subscription.id &&
+    ["canceled", "incomplete_expired"].includes(subscription.status)
+  )
+    return true;
+  throw new Error("Retired purchase subscription association mismatch");
 }

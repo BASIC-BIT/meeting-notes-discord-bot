@@ -81,6 +81,7 @@ export const offerUsageSchema = z.discriminatedUnion("state", [
           operationId: nonempty,
           reason: z.enum([
             "checkout_expired",
+            "initial_invoice_voided",
             "change_canceled",
             "schedule_canceled",
           ]),

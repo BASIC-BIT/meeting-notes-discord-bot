@@ -129,3 +129,15 @@ per-offer eligibility path are integrated. Active plan changes, their owned
 provider retirement, deferred schedules and the full exact-consent application
 journey are separate unfinished work. Do not activate or merge this checkpoint
 as the approved switching policy.
+
+Before replacing a completed initial purchase for a verified terminal subscription,
+reconcile that purchase's original offer invoice. Save matching settled use under
+the existing subscription, operation and offer revision fences before creating
+another purchase. A credit-covered zero-cash settlement qualifies. A mismatched
+identity, missing invoice or unresolved payment preserves the original control
+record. A matching native-voided unpaid first invoice on a canceled or
+incomplete_expired subscription releases the reservation atomically before
+replacement. Its positive historical amount_remaining does not prevent release
+from terminal void evidence. Uncollectible invoices remain unresolved because
+they can still be paid. This preserves recovery context and does not import
+earlier history or void unresolved invoices.

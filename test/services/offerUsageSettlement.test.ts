@@ -4,7 +4,11 @@ import { getMockStore, resetMockStore } from "../../src/repositories/mockStore";
 import { getPurchaseRepository } from "../../src/repositories/purchaseAttemptRepository";
 import { getOfferUsageRepository } from "../../src/repositories/offerUsageRepository";
 import type { PurchaseAttempt } from "../../src/types/purchase";
-import type { StripeClient, StripeSubscription } from "../../src/types/stripe";
+import type {
+  StripeClient,
+  StripeSubscription,
+  StripeInvoice,
+} from "../../src/types/stripe";
 
 const guildId = "111111111111111111";
 const createdAt = Date.parse("2026-10-14T12:00:00Z");
@@ -66,6 +70,10 @@ async function fixture(annual = false) {
     { next: reserved, expected: undefined },
   );
   const discount = { id: "di", source: { type: "coupon", coupon: "coupon" } };
+  const transitions: Pick<
+    StripeInvoice["status_transitions"],
+    "paid_at" | "voided_at"
+  > = { paid_at: createdAt / 1000 + 1, voided_at: null };
   const invoice = {
     id: "in",
     customer: "cus",
@@ -78,7 +86,7 @@ async function fixture(annual = false) {
     amount_remaining: 0,
     subtotal: unitAmount,
     total_excluding_tax: paid,
-    status_transitions: { paid_at: createdAt / 1000 + 1 },
+    status_transitions: transitions,
     discounts: [discount],
     total_discount_amounts: [{ amount: unitAmount - paid, discount: "di" }],
     lines: {
@@ -379,4 +387,225 @@ test("the original invoice binding cannot be changed by a retry of the same purc
     ),
   ).rejects.toThrow("Initial invoice binding");
   expect((await repo.get(guildId))?.initialInvoiceId).toBe("in");
+});
+
+async function retiredPurchaseFixture(annual = false) {
+  const f = await fixture(annual);
+  f.subscription.status = "canceled";
+  const store = getMockStore();
+  const old = store.purchaseAttempts.get(guildId)!;
+  store.purchaseAttempts.set(guildId, {
+    ...old,
+    state: "completed",
+    subscriptionId: "sub",
+  });
+  const pointer = { ...store.subscriptions.get(guildId)!, status: "canceled" };
+  store.subscriptions.set(guildId, pointer);
+  const create = jest.fn(async () => {
+    const current = store.purchaseAttempts.get(guildId)!;
+    return {
+      id: "cs-new",
+      status: "open",
+      url: "https://checkout.stripe.com/new",
+      customer: "cus-new",
+      livemode: false,
+      metadata: { guild_id: guildId, purchase_attempt_id: current.attemptId },
+    };
+  });
+  Object.assign(f.stripe, {
+    subscriptions: { retrieve: jest.fn(async () => f.subscription) },
+    customers: { create: jest.fn(async () => ({ id: "cus-new" })) },
+  });
+  Object.assign(f.stripe.checkout.sessions, { create });
+  const { createInitialPurchase } =
+    await import("../../src/services/initialPurchaseService");
+  const purchase = () =>
+    createInitialPurchase({
+      stripe: f.client,
+      user: { id: "payer-new" },
+      guildId,
+      mode: "test",
+      expected: pointer,
+      checkout: {
+        line_items: [{ price: "price-regular", quantity: 1 }],
+        metadata: { guild_id: guildId, discord_id: "payer-new" },
+      },
+    });
+  return { ...f, old, create, purchase };
+}
+
+test.each([
+  [false, 600],
+  [true, 6000],
+  [false, 0],
+  [true, 0],
+] as const)(
+  "repurchase settles the original %s offer with %s cash before replacing its purchase record",
+  async (annual, cashPaid) => {
+    const f = await retiredPurchaseFixture(annual);
+    f.invoice.amount_paid = cashPaid;
+    await expect(f.purchase()).resolves.toContain("checkout.stripe.com/new");
+    expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).not.toBe(
+      "op",
+    );
+    expect(
+      await getOfferUsageRepository().get(guildId, f.offerId, "test"),
+    ).toMatchObject({
+      state: "used",
+      operationId: "op",
+      settlement: { invoiceId: "in" },
+    });
+  },
+);
+
+test("unsettled original payment cannot lose its purchase record during repurchase", async () => {
+  const f = await retiredPurchaseFixture();
+  f.invoice.status = "open";
+  f.invoice.amount_paid = 0;
+  f.invoice.amount_remaining = 600;
+  await expect(f.purchase()).rejects.toMatchObject({
+    reason: "purchase_pending",
+  });
+  expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).toBe("op");
+  expect(
+    await getOfferUsageRepository().get(guildId, f.offerId, "test"),
+  ).toEqual(f.reserved);
+  expect(f.create).not.toHaveBeenCalled();
+});
+
+test("a missing original invoice retains its control record during repurchase", async () => {
+  const f = await retiredPurchaseFixture();
+  f.subscription.latest_invoice = "";
+  await expect(f.purchase()).rejects.toMatchObject({
+    reason: "purchase_pending",
+  });
+  expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).toBe("op");
+  expect(f.create).not.toHaveBeenCalled();
+});
+
+test("a payer mismatch cannot retire the old offer purchase", async () => {
+  const f = await retiredPurchaseFixture();
+  f.subscription.metadata.discord_id = "unexpected-payer";
+  await expect(f.purchase()).rejects.toMatchObject({
+    reason: "purchase_needs_review",
+  });
+  expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).toBe("op");
+  expect(f.create).not.toHaveBeenCalled();
+});
+
+test.each([false, true])(
+  "a concurrent revision prevents original settlement or void release (%s)",
+  async (voided) => {
+    const f = await retiredPurchaseFixture();
+    if (voided) {
+      f.invoice.status = "void";
+      f.invoice.amount_paid = 0;
+      f.invoice.amount_remaining = 600;
+      f.invoice.status_transitions.paid_at = null;
+      f.invoice.status_transitions.voided_at = createdAt / 1000 + 86400;
+    }
+    const module =
+      await import("../../src/repositories/purchaseAttemptRepository");
+    const real = module.getPurchaseRepository();
+    const spy = jest.spyOn(module, "getPurchaseRepository").mockReturnValue({
+      ...real,
+      compareAndWrite: async (...args) => {
+        const current = getMockStore().purchaseAttempts.get(guildId)!;
+        getMockStore().purchaseAttempts.set(guildId, {
+          ...current,
+          revision: "other-worker",
+        });
+        return real.compareAndWrite(...args);
+      },
+    });
+    try {
+      await expect(f.purchase()).rejects.toMatchObject({
+        reason: "purchase_pending",
+      });
+      expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).toBe(
+        "op",
+      );
+      expect(
+        await getOfferUsageRepository().get(guildId, f.offerId, "test"),
+      ).toEqual(f.reserved);
+      expect(f.create).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  },
+);
+
+test.each([false, true])(
+  "a native-voided unpaid %s first invoice releases before repurchase",
+  async (annual) => {
+    const f = await retiredPurchaseFixture(annual);
+    f.subscription.status = "incomplete_expired";
+    f.invoice.status = "void";
+    f.invoice.amount_paid = 0;
+    f.invoice.amount_remaining = annual ? 6000 : 600;
+    f.invoice.status_transitions.paid_at = null;
+    f.invoice.status_transitions.voided_at = createdAt / 1000 + 86400;
+    await expect(f.purchase()).resolves.toContain("checkout.stripe.com/new");
+    expect(
+      await getOfferUsageRepository().get(guildId, f.offerId, "test"),
+    ).toMatchObject({
+      state: "unused",
+      released: {
+        operationId: "op",
+        reason: "initial_invoice_voided",
+        resourceId: "in",
+      },
+    });
+  },
+);
+
+test("uncollectible original invoices retain their owner because payment is still possible", async () => {
+  const f = await retiredPurchaseFixture();
+  f.invoice.status = "uncollectible";
+  f.invoice.amount_paid = 0;
+  f.invoice.amount_remaining = 600;
+  await expect(f.purchase()).rejects.toMatchObject({
+    reason: "purchase_pending",
+  });
+  expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).toBe("op");
+  expect(f.create).not.toHaveBeenCalled();
+});
+
+test("terminal reconciliation cannot reclaim an already released original reservation", async () => {
+  const f = await retiredPurchaseFixture();
+  f.invoice.status = "void";
+  f.invoice.amount_paid = 0;
+  f.invoice.amount_remaining = 600;
+  f.invoice.status_transitions.paid_at = null;
+  f.invoice.status_transitions.voided_at = createdAt / 1000 + 86400;
+  await f.purchase();
+  const released = await getOfferUsageRepository().get(
+    guildId,
+    f.offerId,
+    "test",
+  );
+  getMockStore().purchaseAttempts.set(guildId, {
+    ...f.old,
+    state: "expired",
+    subscriptionId: "sub",
+    initialInvoiceId: "in",
+  });
+  await expect(
+    acceptPurchaseSubscription(guildId, f.native, f.client),
+  ).resolves.toBeUndefined();
+  expect(getMockStore().purchaseAttempts.get(guildId)?.state).toBe("expired");
+  expect(
+    await getOfferUsageRepository().get(guildId, f.offerId, "test"),
+  ).toEqual(released);
+});
+
+test("void status without a native void timestamp cannot release the original offer", async () => {
+  const f = await retiredPurchaseFixture();
+  f.invoice.status = "void";
+  f.invoice.amount_paid = 0;
+  f.invoice.amount_remaining = 600;
+  f.invoice.status_transitions.paid_at = null;
+  await expect(f.purchase()).rejects.toThrow("Offer settlement evidence");
+  expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).toBe("op");
+  expect(f.create).not.toHaveBeenCalled();
 });
