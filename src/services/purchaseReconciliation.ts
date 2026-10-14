@@ -101,7 +101,7 @@ export async function acceptPurchaseSubscription(
     if (
       await repo.compareAndWrite(
         advanceAttempt(current, {
-          state: "completed",
+          state: preparedPurchaseState(prepared),
           subscriptionId: subscription.id,
           initialInvoiceId: preparedInvoiceId(
             prepared,
@@ -111,7 +111,7 @@ export async function acceptPurchaseSubscription(
         current,
         pointer,
         undefined,
-        prepared.kind === "settled" ? prepared.usage : undefined,
+        preparedUsage(prepared),
       )
     )
       return;
@@ -208,4 +208,17 @@ function retiredPurchase(
   )
     return true;
   throw new Error("Retired purchase subscription association mismatch");
+}
+
+function preparedPurchaseState(
+  prepared: Awaited<ReturnType<typeof prepareInitialOfferSettlement>>,
+): PurchaseAttempt["state"] {
+  return prepared.kind === "voided" ? "expired" : "completed";
+}
+function preparedUsage(
+  prepared: Awaited<ReturnType<typeof prepareInitialOfferSettlement>>,
+) {
+  return prepared.kind === "settled" || prepared.kind === "voided"
+    ? prepared.usage
+    : undefined;
 }

@@ -609,3 +609,35 @@ test("void status without a native void timestamp cannot release the original of
   expect(getMockStore().purchaseAttempts.get(guildId)?.attemptId).toBe("op");
   expect(f.create).not.toHaveBeenCalled();
 });
+test.each([false, true])(
+  "terminal webhook releases a native-voided original %s offer and preserves replay",
+  async (annual) => {
+    const f = await fixture(annual);
+    f.subscription.status = "incomplete_expired";
+    f.invoice.status = "void";
+    f.invoice.amount_paid = 0;
+    f.invoice.amount_remaining = annual ? 6000 : 600;
+    f.invoice.status_transitions.paid_at = null;
+    f.invoice.status_transitions.voided_at = createdAt / 1000 + 5;
+    await acceptPurchaseSubscription(guildId, f.native, f.client);
+    const released = await getOfferUsageRepository().get(
+      guildId,
+      f.offerId,
+      "test",
+    );
+    expect(released).toMatchObject({
+      state: "unused",
+      released: { reason: "initial_invoice_voided", resourceId: "in" },
+    });
+    expect(getMockStore().purchaseAttempts.get(guildId)).toMatchObject({
+      state: "expired",
+      initialInvoiceId: "in",
+    });
+    await expect(
+      acceptPurchaseSubscription(guildId, f.native, f.client),
+    ).resolves.toBeUndefined();
+    expect(
+      await getOfferUsageRepository().get(guildId, f.offerId, "test"),
+    ).toEqual(released);
+  },
+);
