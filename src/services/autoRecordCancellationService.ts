@@ -1,3 +1,4 @@
+import { isAudioFileSpeechRejected } from "../utils/audioTranscript";
 import { waitForFinishProcessing } from "../audio";
 import type { MeetingData } from "../types/meeting-data";
 import { createOpenAIClient } from "./openaiClient";
@@ -27,6 +28,7 @@ const isAutoCancelEnabled = (meeting: MeetingData) => {
 
 const collectTranscriptText = (meeting: MeetingData) =>
   meeting.audioData.audioFiles
+    .filter((file) => !isAudioFileSpeechRejected(file))
     .map((file) => file.transcript)
     .filter((text): text is string => Boolean(text && text.trim()))
     .join(" ");

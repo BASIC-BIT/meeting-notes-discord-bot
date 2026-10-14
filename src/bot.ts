@@ -126,6 +126,7 @@ import {
 } from "./commands/onboard";
 import { removeGuildInstaller } from "./services/guildInstallerService";
 import { captureEvent, shutdownAnalytics } from "./services/analyticsService";
+import { shutdownSpeechDetector } from "./services/speechDetectionService";
 import { setDiscordClient } from "./services/discordClientAccessor";
 import { startMeetingControlCommandWorker } from "./services/meetingControlWorkerService";
 import { autoRecordJoinSuppressionService } from "./services/autoRecordJoinSuppressionService";
@@ -1462,6 +1463,9 @@ process.on("SIGTERM", async () => {
 
   // Wait for ongoing meetings to finish
   await completeOngoingMeetings();
+
+  // Finalization may still use speech detection. Release the worker afterwards.
+  await shutdownSpeechDetector();
 
   // Flush buffered analytics before the task goes away. posthog-node batches,
   // so anything still in the buffer is lost otherwise, and a dropped event is

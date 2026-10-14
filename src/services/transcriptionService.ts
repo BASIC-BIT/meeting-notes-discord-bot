@@ -1,16 +1,21 @@
 import type OpenAI from "openai";
-import type {
-  Transcription,
-  TranscriptionCreateParamsNonStreaming,
-} from "openai/resources/audio";
-import {
-  createReadStream,
-  existsSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import type { TranscriptionCreateParamsNonStreaming } from "openai/resources/audio";
+import { createReadStream } from "node:fs";
 import path from "node:path";
-import ffmpeg from "fluent-ffmpeg";
+import { withPreparedTranscriptionInput } from "./transcriptionInputService";
+import {
+  DEFAULT_SPEECH_POLICY,
+  speechCoverageMatches,
+} from "./speechDetectionPolicy";
+import { getSpeechDetector } from "./speechDetectionService";
+import type { SpeechDetectionMode } from "../config/speechDetection";
+import type { SpeechPhase, SpeechCoverage } from "./speechDetectionTypes";
+import {
+  recordSpeechAssessment,
+  recordSpeechProviderSubmission,
+  recordSpeechRequestSkipped,
+  recordSpeechSnippetOutcome,
+} from "../metrics";
 import {
   bulkhead,
   circuitBreaker,
@@ -32,35 +37,18 @@ import {
   CHANNELS,
   LANGFUSE_AUDIO_ATTACHMENT_MAX_CONCURRENT,
   LANGFUSE_AUDIO_ATTACHMENT_MIN_TIME,
-  NOISE_GATE_APPLY_TO_FAST,
-  NOISE_GATE_APPLY_TO_SLOW,
-  NOISE_GATE_ENABLED,
-  NOISE_GATE_MIN_ACTIVE_WINDOWS,
-  NOISE_GATE_MIN_PEAK_ABOVE_NOISE_DB,
-  NOISE_GATE_PEAK_DBFS,
-  NOISE_GATE_WINDOW_MS,
   RECORD_SAMPLE_RATE,
   TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
   TRANSCRIPTION_BREAK_DURATION,
-  TRANSCRIPTION_HARD_SILENCE_DBFS,
-  TRANSCRIPTION_RATE_MAX_SECONDS,
-  TRANSCRIPTION_RATE_MAX_SYLLABLES_PER_SECOND,
-  TRANSCRIPTION_RATE_MIN_SYLLABLES,
-  TRANSCRIPTION_RATE_MIN_WORDS,
   TRANSCRIPTION_MAX_CONCURRENT,
   TRANSCRIPTION_MAX_QUEUE,
   TRANSCRIPTION_MAX_RETRIES,
   TRANSCRIPTION_RATE_MIN_TIME,
-  TRANSCRIBE_SAMPLE_RATE,
 } from "../constants";
-import { applyTranscriptionGuards } from "../utils/transcriptionGuards";
 import {
-  decideTranscriptionVote,
-  shouldRunTranscriptionVote,
-  type TranscriptionVoteCandidate,
-  type TranscriptionVoteDecision,
-  type TranscriptionVoteGateResult,
-} from "../utils/transcriptionVote";
+  selectTranscription,
+  resolveTranscriptionGuardConfig,
+} from "./transcriptionSelectionService";
 import { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
 import { isLangfuseTracingEnabled } from "./langfuseClient";
@@ -73,8 +61,11 @@ import { buildLangfuseTranscriptionAudioAttachment } from "../observability/lang
 import { buildLangfuseTranscriptionAccounting } from "../observability/langfuseUsageDetails";
 import { toLangfuseAttributeMetadata } from "../observability/langfuseMetadata";
 import { ensureMeetingTempDirSync } from "./tempFileService";
-import { evaluateNoiseGate } from "../utils/audioNoiseGate";
-import { countWords } from "../utils/text";
+import {
+  evaluateNoiseGate,
+  DEFAULT_NOISE_GATE_CONFIG,
+  isNoiseGateEnabled,
+} from "../utils/audioNoiseGate";
 import {
   getTranscriptionPrompt,
   getTranscriptionCleanupPrompt,
@@ -84,150 +75,9 @@ import { chat } from "./openaiChatService";
 import { getMeetingModelOverrides } from "./meetingModelOverrides";
 import { getTranscriptionTextQuality } from "../utils/transcriptionText";
 
-const DEFAULT_NOISE_GATE_CONFIG = {
-  enabled: NOISE_GATE_ENABLED,
-  windowMs: NOISE_GATE_WINDOW_MS,
-  peakDbfs: NOISE_GATE_PEAK_DBFS,
-  minActiveWindows: NOISE_GATE_MIN_ACTIVE_WINDOWS,
-  minPeakAboveNoiseDb: NOISE_GATE_MIN_PEAK_ABOVE_NOISE_DB,
-  applyToFast: NOISE_GATE_APPLY_TO_FAST,
-  applyToSlow: NOISE_GATE_APPLY_TO_SLOW,
-};
-
-let syllableCounterPromise: Promise<(value: string) => number> | null = null;
-
-const getSyllableCounter = async () => {
-  if (!syllableCounterPromise) {
-    syllableCounterPromise = import("syllable")
-      .then((module) => {
-        const counter = module.syllable ?? module.default ?? module;
-        if (typeof counter !== "function") {
-          throw new Error("Failed to load syllable counter.");
-        }
-        return counter;
-      })
-      .catch((error) => {
-        syllableCounterPromise = null;
-        throw error;
-      });
-  }
-  return syllableCounterPromise;
-};
-
-const countSyllables = async (text: string) => {
-  if (!text) return 0;
-  const counter = await getSyllableCounter();
-  return counter(text);
-};
-
-type TranscriptionGuardConfig = {
-  suppressionEnabled: boolean;
-  promptEchoEnabled: boolean;
-  hardSilenceDbfs: number;
-  rateMaxSeconds: number;
-  rateMinWords: number;
-  rateMinSyllables: number;
-  maxSyllablesPerSecond: number;
-};
-
-type TranscriptStats = {
-  transcriptCharCount: number;
-  transcriptWordCount: number;
-  transcriptSyllableCount?: number;
-  wordsPerSecond?: number;
-  syllablesPerSecond?: number;
-};
-
-const resolvePromptEchoEnabled = (meeting: MeetingData) =>
-  meeting.runtimeConfig?.transcription.promptEchoEnabled ?? true;
-
-const resolveTranscriptionVoteEnabled = (meeting: MeetingData) =>
-  meeting.runtimeConfig?.transcription.voteEnabled ?? true;
-
-const resolveHardSilenceDbfs = (meeting: MeetingData) =>
-  meeting.runtimeConfig?.transcription.suppressionHardSilenceDbfs ??
-  TRANSCRIPTION_HARD_SILENCE_DBFS;
-
-const resolveRateConfig = (meeting: MeetingData) => {
-  const transcriptionConfig = meeting.runtimeConfig?.transcription;
-  return {
-    rateMaxSeconds:
-      transcriptionConfig?.suppressionRateMaxSeconds ??
-      TRANSCRIPTION_RATE_MAX_SECONDS,
-    rateMinWords:
-      transcriptionConfig?.suppressionRateMinWords ??
-      TRANSCRIPTION_RATE_MIN_WORDS,
-    rateMinSyllables:
-      transcriptionConfig?.suppressionRateMinSyllables ??
-      TRANSCRIPTION_RATE_MIN_SYLLABLES,
-    maxSyllablesPerSecond:
-      transcriptionConfig?.suppressionRateMaxSyllablesPerSecond ??
-      TRANSCRIPTION_RATE_MAX_SYLLABLES_PER_SECOND,
-  };
-};
-
-const resolveGuardConfig = (
-  meeting: MeetingData,
-  context?: TranscriptionTraceContext,
-): TranscriptionGuardConfig => {
-  const rateConfig = resolveRateConfig(meeting);
-  return {
-    suppressionEnabled: resolveSuppressionEnabled(
-      meeting,
-      context?.suppressionEnabledOverride,
-    ),
-    promptEchoEnabled: resolvePromptEchoEnabled(meeting),
-    hardSilenceDbfs: resolveHardSilenceDbfs(meeting),
-    rateMaxSeconds: rateConfig.rateMaxSeconds,
-    rateMinWords: rateConfig.rateMinWords,
-    rateMinSyllables: rateConfig.rateMinSyllables,
-    maxSyllablesPerSecond: rateConfig.maxSyllablesPerSecond,
-  };
-};
-
-const buildTranscriptStats = async (options: {
-  transcript: string;
-  audioSeconds?: number;
-  traceMetadata: Record<string, unknown>;
-}): Promise<TranscriptStats> => {
-  const trimmed = options.transcript.trim();
-  const transcriptCharCount = trimmed.length;
-  const transcriptWordCount = countWords(trimmed);
-  let transcriptSyllableCount: number | undefined = 0;
-
-  if (trimmed) {
-    try {
-      transcriptSyllableCount = await countSyllables(trimmed);
-    } catch (error) {
-      transcriptSyllableCount = undefined;
-      console.warn("Failed to count syllables for transcription.", {
-        ...options.traceMetadata,
-        error,
-      });
-    }
-  }
-
-  const wordsPerSecond =
-    options.audioSeconds && options.audioSeconds > 0
-      ? transcriptWordCount / options.audioSeconds
-      : undefined;
-  const syllablesPerSecond =
-    options.audioSeconds &&
-    options.audioSeconds > 0 &&
-    transcriptSyllableCount !== undefined
-      ? transcriptSyllableCount / options.audioSeconds
-      : undefined;
-
-  return {
-    transcriptCharCount,
-    transcriptWordCount,
-    transcriptSyllableCount,
-    wordsPerSecond,
-    syllablesPerSecond,
-  };
-};
-
 type TranscriptionTraceContext = {
+  speechDetectionMode: SpeechDetectionMode;
+  speechPhase: SpeechPhase;
   userId: string;
   timestamp: number;
   audioSeconds: number;
@@ -247,7 +97,7 @@ async function transcribeInternal(
   const promptValue = prompt.trim();
   const resolvedPrompt = promptValue.length > 0 ? promptValue : undefined;
   const passMode = context?.noiseGateMode ?? "slow";
-  const voteEnabled = resolveTranscriptionVoteEnabled(meeting);
+  const voteEnabled = meeting.runtimeConfig?.transcription.voteEnabled ?? true;
 
   const modelChoice = getModelChoice(
     "transcription",
@@ -283,6 +133,14 @@ async function transcribeInternal(
       include: ["logprobs"],
       ...(promptText ? { prompt: promptText } : {}),
     };
+    if (context) {
+      recordSpeechProviderSubmission({
+        mode: context.speechDetectionMode,
+        phase: context.speechPhase,
+        candidate: promptText ? "prompt" : "no_prompt",
+        audioSeconds: context.audioSeconds,
+      });
+    }
     const transcription =
       await openAIClient.audio.transcriptions.create(request);
     return {
@@ -292,23 +150,10 @@ async function transcribeInternal(
     };
   };
 
-  const guardConfig = resolveGuardConfig(meeting, context);
-
-  type GuardedTranscriptionResult = {
-    candidateId: "prompt" | "no_prompt";
-    rawTextQuality: ReturnType<typeof getTranscriptionTextQuality>;
-    selectedTextQuality: ReturnType<typeof getTranscriptionTextQuality>;
-    guardResult: ReturnType<typeof applyTranscriptionGuards>;
-    transcriptStats: TranscriptStats;
-    suppressionEnabled: boolean;
-    promptEchoEnabled: boolean;
-    hardSilenceDbfs: number;
-    rateMaxSeconds: number;
-    rateMinWords: number;
-    rateMinSyllables: number;
-    maxSyllablesPerSecond: number;
-    usage?: Transcription["usage"];
-  };
+  const guardConfig = resolveTranscriptionGuardConfig(
+    meeting.runtimeConfig?.transcription,
+    context?.suppressionEnabledOverride,
+  );
 
   const toLogSafeTextQuality = (
     quality: ReturnType<typeof getTranscriptionTextQuality>,
@@ -320,186 +165,86 @@ async function transcribeInternal(
     trivial: quality.trivial,
     reasons: quality.reasons,
   });
-
-  const applyGuardsAndLog = async (
-    raw: {
-      text: string;
-      logprobs?: { logprob?: number }[];
-      usage?: Transcription["usage"];
-    },
-    candidate: {
-      id: "prompt" | "no_prompt";
-      promptText?: string;
-    },
-  ): Promise<GuardedTranscriptionResult> => {
-    const rawTextQuality = getTranscriptionTextQuality(raw.text);
-    const promptEchoEnabledForCandidate =
-      guardConfig.promptEchoEnabled && Boolean(candidate.promptText);
-
-    const transcriptStats = await buildTranscriptStats({
-      transcript: raw.text,
-      audioSeconds: context?.audioSeconds,
-      traceMetadata,
-    });
-    const guardResult = applyTranscriptionGuards({
-      transcription: raw.text,
-      suppressionEnabled: guardConfig.suppressionEnabled,
-      hardSilenceDbfs: guardConfig.hardSilenceDbfs,
-      rateMaxSeconds: guardConfig.rateMaxSeconds,
-      rateMinWords: guardConfig.rateMinWords,
-      rateMinSyllables: guardConfig.rateMinSyllables,
-      maxSyllablesPerSecond: guardConfig.maxSyllablesPerSecond,
-      promptEchoEnabled: promptEchoEnabledForCandidate,
-      promptText: candidate.promptText,
-      noiseGateMetrics: context?.noiseGateMetrics,
-      audioSeconds: context?.audioSeconds,
-      transcriptWordCount: transcriptStats.transcriptWordCount,
-      transcriptSyllableCount: transcriptStats.transcriptSyllableCount,
-      logprobs: raw.logprobs,
-    });
-    const selectedTextQuality = getTranscriptionTextQuality(guardResult.text);
-    const rawTextQualityForLogs = toLogSafeTextQuality(rawTextQuality);
-    const selectedTextQualityForLogs =
-      toLogSafeTextQuality(selectedTextQuality);
-
-    if (
-      guardResult.flags.length > 0 ||
-      rawTextQuality.trivial ||
-      selectedTextQuality.trivial
-    ) {
-      console.warn("Transcription candidate needs review.", {
-        ...traceMetadata,
-        transcriptionCandidate: candidate.id,
-        candidatePromptLength: candidate.promptText?.length ?? 0,
-        flags: guardResult.flags,
-        quietAudio: guardResult.quietAudio,
-        quietByPeak: guardResult.quietByPeak,
-        quietByActivity: guardResult.quietByActivity,
-        hardSilenceDetected: guardResult.hardSilenceDetected,
-        rateMismatchDetected: guardResult.rateMismatchDetected,
-        suppressionEnabled: guardConfig.suppressionEnabled,
-        promptEchoEnabled: promptEchoEnabledForCandidate,
-        hardSilenceDbfs: guardConfig.hardSilenceDbfs,
-        rateMaxSeconds: guardConfig.rateMaxSeconds,
-        rateMinWords: guardConfig.rateMinWords,
-        rateMinSyllables: guardConfig.rateMinSyllables,
-        maxSyllablesPerSecond: guardConfig.maxSyllablesPerSecond,
-        logprobMetrics: guardResult.logprobMetrics,
-        promptEchoDetected: guardResult.promptEchoDetected,
-        promptEchoMetrics: guardResult.promptEchoMetrics,
-        noiseGateMetrics: context?.noiseGateMetrics,
-        rawTranscriptionLength: transcriptStats.transcriptCharCount,
-        transcriptWordCount: transcriptStats.transcriptWordCount,
-        transcriptSyllableCount: transcriptStats.transcriptSyllableCount,
-        wordsPerSecond: transcriptStats.wordsPerSecond,
-        syllablesPerSecond: transcriptStats.syllablesPerSecond,
-        rawTextQuality: rawTextQualityForLogs,
-        selectedTextQuality: selectedTextQualityForLogs,
-        transcriptionLength: guardResult.text.length,
-      });
-    }
-
-    return {
-      candidateId: candidate.id,
-      rawTextQuality,
-      selectedTextQuality,
-      guardResult,
-      transcriptStats,
-      suppressionEnabled: guardConfig.suppressionEnabled,
-      promptEchoEnabled: promptEchoEnabledForCandidate,
-      hardSilenceDbfs: guardConfig.hardSilenceDbfs,
-      rateMaxSeconds: guardConfig.rateMaxSeconds,
-      rateMinWords: guardConfig.rateMinWords,
-      rateMinSyllables: guardConfig.rateMinSyllables,
-      maxSyllablesPerSecond: guardConfig.maxSyllablesPerSecond,
-      usage: raw.usage,
-    };
-  };
-
-  const buildVoteCandidate = (
-    candidate: GuardedTranscriptionResult,
-  ): TranscriptionVoteCandidate => {
-    return {
-      id: candidate.candidateId,
-      text: candidate.guardResult.text,
-      suppressed: candidate.guardResult.suppressed,
-      promptEchoDetected: candidate.guardResult.promptEchoDetected,
-      rateMismatchDetected: candidate.guardResult.rateMismatchDetected,
-      quietAudio: candidate.guardResult.quietAudio,
-      logprobMetrics: candidate.guardResult.logprobMetrics,
-    };
-  };
-
-  type TranscriptionSelection = {
-    selected: GuardedTranscriptionResult;
-    promptCandidate: GuardedTranscriptionResult;
-    noPromptCandidate?: GuardedTranscriptionResult;
-    voteGate: TranscriptionVoteGateResult;
-    voteDecision?: TranscriptionVoteDecision;
-  };
-
-  const runAndSelectTranscription = async (
-    openAIClient: OpenAI,
-  ): Promise<TranscriptionSelection> => {
-    const promptOutput = await runTranscription(openAIClient, resolvedPrompt);
-    const promptCandidate = await applyGuardsAndLog(promptOutput, {
-      id: "prompt",
-      promptText: resolvedPrompt,
-    });
-
-    const voteGate = shouldRunTranscriptionVote({
-      enabled: voteEnabled,
-      hasPrompt: Boolean(resolvedPrompt),
+  const runAndSelectTranscription = async (openAIClient: OpenAI) => {
+    const selection = await selectTranscription({
+      transcribe: (promptText) => runTranscription(openAIClient, promptText),
+      prompt: resolvedPrompt,
       passMode,
-      primaryCandidate: buildVoteCandidate(promptCandidate),
+      voteEnabled,
+      guardConfig,
+      audioSeconds: context?.audioSeconds,
+      noiseGateMetrics: context?.noiseGateMetrics,
+      onSyllableError: (error) =>
+        console.warn("Failed to count syllables for transcription.", {
+          ...traceMetadata,
+          error,
+        }),
+      onCandidate: (candidate) => {
+        const {
+          guardResult,
+          transcriptStats,
+          rawTextQuality,
+          selectedTextQuality,
+        } = candidate;
+        if (
+          !guardResult.flags.length &&
+          !rawTextQuality.trivial &&
+          !selectedTextQuality.trivial
+        )
+          return;
+        console.warn("Transcription candidate needs review.", {
+          ...traceMetadata,
+          transcriptionCandidate: candidate.candidateId,
+          candidatePromptLength:
+            candidate.candidateId === "prompt"
+              ? (resolvedPrompt?.length ?? 0)
+              : 0,
+          flags: guardResult.flags,
+          quietAudio: guardResult.quietAudio,
+          quietByPeak: guardResult.quietByPeak,
+          quietByActivity: guardResult.quietByActivity,
+          hardSilenceDetected: guardResult.hardSilenceDetected,
+          rateMismatchDetected: guardResult.rateMismatchDetected,
+          suppressionEnabled: candidate.suppressionEnabled,
+          promptEchoEnabled: candidate.promptEchoEnabled,
+          hardSilenceDbfs: candidate.hardSilenceDbfs,
+          rateMaxSeconds: candidate.rateMaxSeconds,
+          rateMinWords: candidate.rateMinWords,
+          rateMinSyllables: candidate.rateMinSyllables,
+          maxSyllablesPerSecond: candidate.maxSyllablesPerSecond,
+          logprobMetrics: guardResult.logprobMetrics,
+          promptEchoDetected: guardResult.promptEchoDetected,
+          promptEchoMetrics: guardResult.promptEchoMetrics,
+          noiseGateMetrics: context?.noiseGateMetrics,
+          rawTranscriptionLength: transcriptStats.transcriptCharCount,
+          ...transcriptStats,
+          rawTextQuality: toLogSafeTextQuality(rawTextQuality),
+          selectedTextQuality: toLogSafeTextQuality(selectedTextQuality),
+          transcriptionLength: guardResult.text.length,
+        });
+      },
     });
-
-    if (!voteGate.shouldRun) {
-      return {
-        selected: promptCandidate,
-        promptCandidate,
-        voteGate,
-      };
-    }
-
-    const noPromptOutput = await runTranscription(openAIClient);
-    const noPromptCandidate = await applyGuardsAndLog(noPromptOutput, {
-      id: "no_prompt",
-    });
-
-    const voteDecision = decideTranscriptionVote({
-      promptCandidate: buildVoteCandidate(promptCandidate),
-      noPromptCandidate: buildVoteCandidate(noPromptCandidate),
-    });
-    const selected =
-      voteDecision.selectedId === "no_prompt"
-        ? noPromptCandidate
-        : promptCandidate;
-
-    console.log("Transcription vote selected candidate.", {
-      ...traceMetadata,
-      voteGateReasons: voteGate.reasons,
-      voteDecisionReasons: voteDecision.reasons,
-      voteSelectedCandidate: voteDecision.selectedId,
-      votePromptScore: voteDecision.promptScore,
-      voteNoPromptScore: voteDecision.noPromptScore,
-      votePromptFlags: promptCandidate.guardResult.flags,
-      voteNoPromptFlags: noPromptCandidate.guardResult.flags,
-      votePromptSuppressed: promptCandidate.guardResult.suppressed,
-      voteNoPromptSuppressed: noPromptCandidate.guardResult.suppressed,
-      votePromptTrivialText: promptCandidate.selectedTextQuality.trivial,
-      votePromptTrivialReasons: promptCandidate.selectedTextQuality.reasons,
-      voteNoPromptTrivialText: noPromptCandidate.selectedTextQuality.trivial,
-      voteNoPromptTrivialReasons: noPromptCandidate.selectedTextQuality.reasons,
-    });
-
-    return {
-      selected,
-      promptCandidate,
-      noPromptCandidate,
-      voteGate,
-      voteDecision,
-    };
+    const { voteDecision, noPromptCandidate, promptCandidate, voteGate } =
+      selection;
+    if (voteDecision && noPromptCandidate)
+      console.log("Transcription vote selected candidate.", {
+        ...traceMetadata,
+        voteGateReasons: voteGate.reasons,
+        voteDecisionReasons: voteDecision.reasons,
+        voteSelectedCandidate: voteDecision.selectedId,
+        votePromptScore: voteDecision.promptScore,
+        voteNoPromptScore: voteDecision.noPromptScore,
+        votePromptFlags: promptCandidate.guardResult.flags,
+        voteNoPromptFlags: noPromptCandidate.guardResult.flags,
+        votePromptSuppressed: promptCandidate.guardResult.suppressed,
+        voteNoPromptSuppressed: noPromptCandidate.guardResult.suppressed,
+        votePromptTrivialText: promptCandidate.selectedTextQuality.trivial,
+        votePromptTrivialReasons: promptCandidate.selectedTextQuality.reasons,
+        voteNoPromptTrivialText: noPromptCandidate.selectedTextQuality.trivial,
+        voteNoPromptTrivialReasons:
+          noPromptCandidate.selectedTextQuality.reasons,
+      });
+    return selection;
   };
 
   if (!isLangfuseTracingEnabled()) {
@@ -769,10 +514,7 @@ const resolveNoiseGateContext = (input: {
   const noiseGateMode = input.noiseGateMode ?? "slow";
   const noiseGateEnabled =
     input.noiseGateEnabledOverride ??
-    (noiseGateConfig.enabled &&
-      (noiseGateMode === "fast"
-        ? noiseGateConfig.applyToFast
-        : noiseGateConfig.applyToSlow));
+    isNoiseGateEnabled(noiseGateConfig, noiseGateMode);
   const shouldComputeMetrics =
     input.buffer.length > 0 && (noiseGateEnabled || input.suppressionEnabled);
   const noiseGateMetrics = shouldComputeMetrics
@@ -786,46 +528,6 @@ const resolveNoiseGateContext = (input: {
   return { noiseGateEnabled, noiseGateMetrics };
 };
 
-const convertPcmToWav = (inputFile: string, outputFile: string) =>
-  new Promise<void>((resolve, reject) => {
-    ffmpeg(inputFile)
-      .inputOptions([
-        `-f s16le`,
-        `-ar ${RECORD_SAMPLE_RATE}`,
-        `-ac ${CHANNELS}`,
-      ])
-      .outputOptions([
-        `-f wav`,
-        `-c:a pcm_s16le`,
-        `-ar ${TRANSCRIBE_SAMPLE_RATE}`,
-      ])
-      .on("end", () => {
-        resolve();
-      })
-      .on("error", (err) => {
-        console.error(`Error converting PCM to WAV: ${err.message}`);
-        reject(err);
-      })
-      .save(outputFile);
-  });
-
-const cleanupTempFile = (filePath: string, label: string) => {
-  try {
-    if (existsSync(filePath)) {
-      unlinkSync(filePath);
-      return;
-    }
-    console.log(`failed cleaning up temp ${label} file, continuing`);
-  } catch {
-    console.warn(`Failed cleaning up temp ${label} file, continuing.`);
-  }
-};
-
-const cleanupTempFiles = (files: TempSnippetFiles) => {
-  cleanupTempFile(files.pcmFile, "pcm");
-  cleanupTempFile(files.wavFile, "wav");
-};
-
 export async function transcribeSnippet(
   meeting: MeetingData,
   snippet: AudioSnippet,
@@ -834,10 +536,19 @@ export async function transcribeSnippet(
     noiseGateMode?: "fast" | "slow";
     noiseGateEnabledOverride?: boolean;
     suppressionEnabledOverride?: boolean;
+    speechDetectionBypass?: boolean;
+    // Coverage must come from a prior accepted speech result with usable text.
+    reuseTranscript?: { text: string; coverage: SpeechCoverage };
   } = {},
 ): Promise<SnippetTranscriptionResult> {
+  const startedAt = performance.now();
+  const mode =
+    meeting.runtimeConfig?.transcription.speechDetectionMode ?? "off";
+  const phase = options.noiseGateMode ?? "slow";
+  const force = options.speechDetectionBypass === true;
+  let outcome: Parameters<typeof recordSpeechSnippetOutcome>[0]["outcome"] =
+    "conversion_error";
   const suffix = options.tempSuffix ? `_${options.tempSuffix}` : "";
-  const tempFiles = buildSnippetTempFiles(meeting, snippet, suffix);
   const buffer = Buffer.concat(snippet.chunks);
   const { audioBytes, audioSeconds } = buildAudioStats(buffer);
   const suppressionEnabled = resolveSuppressionEnabled(
@@ -855,20 +566,64 @@ export async function transcribeSnippet(
 
   let stage: "conversion" | "transcription" = "conversion";
   try {
-    writeFileSync(tempFiles.pcmFile, buffer);
-    await convertPcmToWav(tempFiles.pcmFile, tempFiles.wavFile);
-    stage = "transcription";
-    const text = await transcribe(meeting, tempFiles.wavFile, {
-      userId: snippet.userId,
-      timestamp: snippet.timestamp,
-      audioSeconds,
-      audioBytes,
-      noiseGateEnabled,
-      noiseGateMode: resolvedNoiseGateMode,
-      noiseGateMetrics,
-      suppressionEnabledOverride: options.suppressionEnabledOverride,
-    });
-    return { status: "succeeded", text };
+    const reuse = options.reuseTranscript;
+    if (
+      !force &&
+      reuse &&
+      !getTranscriptionTextQuality(reuse.text).trivial &&
+      speechCoverageMatches(
+        buffer,
+        reuse.coverage,
+        DEFAULT_SPEECH_POLICY.policyFingerprint,
+      )
+    ) {
+      outcome = "reused";
+      return {
+        status: "succeeded",
+        text: reuse.text,
+        admission: { kind: "reused", coverage: reuse.coverage },
+      };
+    }
+    const tempFiles = buildSnippetTempFiles(meeting, snippet, suffix);
+    return await withPreparedTranscriptionInput<SnippetTranscriptionResult>(
+      {
+        pcm: buffer,
+        ...tempFiles,
+        mode,
+        phase,
+        force,
+        policyFingerprint: DEFAULT_SPEECH_POLICY.policyFingerprint,
+        detector: mode === "off" || force ? undefined : getSpeechDetector(),
+        observe: (assessment, durationMs) =>
+          recordSpeechAssessment({ mode, phase, assessment, durationMs }),
+      },
+      async ({ wavFile, admission, coverage }) => {
+        if (
+          admission.kind === "assessed" &&
+          admission.assessment.kind === "non_speech"
+        ) {
+          outcome = "vad_skipped";
+          recordSpeechRequestSkipped({ phase, audioSeconds });
+          return { status: "skipped", reason: "non_speech", coverage };
+        }
+        stage = "transcription";
+        outcome = "provider_error";
+        const text = await transcribe(meeting, wavFile, {
+          userId: snippet.userId,
+          timestamp: snippet.timestamp,
+          audioSeconds,
+          audioBytes,
+          speechDetectionMode: mode,
+          speechPhase: phase,
+          noiseGateEnabled,
+          noiseGateMode: resolvedNoiseGateMode,
+          noiseGateMetrics,
+          suppressionEnabledOverride: options.suppressionEnabledOverride,
+        });
+        outcome = "transcribed";
+        return { status: "succeeded", text, admission };
+      },
+    );
   } catch (error) {
     const providerError = error as { status?: unknown; code?: unknown };
     const failureLabel = stage === "conversion" ? "convert" : "transcribe";
@@ -891,7 +646,13 @@ export async function transcribeSnippet(
         stage === "conversion" ? "conversion_error" : "transcription_error",
     };
   } finally {
-    cleanupTempFiles(tempFiles);
+    recordSpeechSnippetOutcome({
+      mode,
+      phase,
+      outcome,
+      audioSeconds,
+      durationMs: performance.now() - startedAt,
+    });
   }
 }
 

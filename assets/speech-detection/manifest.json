@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "model": {
+    "version": "6.2.1",
+    "file": "silero-v6.2.1.onnx",
+    "bytes": 2327524,
+    "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+    "source": "https://github.com/snakers4/silero-vad/blob/v6.2.1/src/silero_vad/data/silero_vad.onnx",
+    "license": "SILERO-LICENSE",
+    "protocolSource": "https://github.com/snakers4/silero-vad/blob/v6.2.1/src/silero_vad/utils_vad.py"
+  },
+  "runtime": {
+    "package": "onnxruntime-web",
+    "version": "1.30.0",
+    "tarball": "https://registry.npmjs.org/onnxruntime-web/-/onnxruntime-web-1.30.0.tgz",
+    "integrity": "sha512-q0y+JrrtukXSzsBWEMccVfqX25LRmosXHF+CaRJmg8pZClzcV7svNc4rKY3jL02Vb7QmRMDs1SigqR4CXAfKYQ==",
+    "license": "ONNXRUNTIME-LICENSE",
+    "assetRoot": "node_modules/onnxruntime-web",
+    "assets": [
+      {
+        "file": "dist/ort.node.min.js",
+        "bytes": 27160,
+        "sha256": "f2ffa91920b249103bbfeb58a1a9b68bf92e9e9018bd164dc16da52bd14ee305"
+      },
+      {
+        "file": "dist/ort-wasm-simd-threaded.mjs",
+        "bytes": 24381,
+        "sha256": "e13f7f94fc51b4ca72b12faeb1ee95f4ace6dfbc8939bc718aabdc0a27c4299b"
+      },
+      {
+        "file": "dist/ort-wasm-simd-threaded.wasm",
+        "bytes": 14239897,
+        "sha256": "3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2"
+      }
+    ]
+  },
+  "protocol": {
+    "sampleRate": 16000,
+    "frameSamples": 512,
+    "contextSamples": 64,
+    "stateShape": [2, 1, 128],
+    "wasmThreads": 1
+  }
+}
