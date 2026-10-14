@@ -1,4 +1,33 @@
 /** @jest-environment node */
+jest.mock("dotenv", () => ({ config: jest.fn() }));
+jest.mock("../../src/services/configService", () => {
+  Object.assign(process.env, {
+    MOCK_MODE: "true",
+    ENABLE_OAUTH: "false",
+    ENABLE_MCP: "false",
+    DISCORD_BOT_TOKEN: "r3-synthetic",
+    DISCORD_CLIENT_ID: "r3-synthetic",
+    OPENAI_API_KEY: "r3-synthetic",
+    SESSION_SECRET: "r3-synthetic",
+    OAUTH_SECRET: "r3-synthetic",
+    FRONTEND_SITE_URL: "http://localhost",
+    LANGFUSE_PUBLIC_KEY: "",
+    LANGFUSE_SECRET_KEY: "",
+    LANGFUSE_TRACING_ENABLED: "false",
+    POSTHOG_KEY: "",
+    STRIPE_SECRET_KEY: "",
+    NOTION_CLIENT_SECRET: "",
+    STORAGE_ACCESS_KEY_ID: "",
+    STORAGE_SECRET_ACCESS_KEY: "",
+    REDIS_URL: "",
+    CACHE_REDIS_URL: "",
+    ECS_CONTAINER_METADATA_URI_V4: "",
+    ECS_AGENT_URI: "",
+    AWS_EXECUTION_ENV: "",
+    AWS_EC2_METADATA_DISABLED: "true",
+  });
+  return jest.requireActual("../../src/services/configService");
+});
 import { getDeploymentControlRepository } from "../../src/db";
 import { getPersonalMediaUploadRepository } from "../../src/repositories/personalMediaUploadRepository";
 import {
@@ -136,8 +165,28 @@ test("pending claims count synchronously and claimed work renews after polling s
   expect((await uploads.get(job.uploadId))!.claimExpiresAt).toBeGreaterThan(
     before!.claimExpiresAt!,
   );
+  const renewalGate = barrier();
+  const renewalStarted = barrier();
+  const renew = uploads.renewClaim.bind(uploads);
+  jest.spyOn(uploads, "renewClaim").mockImplementationOnce(async (input) => {
+    renewalStarted.resolve();
+    await renewalGate.promise;
+    return renew(input);
+  });
+  await jest.advanceTimersByTimeAsync(
+    PERSONAL_MEDIA_UPLOAD_WORKER_CLAIM_RENEWAL_MS,
+  );
+  await renewalStarted.promise;
   fenceRuntimeWorkAdmissions();
   providerGate.resolve();
+  let locallySettled = false;
+  void processing.then(() => {
+    locallySettled = true;
+  });
+  await jest.advanceTimersByTimeAsync(0);
+  expect(locallySettled).toBe(false);
+  expect(getRuntimeWorkAdmissionCheckpoints()[0].localSettled).toBe(false);
+  renewalGate.resolve();
   await processing;
   expect(lifecycle.getWorkCounts().personal_processing).toBe(1);
   expect(getRuntimeWorkAdmissionCheckpoints()).toMatchObject([

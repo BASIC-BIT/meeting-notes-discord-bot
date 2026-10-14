@@ -1,3 +1,4 @@
+import { getMeetingProcessingSignal } from "./services/meetingProcessingLifetime";
 import { MeetingData } from "./types/meeting-data";
 import { config } from "./services/configService";
 import { createOpenAIClient } from "./services/openaiClient";
@@ -123,13 +124,19 @@ async function shouldAct(
       },
       langfusePrompt,
     });
-    const completion = await openAIClient.chat.completions.create({
-      model: modelChoice.model,
-      messages,
-      max_completion_tokens: config.liveVoice.gateMaxOutputTokens,
-      response_format: { type: "json_object" },
-      ...modelParams,
-    });
+    const signal = getMeetingProcessingSignal(meeting);
+    signal.throwIfAborted();
+    const completion = await openAIClient.chat.completions.create(
+      {
+        model: modelChoice.model,
+        messages,
+        max_completion_tokens: config.liveVoice.gateMaxOutputTokens,
+        response_format: { type: "json_object" },
+        ...modelParams,
+      },
+      { signal },
+    );
+    signal.throwIfAborted();
 
     const content = completion.choices[0].message.content ?? "";
     const finish = completion.choices[0].finish_reason;
@@ -152,6 +159,7 @@ async function shouldAct(
     }
     return { action: parsed.action };
   } catch (error) {
+    getMeetingProcessingSignal(meeting).throwIfAborted();
     console.error("Live voice gate failed:", error);
     return { action: "none" };
   }
@@ -201,12 +209,18 @@ async function generateReply(
       },
       langfusePrompt,
     });
-    const completion = await openAIClient.chat.completions.create({
-      model: modelChoice.model,
-      messages,
-      max_completion_tokens: 200,
-      ...modelParams,
-    });
+    const signal = getMeetingProcessingSignal(meeting);
+    signal.throwIfAborted();
+    const completion = await openAIClient.chat.completions.create(
+      {
+        model: modelChoice.model,
+        messages,
+        max_completion_tokens: 200,
+        ...modelParams,
+      },
+      { signal },
+    );
+    signal.throwIfAborted();
 
     const content = completion.choices[0].message.content ?? "";
     console.log(
@@ -218,6 +232,7 @@ async function generateReply(
     if (!content.trim()) return undefined;
     return content.trim();
   } catch (error) {
+    getMeetingProcessingSignal(meeting).throwIfAborted();
     console.error("Live voice responder failed:", error);
     return undefined;
   }
@@ -305,13 +320,19 @@ async function classifyConfirmation(
       },
       langfusePrompt,
     });
-    const completion = await openAIClient.chat.completions.create({
-      model: modelChoice.model,
-      messages,
-      max_completion_tokens: config.liveVoice.gateMaxOutputTokens,
-      response_format: { type: "json_object" },
-      ...modelParams,
-    });
+    const signal = getMeetingProcessingSignal(meeting);
+    signal.throwIfAborted();
+    const completion = await openAIClient.chat.completions.create(
+      {
+        model: modelChoice.model,
+        messages,
+        max_completion_tokens: config.liveVoice.gateMaxOutputTokens,
+        response_format: { type: "json_object" },
+        ...modelParams,
+      },
+      { signal },
+    );
+    signal.throwIfAborted();
 
     const content = completion.choices[0].message.content ?? "";
     const finish = completion.choices[0].finish_reason;
@@ -334,6 +355,7 @@ async function classifyConfirmation(
     }
     return parsed;
   } catch (error) {
+    getMeetingProcessingSignal(meeting).throwIfAborted();
     console.error("Live voice confirmation failed:", error);
     return { decision: "unclear" };
   }
@@ -385,6 +407,7 @@ async function handlePendingCommandIfAny(
   if (segment.userId !== pending.userId) return true;
 
   const confirmation = await classifyConfirmation(meeting, segment);
+  getMeetingProcessingSignal(meeting).throwIfAborted();
   if (confirmation.decision === "confirm") {
     meeting.liveVoiceCommandPending = undefined;
     if (meeting.finishing || meeting.finished) return true;
@@ -438,6 +461,7 @@ async function handleGateDecision(
   let reply: string | undefined;
   try {
     reply = await generateReply(meeting, segment);
+    getMeetingProcessingSignal(meeting).throwIfAborted();
   } finally {
     if (!reply && botUserId) {
       stopThinkingCueLoop(meeting);
@@ -465,16 +489,19 @@ export async function maybeRespondLive(
   meeting: MeetingData,
   segment: LiveSegment,
 ): Promise<void> {
+  getMeetingProcessingSignal(meeting).throwIfAborted();
   if (!segment.text.trim()) return;
 
   const flags = resolveLiveVoiceFlags(meeting);
   if (!isLiveVoiceActive(flags)) return;
 
   const handledPending = await handlePendingCommandIfAny(meeting, segment);
+  getMeetingProcessingSignal(meeting).throwIfAborted();
   if (handledPending) return;
 
   if (!isAddressed(segment.text, meeting)) return;
 
   const decision = await shouldAct(meeting, segment);
+  getMeetingProcessingSignal(meeting).throwIfAborted();
   await handleGateDecision(meeting, segment, decision, flags);
 }

@@ -48,7 +48,7 @@ export function processMeetingControlCommand(
   } catch {
     return Promise.resolve();
   }
-  return work.trackPromise(runCommand(client, command, instanceId, work));
+  return work.trackPromise(() => runCommand(client, command, instanceId, work));
 }
 
 async function runCommand(
@@ -61,7 +61,7 @@ async function runCommand(
   try {
     authority = await work.authority();
   } catch {
-    work.settle();
+    await work.settle();
     return;
   }
   const repository = getMeetingControlCommandRepository();
@@ -85,18 +85,18 @@ async function runCommand(
     claimed = await repository.claimCommand(claimInput);
   } catch {
     work.fence();
-    work.settle();
+    await work.settle();
     return;
   }
   if (!claimed) {
-    work.settle();
+    await work.settle();
     return;
   }
   try {
     work.claimed();
   } catch {
     work.fence();
-    work.settle();
+    await work.settle();
     return;
   }
   const assertOwned = async () => {
@@ -115,7 +115,9 @@ async function runCommand(
     work.signal.throwIfAborted();
   };
   const renewalTimer = setInterval(() => {
-    void assertOwned().catch(() => work.fence());
+    void work
+      .trackEffect(() => assertOwned().catch(() => work.fence()))
+      .catch(() => {});
   }, WORKER_CLAIM_RENEWAL_MS);
   renewalTimer.unref();
   try {
@@ -135,6 +137,7 @@ async function runCommand(
       result,
     });
     if (!committed) work.fence();
+    else work.acknowledgeTerminal();
   } catch (error) {
     if (!work.signal.aborted) {
       try {
@@ -149,13 +152,14 @@ async function runCommand(
           }))
         )
           work.fence();
+        else work.acknowledgeTerminal();
       } catch {
         work.fence();
       }
     }
   } finally {
     clearInterval(renewalTimer);
-    work.settle();
+    await work.settle();
   }
 }
 

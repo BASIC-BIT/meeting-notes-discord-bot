@@ -1,3 +1,4 @@
+import { getMeetingProcessingSignal } from "./meetingProcessingLifetime";
 import type OpenAI from "openai";
 import type { SpanContext } from "@opentelemetry/api";
 import type { MeetingData } from "../types/meeting-data";
@@ -22,6 +23,7 @@ type ChatInput = Omit<
 >;
 
 type ChatOptions = {
+  signal?: AbortSignal;
   model?: string;
   traceName?: string;
   generationName?: string;
@@ -33,6 +35,7 @@ type ChatOptions = {
 };
 
 type ChatLoopInput = {
+  signal?: AbortSignal;
   openAIClient: ReturnType<typeof createOpenAIClient>;
   body: ChatInput;
   model: string;
@@ -81,12 +84,17 @@ const runChatLoop = async (input: ChatLoopInput): Promise<ChatLoopResult> => {
   let truncated = false;
 
   for (;;) {
-    const response = await input.openAIClient.chat.completions.create({
-      model: input.model,
-      safety_identifier: buildOpenAISafetyIdentifier(input.userId),
-      ...input.body,
-      ...input.modelParams,
-    });
+    input.signal?.throwIfAborted();
+    const response = await input.openAIClient.chat.completions.create(
+      {
+        model: input.model,
+        safety_identifier: buildOpenAISafetyIdentifier(input.userId),
+        ...input.body,
+        ...input.modelParams,
+      },
+      input.signal ? { signal: input.signal } : undefined,
+    );
+    input.signal?.throwIfAborted();
     const choice = response.choices[0];
     logFinishReason(input.traceName, input.model, choice.finish_reason);
     count += 1;
@@ -140,6 +148,10 @@ export async function chat(
     parentSpanContext: options.parentSpanContext,
   });
   const { output, count, truncated } = await runChatLoop({
+    signal: AbortSignal.any([
+      getMeetingProcessingSignal(meeting),
+      ...(options.signal ? [options.signal] : []),
+    ]),
     openAIClient,
     body,
     model,

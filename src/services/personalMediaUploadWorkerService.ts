@@ -35,7 +35,7 @@ export function processPersonalMediaUploadJob(
   } catch {
     return Promise.resolve();
   }
-  return work.trackPromise(runUploadJob(job, work));
+  return work.trackPromise(() => runUploadJob(job, work));
 }
 async function runUploadJob(
   job: PersonalMediaUploadJobRecord,
@@ -48,7 +48,7 @@ async function runUploadJob(
       throw new Error("Personal processing requires serving admission");
     context = authority.context;
   } catch {
-    work.settle();
+    await work.settle();
     return;
   }
   const repository = getPersonalMediaUploadRepository();
@@ -76,37 +76,41 @@ async function runUploadJob(
     });
   } catch {
     work.fence();
-    work.settle();
+    await work.settle();
     return;
   }
   if (!claimed) {
-    work.settle();
+    await work.settle();
     return;
   }
   try {
     work.claimed();
   } catch {
     work.fence();
-    work.settle();
+    await work.settle();
     return;
   }
   let durable = false;
   const renewalTimer = setInterval(() => {
-    void repository
-      .renewClaim({
-        ...personalMediaClaimForJob(claimed, instanceId),
-        claimExpiresAt:
-          epochSeconds() + PERSONAL_MEDIA_UPLOAD_WORKER_CLAIM_SECONDS,
-        updatedAt: nowIso(),
-      })
-      .then(
-        (renewed) => {
-          if (!renewed && !durable) work.fence();
-        },
-        () => {
-          if (!durable) work.fence();
-        },
-      );
+    void work
+      .trackEffect(() =>
+        repository
+          .renewClaim({
+            ...personalMediaClaimForJob(claimed, instanceId),
+            claimExpiresAt:
+              epochSeconds() + PERSONAL_MEDIA_UPLOAD_WORKER_CLAIM_SECONDS,
+            updatedAt: nowIso(),
+          })
+          .then(
+            (renewed) => {
+              if (!renewed && !durable) work.fence();
+            },
+            () => {
+              if (!durable) work.fence();
+            },
+          ),
+      )
+      .catch(() => {});
   }, PERSONAL_MEDIA_UPLOAD_WORKER_CLAIM_RENEWAL_MS);
   renewalTimer.unref();
   try {
@@ -123,6 +127,7 @@ async function runUploadJob(
       work.signal,
       () => {
         durable = true;
+        work.acknowledgeTerminal();
         clearInterval(renewalTimer);
         work.delivering();
       },
@@ -138,7 +143,7 @@ async function runUploadJob(
     work.fence();
   } finally {
     clearInterval(renewalTimer);
-    work.settle();
+    await work.settle();
   }
 }
 async function pollPersonalMediaUploadJobs() {

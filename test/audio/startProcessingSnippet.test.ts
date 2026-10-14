@@ -1,3 +1,9 @@
+/** @jest-environment node */
+import fs from "node:fs";
+import { Writable } from "node:stream";
+import { maybeRespondLive } from "../../src/liveVoice";
+jest.mock("dotenv", () => ({ config: jest.fn() }));
+import { stopMeetingProcessing } from "../../src/services/meetingProcessingLifetime";
 import type { MeetingData } from "../../src/types/meeting-data";
 import type { AudioFileData, AudioSnippet } from "../../src/types/audio";
 import { startProcessingSnippet, userStopTalking } from "../../src/audio";
@@ -324,6 +330,9 @@ describe("startProcessingSnippet", () => {
     (coalesceTranscription as jest.Mock).mockRejectedValue(
       new Error("optional refinement failed"),
     );
+    const diagnostic = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
 
     startProcessingSnippet(meeting, snippet.userId);
     await waitForSnippetWork(meeting, audioFileData);
@@ -331,5 +340,151 @@ describe("startProcessingSnippet", () => {
     expect(audioFileData.transcript).toBe("slow baseline");
     expect(audioFileData.transcriptionFailed).toBe(false);
     expect(audioFileData.coalescedTranscript).toBeUndefined();
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.stringContaining("coalesc"),
+      expect.any(Error),
+    );
+    diagnostic.mockRestore();
+  });
+  it("retains an issued slow provider and refuses its late transcript after processing stop", async () => {
+    const snippet: AudioSnippet = {
+      userId: "synthetic",
+      timestamp: new Date("2025-01-01T00:00:01.000Z").getTime(),
+      chunks: [Buffer.alloc(10)],
+      audioBytes: 60000,
+    };
+    const fileData: AudioFileData = {
+      userId: snippet.userId,
+      timestamp: snippet.timestamp,
+      processing: false,
+      audioOnlyProcessing: false,
+    };
+    snippet.audioFileData = fileData;
+    const meeting = buildMeeting(snippet, fileData);
+    let finish!: (value: { status: "succeeded"; text: string }) => void;
+    jest.mocked(transcribeSnippet).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    startProcessingSnippet(meeting, snippet.userId);
+    let settled = false;
+    const drain = stopMeetingProcessing(meeting).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish({ status: "succeeded", text: "late synthetic text" });
+    await drain;
+    expect(fileData.transcript).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "speaker-track ownership waits for actual close, including a preceding error: %s",
+    async (failBeforeClose) => {
+      const diagnostic = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      const snippet: AudioSnippet = {
+        userId: "held-close",
+        timestamp: new Date("2025-01-01T00:00:01.000Z").getTime(),
+        chunks: [Buffer.alloc(60000)],
+        audioBytes: 60000,
+      };
+      const file: AudioFileData = {
+        userId: snippet.userId,
+        timestamp: snippet.timestamp,
+        processing: false,
+        audioOnlyProcessing: false,
+      };
+      snippet.audioFileData = file;
+      const meeting = buildMeeting(snippet, file);
+      let close!: () => void;
+      const stream = new Writable({
+        write(_chunk, _encoding, done) {
+          done();
+        },
+        destroy(_error, done) {
+          close = () => done();
+        },
+      });
+      const mkdir = jest
+        .spyOn(fs.promises, "mkdir")
+        .mockResolvedValue(undefined);
+      const output = jest
+        .spyOn(fs, "createWriteStream")
+        .mockReturnValue(stream as fs.WriteStream);
+      jest
+        .mocked(transcribeSnippet)
+        .mockResolvedValueOnce({ status: "succeeded", text: "" });
+      startProcessingSnippet(meeting, snippet.userId);
+      for (let i = 0; i < 20; i++)
+        await new Promise((done) => setImmediate(done));
+      expect(stream.writableFinished).toBe(true);
+      expect(stream.closed).toBe(false);
+      if (failBeforeClose)
+        stream.emit("error", new Error("synthetic late file failure"));
+      let settled = false;
+      const drain = stopMeetingProcessing(meeting).then(() => {
+        settled = true;
+      });
+      for (let i = 0; i < 10; i++)
+        await new Promise((done) => setImmediate(done));
+      expect(settled).toBe(false);
+      close();
+      await drain;
+      expect(stream.closed).toBe(true);
+      if (failBeforeClose)
+        expect(diagnostic).toHaveBeenCalledWith(
+          expect.stringContaining("Failed to persist speaker track"),
+          expect.any(Error),
+        );
+      diagnostic.mockRestore();
+      mkdir.mockRestore();
+      output.mockRestore();
+    },
+  );
+
+  it("fast transcription retains its separately dispatched live response", async () => {
+    jest.useFakeTimers();
+    const snippet: AudioSnippet = {
+      userId: "held-live",
+      timestamp: new Date("2025-01-01T00:00:01.000Z").getTime(),
+      chunks: [Buffer.alloc(60000)],
+      audioBytes: 60000,
+    };
+    const file: AudioFileData = {
+      userId: snippet.userId,
+      timestamp: snippet.timestamp,
+      processing: false,
+      audioOnlyProcessing: false,
+    };
+    snippet.audioFileData = file;
+    const meeting = buildMeeting(snippet, file);
+    let release!: () => void;
+    jest.mocked(maybeRespondLive).mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          release = done;
+        }),
+    );
+    jest.mocked(transcribeSnippet).mockResolvedValueOnce({
+      status: "succeeded",
+      text: "synthetic live request",
+    });
+    userStopTalking(meeting, snippet.userId);
+    await jest.advanceTimersByTimeAsync(400);
+    expect(maybeRespondLive).toHaveBeenCalledTimes(1);
+    let settled = false;
+    const drain = stopMeetingProcessing(meeting).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release();
+    await drain;
+    jest.clearAllTimers();
+    jest.useRealTimers();
   });
 });

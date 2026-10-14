@@ -1,3 +1,4 @@
+import { getMeetingProcessingSignal } from "./services/meetingProcessingLifetime";
 import { notifyRecordingLimit } from "./services/recordingLimitService";
 import { MeetingData, MeetingSetup } from "./types/meeting-data";
 import {
@@ -70,7 +71,27 @@ import { DEFAULT_CHAT_TTS_SPEAKER_PREFIX_MODE as DEFAULT_PREFIX_MODE } from "./u
 import { resolveMeetingActorId } from "./utils/meetingLifecycle";
 
 const meetings = new Map<string, MeetingData>();
-const meetingInitializations = new Map<string, Promise<MeetingData>>();
+const meetingInitializations = new Map<
+  string,
+  { promise: Promise<MeetingData>; controller: AbortController }
+>();
+let initializationsClosed = false;
+export function getPendingMeetingInitializations() {
+  return [...meetingInitializations.entries()].map(
+    ([id, { promise, controller }]) => ({
+      id,
+      promise,
+      signal: controller.signal,
+    }),
+  );
+}
+export async function stopMeetingInitializations(): Promise<void> {
+  initializationsClosed = true;
+  const pending = [...meetingInitializations.values()];
+  for (const { controller } of pending)
+    controller.abort(new Error("Meeting initialization interrupted"));
+  await Promise.allSettled(pending.map(({ promise }) => promise));
+}
 
 // Since the bot can't be in multiple channels at once, we can just track a single meeting per guild, that's good enough.
 // This actually solves a separate issue of having to track meeting by both voice channel and text channel
@@ -174,13 +195,18 @@ function buildVoiceSessionNickname(displayName: string, suffix: string) {
   );
 }
 
-async function applyVoiceSessionNickname(meeting: MeetingData) {
+async function applyVoiceSessionNickname(
+  meeting: MeetingData,
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
   try {
     const snapshot = await resolveConfigSnapshot({
       guildId: meeting.guildId,
       channelId: meeting.voiceChannel.id,
       tier: meeting.subscriptionTier,
     });
+    signal.throwIfAborted();
     const enabled = getSnapshotBoolean(
       snapshot,
       CONFIG_KEYS.chatTts.statusNicknameEnabled,
@@ -208,6 +234,7 @@ async function applyVoiceSessionNickname(meeting: MeetingData) {
     await botMember.setNickname(nextNickname);
     meeting.botNicknameChanged = true;
   } catch (error) {
+    signal.throwIfAborted();
     console.warn("Failed to update bot session nickname.", error);
   }
 }
@@ -339,16 +366,35 @@ export function initializeMeeting(
   const meetingId = options.meetingId ?? uuidv4();
   const key = `${options.guild.id}:${meetingId}`;
   const pending = meetingInitializations.get(key);
-  if (pending) return pending;
+  if (pending) return pending.promise;
+  if (initializationsClosed)
+    return Promise.reject(
+      new Error("Meeting initialization admission is closed"),
+    );
   const existing = getMeeting(options.guild.id);
   if (existing?.meetingId === meetingId && !existing.finished)
     return Promise.resolve(existing);
-  const initialization = initializeNewMeeting({ ...options, meetingId });
-  meetingInitializations.set(key, initialization);
+  const controller = new AbortController();
+  const startSignal = AbortSignal.any([
+    controller.signal,
+    ...(options.startSignal ? [options.startSignal] : []),
+  ]);
+  let resolve!: (meeting: MeetingData | PromiseLike<MeetingData>) => void;
+  let reject!: (error: unknown) => void;
+  const initialization = new Promise<MeetingData>((done, failed) => {
+    resolve = done;
+    reject = failed;
+  });
+  meetingInitializations.set(key, { promise: initialization, controller });
   void initialization.then(
     () => meetingInitializations.delete(key),
     () => meetingInitializations.delete(key),
   );
+  try {
+    resolve(initializeNewMeeting({ ...options, meetingId, startSignal }));
+  } catch (error) {
+    reject(error);
+  }
   return initialization;
 }
 async function initializeNewMeeting(
@@ -437,7 +483,10 @@ async function disposeFailedInitialization(initialization: {
   if (!meeting) return true;
   meeting.finishing = true;
   meeting.finished = true;
-  const closeAudio = meeting.captureAudio || meeting.recordBotAudio;
+  const closeAudio =
+    meeting.captureAudio ||
+    meeting.recordBotAudio ||
+    Boolean(meeting.audioData.ffmpegProcess);
   meeting.captureAudio = false;
   meeting.recordBotAudio = false;
   meeting.ttsQueue?.stopAndClear();
@@ -694,7 +743,10 @@ async function initializeReservedMeeting(
         meeting.attendance.add(formatUserMention(message.author.id));
       }
 
-      void maybeSpeakChatMessage(meeting, message, entry);
+      void maybeSpeakChatMessage(meeting, message, entry).catch((error) => {
+        if (!getMeetingProcessingSignal(meeting).aborted)
+          console.error("Chat TTS failed", error);
+      });
     });
   }
 
@@ -725,7 +777,9 @@ async function initializeReservedMeeting(
     console.warn("Failed to resolve meeting runtime config:", error);
   }
 
-  await applyVoiceSessionNickname(meeting);
+  signal.throwIfAborted();
+  await applyVoiceSessionNickname(meeting, signal);
+  signal.throwIfAborted();
   resetTtsOnlyIdleTimeout(meeting);
 
   if (meeting.captureAudio) {

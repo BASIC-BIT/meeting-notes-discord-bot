@@ -281,7 +281,10 @@ const handleCommandInteraction = async (
 
 const modalHandlers: Array<{
   matches: (customId: string) => boolean;
-  handle: (interaction: ModalSubmitInteraction) => Promise<void>;
+  handle: (
+    interaction: ModalSubmitInteraction,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   onboarding?: boolean;
 }> = [
   {
@@ -319,21 +322,28 @@ const modalHandlers: Array<{
   },
 ];
 
-const handleModalInteraction = async (interaction: ModalSubmitInteraction) => {
+const handleModalInteraction = async (
+  interaction: ModalSubmitInteraction,
+  signal?: AbortSignal,
+) => {
+  signal?.throwIfAborted();
   for (const entry of modalHandlers) {
     if (!entry.matches(interaction.customId)) continue;
     if (entry.onboarding && !config.server.onboardingEnabled) {
       await replyOnboardingDisabled(interaction);
       return;
     }
-    await entry.handle(interaction);
+    await entry.handle(interaction, signal);
     return;
   }
 };
 
 const buttonHandlers: Array<{
   matches: (customId: string) => boolean;
-  handle: (interaction: ButtonInteraction) => Promise<void>;
+  handle: (
+    interaction: ButtonInteraction,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   onboarding?: boolean;
 }> = [
   {
@@ -383,14 +393,18 @@ const buttonHandlers: Array<{
   },
 ];
 
-const handleButtonInteraction = async (interaction: ButtonInteraction) => {
+const handleButtonInteraction = async (
+  interaction: ButtonInteraction,
+  signal?: AbortSignal,
+) => {
+  signal?.throwIfAborted();
   for (const entry of buttonHandlers) {
     if (!entry.matches(interaction.customId)) continue;
     if (entry.onboarding && !config.server.onboardingEnabled) {
       await replyOnboardingDisabled(interaction);
       return;
     }
-    await entry.handle(interaction);
+    await entry.handle(interaction, signal);
     return;
   }
 
@@ -399,7 +413,7 @@ const handleButtonInteraction = async (interaction: ButtonInteraction) => {
     return;
   }
   if (interaction.customId === "generate_image") {
-    await generateAndSendImage(interaction);
+    await generateAndSendImage(interaction, signal);
   }
 };
 
@@ -414,7 +428,11 @@ const handleChannelSelectInteraction = async (
   await handleOnboardChannelSelect(interaction);
 };
 
-const handleInteractionCreate = async (interaction: RepliableInteraction) => {
+const handleInteractionCreate = async (
+  interaction: RepliableInteraction,
+  signal?: AbortSignal,
+) => {
+  signal?.throwIfAborted();
   if (interaction.isChatInputCommand()) {
     await handleCommandInteraction(interaction);
     return;
@@ -435,11 +453,11 @@ const handleInteractionCreate = async (interaction: RepliableInteraction) => {
     return;
   }
   if (interaction.isModalSubmit()) {
-    await handleModalInteraction(interaction);
+    await handleModalInteraction(interaction, signal);
     return;
   }
   if (interaction.isButton()) {
-    await handleButtonInteraction(interaction);
+    await handleButtonInteraction(interaction, signal);
     return;
   }
   if (interaction.isChannelSelectMenu()) {
@@ -651,7 +669,7 @@ export async function setupBot() {
     } catch {
       return;
     }
-    await work.trackPromise(
+    await work.trackPromise(() =>
       executeInteractionWork(interaction, ownerControl, Boolean(local), work),
     );
   });
@@ -681,7 +699,7 @@ async function executeInteractionWork(
         return;
       }
       work.claimed();
-      await handleInteractionCreate(interaction);
+      await handleInteractionCreate(interaction, work.signal);
     }
   } catch (e) {
     if (receiptAttempted) work.fence();
@@ -707,7 +725,7 @@ async function executeInteractionWork(
       console.error("Error replying to interaction about initial error", e2);
     }
   } finally {
-    work.settle();
+    await work.settle();
   }
 }
 
@@ -752,7 +770,7 @@ async function runServingBotWork(
   run: (assertServing: () => Promise<void>) => Promise<void>,
 ) {
   const work = beginRuntimeWorkClaim("ancillary", randomUUID());
-  return work.trackPromise(executeServingBotWork(run, work));
+  return work.trackPromise(() => executeServingBotWork(run, work));
 }
 async function executeServingBotWork(
   run: (assertServing: () => Promise<void>) => Promise<void>,
@@ -778,7 +796,7 @@ async function executeServingBotWork(
     if (started || work.signal.aborted) work.fence();
     throw error;
   } finally {
-    work.settle();
+    await work.settle();
   }
 }
 async function reevaluateOccupiedVoiceChannels() {
@@ -860,7 +878,7 @@ async function recordSuppressionVoiceState(
   }
   try {
     const authority = await work.authority();
-    await work.trackPromise(
+    await work.trackPromise(() =>
       autoRecordJoinSuppressionService.clearIfEmpty({
         guildId: oldState.guild.id,
         channelId: channel.id,
@@ -875,7 +893,7 @@ async function recordSuppressionVoiceState(
     work.fence();
     throw error;
   } finally {
-    work.settle();
+    await work.settle();
   }
 }
 

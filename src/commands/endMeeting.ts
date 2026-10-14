@@ -734,27 +734,28 @@ export async function persistAutoRecordSuppression(
       })
     : undefined;
   try {
-    const suppression = autoRecordJoinSuppressionService.suppressUntilEmpty({
-      guildId: meeting.guildId,
-      channelId: meeting.voiceChannel.id,
-      nonBotMemberIds,
-      reason,
-      meetingId: meeting.meetingId,
-      authority: meeting.reservation
-        ? {
-            kind: "session",
-            ownership: meeting.reservation,
-            now: Math.floor(Date.now() / 1000),
-          }
-        : undefined,
-    });
-    return await (work ? work.trackPromise(suppression) : suppression);
+    const suppression = () =>
+      autoRecordJoinSuppressionService.suppressUntilEmpty({
+        guildId: meeting.guildId,
+        channelId: meeting.voiceChannel.id,
+        nonBotMemberIds,
+        reason,
+        meetingId: meeting.meetingId,
+        authority: meeting.reservation
+          ? {
+              kind: "session",
+              ownership: meeting.reservation,
+              now: Math.floor(Date.now() / 1000),
+            }
+          : undefined,
+      });
+    return await (work ? work.trackPromise(suppression) : suppression());
   } catch (error) {
     work?.fence();
     fenceMeetingFinalization(meeting);
     throw error;
   } finally {
-    work?.settle();
+    await work?.settle();
   }
 }
 

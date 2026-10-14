@@ -1,4 +1,6 @@
 /** @jest-environment node */
+import { UnresolvedNotionMutation } from "../notionOperationLifetime";
+import { maybeAutoExportCompletedMeeting } from "../notionAutomationService";
 import { jest } from "@jest/globals";
 import type {
   PersonalMediaUploadJobRecord,
@@ -59,7 +61,15 @@ jest.mock("../../observability/personalUploadTrace", () => ({
 
 const mockUploadedObjects = new Map<string, string | Buffer>();
 const mockConcatLists: string[] = [];
-const mockTranscribe = jest.fn(async () => ({ text: "segment transcript" }));
+let mockHoldConversion = false;
+let mockConversionEnd: (() => void) | undefined;
+const mockConversionKill = jest.fn();
+const mockTranscribe = jest.fn<
+  (
+    request?: unknown,
+    options?: { signal?: AbortSignal },
+  ) => Promise<{ text: string }>
+>(async () => ({ text: "segment transcript" }));
 const mockChatComplete = jest.fn<
   () => Promise<{ choices: { message: { content: string | null } }[] }>
 >(async () => ({
@@ -117,6 +127,7 @@ jest.mock("fluent-ffmpeg", () => {
         if (event === "end") this.endHandler = handler;
         return this;
       },
+      kill: mockConversionKill,
       run() {
         if (this.inputPath.endsWith(".txt")) {
           mockConcatLists.push(fs.readFileSync(this.inputPath, "utf8"));
@@ -125,7 +136,8 @@ jest.mock("fluent-ffmpeg", () => {
           fs.mkdirSync(path.dirname(this.outputPath), { recursive: true });
           fs.writeFileSync(this.outputPath, Buffer.from("audio"));
         }
-        this.endHandler?.();
+        if (mockHoldConversion) mockConversionEnd = this.endHandler;
+        else this.endHandler?.();
         return this;
       },
     };
@@ -596,7 +608,7 @@ describe("personalMediaUploadProcessingService", () => {
     },
   );
 
-  it("keeps ancillary work counted during held indexing despite a delayed false renewal", async () => {
+  it("keeps held indexing counted and retains an unknown subsequent automatic export", async () => {
     jest.useFakeTimers({ now: 100_000 });
     getMockStore().deploymentControlRecords.clear();
     const identity = {
@@ -698,6 +710,29 @@ describe("personalMediaUploadProcessingService", () => {
       await processing;
       expect(lifecycle.getWorkCounts().ancillary_delivery).toBe(0);
       expect(getRuntimeWorkAdmissionCheckpoints()).toHaveLength(0);
+      jest
+        .mocked(maybeAutoExportCompletedMeeting)
+        .mockRejectedValueOnce(
+          new UnresolvedNotionMutation(new Error("synthetic lost response")),
+        );
+      mockWorkerClaim.mockImplementationOnce(async (input) => {
+        mockWorkerJob = {
+          ...buildJob(),
+          status: "processing",
+          processingClaimId: input.claimId,
+          processingOwnerInstanceId: input.instanceId,
+        };
+        return mockWorkerJob;
+      });
+      await processPersonalMediaUploadJob(buildJob());
+      expect(lifecycle.getWorkCounts().ancillary_delivery).toBe(1);
+      expect(getRuntimeWorkAdmissionCheckpoints()).toMatchObject([
+        {
+          fenced: true,
+          localSettled: true,
+          terminalAcknowledged: { claimId: mockWorkerJob!.processingClaimId },
+        },
+      ]);
     } finally {
       held.release();
       lifecycle.stop();
@@ -729,6 +764,37 @@ describe("personalMediaUploadProcessingService", () => {
     expect(durable).toHaveBeenCalledTimes(1);
   });
 
+  it("personal conversion cancellation retains the actual encoder until its terminal event", async () => {
+    mockHoldConversion = true;
+    const controller = new AbortController();
+    let settled = false;
+    const processing = processPersonalMediaUpload(
+      buildJob(),
+      "instance-1",
+      controller.signal,
+    );
+    const outcome = processing.then(
+      () => {
+        settled = true;
+        return "complete";
+      },
+      () => {
+        settled = true;
+        return "interrupted";
+      },
+    );
+    while (!mockConversionEnd) await new Promise((done) => setImmediate(done));
+    controller.abort(new Error("synthetic stop"));
+    expect(mockConversionKill).toHaveBeenCalledWith("SIGTERM");
+    expect(settled).toBe(false);
+    mockConversionEnd();
+    mockConversionEnd = undefined;
+    mockHoldConversion = false;
+    expect(await outcome).toBe("interrupted");
+    expect(mockTranscribe).not.toHaveBeenCalled();
+    expect(uploadObjectToS3).not.toHaveBeenCalled();
+  });
+
   it("fences a provider result returned after processing ownership is lost", async () => {
     let resume!: (value: { text: string }) => void;
     const held = new Promise<{ text: string }>((resolve) => {
@@ -749,6 +815,7 @@ describe("personalMediaUploadProcessingService", () => {
       controller.signal,
     );
     await started;
+    expect(mockTranscribe.mock.calls[0][1]?.signal).toBe(controller.signal);
     controller.abort(new Error("synthetic ownership loss"));
     resume({ text: "late synthetic transcript" });
     await expect(processing).rejects.toThrow("synthetic ownership loss");
@@ -1000,11 +1067,13 @@ describe("personalMediaUploadProcessingService", () => {
     expect(markPersonalRecordingUploadSegmentProcessing).not.toHaveBeenCalled();
     expect(fetchJsonFromS3).toHaveBeenCalledWith(
       processedSegment.transcriptS3Key,
+      undefined,
     );
     expect(uploadObjectToS3).toHaveBeenCalledWith(
       "personal/user-1/upload-1/attempt-1/transcript.json",
       expect.stringContaining("cached transcript"),
       "application/json",
+      { signal: undefined },
     );
   });
 

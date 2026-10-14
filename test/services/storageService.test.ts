@@ -231,4 +231,47 @@ describe("storageService upload POST signing", () => {
       "Failed to read checkpoint",
     );
   });
+  test("download retains a held SDK body after abort and never writes its late bytes", async () => {
+    Object.defineProperty(config.mock, "enabled", {
+      get: () => false,
+      configurable: true,
+    });
+    Object.defineProperty(config.storage, "transcriptBucket", {
+      get: () => "synthetic-bucket",
+      configurable: true,
+    });
+    let releaseBody!: (value: Uint8Array) => void;
+    const body = new Promise<Uint8Array>((resolve) => {
+      releaseBody = resolve;
+    });
+    const readBody = jest.fn(() => body);
+    const send = jest
+      .spyOn(S3Client.prototype, "send")
+      .mockImplementation(async () => ({
+        Body: { transformToByteArray: readBody },
+      }));
+    const write = jest.spyOn(fs, "writeFile").mockResolvedValue();
+    const controller = new AbortController();
+    let settled = false;
+    const download = downloadObjectToFile(
+      "synthetic-key",
+      "synthetic-unused-path",
+      controller.signal,
+    );
+    const observed = download.finally(() => {
+      settled = true;
+    });
+    const rejected = expect(observed).rejects.toThrow("synthetic stop");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(readBody).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.any(GetObjectCommand), {
+      abortSignal: controller.signal,
+    });
+    controller.abort(new Error("synthetic stop"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    releaseBody(Buffer.from("synthetic late body"));
+    await rejected;
+    expect(write).not.toHaveBeenCalled();
+  });
 });

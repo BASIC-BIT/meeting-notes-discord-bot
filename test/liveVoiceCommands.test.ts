@@ -1,3 +1,5 @@
+/** @jest-environment node */
+jest.mock("dotenv", () => ({ config: jest.fn() }));
 import { afterEach, expect, jest, test } from "@jest/globals";
 import type { MeetingData } from "../src/types/meeting-data";
 import type { Participant } from "../src/types/participants";
@@ -353,4 +355,51 @@ test("drops pending and logs when confirmation prompt cannot enqueue", async () 
   expect(meeting.liveVoiceCommandPending).toBeUndefined();
   expect(errorSpy).toHaveBeenCalled();
   errorSpy.mockRestore();
+});
+
+test("held live gate observes processing cancellation and cannot enqueue a late command", async () => {
+  const { maybeRespondLive, mockCreate } = await setupLiveVoice([]);
+  const lifetime = await import("../src/services/meetingProcessingLifetime");
+  const meeting = makeMeeting({
+    creatorId: "user-1",
+    members: [{ id: "user-1", canEnd: true }],
+  });
+  let started!: () => void;
+  const dispatched = new Promise<void>((done) => {
+    started = done;
+  });
+  let complete!: (value: unknown) => void;
+  mockCreate.mockImplementationOnce(() => {
+    started();
+    return new Promise((done) => {
+      complete = done;
+    });
+  });
+  const task = lifetime.runMeetingProcessingEffect(meeting, () =>
+    maybeRespondLive(meeting, makeSegment("user-1", "Chronote end meeting")),
+  );
+  const result = task.catch(() => {});
+  await dispatched;
+  const options = mockCreate.mock.calls[0][1] as
+    { signal?: AbortSignal } | undefined;
+  expect(options?.signal?.aborted).toBe(false);
+  let settled = false;
+  const drain = lifetime.stopMeetingProcessing(meeting).then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  expect(options?.signal?.aborted).toBe(true);
+  expect(settled).toBe(false);
+  complete({
+    choices: [
+      {
+        message: { content: '{"action":"command_end"}' },
+        finish_reason: "stop",
+      },
+    ],
+  });
+  await result;
+  await drain;
+  expect(meeting.ttsQueue?.enqueue).not.toHaveBeenCalled();
+  expect(meeting.liveVoiceCommandPending).toBeUndefined();
 });

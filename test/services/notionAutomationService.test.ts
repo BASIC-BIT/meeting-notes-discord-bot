@@ -213,4 +213,96 @@ describe("notionAutomationService", () => {
     ).not.toHaveBeenCalled();
     expect(exportMeetingToNotionAutomation).not.toHaveBeenCalled();
   });
+  it.each(["config", "reservation", "page"] as const)(
+    "cancellation during held %s retains the caller and prevents later writes",
+    async (boundary) => {
+      let entered!: () => void;
+      const started = new Promise<void>((done) => {
+        entered = done;
+      });
+      let release!: () => void;
+      const held = new Promise<void>((done) => {
+        release = done;
+      });
+      const wait = async () => {
+        entered();
+        await held;
+      };
+      if (boundary === "config")
+        mockRepository.getAutomationConfig.mockImplementationOnce(async () => {
+          await wait();
+          return automationConfig;
+        });
+      if (boundary === "reservation")
+        mockRepository.reserveAutomationMeetingExport.mockImplementationOnce(
+          async () => {
+            await wait();
+            return true;
+          },
+        );
+      if (boundary === "page")
+        jest
+          .mocked(exportMeetingToNotionAutomation)
+          .mockImplementationOnce(async () => {
+            await wait();
+            return { ...existingExport, status: "exported" };
+          });
+      const controller = new AbortController();
+      let settled = false;
+      const operation = maybeAutoExportCompletedMeeting(
+        meeting,
+        controller.signal,
+      );
+      const observed = operation.then(
+        () => {
+          settled = true;
+          return "success";
+        },
+        () => {
+          settled = true;
+          return "interrupted";
+        },
+      );
+      await started;
+      controller.abort(new Error("synthetic interruption"));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      release();
+      expect(await observed).toBe("interrupted");
+      if (boundary !== "page")
+        expect(exportMeetingToNotionAutomation).not.toHaveBeenCalled();
+      expect(
+        mockRepository.writeAutomationMeetingExport,
+      ).not.toHaveBeenCalled();
+      expect(mockRepository.writeAutomationConfig).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancellation during an issued failure write waits and prevents the following config write", async () => {
+    jest
+      .mocked(exportMeetingToNotionAutomation)
+      .mockRejectedValueOnce(new Error("fixture refusal"));
+    let entered!: () => void;
+    const started = new Promise<void>((done) => {
+      entered = done;
+    });
+    let release!: () => void;
+    mockRepository.writeAutomationMeetingExport.mockImplementationOnce(() => {
+      entered();
+      return new Promise<void>((done) => {
+        release = done;
+      });
+    });
+    const controller = new AbortController();
+    const task = maybeAutoExportCompletedMeeting(meeting, controller.signal);
+    const observed = task.then(
+      () => "success",
+      () => "interrupted",
+    );
+    await started;
+    controller.abort();
+    release();
+    expect(await observed).toBe("interrupted");
+    expect(mockRepository.writeAutomationConfig).not.toHaveBeenCalled();
+  });
 });

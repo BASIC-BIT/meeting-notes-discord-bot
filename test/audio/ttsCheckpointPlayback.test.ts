@@ -4,10 +4,14 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { AudioPlayer } from "@discordjs/voice";
 import type { MeetingData } from "../../src/types/meeting-data";
+import { stopMeetingProcessing } from "../../src/services/meetingProcessingLifetime";
 import { createTtsQueue } from "../../src/ttsQueue";
 import { createCheckpointPlaybackTap } from "../../src/services/recordingCheckpointPlayback";
 const mockSpeech = jest.fn();
 const mockKill = jest.fn();
+let mockHoldEncoder = false;
+let mockResourceFailure = false;
+const mockCommands: EventEmitter[] = [];
 const mockOutput = () => {
   const stream = new PassThrough();
   setImmediate(() => stream.end(Buffer.alloc(3840)));
@@ -33,15 +37,26 @@ jest.mock("../../src/services/recordingCheckpointPlayback", () => ({
 }));
 jest.mock("../../src/metrics", () => ({ chatTtsSpoken: { inc: jest.fn() } }));
 jest.mock("fluent-ffmpeg", () => () => {
+  const events = new (jest.requireActual("node:events").EventEmitter)();
+  mockCommands.push(events);
   const chain = {
     inputOptions: () => chain,
     audioFrequency: () => chain,
     audioChannels: () => chain,
     format: () => chain,
-    on: () => chain,
+    on: (event: string, listener: (...args: unknown[]) => void) => {
+      events.on(event, listener);
+      return chain;
+    },
     audioFilters: () => chain,
-    pipe: () => mockOutput(),
-    kill: mockKill,
+    pipe: () => {
+      if (!mockHoldEncoder) setImmediate(() => events.emit("end"));
+      return mockOutput();
+    },
+    kill: (signal: string) => {
+      mockKill(signal);
+      if (!mockHoldEncoder) setImmediate(() => events.emit("end"));
+    },
   };
   return chain;
 });
@@ -52,11 +67,14 @@ jest.mock("prism-media", () => {
 jest.mock("@discordjs/voice", () => ({
   AudioPlayerStatus: { Idle: "idle" },
   StreamType: { Opus: "opus" },
-  createAudioResource: (playStream: PassThrough) => ({
-    playStream,
-    playbackDuration: 0,
-    read: () => null,
-  }),
+  createAudioResource: (playStream: PassThrough) => {
+    if (mockResourceFailure) throw new Error("synthetic resource failure");
+    return {
+      playStream,
+      playbackDuration: 0,
+      read: () => null,
+    };
+  },
 }));
 function fixture(recordBotAudio = false) {
   const player = Object.assign(new EventEmitter(), {
@@ -97,6 +115,9 @@ const settle = async () => {
 };
 beforeEach(() => {
   jest.clearAllMocks();
+  mockHoldEncoder = false;
+  mockResourceFailure = false;
+  mockCommands.length = 0;
   mockSpeech.mockResolvedValue({ body: body() });
 });
 test("TTS-only playback does not reserve recording PCM or stop itself", async () => {
@@ -140,6 +161,80 @@ test("pre-play failure disposes capture tap and ffmpeg without playing", async (
       jest.mocked(createCheckpointPlaybackTap).mock.results[0].value.stream
         .destroyed,
     ).toBe(true);
+  } finally {
+    error.mockRestore();
+  }
+});
+
+test("processing stop retains an issued TTS provider until its late body is cancelled", async () => {
+  let complete!: (response: { body: ReadableStream<Uint8Array> }) => void;
+  let cancelBody!: () => void;
+  const cancelled = new Promise<void>((resolve) => {
+    cancelBody = resolve;
+  });
+  mockSpeech.mockReturnValue(
+    new Promise((resolve) => {
+      complete = resolve;
+    }),
+  );
+  const f = fixture();
+  f.queue.enqueue(item);
+  let settled = false;
+  const drain = stopMeetingProcessing(f.meeting).then(() => {
+    settled = true;
+  });
+  f.queue.stopAndClear();
+  await settle();
+  expect(settled).toBe(false);
+  const lateBody = new ReadableStream<Uint8Array>({ cancel: () => cancelled });
+  complete({ body: lateBody });
+  await settle();
+  expect(settled).toBe(false);
+  expect(f.player.play).not.toHaveBeenCalled();
+  cancelBody();
+  await drain;
+  expect(settled).toBe(true);
+});
+
+test("TTS playback settlement requires actual ffmpeg termination after kill request", async () => {
+  mockHoldEncoder = true;
+  const f = fixture();
+  f.queue.enqueue(item);
+  await settle();
+  expect(mockKill).toHaveBeenCalledWith("SIGTERM");
+  let settled = false;
+  const drain = stopMeetingProcessing(f.meeting).then(() => {
+    settled = true;
+  });
+  await settle();
+  expect(settled).toBe(false);
+  mockCommands[0].emit("end");
+  await drain;
+  expect(settled).toBe(true);
+});
+
+test("resource construction failure retains the started encoder until actual termination", async () => {
+  const error = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    mockResourceFailure = true;
+    mockHoldEncoder = true;
+    const f = fixture();
+    f.queue.enqueue(item);
+    await settle();
+    let stopped = false;
+    const drain = stopMeetingProcessing(f.meeting).then(() => {
+      stopped = true;
+    });
+    await settle();
+    expect(mockKill).toHaveBeenCalledWith("SIGTERM");
+    expect(stopped).toBe(false);
+    mockCommands[0].emit("end");
+    await drain;
+    expect(f.player.play).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      "Failed to stream TTS to Discord:",
+      expect.objectContaining({ message: "synthetic resource failure" }),
+    );
   } finally {
     error.mockRestore();
   }

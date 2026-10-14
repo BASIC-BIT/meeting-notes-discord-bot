@@ -14,6 +14,7 @@ export type MeetingSummaries = {
 };
 
 type MeetingSummaryInput = {
+  signal?: AbortSignal;
   guildId?: string;
   notes: string;
   serverName: string;
@@ -83,6 +84,7 @@ export function parseMeetingSummaryResponse(
 export async function generateMeetingSummaries(
   input: MeetingSummaryInput,
 ): Promise<MeetingSummaries> {
+  input.signal?.throwIfAborted();
   const now = input.now ?? new Date();
   const tagLine = input.tags?.length ? input.tags.join(", ") : "None";
   const previousSentence = input.previousSummarySentence?.trim();
@@ -90,6 +92,7 @@ export async function generateMeetingSummaries(
   const recentMeetingNames = await listRecentMeetingNamesForPrompt({
     guildId: input.guildId,
     excludeMeetingId: input.meetingId,
+    signal: input.signal,
   });
 
   const previousSummaryBlock =
@@ -136,16 +139,22 @@ export async function generateMeetingSummaries(
       langfusePrompt,
       parentSpanContext: input.parentSpanContext,
     });
-    const completion = await openAIClient.chat.completions.create({
-      model: modelChoice.model,
-      messages,
-      ...chatParams,
-      response_format: { type: "json_object" },
-      max_completion_tokens: 160,
-    });
+    input.signal?.throwIfAborted();
+    const completion = await openAIClient.chat.completions.create(
+      {
+        model: modelChoice.model,
+        messages,
+        ...chatParams,
+        response_format: { type: "json_object" },
+        max_completion_tokens: 160,
+      },
+      input.signal ? { signal: input.signal } : undefined,
+    );
+    input.signal?.throwIfAborted();
     const content = completion.choices[0]?.message?.content ?? "";
     return parseMeetingSummaryResponse(content) ?? {};
   } catch (error) {
+    input.signal?.throwIfAborted();
     console.error("Failed to generate meeting summaries:", error);
     return {};
   }

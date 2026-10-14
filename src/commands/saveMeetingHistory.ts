@@ -1,3 +1,5 @@
+import { getMeetingProcessingSignal } from "../services/meetingProcessingLifetime";
+import { assertNotionOutcomeKnown } from "../services/notionOperationLifetime";
 import { assertMeetingProcessingSucceeded } from "../utils/meetingProcessing";
 import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
@@ -193,8 +195,12 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
     await saveOwnedMeetingHistoryService(meeting, history);
     meeting.historySaved = true;
     try {
-      await maybeAutoExportCompletedMeeting(history);
+      await maybeAutoExportCompletedMeeting(
+        history,
+        getMeetingProcessingSignal(meeting),
+      );
     } catch (error) {
+      assertNotionOutcomeKnown(error, getMeetingProcessingSignal(meeting));
       console.warn("Completed meeting Notion export failed", {
         meetingId: meeting.meetingId,
         error,

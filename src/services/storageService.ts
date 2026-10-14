@@ -123,7 +123,11 @@ const isMissingKeyError = (error: unknown): boolean => {
   );
 };
 
-async function fetchObjectAsString(key: string): Promise<string | undefined> {
+async function fetchObjectAsString(
+  key: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  signal?.throwIfAborted();
   if (config.mock.enabled) {
     const mockObject = getMockStore().objectsByKey.get(key);
     return Buffer.isBuffer(mockObject)
@@ -142,13 +146,17 @@ async function fetchObjectAsString(key: string): Promise<string | undefined> {
         Bucket: config.storage.transcriptBucket,
         Key: key,
       }),
+      { abortSignal: signal },
     );
 
     const body = response.Body;
     if (!body) return undefined;
 
-    return await body.transformToString();
+    const text = await body.transformToString();
+    signal?.throwIfAborted();
+    return text;
   } catch (error) {
+    signal?.throwIfAborted();
     if (isMissingKeyError(error)) {
       return undefined;
     }
@@ -158,8 +166,12 @@ async function fetchObjectAsString(key: string): Promise<string | undefined> {
   return undefined;
 }
 
-export async function fetchJsonFromS3<T>(key: string): Promise<T | undefined> {
-  const raw = await fetchObjectAsString(key);
+export async function fetchJsonFromS3<T>(
+  key: string,
+  signal?: AbortSignal,
+): Promise<T | undefined> {
+  const raw = await fetchObjectAsString(key, signal);
+  signal?.throwIfAborted();
   if (!raw) return undefined;
   try {
     return JSON.parse(raw) as T;
@@ -289,7 +301,9 @@ export async function getSignedObjectUrl(
 export async function downloadObjectToFile(
   key: string,
   destinationPath: string,
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  signal?.throwIfAborted();
   if (config.mock.enabled) {
     const mockObject = getMockStore().objectsByKey.get(key);
     if (!mockObject) return false;
@@ -307,13 +321,17 @@ export async function downloadObjectToFile(
         Bucket: config.storage.transcriptBucket,
         Key: key,
       }),
+      { abortSignal: signal },
     );
     const body = response.Body;
     if (!body) return false;
     const bytes = await body.transformToByteArray();
+    signal?.throwIfAborted();
     await fs.writeFile(destinationPath, bytes);
+    signal?.throwIfAborted();
     return true;
   } catch (error) {
+    signal?.throwIfAborted();
     console.error("Failed to download object from S3", error);
     return false;
   }

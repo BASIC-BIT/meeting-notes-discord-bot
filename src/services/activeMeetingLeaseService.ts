@@ -60,7 +60,7 @@ type OwnedReservation = {
   controller: AbortController;
   timer?: ReturnType<typeof setInterval>;
   meeting?: MeetingData;
-  renewing: boolean;
+  renewal?: Promise<void>;
   initializationUnresolved?: boolean;
   initializationCleanup?: Promise<boolean>;
 };
@@ -304,7 +304,6 @@ async function acquireReservation(
   const owned: OwnedReservation = {
     reservation,
     controller: new AbortController(),
-    renewing: false,
   };
   reservations.set(reservationKey(guildId, meetingId), owned);
   prepareOwnedVoiceSession(reservation);
@@ -332,9 +331,23 @@ async function observeReservationSuppression(
   };
   return false;
 }
-async function renewReservation(owned: OwnedReservation): Promise<void> {
-  if (owned.renewing || owned.controller.signal.aborted) return;
-  owned.renewing = true;
+function renewReservation(owned: OwnedReservation): Promise<void> {
+  if (owned.renewal) return owned.renewal;
+  if (owned.controller.signal.aborted) return Promise.resolve();
+  let resolve!: () => void;
+  const renewal = new Promise<void>((done) => {
+    resolve = done;
+  });
+  owned.renewal = renewal;
+  void performReservationRenewal(owned).finally(() => {
+    owned.renewal = undefined;
+    resolve();
+  });
+  return renewal;
+}
+async function performReservationRenewal(
+  owned: OwnedReservation,
+): Promise<void> {
   const { reservation, meeting } = owned;
   try {
     const { updatedAt, leaseExpiresAt, expiresAt } = buildLeaseTimestamps(
@@ -362,8 +375,6 @@ async function renewReservation(owned: OwnedReservation): Promise<void> {
     if (owned.timer) clearInterval(owned.timer);
     if (meeting && !meeting.finishing && !meeting.finished)
       dispatchEndMeeting(meeting);
-  } finally {
-    owned.renewing = false;
   }
 }
 export function getReservationSignal(
@@ -529,12 +540,22 @@ export function getOwnedSessionReservations(): ReadonlyArray<{
   reservation: SessionReservation;
   meeting?: MeetingData;
   initializationUnresolved?: boolean;
+  initializationCleanup?: Promise<boolean>;
+  renewal?: Promise<void>;
 }> {
   return [...reservations.values()].map(
-    ({ reservation, meeting, initializationUnresolved }) => ({
+    ({
       reservation,
       meeting,
       initializationUnresolved,
+      initializationCleanup,
+      renewal,
+    }) => ({
+      reservation,
+      meeting,
+      initializationUnresolved,
+      initializationCleanup,
+      renewal,
     }),
   );
 }

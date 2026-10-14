@@ -1,3 +1,7 @@
+import {
+  runNotionMutation,
+  assertNotionOutcomeKnown,
+} from "./notionOperationLifetime";
 import { getNotionIntegrationRepository } from "../repositories/notionIntegrationRepository";
 import type { MeetingHistory } from "../types/db";
 import { MEETING_STATUS } from "../types/meetingLifecycle";
@@ -25,6 +29,7 @@ type AutomationMeetingExportKey = {
 type RunAutoExportParams = {
   meeting: MeetingHistory;
   force?: boolean;
+  signal?: AbortSignal;
 };
 
 const hasNotes = (meeting: MeetingHistory) =>
@@ -76,30 +81,48 @@ const getErrorMessage = (error: unknown) =>
     ? error.message
     : "Notion automation failed.";
 
-const clearConfigError = async (config: NotionAutomationConfig) => {
+const clearConfigError = async (
+  config: NotionAutomationConfig,
+  signal?: AbortSignal,
+) => {
+  signal?.throwIfAborted();
   if (!config.lastError) return;
-  await getNotionIntegrationRepository().writeAutomationConfig({
-    ...config,
-    lastError: undefined,
-    updatedAt: new Date().toISOString(),
-  });
+  await runNotionMutation(signal, () =>
+    getNotionIntegrationRepository().writeAutomationConfig(
+      {
+        ...config,
+        lastError: undefined,
+        updatedAt: new Date().toISOString(),
+      },
+      signal,
+    ),
+  );
+  signal?.throwIfAborted();
 };
 
 const recordConfigError = async (
   config: NotionAutomationConfig,
   error: unknown,
+  signal?: AbortSignal,
 ) => {
-  await getNotionIntegrationRepository().writeAutomationConfig({
-    ...config,
-    lastError: getErrorMessage(error),
-    updatedAt: new Date().toISOString(),
-  });
+  await runNotionMutation(signal, () =>
+    getNotionIntegrationRepository().writeAutomationConfig(
+      {
+        ...config,
+        lastError: getErrorMessage(error),
+        updatedAt: new Date().toISOString(),
+      },
+      signal,
+    ),
+  );
+  signal?.throwIfAborted();
 };
 
 const buildFailedExport = (params: {
   config: NotionAutomationConfig;
   meeting: MeetingHistory;
   existing?: NotionAutomationMeetingExport;
+  signal?: AbortSignal;
   error: unknown;
 }): NotionAutomationMeetingExport => ({
   guildId: params.meeting.guildId,
@@ -121,16 +144,21 @@ const writeFailure = async (params: {
   config: NotionAutomationConfig;
   meeting: MeetingHistory;
   existing?: NotionAutomationMeetingExport;
+  signal?: AbortSignal;
   error: unknown;
 }) => {
-  await getNotionIntegrationRepository().writeAutomationMeetingExport(
-    buildFailedExport(params),
+  await runNotionMutation(params.signal, () =>
+    getNotionIntegrationRepository().writeAutomationMeetingExport(
+      buildFailedExport(params),
+      params.signal,
+    ),
   );
-  await recordConfigError(params.config, params.error);
+  params.signal?.throwIfAborted();
+  await recordConfigError(params.config, params.error, params.signal);
 };
 
-const getAutomationConfig = (guildId: string) =>
-  getNotionIntegrationRepository().getAutomationConfig(guildId);
+const getAutomationConfig = (guildId: string, signal?: AbortSignal) =>
+  getNotionIntegrationRepository().getAutomationConfig(guildId, signal);
 
 const throwNotionNotConfigured = () => {
   throw new NotionApiError(
@@ -159,13 +187,16 @@ const throwAutomationNotEligible = () => {
 const getRunnableAutomationConfig = async ({
   meeting,
   force,
+  signal,
 }: RunAutoExportParams) => {
   if (!appConfig.notion.enabled) {
     if (force) throwNotionNotConfigured();
     return undefined;
   }
 
-  const config = await getAutomationConfig(meeting.guildId);
+  signal?.throwIfAborted();
+  const config = await getAutomationConfig(meeting.guildId, signal);
+  signal?.throwIfAborted();
   if (!config) {
     if (force) throwAutomationNotConfigured();
     return undefined;
@@ -181,11 +212,13 @@ const getRunnableAutomationConfig = async ({
 
 const reserveNewAutomationExport = async (params: {
   existing?: NotionAutomationMeetingExport;
+  signal?: AbortSignal;
   key: AutomationMeetingExportKey;
 }) => {
   if (params.existing) return true;
   return getNotionIntegrationRepository().reserveAutomationMeetingExport(
     params.key,
+    params.signal,
   );
 };
 
@@ -193,12 +226,14 @@ const writeNotionAutomationExport = (params: {
   config: NotionAutomationConfig;
   meeting: MeetingHistory;
   existing?: NotionAutomationMeetingExport;
+  signal?: AbortSignal;
 }) => {
   if (params.existing?.notionPageId) {
     return syncMeetingToNotionAutomation({
       userId: params.config.ownerUserId,
       meeting: params.meeting,
       existing: params.existing,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
   }
 
@@ -207,6 +242,7 @@ const writeNotionAutomationExport = (params: {
     meeting: params.meeting,
     destinationPageId: params.config.destinationPageId,
     attemptCount: (params.existing?.attemptCount ?? 0) + 1,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 };
 
@@ -219,11 +255,19 @@ const runAutoExport = async (params: RunAutoExportParams) => {
     guildId: params.meeting.guildId,
     meetingId: params.meeting.channelId_timestamp,
   };
-  const existing = await repository.getAutomationMeetingExport(key);
+  params.signal?.throwIfAborted();
+  const existing = await repository.getAutomationMeetingExport(
+    key,
+    params.signal,
+  );
+  params.signal?.throwIfAborted();
   if (existing?.status === "exported" && !params.force) return existing;
   if (existing && !params.force) return existing;
 
-  const reserved = await reserveNewAutomationExport({ existing, key });
+  const reserved = await runNotionMutation(params.signal, () =>
+    reserveNewAutomationExport({ existing, key, signal: params.signal }),
+  );
+  params.signal?.throwIfAborted();
   if (!reserved) return undefined;
 
   try {
@@ -231,11 +275,20 @@ const runAutoExport = async (params: RunAutoExportParams) => {
       config,
       meeting: params.meeting,
       existing,
+      signal: params.signal,
     });
-    await clearConfigError(config);
+    params.signal?.throwIfAborted();
+    await clearConfigError(config, params.signal);
     return exported;
   } catch (error) {
-    await writeFailure({ config, meeting: params.meeting, existing, error });
+    assertNotionOutcomeKnown(error, params.signal);
+    await writeFailure({
+      config,
+      meeting: params.meeting,
+      existing,
+      error,
+      signal: params.signal,
+    });
     if (params.force) throw error;
     return undefined;
   }
@@ -243,10 +296,12 @@ const runAutoExport = async (params: RunAutoExportParams) => {
 
 export const maybeAutoExportCompletedMeeting = async (
   meeting: MeetingHistory,
+  signal?: AbortSignal,
 ) => {
   try {
-    await runAutoExport({ meeting });
+    await runAutoExport({ meeting, signal });
   } catch (error) {
+    assertNotionOutcomeKnown(error, signal);
     console.warn("Notion auto-export failed", {
       guildId: meeting.guildId,
       meetingId: meeting.meetingId,
@@ -267,17 +322,27 @@ export const retryNotionAutomationExport = async (meeting: MeetingHistory) => {
   return exported;
 };
 
-export const maybeAutoSyncMeetingNotes = async (meeting: MeetingHistory) => {
+export const maybeAutoSyncMeetingNotes = async (
+  meeting: MeetingHistory,
+  signal?: AbortSignal,
+) => {
+  signal?.throwIfAborted();
   if (!appConfig.notion.enabled) return;
 
-  const config = await getAutomationConfig(meeting.guildId);
+  signal?.throwIfAborted();
+  const config = await getAutomationConfig(meeting.guildId, signal);
+  signal?.throwIfAborted();
   if (!config || !config.autoExportEnabled || !hasNotes(meeting)) return;
   if (!matchesPersonalAutomationOwner(config, meeting)) return;
   const repository = getNotionIntegrationRepository();
-  const existing = await repository.getAutomationMeetingExport({
-    guildId: meeting.guildId,
-    meetingId: meeting.channelId_timestamp,
-  });
+  const existing = await repository.getAutomationMeetingExport(
+    {
+      guildId: meeting.guildId,
+      meetingId: meeting.channelId_timestamp,
+    },
+    signal,
+  );
+  signal?.throwIfAborted();
   if (!existing || existing.status !== "exported") return;
   if (existing.exportedNotesVersion >= (meeting.notesVersion ?? 1)) return;
 
@@ -286,9 +351,12 @@ export const maybeAutoSyncMeetingNotes = async (meeting: MeetingHistory) => {
       userId: config.ownerUserId,
       meeting,
       existing,
+      ...(signal ? { signal } : {}),
     });
-    await clearConfigError(config);
+    signal?.throwIfAborted();
+    await clearConfigError(config, signal);
   } catch (error) {
-    await writeFailure({ config, meeting, existing, error });
+    assertNotionOutcomeKnown(error, signal);
+    await writeFailure({ config, meeting, existing, error, signal });
   }
 };

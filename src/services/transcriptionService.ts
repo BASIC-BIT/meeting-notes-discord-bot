@@ -1,14 +1,14 @@
+import { withTranscriptionInput } from "./transcriptionInput";
+import {
+  getMeetingProcessingSignal,
+  runMeetingProcessingEffect,
+} from "./meetingProcessingLifetime";
 import type OpenAI from "openai";
 import type {
   Transcription,
   TranscriptionCreateParamsNonStreaming,
 } from "openai/resources/audio";
-import {
-  createReadStream,
-  existsSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import ffmpeg from "fluent-ffmpeg";
 import {
@@ -243,7 +243,9 @@ async function transcribeInternal(
   file: string,
   context?: TranscriptionTraceContext,
 ): Promise<string> {
+  getMeetingProcessingSignal(meeting).throwIfAborted();
   const { prompt, langfusePrompt } = await getTranscriptionPrompt(meeting);
+  getMeetingProcessingSignal(meeting).throwIfAborted();
   const promptValue = prompt.trim();
   const resolvedPrompt = promptValue.length > 0 ? promptValue : undefined;
   const passMode = context?.noiseGateMode ?? "slow";
@@ -274,22 +276,29 @@ async function transcribeInternal(
     openAIClient: OpenAI,
     promptText?: string,
   ) => {
-    const request: TranscriptionCreateParamsNonStreaming<"json"> = {
-      file: createReadStream(file),
-      model: modelChoice.model,
-      language: "en",
-      temperature: 0,
-      response_format: "json",
-      include: ["logprobs"],
-      ...(promptText ? { prompt: promptText } : {}),
-    };
-    const transcription =
-      await openAIClient.audio.transcriptions.create(request);
-    return {
-      text: transcription.text ?? "",
-      logprobs: transcription.logprobs ?? [],
-      usage: transcription.usage,
-    };
+    const signal = getMeetingProcessingSignal(meeting);
+    signal.throwIfAborted();
+    return withTranscriptionInput(file, async (input) => {
+      const request: TranscriptionCreateParamsNonStreaming<"json"> = {
+        file: input,
+        model: modelChoice.model,
+        language: "en",
+        temperature: 0,
+        response_format: "json",
+        include: ["logprobs"],
+        ...(promptText ? { prompt: promptText } : {}),
+      };
+      const transcription = await openAIClient.audio.transcriptions.create(
+        request,
+        { signal },
+      );
+      signal.throwIfAborted();
+      return {
+        text: transcription.text ?? "",
+        logprobs: transcription.logprobs ?? [],
+        usage: transcription.usage,
+      };
+    });
   };
 
   const guardConfig = resolveGuardConfig(meeting, context);
@@ -545,30 +554,40 @@ async function transcribeInternal(
             { asType: "generation" },
           );
 
-          void langfuseAttachmentLimiter
-            .schedule(() => buildLangfuseTranscriptionAudioAttachment(file))
-            .then((audioAttachment) => {
-              if (!audioAttachment) return;
-              updateActiveObservation(
-                {
-                  input: {
-                    ...observationInput,
-                    audio: audioAttachment.media,
+          void runMeetingProcessingEffect(meeting, () =>
+            langfuseAttachmentLimiter
+              .schedule(() => {
+                getMeetingProcessingSignal(meeting).throwIfAborted();
+                return buildLangfuseTranscriptionAudioAttachment(file);
+              })
+              .then((audioAttachment) => {
+                if (
+                  !audioAttachment ||
+                  getMeetingProcessingSignal(meeting).aborted
+                )
+                  return;
+                updateActiveObservation(
+                  {
+                    input: {
+                      ...observationInput,
+                      audio: audioAttachment.media,
+                    },
+                    metadata: {
+                      audioAttachmentBytes: audioAttachment.byteLength,
+                      audioAttachmentContentType: audioAttachment.contentType,
+                    },
                   },
-                  metadata: {
-                    audioAttachmentBytes: audioAttachment.byteLength,
-                    audioAttachmentContentType: audioAttachment.contentType,
-                  },
-                },
-                { asType: "generation" },
-              );
-            })
-            .catch((error) => {
-              console.warn(
-                "Failed to attach transcription audio to Langfuse.",
-                error,
-              );
-            });
+                  { asType: "generation" },
+                );
+              })
+              .catch((error) => {
+                if (getMeetingProcessingSignal(meeting).aborted) return;
+                console.warn(
+                  "Failed to attach transcription audio to Langfuse.",
+                  error,
+                );
+              }),
+          ).catch(() => {});
 
           const openAIClient = createOpenAIClient({
             disableTracing: true,
@@ -715,9 +734,10 @@ async function transcribe(
   file: string,
   context?: TranscriptionTraceContext,
 ): Promise<string> {
-  return await policies.execute(() =>
-    limiter.schedule(() => transcribeInternal(meeting, file, context)),
-  );
+  return await policies.execute(() => {
+    getMeetingProcessingSignal(meeting).throwIfAborted();
+    return limiter.schedule(() => transcribeInternal(meeting, file, context));
+  });
 }
 
 type TempSnippetFiles = {
@@ -786,9 +806,20 @@ const resolveNoiseGateContext = (input: {
   return { noiseGateEnabled, noiseGateMetrics };
 };
 
-const convertPcmToWav = (inputFile: string, outputFile: string) =>
+const convertPcmToWav = (
+  inputFile: string,
+  outputFile: string,
+  signal: AbortSignal,
+) =>
   new Promise<void>((resolve, reject) => {
-    ffmpeg(inputFile)
+    signal.throwIfAborted();
+    const command = ffmpeg(inputFile);
+    const cancel = () => command.kill("SIGTERM");
+    signal.addEventListener("abort", cancel, { once: true });
+    command
+      .on("start", () => {
+        if (signal.aborted) cancel();
+      })
       .inputOptions([
         `-f s16le`,
         `-ar ${RECORD_SAMPLE_RATE}`,
@@ -800,9 +831,11 @@ const convertPcmToWav = (inputFile: string, outputFile: string) =>
         `-ar ${TRANSCRIBE_SAMPLE_RATE}`,
       ])
       .on("end", () => {
+        signal.removeEventListener("abort", cancel);
         resolve();
       })
       .on("error", (err) => {
+        signal.removeEventListener("abort", cancel);
         console.error(`Error converting PCM to WAV: ${err.message}`);
         reject(err);
       })
@@ -855,8 +888,11 @@ export async function transcribeSnippet(
 
   let stage: "conversion" | "transcription" = "conversion";
   try {
+    const signal = getMeetingProcessingSignal(meeting);
+    signal.throwIfAborted();
     writeFileSync(tempFiles.pcmFile, buffer);
-    await convertPcmToWav(tempFiles.pcmFile, tempFiles.wavFile);
+    await convertPcmToWav(tempFiles.pcmFile, tempFiles.wavFile, signal);
+    signal.throwIfAborted();
     stage = "transcription";
     const text = await transcribe(meeting, tempFiles.wavFile, {
       userId: snippet.userId,

@@ -101,7 +101,7 @@ jest.mock("../ttsQueue", () => ({
 }));
 
 jest.mock("../chatTts", () => ({
-  maybeSpeakChatMessage: jest.fn(),
+  maybeSpeakChatMessage: jest.fn(async () => undefined),
 }));
 
 jest.mock("../utils/participants", () => ({
@@ -139,6 +139,8 @@ import { createTtsQueue } from "../ttsQueue";
 import {
   deleteMeeting,
   initializeMeeting,
+  stopMeetingInitializations,
+  getPendingMeetingInitializations,
   restoreVoiceSessionNickname,
   endTtsOnlySession,
   getMeeting,
@@ -640,5 +642,98 @@ describe("initializeMeeting", () => {
       expect.any(Function),
     );
     deleteMeeting(meeting.guildId);
+  });
+  it("cancelled initialization does not dispatch nickname or dictionary after held runtime config", async () => {
+    const runtime = jest.requireMock(
+      "../services/meetingConfigService",
+    ).resolveMeetingRuntimeConfig;
+    let release!: () => void;
+    let started!: () => void;
+    const dispatched = new Promise<void>((done) => {
+      started = done;
+    });
+    runtime.mockImplementationOnce(async () => {
+      started();
+      await new Promise<void>((done) => {
+        release = done;
+      });
+      return {};
+    });
+    const bot = buildBotMember("Synthetic Bot");
+    jest.mocked(getSnapshotBoolean).mockReturnValue(true);
+    jest.mocked(getSnapshotString).mockReturnValue("(recording)");
+    const controller = new AbortController();
+    const pending = initializeMeeting({
+      ...buildMeetingOptions(bot),
+      startSignal: controller.signal,
+      transcribeMeeting: true,
+      generateNotes: true,
+    });
+    const rejected = expect(pending).rejects.toThrow("synthetic stop");
+    await dispatched;
+    controller.abort(new Error("synthetic stop"));
+    release();
+    await rejected;
+    expect(bot.setNickname).not.toHaveBeenCalled();
+    expect(listDictionaryEntriesService).not.toHaveBeenCalled();
+  });
+
+  it("shutdown retains initialization through the actual held reservation and unwind", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((done) => {
+      release = done;
+    });
+    let started!: () => void;
+    const dispatched = new Promise<void>((done) => {
+      started = done;
+    });
+    const reserve = jest
+      .mocked(tryAcquireMeetingLease)
+      .getMockImplementation()!;
+    jest
+      .mocked(tryAcquireMeetingLease)
+      .mockImplementationOnce(async (input) => {
+        started();
+        await held;
+        return reserve(input);
+      });
+    let finishUnwind!: () => void;
+    const unwind = new Promise<void>((done) => {
+      finishUnwind = done;
+    });
+    jest.mocked(unwindSessionInitialization).mockReturnValueOnce(unwind);
+    const options = {
+      ...buildMeetingOptions(),
+      meetingId: "held-start",
+      transcribeMeeting: true,
+      generateNotes: true,
+    };
+    const initialization = initializeMeeting(options);
+    const result = initialization.catch(() => undefined);
+    await dispatched;
+    expect(getPendingMeetingInitializations()[0].promise).toBe(initialization);
+    let settled = false;
+    const drain = stopMeetingInitializations().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(
+      jest.mocked(tryAcquireMeetingLease).mock.calls[0][0].startSignal?.aborted,
+    ).toBe(true);
+    release();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(unwindSessionInitialization).toHaveBeenCalled();
+    expect(settled).toBe(false);
+    expect(getPendingMeetingInitializations()).toHaveLength(1);
+    finishUnwind();
+    await result;
+    await drain;
+    expect(openOutputFile).not.toHaveBeenCalled();
+    expect(getPendingMeetingInitializations()).toHaveLength(0);
+    await expect(
+      initializeMeeting({ ...options, meetingId: "late-start" }),
+    ).rejects.toThrow();
+    expect(tryAcquireMeetingLease).toHaveBeenCalledTimes(1);
   });
 });

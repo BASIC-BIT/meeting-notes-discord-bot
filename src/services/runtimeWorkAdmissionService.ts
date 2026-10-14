@@ -30,16 +30,15 @@ type Checkpoint = {
   session?: SessionOwnership;
   localSettled: boolean;
   ownedPromise?: Promise<unknown>;
+  effects: Set<Promise<unknown>>;
+  terminalAcknowledged?: ClaimCheckpoint;
 };
 const work = new Map<string, Checkpoint>();
 
-/** Counts before admission I/O. Unknown writes stay counted for R3 reconciliation. */
-export function beginRuntimeWorkClaim(
+function resolveParentSession(
   domain: Domain,
-  id: string,
   session?: { guildId: string; meetingId?: string },
 ) {
-  if (work.has(id)) throw new Error("Runtime work is already registered");
   const owned = session
     ? getOwnedSessionReservations().find(
         ({ reservation }) =>
@@ -53,6 +52,17 @@ export function beginRuntimeWorkClaim(
   const parent = owned?.reservation;
   if (parent && !isReservationControlEligible(parent))
     throw new Error("Session control ownership is closing");
+  return parent;
+}
+
+/** Counts before admission I/O. Unknown writes stay counted for R3 reconciliation. */
+export function beginRuntimeWorkClaim(
+  domain: Domain,
+  id: string,
+  session?: { guildId: string; meetingId?: string },
+) {
+  if (work.has(id)) throw new Error("Runtime work is already registered");
+  const parent = resolveParentSession(domain, session);
   const registration = parent
     ? undefined
     : beginRuntimeWork("pending_admission");
@@ -65,6 +75,7 @@ export function beginRuntimeWorkClaim(
     handle,
     session: parent,
     localSettled: false,
+    effects: new Set(),
   };
   const parentSignal = parent ? getReservationSignal(parent) : undefined;
   const onParentFence = () => {
@@ -73,11 +84,50 @@ export function beginRuntimeWorkClaim(
   };
   parentSignal?.addEventListener("abort", onParentFence, { once: true });
   work.set(id, checkpoint);
+  let acceptingEffects = true;
   return {
     signal: checkpoint.controller.signal,
-    trackPromise<T>(promise: Promise<T>): Promise<T> {
+    trackPromise<T>(run: () => Promise<T>): Promise<T> {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<T>((done, failed) => {
+        resolve = done;
+        reject = failed;
+      });
       checkpoint.ownedPromise = promise;
+      try {
+        resolve(run());
+      } catch (error) {
+        reject(error);
+      }
       return promise;
+    },
+    trackEffect<T>(run: () => Promise<T>): Promise<T> {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      let reject!: (error: unknown) => void;
+      const effect = new Promise<T>((done, failed) => {
+        resolve = done;
+        reject = failed;
+      });
+      checkpoint.effects.add(effect);
+      void effect.then(
+        () => checkpoint.effects.delete(effect),
+        () => checkpoint.effects.delete(effect),
+      );
+      try {
+        if (!acceptingEffects)
+          throw new Error("Runtime work effects are closing");
+        checkpoint.controller.signal.throwIfAborted();
+        resolve(run());
+      } catch (error) {
+        reject(error);
+      }
+      return effect;
+    },
+    acknowledgeTerminal() {
+      if (!checkpoint.claim)
+        throw new Error("Terminal acknowledgment requires the original claim");
+      checkpoint.terminalAcknowledged = { ...checkpoint.claim };
     },
     recordClaim(claim: ClaimCheckpoint) {
       checkpoint.claim = claim;
@@ -110,7 +160,10 @@ export function beginRuntimeWorkClaim(
       checkpoint.stage = "unresolved";
       checkpoint.controller.abort();
     },
-    settle() {
+    async settle() {
+      acceptingEffects = false;
+      while (checkpoint.effects.size)
+        await Promise.allSettled([...checkpoint.effects]);
       checkpoint.localSettled = true;
       parentSignal?.removeEventListener("abort", onParentFence);
       if (checkpoint.controller.signal.aborted) return;
@@ -131,6 +184,8 @@ export function getRuntimeWorkAdmissionCheckpoints() {
       session,
       localSettled,
       ownedPromise,
+      effects,
+      terminalAcknowledged,
     }) => ({
       id,
       domain,
@@ -147,6 +202,8 @@ export function getRuntimeWorkAdmissionCheckpoints() {
         : undefined,
       localSettled,
       ownedPromise,
+      effects: [...effects],
+      terminalAcknowledged,
       signal: controller.signal,
       fenced: controller.signal.aborted,
     }),

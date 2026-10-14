@@ -1,3 +1,4 @@
+import { assertNotionOutcomeKnown } from "./notionOperationLifetime";
 import type { MeetingData } from "../types/meeting-data";
 import {
   HISTORY_TRANSITION_FIELDS,
@@ -97,23 +98,28 @@ export async function listRecentMeetingsForChannelService(
   );
 }
 
-export async function updateMeetingNotesService(params: {
-  guildId: string;
-  channelId_timestamp: string;
-  notes: string;
-  notesDelta?: unknown | null;
-  notesVersion: number;
-  editedBy: string;
-  summarySentence?: string;
-  summaryLabel?: string;
-  meetingName?: string;
-  suggestion?: SuggestionHistoryEntry;
-  source?: NotesEditSource;
-  expectedPreviousVersion?: number;
-  metadata?: { notesMessageIds?: string[]; notesChannelId?: string };
-}) {
+export async function updateMeetingNotesService(
+  params: {
+    guildId: string;
+    channelId_timestamp: string;
+    notes: string;
+    notesDelta?: unknown | null;
+    notesVersion: number;
+    editedBy: string;
+    summarySentence?: string;
+    summaryLabel?: string;
+    meetingName?: string;
+    suggestion?: SuggestionHistoryEntry;
+    source?: NotesEditSource;
+    expectedPreviousVersion?: number;
+    metadata?: { notesMessageIds?: string[]; notesChannelId?: string };
+  },
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
   const repository = getMeetingHistoryRepository();
   const ok = await repository.updateNotes(params);
+  signal?.throwIfAborted();
   if (!ok) return false;
   try {
     const updated = await repository.get(
@@ -121,9 +127,11 @@ export async function updateMeetingNotesService(params: {
       params.channelId_timestamp,
     );
     if (updated) {
-      await maybeAutoSyncMeetingNotes(updated);
+      signal?.throwIfAborted();
+      await maybeAutoSyncMeetingNotes(updated, signal);
     }
   } catch (error) {
+    assertNotionOutcomeKnown(error, signal);
     console.warn("Failed to sync Notion after notes update", {
       guildId: params.guildId,
       meetingId: params.channelId_timestamp,
@@ -133,13 +141,17 @@ export async function updateMeetingNotesService(params: {
   return true;
 }
 
-export async function updateMeetingNotesMessageMetadataService(params: {
-  guildId: string;
-  channelId_timestamp: string;
-  notesMessageIds: string[];
-  notesChannelId: string;
-  expectedNotesVersion: number;
-}) {
+export async function updateMeetingNotesMessageMetadataService(
+  params: {
+    guildId: string;
+    channelId_timestamp: string;
+    notesMessageIds: string[];
+    notesChannelId: string;
+    expectedNotesVersion: number;
+  },
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
   return getMeetingHistoryRepository().updateNotesMessageMetadata(params);
 }
 

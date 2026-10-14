@@ -1,3 +1,5 @@
+/** @jest-environment node */
+jest.mock("dotenv", () => ({ config: jest.fn() }));
 import {
   afterEach,
   beforeEach,
@@ -130,6 +132,37 @@ describe("activeMeetingLeaseService", () => {
       throw new Error("fixture admission failed");
     return { reservation: admitted.reservation, getMeetingHistory };
   }
+
+  test("reservation exposes the actual held renewal before meeting initialization", async () => {
+    const { reservation } = await recordingReservation();
+    let complete!: (value: boolean) => void;
+    mockedRenewActiveMeetingLease.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          complete = done;
+        }),
+    );
+    await jest.advanceTimersByTimeAsync(10_000);
+    const owned = getOwnedSessionReservations().find(
+      (entry) => entry.reservation === reservation,
+    )!;
+    expect(owned.renewal).toBeDefined();
+    let settled = false;
+    void owned.renewal!.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    complete(true);
+    await owned.renewal;
+    expect(settled).toBe(true);
+    expect(
+      getOwnedSessionReservations().find(
+        (entry) => entry.reservation === reservation,
+      )?.renewal,
+    ).toBeUndefined();
+    await releaseSessionReservation(reservation);
+  });
 
   test("a control fenced during admission lookup cannot reserve or prepare voice", async () => {
     const context = await getRuntimeAdmissionContext();
