@@ -2,6 +2,7 @@ import { completionPolicySchema } from "./meetingCompletionPolicy";
 import {
   recordingCheckpointSchema,
   recordingCaptureStateSchema,
+  captureCoverageSummarySchema,
   recoveryDispositionSchema,
 } from "./recordingCheckpoint";
 import { z } from "zod";
@@ -450,6 +451,7 @@ export const HISTORY_TRANSITION_FIELDS = [
   "completionPolicy",
   "checkpoint",
   "capture",
+  "captureCoverage",
   "recovery",
   "status",
   "duration",
@@ -552,6 +554,8 @@ export function validateHistoryTransition(input: HistoryTransition): void {
   validateCheckpointTransition(input);
   if (input.patch.capture)
     recordingCaptureStateSchema.parse(input.patch.capture);
+  if (input.patch.captureCoverage)
+    captureCoverageSummarySchema.parse(input.patch.captureCoverage);
   if (input.patch.recovery)
     recoveryDispositionSchema.parse(input.patch.recovery);
   if (input.recordingDelivery) validateRecordingDelivery(input);
@@ -790,7 +794,10 @@ function validateTerminalCheckpointPreservation(input: HistoryTransition) {
     !["failed", "interrupted"].includes(input.expectedStatus) ||
     !input.signal ||
     Object.keys(input.patch).some(
-      (field) => !["checkpoint", "capture", "recovery"].includes(field),
+      (field) =>
+        !["checkpoint", "capture", "captureCoverage", "recovery"].includes(
+          field,
+        ),
     )
   )
     throw new Error("Terminal preservation is metadata only");

@@ -460,6 +460,7 @@ export interface MeetingHistory {
   };
   checkpoint?: RecordingCheckpoint;
   capture?: RecordingCaptureState;
+  captureCoverage?: import("./recordingCheckpoint").CaptureCoverageSummary;
   recovery?: RecordingRecoveryState;
   ownerInstanceId?: string;
   executionVersion?: number;

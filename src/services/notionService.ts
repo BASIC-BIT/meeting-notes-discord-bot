@@ -11,6 +11,7 @@ import {
   type NotionIntegrationRepository,
 } from "../repositories/notionIntegrationRepository";
 import type { MeetingHistory } from "../types/db";
+import { withMeetingCaptureNotice } from "../utils/meetingCaptureNotice";
 import type {
   NotionAutomationConfig,
   NotionAutomationMeetingExport,
@@ -404,7 +405,7 @@ export const buildMeetingNotionMarkdown = async (meeting: MeetingHistory) => {
   const participants = formatParticipantNames(meeting);
   const details = [
     `- Date: ${escapeNotionText(new Date(meeting.timestamp).toISOString())}`,
-    `- Duration: ${escapeNotionText(formatDuration(meeting.duration))}`,
+    `- Duration: ${meeting.capture?.kind === "interrupted" && !meeting.capture.endedAt ? "Unknown" : escapeNotionText(formatDuration(meeting.duration))}`,
     `- Discord channel: ${escapeNotionText(meeting.channelId)}`,
     participants ? `- Participants: ${participants}` : undefined,
     meeting.notesVersion
@@ -423,7 +424,7 @@ export const buildMeetingNotionMarkdown = async (meeting: MeetingHistory) => {
     "",
     "## Notes",
     "",
-    notes,
+    withMeetingCaptureNotice(notes, meeting),
   ].join("\n");
 };
 

@@ -56,6 +56,16 @@ A completed meeting means that processing ended. It does not guarantee that Chro
 
 If Notion automation is enabled, Chronote exports completed meeting notes after they are saved. Server automation uses the server manager's configured destination. Personal automation uses the personal meeting owner's Notion destination.
 
+## Interrupted recordings
+
+If recording is interrupted, Chronote can recover verified saved audio or text without joining the voice channel again. Recovery follows the meeting's original transcription and notes settings. It does not generate notes when notes were disabled, and it does not invent notes when no usable saved speech remains.
+
+Recovered partial notes keep an **Interrupted** status. A warning explains that they cover only the saved recording. The warning remains after notes edits and corrections, and appears in Discord, the library, shared meetings, copied or downloaded notes, Remote MCP, and Notion exports. Known transcription gaps still carry a warning even when recording itself finished.
+
+The library shows recovery progress or when processing or delivery needs review. Confirmed saved audio duration describes preserved audio, which may contain gaps. It does not prove the full meeting was recorded. If the recording's exact end time is unknown, Chronote leaves it unknown.
+
+If the live page cannot confirm the recording status, it shows **Status unavailable** instead of Complete. Use **Retry** to check again, or open the meeting library for saved content and recovery status.
+
 ## Stage 5: Revise
 
 After publishing, authorized users can refine the notes:

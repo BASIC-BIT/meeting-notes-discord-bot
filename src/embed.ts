@@ -17,6 +17,7 @@ import {
   Message,
 } from "discord.js";
 import { MeetingData } from "./types/meeting-data";
+import { withMeetingCaptureNotice } from "./utils/meetingCaptureNotice";
 import { config } from "./services/configService";
 import { buildPortalMeetingUrl } from "./utils/portalLinks";
 import { buildSummaryFeedbackButtonIds } from "./commands/summaryFeedback";
@@ -69,12 +70,18 @@ function truncateFieldValue(value: string, max = MAX_FIELD_VALUE): string {
 function buildMeetingFields(meeting: MeetingData) {
   const attendanceList = Array.from(meeting.attendance).join("\n");
   const startLabel = formatTimestamp(meeting.startTime);
-  const endLabel = meeting.endTime
-    ? formatTimestamp(meeting.endTime)
-    : "Unknown";
-  const durationLabel = meeting.endTime
-    ? formatDurationMinutes(meeting.startTime, meeting.endTime)
-    : formatDurationMinutes(meeting.startTime, new Date());
+  const actualEnd =
+    meeting.recordingCaptureState?.kind === "interrupted"
+      ? meeting.recordingCaptureState.endedAt
+        ? new Date(meeting.recordingCaptureState.endedAt)
+        : undefined
+      : meeting.endTime;
+  const endLabel = actualEnd ? formatTimestamp(actualEnd) : "Unknown";
+  const durationLabel = actualEnd
+    ? formatDurationMinutes(meeting.startTime, actualEnd)
+    : meeting.recordingCaptureState?.kind === "interrupted"
+      ? "Unknown"
+      : formatDurationMinutes(meeting.startTime, new Date());
 
   const fields = [
     { name: "Start Time", value: startLabel, inline: true },
@@ -124,7 +131,14 @@ function buildSummaryEmbed(meeting: MeetingData): EmbedBuilder {
     .setTitle(resolveMeetingTitle(meeting))
     .setColor(SUMMARY_COLOR)
     .setDescription(
-      summary && summary.length > 0 ? summary : "Summary unavailable.",
+      withMeetingCaptureNotice(
+        summary && summary.length > 0 ? summary : "Summary unavailable.",
+        {
+          capture: meeting.recordingCaptureState,
+          processing: meeting.processing,
+          notes: meeting.notesText,
+        },
+      ),
     )
     .addFields(buildMeetingFields(meeting))
     .setTimestamp();
@@ -138,6 +152,7 @@ function buildNotesEmbeds(meeting: MeetingData): EmbedBuilder[] {
     notesBody,
     color: SUMMARY_COLOR,
     processing: meeting.processing,
+    capture: meeting.recordingCaptureState,
   }).map((embed) => embed.setTimestamp());
 }
 

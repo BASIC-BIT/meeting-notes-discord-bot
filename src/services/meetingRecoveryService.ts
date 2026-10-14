@@ -1,4 +1,9 @@
 import type { MeetingHistory } from "../types/db";
+import {
+  summarizeCaptureCoverage,
+  withMeetingCaptureNotice,
+} from "../utils/meetingCaptureNotice";
+import { buildMeetingNotesEmbeds } from "../utils/meetingNotes";
 import { recoveryHistoryKey } from "../types/meetingRecovery";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -20,7 +25,6 @@ import {
 import { resolveCompletionPolicy } from "./meetingCompletionPolicyService";
 import { createDiscordMessage } from "./discordMessageService";
 import { uploadObjectToS3 } from "./storageService";
-import { buildPaginatedEmbeds } from "../utils/embedPagination";
 import type { TranscriptionContentInput } from "./transcriptionService";
 
 type RecoveryPatch = Parameters<
@@ -159,9 +163,11 @@ async function deliver(claim: RecoveryClaim, deps: RecoveryDependencies) {
                 row.capture?.kind === "complete"
                   ? "Recovered meeting"
                   : "Recovered partial meeting",
-              description:
+              description: withMeetingCaptureNotice(
                 row.summarySentence ??
-                "Notes recovered from saved conversation.",
+                  "Notes recovered from saved conversation.",
+                row,
+              ),
             },
           ],
           allowed_mentions: { parse: [] },
@@ -172,13 +178,13 @@ async function deliver(claim: RecoveryClaim, deps: RecoveryDependencies) {
     if (!summary.id) throw new Error("Summary acknowledgment missing");
     await persistRecovery(claim, { summaryMessageId: summary.id }, deps);
     const ids: string[] = [];
-    for (const embed of buildPaginatedEmbeds({
-      text: row.notes!,
-      baseTitle:
+    for (const embed of buildMeetingNotesEmbeds({
+      ...row,
+      notesBody: row.notes!,
+      meetingName:
         row.capture?.kind === "complete"
           ? "Recovered meeting notes"
           : "Recovered partial notes",
-      footerText: "Saved content may contain gaps.",
     })) {
       const message = await deps.effect(() =>
         deps.send(
@@ -399,6 +405,7 @@ async function prepareRecoveryCapture(
     claim,
     {
       capture,
+      captureCoverage: summarizeCaptureCoverage(content.coverage),
       status: capture.kind === "complete" ? "processing" : "interrupted",
     },
     deps,

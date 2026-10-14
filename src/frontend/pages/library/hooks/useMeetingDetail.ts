@@ -68,7 +68,9 @@ const resolveLiveStreamEnabled = (
 };
 
 const shouldRefetchMeeting = (status: string) =>
-  status === MEETING_STATUS.COMPLETE || status === MEETING_STATUS.CANCELLED;
+  ["complete", "cancelled", "interrupted", "failed", "unavailable"].includes(
+    status,
+  );
 
 const resolveLiveStreamParams = (
   meeting: MeetingDetails | null,
@@ -84,7 +86,7 @@ const resolveDisplayStatus = (
   liveStream: ReturnType<typeof useLiveMeetingStream>,
   meeting: MeetingDetails | null,
 ) => {
-  if (liveStream.meeting && liveStream.meeting.status) {
+  if (liveStream.meeting && liveStream.meeting.status !== "unavailable") {
     return liveStream.meeting.status;
   }
   if (meeting && meeting.status) {

@@ -35,6 +35,7 @@ export type RecoveryRepository = {
         | "delivery"
         | "status"
         | "capture"
+        | "captureCoverage"
         | "recovery"
         | "processing"
         | "notes"

@@ -80,6 +80,16 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockCompletionBodies.length = 0;
 });
+test("notesDisabledRemainDisabled", async () => {
+  const f = await fixture(undefined, {
+    requested: { transcribeMeeting: true, generateNotes: false },
+  });
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.notes).not.toHaveBeenCalled();
+  expect(f.send).not.toHaveBeenCalled();
+  expect(f.claim.history.notes).toBeUndefined();
+  expect(f.claim.history.processing?.notes).toBe("skipped");
+});
 test("partialSpeechGeneratesNotesWithoutVoiceJoin and verifiedTranscriptRecoversWithoutAudio", async () => {
   const f = await fixture();
   await readRecoveryContent(f.claim.history, f.reader, f.deps.signal);
@@ -94,6 +104,10 @@ test("partialSpeechGeneratesNotesWithoutVoiceJoin and verifiedTranscriptRecovers
   expect(f.claim.history.checkpoint?.capture.ownerInstanceId).toBe("old");
   expect(f.claim.lease).not.toHaveProperty("voiceOperationAttemptId");
   expect(f.send).toHaveBeenCalledTimes(2);
+  for (const call of f.send.mock.calls)
+    expect(JSON.stringify(call)).toContain(
+      "Partial notes: recording was interrupted.",
+    );
   const input = f.notes.mock.calls[0][0];
   expect(input).not.toHaveProperty("connection");
   expect(input.captureNotice).toContain("ended abruptly");

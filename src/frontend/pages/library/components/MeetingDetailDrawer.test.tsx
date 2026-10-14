@@ -449,6 +449,27 @@ describe("MeetingDetailDrawer summary copy", () => {
       message: "Summary copied to clipboard.",
     });
   });
+  it("copied interrupted notes retain the coverage warning", async () => {
+    const capture = {
+      kind: "interrupted" as const,
+      startedAt: "2026-01-01T00:00:00Z",
+      detectedAt: "2026-01-01T01:00:00Z",
+      endedAt: null,
+    };
+    useMeetingDetailMock.mockReturnValue(
+      buildUseMeetingDetailResult({
+        detail: buildDetail({ notes: "Generated saved decision.", capture }),
+        meeting: buildMeeting({ notes: "Generated saved decision.", capture }),
+      }),
+    );
+    renderDrawer();
+    fireEvent.click(screen.getByLabelText("Copy summary as Markdown"));
+    await waitFor(() =>
+      expect(writeTextMock).toHaveBeenCalledWith(
+        expect.stringContaining("These notes cover only the saved recording."),
+      ),
+    );
+  });
 
   it("reinitializes the same meeting after the drawer closes", async () => {
     useMeetingDetailMock.mockReturnValue(

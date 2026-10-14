@@ -7,6 +7,12 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Clearer interrupted recording outcomes
+
+- Chronote can recover saved conversation after an interrupted recording while respecting the original transcription and notes settings. It does not rejoin the voice channel or fill missing conversation with invented content.
+- Partial notes retain an **Interrupted** status and a coverage warning across Discord, the library, shared meetings, copies, downloads, Remote MCP, and Notion exports. Editing or correcting the notes keeps the warning.
+- Live pages distinguish known interruption from unavailable recording status. The library shows recovery progress and outcomes that need review. Unknown recording end times remain unknown. See [Meeting lifecycle](/core-concepts/meeting-lifecycle#interrupted-recordings).
+
 ### Recording limits and plan links (October 12)
 
 - Recording-limit messages explain when recording can resume and link to the plan options for that server. Servers with existing billing get **Manage plan**. No plan removes the two-hour maximum per meeting.

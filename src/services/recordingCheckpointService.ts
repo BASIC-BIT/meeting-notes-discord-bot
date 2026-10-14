@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { summarizeCaptureCoverage } from "../utils/meetingCaptureNotice";
 import { isDeepStrictEqual } from "node:util";
 import { getDeploymentControlRepository } from "../db";
 import type { DeploymentControlRepository } from "../repositories/deploymentControlRepository";
@@ -526,6 +527,7 @@ export function createRecordingCheckpointService(
       ? {
           ...(checkpoint === input.previous ? {} : { checkpoint }),
           capture: state,
+          captureCoverage: summarizeCaptureCoverage(coverage),
           recovery: proof.recovery,
           ...(proof.status ? { status: proof.status } : {}),
         }

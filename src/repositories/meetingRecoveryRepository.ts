@@ -23,6 +23,7 @@ import type {
 import { buildRuntimeAdmissionChecks } from "../services/deploymentControlTransactions";
 import {
   recoveryDispositionSchema,
+  captureCoverageSummarySchema,
   recordingCaptureStateSchema,
   checkpointObjectSchema,
 } from "../types/recordingCheckpoint";
@@ -35,6 +36,7 @@ const OBSERVED_FIELDS = [
   "status",
   "checkpoint",
   "capture",
+  "captureCoverage",
   "recovery",
   "processing",
   "delivery",
@@ -217,6 +219,8 @@ type RecoveryPatch = Parameters<
 >[1];
 const stages = ["verification", "transcription", "notes", "delivery"];
 function validateRecoveryPatch(claim: RecoveryClaim, patch: RecoveryPatch) {
+  if (patch.captureCoverage)
+    captureCoverageSummarySchema.parse(patch.captureCoverage);
   if (patch.recovery) {
     const next = recoveryDispositionSchema.parse(patch.recovery);
     const prior = claim.history.recovery!;

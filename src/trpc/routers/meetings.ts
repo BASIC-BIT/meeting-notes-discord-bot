@@ -1,4 +1,9 @@
 import type { RuntimeApiOperation } from "../../services/runtimeApiOperationService";
+import {
+  projectMeetingCapture,
+  resolveCaptureStatus,
+  type CaptureNoticeInput,
+} from "../../utils/meetingCaptureNotice";
 import { TRPCError } from "@trpc/server";
 import { formatHunkDiff } from "../../utils/diff";
 import { z } from "zod";
@@ -648,6 +653,7 @@ async function sendNotesEmbedsToDiscord(params: {
   footerText?: string;
   color?: number;
   processing?: MeetingProcessingOutcome;
+  captureNoticeInput?: CaptureNoticeInput;
 }): Promise<string[]> {
   const embedBatches = batchMeetingNotesEmbeds(
     buildMeetingNotesEmbeds({
@@ -656,6 +662,7 @@ async function sendNotesEmbedsToDiscord(params: {
       footerText: params.footerText,
       color: params.color,
       processing: params.processing,
+      ...params.captureNoticeInput,
     }),
   );
 
@@ -754,6 +761,7 @@ async function editOrReplaceNotesEmbeds(params: {
   footerText?: string;
   color?: number;
   processing?: MeetingProcessingOutcome;
+  captureNoticeInput?: CaptureNoticeInput;
   summaryMessageId?: string;
 }): Promise<NotesEmbedUpdateResult> {
   const embeds = buildMeetingNotesEmbeds({
@@ -762,6 +770,7 @@ async function editOrReplaceNotesEmbeds(params: {
     footerText: params.footerText,
     color: params.color,
     processing: params.processing,
+    ...params.captureNoticeInput,
   }).map((embed) => embed.toJSON() as unknown as Record<string, unknown>);
 
   if (
@@ -788,6 +797,7 @@ async function editOrReplaceNotesEmbeds(params: {
     footerText: params.footerText,
     color: params.color,
     processing: params.processing,
+    captureNoticeInput: params.captureNoticeInput,
   });
   return { messageIds, strategy: "replaced" };
 }
@@ -814,6 +824,7 @@ async function syncNotesEmbedsAfterWebEdit(params: {
       meetingName: params.history.meetingName,
       footerText: params.footerText,
       processing: params.history.processing,
+      captureNoticeInput: params.history,
       summaryMessageId: params.history.summaryMessageId,
     });
   } catch (error) {
@@ -893,9 +904,6 @@ const resolveMeetingListChannelName = (
   isPersonalMeeting(meeting)
     ? PERSONAL_MEETING_CHANNEL_NAME
     : (channelMap.get(channelId) ?? channelId);
-
-const resolveMeetingListStatus = (status: MeetingSummary["status"]) =>
-  status ?? MEETING_STATUS.COMPLETE;
 
 const resolveMeetingListDuration = (meeting: MeetingSummary): number => {
   const status = meeting.status;
@@ -1015,7 +1023,8 @@ const list = guildMemberProcedure
           roleNamesByGuildId,
         );
         return {
-          status: resolveMeetingListStatus(meeting.status),
+          ...projectMeetingCapture(meeting),
+          status: resolveCaptureStatus(meeting),
           id: meeting.channelId_timestamp,
           meetingId: meeting.meetingId,
           channelId,
@@ -1203,7 +1212,8 @@ const detail = authedProcedure
 
     return {
       meeting: {
-        status: history.status ?? MEETING_STATUS.COMPLETE,
+        ...projectMeetingCapture(history),
+        status: resolveCaptureStatus(history),
         id: history.channelId_timestamp,
         meetingId: history.meetingId,
         channelId,
@@ -1928,6 +1938,7 @@ const applyNotesCorrection = correctionProcedure
           meetingName: history.meetingName,
           footerText,
           processing: history.processing,
+          captureNoticeInput: history,
           summaryMessageId: history.summaryMessageId,
         });
       } catch (error) {

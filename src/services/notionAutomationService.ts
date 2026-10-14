@@ -36,7 +36,10 @@ const hasNotes = (meeting: MeetingHistory) =>
   Boolean(meeting.notes && meeting.notes.trim().length > 0);
 
 const isCompletedMeeting = (meeting: MeetingHistory) =>
-  (meeting.status ?? MEETING_STATUS.COMPLETE) === MEETING_STATUS.COMPLETE;
+  (meeting.status ?? MEETING_STATUS.COMPLETE) === MEETING_STATUS.COMPLETE ||
+  (meeting.status === MEETING_STATUS.INTERRUPTED &&
+    meeting.recovery?.disposition === "done" &&
+    meeting.recovery.outcome === "completed");
 
 const matchesChannelFilter = (
   config: NotionAutomationConfig,

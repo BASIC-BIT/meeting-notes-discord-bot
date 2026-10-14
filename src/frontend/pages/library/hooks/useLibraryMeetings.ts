@@ -76,17 +76,23 @@ export const useLibraryMeetings = (
         meetingRow.channelId,
       );
       const dateLabel = formatDateLabel(meetingRow.timestamp);
-      const durationLabel = formatDurationLabel(meetingRow.duration);
+      const durationLabel =
+        meetingRow.capture?.kind === "interrupted" &&
+        !meetingRow.capture.endedAt
+          ? "Unknown duration"
+          : formatDurationLabel(meetingRow.duration);
       const title = resolveMeetingTitle({
         meetingName: meetingRow.meetingName,
         summaryLabel: meetingRow.summaryLabel,
         summarySentence: meetingRow.summarySentence,
         channelLabel,
       });
-      const summary = deriveSummary(
-        meetingRow.notes,
-        meetingRow.summarySentence,
-      );
+      const summary =
+        meetingRow.recovery &&
+        !meetingRow.notes.trim() &&
+        !meetingRow.summarySentence?.trim()
+          ? ""
+          : deriveSummary(meetingRow.notes, meetingRow.summarySentence);
       return {
         ...meetingRow,
         title,

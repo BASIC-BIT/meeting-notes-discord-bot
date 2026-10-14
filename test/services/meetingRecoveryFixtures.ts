@@ -17,6 +17,7 @@ import type { CheckpointArtifactInput } from "../../src/types/recordingCheckpoin
 export async function recoveryFixture(
   text = "We agreed to finish the release testing tomorrow.",
   options: {
+    requested?: { transcribeMeeting: boolean; generateNotes: boolean };
     artifacts?: CheckpointArtifactInput[];
     context?: (
       context: ReturnType<typeof generationContextSchema.parse>,
@@ -31,6 +32,7 @@ export async function recoveryFixture(
     ...history,
     participants: [],
     textChannelId: "text",
+    ...(options.requested ?? {}),
   };
   const histories = new Map([[row.guildId, [row]]]);
   const ownership = {
@@ -86,7 +88,10 @@ export async function recoveryFixture(
     executionVersion: 1,
     reservedAt: row.timestamp,
     captureStartedAt: row.timestamp,
-    requested: { transcribeMeeting: true, generateNotes: true },
+    requested: options.requested ?? {
+      transcribeMeeting: true,
+      generateNotes: true,
+    },
   };
   const runtimeConfig = await resolveMeetingRuntimeConfig({
     guildId: row.guildId,

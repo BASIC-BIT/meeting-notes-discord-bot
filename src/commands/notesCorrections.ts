@@ -37,6 +37,10 @@ import {
   resolveMeetingNameFromSummary,
 } from "../services/meetingNameService";
 import { buildMeetingNotesEmbeds } from "../utils/meetingNotes";
+import {
+  withMeetingCaptureNotice,
+  type CaptureNoticeInput,
+} from "../utils/meetingCaptureNotice";
 import { MEETING_RENAME_PREFIX } from "./meetingName";
 import { createOpenAIClient } from "../services/openaiClient";
 import { buildModelOverrides, getModelChoice } from "../services/modelFactory";
@@ -58,6 +62,7 @@ type PendingCorrection = {
   channelId?: string;
   notesMessageIds?: string[];
   processing?: MeetingProcessingOutcome;
+  captureNoticeInput?: CaptureNoticeInput;
   notesChannelId?: string;
   summaryMessageId?: string;
   meetingCreatorId?: string;
@@ -414,6 +419,13 @@ export async function handleNotesCorrectionModal(
       channelId: history.channelId,
       notesMessageIds: history.notesMessageIds,
       processing: history.processing,
+      captureNoticeInput: {
+        capture: history.capture,
+        captureCoverage: history.captureCoverage,
+        status: history.status,
+        processing: history.processing,
+        notes: history.notes,
+      },
       notesChannelId: history.notesChannelId,
       summaryMessageId: history.summaryMessageId,
       meetingCreatorId: history.meetingCreatorId,
@@ -703,6 +715,7 @@ async function updateNotesEmbedsForCorrection(
     color,
     meetingName,
     pending.processing,
+    pending.captureNoticeInput,
   );
 
   if (existingIds.length > 0 && embeds.length <= existingIds.length) {
@@ -810,6 +823,7 @@ function buildUpdatedEmbeds(
   color?: number | null,
   meetingName?: string,
   processing?: MeetingProcessingOutcome,
+  captureNoticeInput?: CaptureNoticeInput,
 ) {
   const footerText = editedByTag
     ? `v${version} • Edited by ${editedByTag}`
@@ -821,6 +835,7 @@ function buildUpdatedEmbeds(
     footerText,
     color: color ?? undefined,
     processing,
+    ...captureNoticeInput,
   });
 }
 
@@ -986,9 +1001,12 @@ async function updateSummaryMessageForCorrection(
       resolveSummaryTitle(summaries.meetingName, summaries.summaryLabel),
     )
     .setDescription(
-      resolveSummaryDescription(
-        summaries.summarySentence,
-        summaries.summaryLabel,
+      withMeetingCaptureNotice(
+        resolveSummaryDescription(
+          summaries.summarySentence,
+          summaries.summaryLabel,
+        ),
+        pending.captureNoticeInput ?? {},
       ),
     );
   try {

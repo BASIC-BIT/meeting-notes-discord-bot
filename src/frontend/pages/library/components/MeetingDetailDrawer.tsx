@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { withMeetingCaptureNotice } from "../../../../utils/meetingCaptureNotice";
 import { useSearch } from "@tanstack/react-router";
 import type { HTMLAttributes } from "react";
 import {
@@ -78,6 +79,24 @@ const resolveRenameDraft = (meeting: {
 
 const renderDetailStatusBadge = (status?: MeetingStatus) => {
   switch (status) {
+    case MEETING_STATUS.INTERRUPTED:
+      return (
+        <Badge color="yellow" variant="light">
+          Interrupted
+        </Badge>
+      );
+    case MEETING_STATUS.STARTING:
+      return (
+        <Badge color="blue" variant="light">
+          Starting
+        </Badge>
+      );
+    case MEETING_STATUS.FAILED:
+      return (
+        <Badge color="red" variant="light">
+          Failed
+        </Badge>
+      );
     case MEETING_STATUS.IN_PROGRESS:
       return (
         <Badge color="red" variant="light">
@@ -271,8 +290,10 @@ export default function MeetingDetailDrawer({
   const notionRetryAutomationMutation =
     trpc.notion.retryAutomationExport.useMutation();
 
-  const summaryCopyText = detail?.notes ?? "";
-  const canCopySummary = summaryCopyText.trim().length > 0;
+  const summaryCopyText = detail
+    ? withMeetingCaptureNotice(detail.notes ?? "", detail)
+    : "";
+  const canCopySummary = Boolean(detail?.notes?.trim());
 
   const meetingSharingPolicy =
     shareStateQuery.data?.meetingSharingPolicy ?? "server";
@@ -1017,6 +1038,11 @@ export default function MeetingDetailDrawer({
       summary={meeting.summary}
       notes={meeting.notes}
       processing={meeting.processing}
+      capture={meeting.capture}
+      captureCoverage={meeting.captureCoverage}
+      captureNotice={meeting.captureNotice}
+      recovery={meeting.recovery}
+      recoveryNotice={meeting.recoveryNotice}
       summaryFeedback={summaryFeedback}
       feedbackPending={feedbackMutation.isPending}
       copyDisabled={!canCopySummary}

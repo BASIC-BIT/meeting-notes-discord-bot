@@ -981,6 +981,12 @@ test("initial interruption atomically publishes terminal history and verified ch
     status: "interrupted",
     checkpoint: { revision: 1 },
     recovery: { disposition: "pending" },
+    captureCoverage: {
+      kind: "verified",
+      savedDurationMs: 1000,
+      lastConfirmedCaptureAt: "2026-01-01T00:00:03.000Z",
+      stoppedAt: "2026-01-01T00:00:03.000Z",
+    },
   });
 });
 test.each(["absent", "expired", "replaced"])(

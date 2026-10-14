@@ -196,6 +196,20 @@ export type RecordingCaptureProvenance = z.infer<
 >;
 export type RecordingCoverage = z.infer<typeof recordingCoverageSchema>;
 export type CaptureCoverage = z.infer<typeof captureCoverageSchema>;
+export const captureCoverageSummarySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("unknown") }).strict(),
+  z
+    .object({
+      kind: z.literal("verified"),
+      savedDurationMs: z.number().positive().finite(),
+      lastConfirmedCaptureAt: timestamp,
+      stoppedAt: timestamp.optional(),
+    })
+    .strict(),
+]);
+export type CaptureCoverageSummary = z.infer<
+  typeof captureCoverageSummarySchema
+>;
 export type RecordingCaptureState = z.infer<typeof recordingCaptureStateSchema>;
 export type RecoveryDisposition = z.infer<typeof recoveryDispositionSchema>;
 export type CheckpointObject = z.infer<typeof checkpointObjectSchema>;

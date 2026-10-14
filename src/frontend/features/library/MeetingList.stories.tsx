@@ -69,6 +69,7 @@ const archivedItems: MeetingListItem[] = [
 
 const meta: Meta<typeof MeetingList> = {
   title: "Library/MeetingList",
+  tags: ["recording-outcomes"],
   component: MeetingList,
   args: {
     items,
@@ -111,6 +112,25 @@ export const EmptyWithAction: Story = {
 export const Archived: Story = {
   args: {
     items: archivedItems,
+  },
+};
+export const Interrupted: Story = {
+  args: {
+    items: [
+      {
+        ...items[0],
+        status: "interrupted",
+        durationLabel: "Unknown duration",
+        capture: {
+          kind: "interrupted",
+          startedAt: "2026-01-01T00:00:00Z",
+          detectedAt: "2026-01-01T01:00:00Z",
+          endedAt: null,
+        },
+        recoveryNotice: "Saved recording recovery finished.",
+      },
+      { ...items[1], status: "starting" },
+    ],
   },
 };
 

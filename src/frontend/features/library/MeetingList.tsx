@@ -18,6 +18,7 @@ import {
   IconUsers,
 } from "@tabler/icons-react";
 import Surface from "../../components/Surface";
+import { MeetingCaptureNotice } from "../../components/MeetingCaptureNotice";
 import type { MeetingStatus } from "../../../types/meetingLifecycle";
 import { MEETING_STATUS } from "../../../types/meetingLifecycle";
 import type { MeetingListItem } from "../../pages/library/types";
@@ -25,6 +26,24 @@ import classes from "./MeetingList.module.css";
 
 const renderListStatusBadge = (status?: MeetingStatus) => {
   switch (status) {
+    case MEETING_STATUS.INTERRUPTED:
+      return (
+        <Badge color="yellow" variant="light">
+          Interrupted
+        </Badge>
+      );
+    case MEETING_STATUS.STARTING:
+      return (
+        <Badge color="blue" variant="light">
+          Starting
+        </Badge>
+      );
+    case MEETING_STATUS.FAILED:
+      return (
+        <Badge color="red" variant="light">
+          Failed
+        </Badge>
+      );
     case MEETING_STATUS.IN_PROGRESS:
       return (
         <Badge color="red" variant="light">
@@ -139,6 +158,7 @@ export function MeetingList({
                     ) : null}
                     {renderListStatusBadge(meetingItem.status)}
                   </Group>
+                  <MeetingCaptureNotice {...meetingItem} />
                   <Text size="xs" c="dimmed">
                     {meetingItem.summary || "No summary yet."}
                   </Text>
