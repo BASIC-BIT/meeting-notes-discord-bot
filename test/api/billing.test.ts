@@ -211,6 +211,39 @@ const activeStripeSubscription = {
   },
 };
 
+function invoiceDiscountFixture(variant: string) {
+  const monthly = variant === "monthly";
+  const amount = monthly ? 1000 : 10000;
+  const reduction =
+    variant === "renewal" ? 0 : variant === "other" ? 2000 : amount * 0.4;
+  const price = {
+    id: monthly ? "price_basic" : "price_annual",
+    lookup_key: monthly ? "chronote_basic_monthly" : "chronote_basic_annual",
+    unit_amount: amount,
+    currency: "usd",
+    recurring: { interval: monthly ? "month" : "year", interval_count: 1 },
+    type: "recurring",
+    billing_scheme: "per_unit",
+    transform_quantity: null,
+  };
+  const discount = {
+    id: "di_native",
+    promotion_code: null,
+    source: {
+      coupon: {
+        id: variant === "other" ? "coupon_other" : "coupon_intro",
+        percent_off: variant === "other" ? 20 : 40,
+        amount_off: null,
+        currency: null,
+        duration: monthly ? "repeating" : "once",
+        duration_in_months: monthly ? 3 : null,
+        livemode: false,
+      },
+    },
+  };
+  return { monthly, amount, reduction, price, discount };
+}
+
 describe("billing webhook routes", () => {
   test.each([
     ["annual", "intro_discounted"],
@@ -221,43 +254,15 @@ describe("billing webhook routes", () => {
     ["string", "intro_discounted"],
     ["lookup_failure", "unknown"],
     ["price_lookup_failure", "unknown"],
+    ["coupon_lookup_failure", "unknown"],
     ["ambiguous", "unknown"],
     ["missing", "unknown"],
     ["mismatch", "unknown"],
   ])(
     "classifies actual %s invoice independently of current annual cohort/period",
     async (variant, category) => {
-      const monthly = variant === "monthly";
-      const amount = monthly ? 1000 : 10000;
-      const reduction =
-        variant === "renewal" ? 0 : variant === "other" ? 2000 : amount * 0.4;
-      const price = {
-        id: monthly ? "price_basic" : "price_annual",
-        lookup_key: monthly
-          ? "chronote_basic_monthly"
-          : "chronote_basic_annual",
-        unit_amount: amount,
-        currency: "usd",
-        recurring: { interval: monthly ? "month" : "year", interval_count: 1 },
-        type: "recurring",
-        billing_scheme: "per_unit",
-        transform_quantity: null,
-      };
-      const discount = {
-        id: "di_native",
-        promotion_code: null,
-        source: {
-          coupon: {
-            id: variant === "other" ? "coupon_other" : "coupon_intro",
-            percent_off: variant === "other" ? 20 : 40,
-            amount_off: null,
-            currency: null,
-            duration: monthly ? "repeating" : "once",
-            duration_in_months: monthly ? 3 : null,
-            livemode: false,
-          },
-        },
-      };
+      const { monthly, amount, reduction, price, discount } =
+        invoiceDiscountFixture(variant);
       const invoice = {
         id: "in_old_initial",
         status: "paid",
@@ -351,6 +356,16 @@ describe("billing webhook routes", () => {
         jest
           .mocked(stripe.prices.retrieve)
           .mockRejectedValue(new Error("native price unavailable"));
+      }
+      if (variant === "coupon_lookup_failure") {
+        Object.assign(discount.source, { coupon: "coupon_intro" });
+        Object.assign(stripe, {
+          coupons: {
+            retrieve: jest.fn(async () => {
+              throw new Error("native coupon unavailable");
+            }),
+          },
+        });
       }
       const retrieveInvoice = jest.fn(async () => {
         if (variant === "lookup_failure") throw new Error("native unavailable");

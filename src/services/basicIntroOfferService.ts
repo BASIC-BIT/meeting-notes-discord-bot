@@ -61,22 +61,79 @@ export async function verifyBasicIntroPortalConfiguration(
   return portal.id;
 }
 
-export async function getBasicIntroOffer(params: {
-  stripe: StripeClient;
-  plans: PaidPlan[];
-  now?: number;
-  interval?: BillingInterval;
-}): Promise<BasicIntroOffer> {
-  const settings = { ...config.stripe.basicIntroOffer };
-  const interval = params.interval ?? "month";
-  const terms =
-    interval === "year" ? BASIC_ANNUAL_INTRO_TERMS : BASIC_INTRO_TERMS;
-  const couponId =
-    interval === "year" ? settings.annualCouponId : settings.couponId;
-  if (!couponId && (interval === "year" || settings.annualCouponId))
-    return { status: "inactive" };
-  const values = Object.values(settings);
-  if (values.every((value) => !value)) return { status: "inactive" };
+function unsupportedIntroPrice(
+  price: Stripe.Price,
+  plan: PaidPlan,
+  interval: BillingInterval,
+  terms: typeof BASIC_INTRO_TERMS | typeof BASIC_ANNUAL_INTRO_TERMS,
+  live: boolean,
+): boolean {
+  return Boolean(
+    price.lookup_key !==
+      (interval === "year"
+        ? config.stripe.lookupKeys.basicAnnual
+        : config.stripe.lookupKeys.basicMonthly) ||
+    price.transform_quantity ||
+    !price.active ||
+    price.id !== plan.priceId ||
+    price.livemode !== live ||
+    price.currency !== terms.currency ||
+    price.unit_amount !== terms.regularUnitAmount ||
+    price.billing_scheme !== "per_unit" ||
+    price.type !== "recurring" ||
+    price.recurring?.interval !== interval ||
+    price.recurring.interval_count !== 1 ||
+    price.recurring.usage_type !== "licensed",
+  );
+}
+
+function couponRedemptionEndsTooSoon(
+  redeemBy: number | null,
+  enrollmentEnd: number | null,
+): boolean {
+  return (
+    redeemBy !== null &&
+    (enrollmentEnd === null ||
+      !Number.isFinite(redeemBy) ||
+      redeemBy < Math.ceil(enrollmentEnd / 1000) + CHECKOUT_LIFETIME_SECONDS)
+  );
+}
+
+function unsupportedIntroCoupon(
+  coupon: Stripe.Coupon | Stripe.DeletedCoupon,
+  couponId: string,
+  live: boolean,
+  interval: BillingInterval,
+  productId: string,
+  end: number | null,
+  percentOff: number,
+): boolean {
+  return Boolean(
+    coupon.deleted ||
+    coupon.id !== couponId ||
+    !coupon.valid ||
+    coupon.livemode !== live ||
+    coupon.percent_off !== percentOff ||
+    coupon.amount_off !== null ||
+    coupon.currency !== null ||
+    coupon.duration !== (interval === "year" ? "once" : "repeating") ||
+    coupon.duration_in_months !== (interval === "year" ? null : 3) ||
+    couponRedemptionEndsTooSoon(coupon.redeem_by, end) ||
+    (coupon.applies_to && !coupon.applies_to.products.includes(productId)),
+  );
+}
+
+function introEnrollmentWindow(
+  settings: typeof config.stripe.basicIntroOffer,
+  couponId: string,
+):
+  | { status: "unavailable" }
+  | {
+      status: "valid";
+      start: number;
+      end: number | null;
+      enrollmentEndsAt: string | null;
+    } {
   if (
     [couponId, settings.startsAt, settings.portalConfigurationId].some(
       (value) => !value.trim(),
@@ -97,9 +154,57 @@ export async function getBasicIntroOffer(params: {
     (end !== null && (!Number.isFinite(end) || start >= end))
   )
     return { status: "unavailable" };
+  return { status: "valid", start, end, enrollmentEndsAt };
+}
+
+function introCampaign(params: { interval?: BillingInterval; now?: number }):
+  | { status: "inactive" | "unavailable" | "expired" }
+  | {
+      status: "configured";
+      settings: typeof config.stripe.basicIntroOffer;
+      interval: BillingInterval;
+      terms: typeof BASIC_INTRO_TERMS | typeof BASIC_ANNUAL_INTRO_TERMS;
+      couponId: string;
+      enrollmentEndsAt: string | null;
+      end: number | null;
+    } {
+  const settings = { ...config.stripe.basicIntroOffer };
+  const interval = params.interval ?? "month";
+  const terms =
+    interval === "year" ? BASIC_ANNUAL_INTRO_TERMS : BASIC_INTRO_TERMS;
+  const couponId =
+    interval === "year" ? settings.annualCouponId : settings.couponId;
+  if (!couponId && (interval === "year" || settings.annualCouponId))
+    return { status: "inactive" };
+  const values = Object.values(settings);
+  if (values.every((value) => !value)) return { status: "inactive" };
+  const window = introEnrollmentWindow(settings, couponId);
+  if (window.status === "unavailable") return window;
+  const { start, end, enrollmentEndsAt } = window;
   const now = params.now ?? Date.now();
   if (now < start) return { status: "inactive" };
   if (end !== null && now >= end) return { status: "expired" };
+  return {
+    status: "configured" as const,
+    settings,
+    interval,
+    terms,
+    couponId,
+    enrollmentEndsAt,
+    end,
+  };
+}
+
+export async function getBasicIntroOffer(params: {
+  stripe: StripeClient;
+  plans: PaidPlan[];
+  now?: number;
+  interval?: BillingInterval;
+}): Promise<BasicIntroOffer> {
+  const campaign = introCampaign(params);
+  if (campaign.status !== "configured") return campaign;
+  const { settings, interval, terms, couponId, enrollmentEndsAt, end } =
+    campaign;
   const plan = params.plans.find(
     (candidate) =>
       candidate.tier === "basic" && candidate.interval === interval,
@@ -122,42 +227,20 @@ export async function getBasicIntroOffer(params: {
       ),
     ]);
     const live = config.subscription.stripeMode === "live";
-    if (
-      price.lookup_key !==
-        (interval === "year"
-          ? config.stripe.lookupKeys.basicAnnual
-          : config.stripe.lookupKeys.basicMonthly) ||
-      price.transform_quantity ||
-      !price.active ||
-      price.id !== plan.priceId ||
-      price.livemode !== live ||
-      price.currency !== terms.currency ||
-      price.unit_amount !== terms.regularUnitAmount ||
-      price.billing_scheme !== "per_unit" ||
-      price.type !== "recurring" ||
-      price.recurring?.interval !== interval ||
-      price.recurring.interval_count !== 1 ||
-      price.recurring.usage_type !== "licensed"
-    )
+    if (unsupportedIntroPrice(price, plan, interval, terms, live))
       return { status: "unavailable" };
     const productId =
       typeof price.product === "string" ? price.product : price.product.id;
     if (
-      coupon.deleted ||
-      coupon.id !== couponId ||
-      !coupon.valid ||
-      coupon.livemode !== live ||
-      coupon.percent_off !== terms.percentOff ||
-      coupon.amount_off !== null ||
-      coupon.currency !== null ||
-      coupon.duration !== (interval === "year" ? "once" : "repeating") ||
-      coupon.duration_in_months !== (interval === "year" ? null : 3) ||
-      (coupon.redeem_by !== null &&
-        (end === null ||
-          !Number.isFinite(coupon.redeem_by) ||
-          coupon.redeem_by <
-            Math.ceil(end / 1000) + CHECKOUT_LIFETIME_SECONDS)) ||
-      (coupon.applies_to && !coupon.applies_to.products.includes(productId))
+      unsupportedIntroCoupon(
+        coupon,
+        couponId,
+        live,
+        interval,
+        productId,
+        end,
+        terms.percentOff,
+      )
     )
       return { status: "unavailable" };
     if (end !== null && (params.now ?? Date.now()) >= end)
@@ -228,6 +311,39 @@ function frozenIntroOffer(
   };
 }
 
+function canReuseFrozenIntroOffer(
+  frozen: BasicIntroOffer | null,
+  current: PurchaseAttempt,
+  interval: BillingInterval,
+  payerId: string | undefined,
+): frozen is Extract<BasicIntroOffer, { status: "available" }> {
+  return Boolean(
+    frozen?.status === "available" &&
+    frozen.id ===
+      (interval === "year"
+        ? BASIC_ANNUAL_INTRO_OFFER_ID
+        : BASIC_INTRO_OFFER_ID) &&
+    payerId === current.payerId &&
+    !current.incidentKey &&
+    (current.state === "open" ||
+      (current.state === "preparing" &&
+        Date.now() - current.createdAt < 29 * 60 * 1000)) &&
+    Number(current.checkout.expires_at) * 1000 > Date.now(),
+  );
+}
+
+function introIntervalIsUnconfigured(
+  interval: BillingInterval | undefined,
+): boolean {
+  return Boolean(
+    Object.values(config.stripe.basicIntroOffer).every((value) => !value) ||
+    (interval === "year" && !config.stripe.basicIntroOffer.annualCouponId) ||
+    ((interval ?? "month") === "month" &&
+      !config.stripe.basicIntroOffer.couponId &&
+      config.stripe.basicIntroOffer.annualCouponId),
+  );
+}
+
 export async function getGuildBasicIntroOffer(params: {
   stripe: StripeClient;
   guildId: string;
@@ -244,29 +360,17 @@ export async function getGuildBasicIntroOffer(params: {
   if (current && current.state !== "expired") {
     const frozen = frozenIntroOffer(current);
     if (
-      frozen?.status === "available" &&
-      frozen.id ===
-        ((params.interval ?? "month") === "year"
-          ? BASIC_ANNUAL_INTRO_OFFER_ID
-          : BASIC_INTRO_OFFER_ID) &&
-      params.payerId === current.payerId &&
-      !current.incidentKey &&
-      (current.state === "open" ||
-        (current.state === "preparing" &&
-          Date.now() - current.createdAt < 29 * 60 * 1000)) &&
-      Number(current.checkout.expires_at) * 1000 > Date.now()
+      canReuseFrozenIntroOffer(
+        frozen,
+        current,
+        params.interval ?? "month",
+        params.payerId,
+      )
     )
       return frozen;
     return { status: "ineligible" };
   }
-  if (
-    Object.values(config.stripe.basicIntroOffer).every((value) => !value) ||
-    (params.interval === "year" &&
-      !config.stripe.basicIntroOffer.annualCouponId) ||
-    ((params.interval ?? "month") === "month" &&
-      !config.stripe.basicIntroOffer.couponId &&
-      config.stripe.basicIntroOffer.annualCouponId)
-  )
+  if (introIntervalIsUnconfigured(params.interval))
     return { status: "inactive" };
   try {
     return await getBasicIntroOffer({
@@ -311,53 +415,39 @@ async function selectedPriceInterval(
   }
 }
 
-export async function prepareBasicIntroCheckout(params: {
-  stripe: StripeClient;
-  guildId: string;
-  expected: GuildSubscription | undefined;
-  checkout: Stripe.Checkout.SessionCreateParams;
-  expectedOffer?: ExpectedIntroOffer;
-  offerChoice?: IntroOfferChoice;
-  current?: PurchaseAttempt;
-}): Promise<Stripe.Checkout.SessionCreateParams> {
-  const choice = params.offerChoice ?? "automatic";
-  const manualPromotion = Boolean(
-    params.checkout.discounts?.some((discount) => discount.promotion_code) ||
-    params.checkout.metadata?.promo_code,
-  );
-  const current = params.current;
-  if (current) {
-    const frozen = frozenIntroOffer(current);
-    if ((current.offerChoice ?? "automatic") !== choice) throw choiceRequired();
-    if (
-      params.expectedOffer &&
-      params.expectedOffer !==
-        (frozen?.status === "available" ? frozen.id : "none")
-    )
-      throw changedTerms();
-    if (frozen) {
-      if (manualPromotion) throw choiceRequired();
-      return {
-        ...params.checkout,
-        discounts: current.checkout.discounts,
-        allow_promotion_codes: current.checkout.allow_promotion_codes,
-      };
-    }
-    return params.checkout;
+function reuseIntroCheckout(
+  current: PurchaseAttempt,
+  checkout: Stripe.Checkout.SessionCreateParams,
+  choice: IntroOfferChoice,
+  expectedOffer: ExpectedIntroOffer | undefined,
+  manualPromotion: boolean,
+): Stripe.Checkout.SessionCreateParams {
+  const frozen = frozenIntroOffer(current);
+  if ((current.offerChoice ?? "automatic") !== choice) throw choiceRequired();
+  if (
+    expectedOffer &&
+    expectedOffer !== (frozen?.status === "available" ? frozen.id : "none")
+  )
+    throw changedTerms();
+  if (frozen) {
+    if (manualPromotion) throw choiceRequired();
+    return {
+      ...checkout,
+      discounts: current.checkout.discounts,
+      allow_promotion_codes: current.checkout.allow_promotion_codes,
+    };
   }
-  if (choice === "promotion" && !manualPromotion)
-    throw new BillingActionError(
-      "BAD_REQUEST",
-      "Enter a promotion code before choosing a promotion.",
-    );
-  const settingsBeforeVerification = JSON.stringify(
-    config.stripe.basicIntroOffer,
-  );
+  return checkout;
+}
+
+async function verifySelectedIntroOffer(
+  stripe: StripeClient,
+  selectedPrice: string | undefined,
+  eligible: boolean,
+): Promise<BasicIntroOffer> {
   let offer: BasicIntroOffer = { status: "inactive" };
-  const selectedPrice = params.checkout.line_items?.[0]?.price;
-  const eligible = await serverIsEligible(params.guildId, params.expected);
   if (eligible && Object.values(config.stripe.basicIntroOffer).some(Boolean)) {
-    const interval = await selectedPriceInterval(params.stripe, selectedPrice);
+    const interval = await selectedPriceInterval(stripe, selectedPrice);
     if (
       interval &&
       (interval === "year"
@@ -367,8 +457,8 @@ export async function prepareBasicIntroCheckout(params: {
     ) {
       try {
         offer = await getBasicIntroOffer({
-          stripe: params.stripe,
-          plans: await getPaidPlans(params.stripe),
+          stripe: stripe,
+          plans: await getPaidPlans(stripe),
           interval,
         });
       } catch {
@@ -379,37 +469,24 @@ export async function prepareBasicIntroCheckout(params: {
         throw changedTerms();
     }
   }
-  if (
-    offer.status === "available" &&
-    offer.enrollmentEndsAt !== null &&
-    Date.now() >= Date.parse(offer.enrollmentEndsAt)
-  )
-    offer = { status: "expired" };
-  if (
-    JSON.stringify(config.stripe.basicIntroOffer) !== settingsBeforeVerification
-  )
-    throw unavailableOffer();
-  const applies =
-    choice === "automatic" &&
-    eligible &&
-    offer.status === "available" &&
-    selectedPrice === offer.priceId;
-  if (applies && manualPromotion) throw choiceRequired();
-  if (
-    params.expectedOffer &&
-    params.expectedOffer !==
-      (applies && offer.status === "available" ? offer.id : "none")
-  )
-    throw changedTerms();
+  return offer;
+}
+
+function applyIntroCheckout(
+  checkout: Stripe.Checkout.SessionCreateParams,
+  offer: BasicIntroOffer,
+  choice: IntroOfferChoice,
+  applies: boolean,
+): Stripe.Checkout.SessionCreateParams {
   const couponId =
     offer.status === "available" && offer.id === BASIC_ANNUAL_INTRO_OFFER_ID
       ? config.stripe.basicIntroOffer.annualCouponId
       : config.stripe.basicIntroOffer.couponId;
   if (
     applies &&
-    (params.checkout.line_items?.length !== 1 ||
-      params.checkout.line_items[0].quantity !== 1 ||
-      params.checkout.discounts?.length)
+    (checkout.line_items?.length !== 1 ||
+      checkout.line_items[0].quantity !== 1 ||
+      checkout.discounts?.length)
   )
     throw choiceRequired();
   const offerMetadata = {
@@ -427,22 +504,104 @@ export async function prepareBasicIntroCheckout(params: {
       : {}),
   };
   return {
-    ...params.checkout,
+    ...checkout,
     ...(applies
       ? {
           discounts: [{ coupon: couponId }],
           allow_promotion_codes: undefined,
         }
       : {}),
-    metadata: { ...params.checkout.metadata, ...offerMetadata },
+    metadata: { ...checkout.metadata, ...offerMetadata },
     subscription_data: {
-      ...params.checkout.subscription_data,
+      ...checkout.subscription_data,
       metadata: {
-        ...params.checkout.subscription_data?.metadata,
+        ...checkout.subscription_data?.metadata,
         ...offerMetadata,
       },
     },
   };
+}
+
+function acceptIntroQuote(
+  choice: IntroOfferChoice,
+  eligible: boolean,
+  offer: BasicIntroOffer,
+  selectedPrice: string | undefined,
+  manualPromotion: boolean,
+  expectedOffer: ExpectedIntroOffer | undefined,
+): boolean {
+  const applies =
+    choice === "automatic" &&
+    eligible &&
+    offer.status === "available" &&
+    selectedPrice === offer.priceId;
+  if (applies && manualPromotion) throw choiceRequired();
+  if (
+    expectedOffer &&
+    expectedOffer !==
+      (applies && offer.status === "available" ? offer.id : "none")
+  )
+    throw changedTerms();
+  return applies;
+}
+
+export async function prepareBasicIntroCheckout(params: {
+  stripe: StripeClient;
+  guildId: string;
+  expected: GuildSubscription | undefined;
+  checkout: Stripe.Checkout.SessionCreateParams;
+  expectedOffer?: ExpectedIntroOffer;
+  offerChoice?: IntroOfferChoice;
+  current?: PurchaseAttempt;
+}): Promise<Stripe.Checkout.SessionCreateParams> {
+  const choice = params.offerChoice ?? "automatic";
+  const manualPromotion = Boolean(
+    params.checkout.discounts?.some((discount) => discount.promotion_code) ||
+    params.checkout.metadata?.promo_code,
+  );
+  const current = params.current;
+  if (current)
+    return reuseIntroCheckout(
+      current,
+      params.checkout,
+      choice,
+      params.expectedOffer,
+      manualPromotion,
+    );
+  if (choice === "promotion" && !manualPromotion)
+    throw new BillingActionError(
+      "BAD_REQUEST",
+      "Enter a promotion code before choosing a promotion.",
+    );
+  const settingsBeforeVerification = JSON.stringify(
+    config.stripe.basicIntroOffer,
+  );
+  const selectedPrice = params.checkout.line_items?.[0]?.price;
+  const eligible = await serverIsEligible(params.guildId, params.expected);
+  let offer = await verifySelectedIntroOffer(
+    params.stripe,
+    selectedPrice,
+    eligible,
+  );
+  if (
+    offer.status === "available" &&
+    offer.enrollmentEndsAt !== null &&
+    Date.now() >= Date.parse(offer.enrollmentEndsAt)
+  )
+    offer = { status: "expired" };
+  if (
+    JSON.stringify(config.stripe.basicIntroOffer) !== settingsBeforeVerification
+  )
+    throw unavailableOffer();
+  const applies = acceptIntroQuote(
+    choice,
+    eligible,
+    offer,
+    selectedPrice,
+    manualPromotion,
+    params.expectedOffer,
+  );
+  return applyIntroCheckout(params.checkout, offer, choice, applies);
 }
 
 export const BASIC_INTRO_PLAN_CHANGE_MESSAGE =
@@ -477,6 +636,109 @@ export function activeBasicIntroDiscount(
   return null;
 }
 
+// Pure evidence predicate: preserve the short-circuit order of the full native
+// first-year invoice contract. Retrieval and display classification stay outside.
+function hasUnsupportedAnnualPaymentEvidence(
+  invoice: Stripe.Invoice,
+  subscription: Stripe.Subscription,
+  referenceId: string,
+  discount: Stripe.Discount | Stripe.DeletedDiscount,
+  coupon: Stripe.Coupon | Stripe.DeletedCoupon | null,
+  expectedLivemode: boolean,
+): boolean {
+  const item = subscription.items.data[0];
+  const invoiceSubscription =
+    invoice.parent?.subscription_details?.subscription;
+  const owner =
+    typeof invoice.customer === "string"
+      ? invoice.customer
+      : invoice.customer?.id;
+  const subscriptionOwner =
+    typeof subscription.customer === "string"
+      ? subscription.customer
+      : subscription.customer.id;
+  const line = invoice.lines.data[0];
+  const lineParent = line?.parent?.subscription_item_details;
+  const priceReference = line?.pricing?.price_details?.price;
+  const priceId =
+    typeof priceReference === "string" ? priceReference : priceReference?.id;
+  const lineDiscount = line?.discount_amounts?.[0];
+  const invoiceDiscount = invoice.total_discount_amounts?.[0];
+  const lineDiscountId =
+    typeof lineDiscount?.discount === "string"
+      ? lineDiscount.discount
+      : lineDiscount?.discount.id;
+  const invoiceDiscountId =
+    typeof invoiceDiscount?.discount === "string"
+      ? invoiceDiscount.discount
+      : invoiceDiscount?.discount.id;
+  const termDays = line ? (line.period.end - line.period.start) / 86400 : 0;
+  return Boolean(
+    invoice.id !== referenceId ||
+    (typeof invoiceSubscription === "string"
+      ? invoiceSubscription
+      : invoiceSubscription?.id) !== subscription.id ||
+    owner !== subscriptionOwner ||
+    invoice.livemode !== subscription.livemode ||
+    invoice.livemode !== expectedLivemode ||
+    invoice.status !== "paid" ||
+    invoice.billing_reason !== "subscription_create" ||
+    invoice.currency !== "usd" ||
+    invoice.subtotal !== 10000 ||
+    invoice.total_excluding_tax !== 6000 ||
+    !Number.isSafeInteger(invoice.amount_paid) ||
+    invoice.amount_paid < 6000 ||
+    invoice.amount_paid !== invoice.total ||
+    invoice.amount_remaining !== 0 ||
+    invoice.starting_balance !== 0 ||
+    invoice.ending_balance !== 0 ||
+    invoice.pre_payment_credit_notes_amount !== 0 ||
+    invoice.post_payment_credit_notes_amount !== 0 ||
+    invoice.lines.has_more ||
+    invoice.lines.data.length !== 1 ||
+    !line ||
+    line.invoice !== invoice.id ||
+    line.currency !== "usd" ||
+    line.livemode !== invoice.livemode ||
+    line.subtotal !== 10000 ||
+    line.quantity !== 1 ||
+    lineParent?.subscription !== subscription.id ||
+    lineParent.subscription_item !== item.id ||
+    lineParent.proration !== false ||
+    priceId !== item.price.id ||
+    item.quantity !== 1 ||
+    item.price.currency !== "usd" ||
+    item.price.unit_amount !== 10000 ||
+    item.price.type !== "recurring" ||
+    item.price.billing_scheme !== "per_unit" ||
+    item.price.transform_quantity ||
+    item.price.recurring?.interval !== "year" ||
+    item.price.recurring.interval_count !== 1 ||
+    item.price.recurring.usage_type !== "licensed" ||
+    ![365, 366].includes(termDays) ||
+    line.period.start !== item.current_period_start ||
+    line.period.end !== item.current_period_end ||
+    invoice.discounts.length !== 1 ||
+    !coupon ||
+    coupon.deleted ||
+    coupon.id !== subscription.metadata.intro_offer_coupon_id ||
+    coupon.duration !== "once" ||
+    coupon.duration_in_months !== null ||
+    coupon.percent_off !== 40 ||
+    coupon.amount_off !== null ||
+    coupon.currency !== null ||
+    coupon.livemode !== invoice.livemode ||
+    discount.promotion_code ||
+    line.discount_amounts?.length !== 1 ||
+    lineDiscount?.amount !== 4000 ||
+    lineDiscountId !== discount.id ||
+    invoice.total_discount_amounts?.length !== 1 ||
+    invoiceDiscount?.amount !== 4000 ||
+    invoiceDiscountId !== discount.id ||
+    line.pretax_credit_amounts?.some((credit) => credit.type !== "discount"),
+  );
+}
+
 // A consumed once discount remains on its invoice, not on subscription.discounts.
 export async function getAnnualIntroFirstYearPayment(
   stripe: StripeClient,
@@ -485,7 +747,6 @@ export async function getAnnualIntroFirstYearPayment(
   if (subscription.metadata.intro_offer_id !== BASIC_ANNUAL_INTRO_OFFER_ID)
     return null;
   try {
-    const item = subscription.items.data[0];
     const reference = subscription.latest_invoice;
     if (!reference || subscription.items.data.length !== 1)
       return { status: "unavailable" };
@@ -493,21 +754,6 @@ export async function getAnnualIntroFirstYearPayment(
       typeof reference === "string" ? reference : reference.id,
       { expand: ["discounts.source.coupon"] },
     );
-    const invoiceSubscription =
-      invoice.parent?.subscription_details?.subscription;
-    const owner =
-      typeof invoice.customer === "string"
-        ? invoice.customer
-        : invoice.customer?.id;
-    const subscriptionOwner =
-      typeof subscription.customer === "string"
-        ? subscription.customer
-        : subscription.customer.id;
-    const line = invoice.lines.data[0];
-    const lineParent = line?.parent?.subscription_item_details;
-    const priceReference = line?.pricing?.price_details?.price;
-    const priceId =
-      typeof priceReference === "string" ? priceReference : priceReference?.id;
     const discount = invoice.discounts[0];
     if (!discount || typeof discount === "string")
       return { status: "unavailable" };
@@ -516,83 +762,18 @@ export async function getAnnualIntroFirstYearPayment(
       typeof couponReference === "string"
         ? await stripe.coupons.retrieve(couponReference)
         : couponReference;
-    const lineDiscount = line?.discount_amounts?.[0];
-    const invoiceDiscount = invoice.total_discount_amounts?.[0];
-    const lineDiscountId =
-      typeof lineDiscount?.discount === "string"
-        ? lineDiscount.discount
-        : lineDiscount?.discount.id;
-    const invoiceDiscountId =
-      typeof invoiceDiscount?.discount === "string"
-        ? invoiceDiscount.discount
-        : invoiceDiscount?.discount.id;
-    const termDays = line ? (line.period.end - line.period.start) / 86400 : 0;
     if (
-      invoice.id !==
-        (typeof reference === "string" ? reference : reference.id) ||
-      (typeof invoiceSubscription === "string"
-        ? invoiceSubscription
-        : invoiceSubscription?.id) !== subscription.id ||
-      owner !== subscriptionOwner ||
-      invoice.livemode !== subscription.livemode ||
-      invoice.livemode !== (config.subscription.stripeMode === "live") ||
-      invoice.status !== "paid" ||
-      invoice.billing_reason !== "subscription_create" ||
-      invoice.currency !== "usd" ||
-      invoice.subtotal !== 10000 ||
-      invoice.total_excluding_tax !== 6000 ||
-      !Number.isSafeInteger(invoice.amount_paid) ||
-      invoice.amount_paid < 6000 ||
-      invoice.amount_paid !== invoice.total ||
-      invoice.amount_remaining !== 0 ||
-      invoice.starting_balance !== 0 ||
-      invoice.ending_balance !== 0 ||
-      invoice.pre_payment_credit_notes_amount !== 0 ||
-      invoice.post_payment_credit_notes_amount !== 0 ||
-      invoice.lines.has_more ||
-      invoice.lines.data.length !== 1 ||
-      !line ||
-      line.invoice !== invoice.id ||
-      line.currency !== "usd" ||
-      line.livemode !== invoice.livemode ||
-      line.subtotal !== 10000 ||
-      line.quantity !== 1 ||
-      lineParent?.subscription !== subscription.id ||
-      lineParent.subscription_item !== item.id ||
-      lineParent.proration !== false ||
-      priceId !== item.price.id ||
-      item.quantity !== 1 ||
-      item.price.currency !== "usd" ||
-      item.price.unit_amount !== 10000 ||
-      item.price.type !== "recurring" ||
-      item.price.billing_scheme !== "per_unit" ||
-      item.price.transform_quantity ||
-      item.price.recurring?.interval !== "year" ||
-      item.price.recurring.interval_count !== 1 ||
-      item.price.recurring.usage_type !== "licensed" ||
-      ![365, 366].includes(termDays) ||
-      line.period.start !== item.current_period_start ||
-      line.period.end !== item.current_period_end ||
-      invoice.discounts.length !== 1 ||
-      !coupon ||
-      coupon.deleted ||
-      coupon.id !== subscription.metadata.intro_offer_coupon_id ||
-      coupon.duration !== "once" ||
-      coupon.duration_in_months !== null ||
-      coupon.percent_off !== 40 ||
-      coupon.amount_off !== null ||
-      coupon.currency !== null ||
-      coupon.livemode !== invoice.livemode ||
-      discount.promotion_code ||
-      line.discount_amounts?.length !== 1 ||
-      lineDiscount?.amount !== 4000 ||
-      lineDiscountId !== discount.id ||
-      invoice.total_discount_amounts?.length !== 1 ||
-      invoiceDiscount?.amount !== 4000 ||
-      invoiceDiscountId !== discount.id ||
-      line.pretax_credit_amounts?.some((credit) => credit.type !== "discount")
+      hasUnsupportedAnnualPaymentEvidence(
+        invoice,
+        subscription,
+        typeof reference === "string" ? reference : reference.id,
+        discount,
+        coupon,
+        config.subscription.stripeMode === "live",
+      )
     )
       return { status: "unavailable" };
+    const line = invoice.lines.data[0];
     return {
       status: "available",
       currency: "usd",
@@ -606,24 +787,38 @@ export async function getAnnualIntroFirstYearPayment(
   }
 }
 
-export async function getProviderSubscriptionDetails(
+async function scopedSubscriptionCoupon(
   stripe: StripeClient,
+  discount: Stripe.Discount,
+  price: Stripe.Price,
+): Promise<Stripe.Coupon | null> {
+  const source = discount.source.coupon;
+  let coupon = typeof source === "string" ? null : source;
+  const couponId = typeof source === "string" ? source : source?.id;
+  if (coupon?.deleted) return null;
+  if (!coupon || !coupon.applies_to) {
+    if (!couponId) return null;
+    try {
+      // applies_to is expandable, and omission on the subscription expansion
+      // cannot prove that the coupon is unrestricted.
+      coupon = await stripe.coupons.retrieve(couponId, {
+        expand: ["applies_to"],
+      });
+    } catch {
+      return null;
+    }
+  }
+  if (!coupon || coupon.id !== couponId) return null;
+  const productId =
+    typeof price.product === "string" ? price.product : price.product?.id;
+  if (coupon.applies_to && !productId) return null;
+  return coupon;
+}
+
+function availableSubscriptionDiscounts(
   subscription: Stripe.Subscription,
-): Promise<ProviderSubscriptionDetails> {
-  const item = subscription.items.data[0];
-  if (
-    subscription.items.data.length !== 1 ||
-    item.quantity !== 1 ||
-    !["month", "year"].includes(item.price.recurring?.interval ?? "")
-  )
-    return { status: "unavailable" };
-  const price = item.price;
-  const unitAmount = price.unit_amount;
-  if (unitAmount === null) return { status: "unavailable" };
-  const interval = price.recurring?.interval;
-  if (interval !== "month" && interval !== "year")
-    return { status: "unavailable" };
-  const intro = activeBasicIntroDiscount(subscription);
+  item: Stripe.SubscriptionItem,
+): (Stripe.Discount | string)[] | null {
   const discounts = [
     ...(subscription.discounts ?? []),
     ...(item.discounts ?? []),
@@ -637,7 +832,41 @@ export async function getProviderSubscriptionDetails(
     discounts.length > 1 ||
     discounts.some((value) => typeof value === "string")
   )
-    return { status: "unavailable" };
+    return null;
+  return discounts;
+}
+
+function couponAppliesToProduct(
+  coupon: Stripe.Coupon,
+  productId: string | undefined,
+): boolean {
+  return (
+    !coupon.applies_to ||
+    Boolean(productId && coupon.applies_to.products.includes(productId))
+  );
+}
+
+async function subscriptionDiscountDetails(
+  stripe: StripeClient,
+  subscription: Stripe.Subscription,
+  item: Stripe.SubscriptionItem,
+  unitAmount: number,
+): Promise<
+  | { status: "unavailable" }
+  | {
+      status: "available";
+      intro: Stripe.Discount | null;
+      discountDetails: Extract<
+        ProviderSubscriptionDetails,
+        { status: "available" }
+      >["discount"];
+      discountedUnitAmount: number | null;
+    }
+> {
+  const price = item.price;
+  const intro = activeBasicIntroDiscount(subscription);
+  const discounts = availableSubscriptionDiscounts(subscription, item);
+  if (!discounts) return { status: "unavailable" };
   const discount = discounts[0];
   let discountDetails: Extract<
     ProviderSubscriptionDetails,
@@ -645,30 +874,11 @@ export async function getProviderSubscriptionDetails(
   >["discount"] = null;
   let discountedUnitAmount: number | null = null;
   if (discount && typeof discount !== "string") {
-    const source = discount.source.coupon;
-    let coupon = typeof source === "string" ? null : source;
-    const couponId = typeof source === "string" ? source : source?.id;
-    if (coupon?.deleted) return { status: "unavailable" };
-    if (!coupon || !coupon.applies_to) {
-      if (!couponId) return { status: "unavailable" };
-      try {
-        // applies_to is expandable, and omission on the subscription expansion
-        // cannot prove that the coupon is unrestricted.
-        coupon = await stripe.coupons.retrieve(couponId, {
-          expand: ["applies_to"],
-        });
-      } catch {
-        return { status: "unavailable" };
-      }
-    }
-    if (!coupon || coupon.id !== couponId) return { status: "unavailable" };
+    const coupon = await scopedSubscriptionCoupon(stripe, discount, price);
+    if (!coupon) return { status: "unavailable" };
     const productId =
       typeof price.product === "string" ? price.product : price.product?.id;
-    if (coupon.applies_to && !productId) return { status: "unavailable" };
-    if (
-      !coupon.applies_to ||
-      (productId && coupon.applies_to.products.includes(productId))
-    ) {
+    if (couponAppliesToProduct(coupon, productId)) {
       if (coupon.amount_off !== null && coupon.currency !== price.currency)
         return { status: "unavailable" };
       discountDetails = {
@@ -690,6 +900,39 @@ export async function getProviderSubscriptionDetails(
       );
     }
   }
+  return {
+    status: "available" as const,
+    intro,
+    discountDetails,
+    discountedUnitAmount,
+  };
+}
+
+export async function getProviderSubscriptionDetails(
+  stripe: StripeClient,
+  subscription: Stripe.Subscription,
+): Promise<ProviderSubscriptionDetails> {
+  const item = subscription.items.data[0];
+  if (
+    subscription.items.data.length !== 1 ||
+    item.quantity !== 1 ||
+    !["month", "year"].includes(item.price.recurring?.interval ?? "")
+  )
+    return { status: "unavailable" };
+  const price = item.price;
+  const unitAmount = price.unit_amount;
+  if (unitAmount === null) return { status: "unavailable" };
+  const interval = price.recurring?.interval;
+  if (interval !== "month" && interval !== "year")
+    return { status: "unavailable" };
+  const result = await subscriptionDiscountDetails(
+    stripe,
+    subscription,
+    item,
+    unitAmount,
+  );
+  if (result.status === "unavailable") return { status: "unavailable" };
+  const { intro, discountDetails, discountedUnitAmount } = result;
   return {
     status: "available",
     priceId: price.id,
@@ -718,11 +961,11 @@ export const SUBSCRIPTION_DISCOUNT_EXPANSIONS = [
   "items.data.discounts",
 ];
 
-export async function getBasicIntroCustomerRestriction(
+async function customerSubscriptions(
   stripe: StripeClient,
   customerId: string,
-  knownSubscription?: Stripe.Subscription,
-): Promise<{ configurationId: string; endsAt: string | null } | null> {
+  knownSubscription: Stripe.Subscription | undefined,
+): Promise<Stripe.Subscription[]> {
   const subscriptions: Stripe.Subscription[] = knownSubscription
     ? [knownSubscription]
     : [];
@@ -753,6 +996,19 @@ export async function getBasicIntroCustomerRestriction(
     if (page.has_more && !after)
       throw new Error("Stripe customer subscription page is incomplete");
   } while (after);
+  return subscriptions;
+}
+
+export async function getBasicIntroCustomerRestriction(
+  stripe: StripeClient,
+  customerId: string,
+  knownSubscription?: Stripe.Subscription,
+): Promise<{ configurationId: string; endsAt: string | null } | null> {
+  const subscriptions = await customerSubscriptions(
+    stripe,
+    customerId,
+    knownSubscription,
+  );
   let configurationId: string | undefined;
   let latestEnd = 0;
   let unknownEnd = false;

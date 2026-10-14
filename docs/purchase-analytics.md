@@ -38,7 +38,7 @@ server task. Canceled checkout returns to its purchase page with the original
 server, cadence, source and saved promotion intent. Future measurement views
 must keep visibility, buying actions and paid invoices separate.
 
-### Introductory offer event contract
+## Introductory offer event contract
 
 `offer` is always one of `none`, `basic_intro_v1` or `basic_annual_intro_v1`.
 It is added to `upgrade_ready`, `upgrade_plan_clicked`,

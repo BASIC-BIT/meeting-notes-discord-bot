@@ -70,6 +70,34 @@ async function mayRetire(input: PurchaseInput, attempt: PurchaseAttempt) {
   return terminal(linked.status);
 }
 
+function checkoutFingerprint(checkout: PurchaseAttempt["checkout"]): string {
+  const fingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        ...checkout,
+        metadata: undefined,
+        success_url: undefined,
+        cancel_url: undefined,
+        subscription_data: {
+          ...checkout.subscription_data,
+          metadata: undefined,
+        },
+      }),
+    )
+    .digest("hex");
+  return fingerprint;
+}
+
+function subscriptionPointerChanged(
+  pointer: GuildSubscription | undefined,
+  expected: GuildSubscription | undefined,
+): boolean {
+  return (
+    pointer?.stripeSubscriptionId !== expected?.stripeSubscriptionId ||
+    pointer?.stripeSyncRevision !== expected?.stripeSyncRevision
+  );
+}
+
 async function reserve(input: PurchaseInput) {
   const repo = getPurchaseRepository();
   for (let i = 0; i < 3; i++) {
@@ -79,20 +107,7 @@ async function reserve(input: PurchaseInput) {
       ...input,
       current: reusable ? current : undefined,
     });
-    const fingerprint = createHash("sha256")
-      .update(
-        JSON.stringify({
-          ...checkout,
-          metadata: undefined,
-          success_url: undefined,
-          cancel_url: undefined,
-          subscription_data: {
-            ...checkout.subscription_data,
-            metadata: undefined,
-          },
-        }),
-      )
-      .digest("hex");
+    const fingerprint = checkoutFingerprint(checkout);
     if (current && reusable) {
       if (
         current.mode !== input.mode ||
@@ -137,11 +152,7 @@ async function reserve(input: PurchaseInput) {
     };
     if (await repo.compareAndWrite(next, current, input.expected)) return next;
     const pointer = await getSubscriptionRepository().get(input.guildId);
-    if (
-      pointer?.stripeSubscriptionId !== input.expected?.stripeSubscriptionId ||
-      pointer?.stripeSyncRevision !== input.expected?.stripeSyncRevision
-    )
-      throw pending();
+    if (subscriptionPointerChanged(pointer, input.expected)) throw pending();
   }
   throw pending();
 }

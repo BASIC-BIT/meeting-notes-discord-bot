@@ -134,6 +134,37 @@ const installNotionVisualState = async (
   });
 };
 
+async function assertPageCanScroll(page: Page): Promise<void> {
+  const scroll = await page.evaluate(() => {
+    const elements = [
+      document.scrollingElement,
+      ...document.querySelectorAll<HTMLElement>("*"),
+    ];
+    const element = elements.find(
+      (candidate) =>
+        candidate &&
+        candidate.scrollHeight > candidate.clientHeight + 10 &&
+        (candidate === document.scrollingElement ||
+          ["auto", "scroll"].includes(getComputedStyle(candidate).overflowY)),
+    );
+    if (!element) return null;
+    element.scrollTop = 0;
+    const before = element.scrollTop;
+    element.scrollTop = 100;
+    const result = {
+      height: element.scrollHeight,
+      client: element.clientHeight,
+      before,
+      after: element.scrollTop,
+    };
+    element.scrollTop = 0;
+    return result;
+  });
+  expect(scroll).not.toBeNull();
+  expect(scroll!.height).toBeGreaterThan(scroll!.client);
+  expect(scroll!.after).toBeGreaterThan(scroll!.before);
+}
+
 test.describe("visual regression", () => {
   test.skip(!runVisual, "Visual regression disabled");
 
@@ -177,6 +208,23 @@ test.describe("visual regression", () => {
   for (const colorScheme of ["light", "dark"] as const) {
     for (const viewport of marketingViewports) {
       for (const surface of ["home", "upgrade", "billing"] as const) {
+        const fixture = {
+          home: {
+            path: "/",
+            selector: "home-billing-period",
+            purchase: "home-cta-basic",
+          },
+          upgrade: {
+            path: `/upgrade/select-server?serverId=${mockGuilds.ddm.id}`,
+            selector: "upgrade-billing-period",
+            purchase: "upgrade-plan-basic",
+          },
+          billing: {
+            path: `/portal/server/${mockGuilds.ddm.id}/billing`,
+            selector: "billing-interval",
+            purchase: "billing-plan-basic",
+          },
+        }[surface];
         test(`basic intro ${surface} ${viewport.name} ${colorScheme} @visual`, async ({
           page,
         }) => {
@@ -187,20 +235,8 @@ test.describe("visual regression", () => {
             colorScheme,
           );
           await useIntroBilling(page);
-          const path =
-            surface === "home"
-              ? "/"
-              : surface === "upgrade"
-                ? `/upgrade/select-server?serverId=${mockGuilds.ddm.id}`
-                : `/portal/server/${mockGuilds.ddm.id}/billing`;
-          await page.goto(path);
-          const selector = page.getByTestId(
-            surface === "home"
-              ? "home-billing-period"
-              : surface === "upgrade"
-                ? "upgrade-billing-period"
-                : "billing-interval",
-          );
+          await page.goto(fixture.path);
+          const selector = page.getByTestId(fixture.selector);
           await expect(page.getByTestId("basic-intro-terms")).toBeVisible();
           await expect(page.locator("html")).toHaveAttribute(
             "data-mantine-color-scheme",
@@ -239,13 +275,7 @@ test.describe("visual regression", () => {
                 () => document.documentElement.scrollWidth <= innerWidth,
               ),
             ).toBe(true);
-            const purchase = page.getByTestId(
-              surface === "home"
-                ? "home-cta-basic"
-                : surface === "upgrade"
-                  ? "upgrade-plan-basic"
-                  : "billing-plan-basic",
-            );
+            const purchase = page.getByTestId(fixture.purchase);
             const action =
               surface === "home" ? purchase : purchase.getByRole("button");
             await action.scrollIntoViewIfNeeded();
@@ -276,36 +306,7 @@ test.describe("visual regression", () => {
                 ),
               ).toBe(true);
             }
-            const scroll = await page.evaluate(() => {
-              const elements = [
-                document.scrollingElement,
-                ...document.querySelectorAll<HTMLElement>("*"),
-              ];
-              const element = elements.find(
-                (candidate) =>
-                  candidate &&
-                  candidate.scrollHeight > candidate.clientHeight + 10 &&
-                  (candidate === document.scrollingElement ||
-                    ["auto", "scroll"].includes(
-                      getComputedStyle(candidate).overflowY,
-                    )),
-              );
-              if (!element) return null;
-              element.scrollTop = 0;
-              const before = element.scrollTop;
-              element.scrollTop = 100;
-              const result = {
-                height: element.scrollHeight,
-                client: element.clientHeight,
-                before,
-                after: element.scrollTop,
-              };
-              element.scrollTop = 0;
-              return result;
-            });
-            expect(scroll).not.toBeNull();
-            expect(scroll!.height).toBeGreaterThan(scroll!.client);
-            expect(scroll!.after).toBeGreaterThan(scroll!.before);
+            await assertPageCanScroll(page);
             await page.evaluate(() => window.scrollTo(0, 0));
             for (const mode of visualModes) {
               await page.goto(

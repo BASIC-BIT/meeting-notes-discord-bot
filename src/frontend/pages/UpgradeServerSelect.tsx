@@ -408,6 +408,13 @@ export default function UpgradeServerSelect({
   const showBillingManagement =
     billing && (billing.canManageBillingPortal || managementOnly);
 
+  const guildErrorText =
+    guildError === "auth"
+      ? "Reconnect Discord to load servers you manage."
+      : guildError;
+  const toggleServerPicker = () => setChangingServer(!changingServer);
+  const refreshServers = () => void refresh();
+  const retryBilling = () => void billingQuery.refetch();
   return (
     <Container
       size={1040}
@@ -471,7 +478,7 @@ export default function UpgradeServerSelect({
                     variant="subtle"
                     size="sm"
                     disabled={busy || Boolean(failedCheckout)}
-                    onClick={() => setChangingServer(!changingServer)}
+                    onClick={toggleServerPicker}
                   >
                     {changingServer ? "Keep this server" : "Change server"}
                   </Button>
@@ -480,16 +487,12 @@ export default function UpgradeServerSelect({
               {guildError ? (
                 <Alert color="red" title="Servers unavailable">
                   <Stack gap="sm">
-                    <Text size="sm">
-                      {guildError === "auth"
-                        ? "Reconnect Discord to load servers you manage."
-                        : guildError}
-                    </Text>
+                    <Text size="sm">{guildErrorText}</Text>
                     <Group>
                       <Button
                         size="sm"
                         variant="light"
-                        onClick={() => void refresh()}
+                        onClick={refreshServers}
                       >
                         Retry servers
                       </Button>
@@ -533,11 +536,7 @@ export default function UpgradeServerSelect({
                     <Text size="sm">
                       We couldn’t check this server’s current plan.
                     </Text>
-                    <Button
-                      size="sm"
-                      variant="light"
-                      onClick={() => void billingQuery.refetch()}
-                    >
+                    <Button size="sm" variant="light" onClick={retryBilling}>
                       Retry billing
                     </Button>
                   </Stack>

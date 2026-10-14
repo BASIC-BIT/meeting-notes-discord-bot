@@ -4,35 +4,23 @@ import { formatCurrency } from "../utils/pricing";
 
 const date = (value: string) => new Date(value).toLocaleDateString();
 
-export default function SubscriptionDetails({
+type AvailableDetails = Extract<
+  ProviderSubscriptionDetails,
+  { status: "available" }
+>;
+
+function currentPeriodPayment({
   details,
+  currentPrice,
+  period,
 }: {
-  details: ProviderSubscriptionDetails | null | undefined;
+  details: AvailableDetails;
+  currentPrice: string;
+  period: string;
 }) {
-  if (!details || details.status === "unavailable")
-    return (
-      <Text size="sm" c="var(--mantine-color-text)">
-        Provider price and renewal details are unavailable. Review payment and
-        cancellation in Manage billing.
-      </Text>
-    );
-  const period = details.interval === "year" ? "year" : "month";
-  const currentPrice = formatCurrency(
-    details.discountedUnitAmount ?? details.unitAmount,
-    details.currency,
-  );
-  const regularPrice = formatCurrency(details.unitAmount, details.currency);
-  const renewalPrice =
-    details.discount && !details.discount.endsAt
-      ? null
-      : details.discount?.endsAt &&
-          details.renewalAt &&
-          Date.parse(details.renewalAt) >= Date.parse(details.discount.endsAt)
-        ? regularPrice
-        : currentPrice;
   const firstYear = details.firstYearPayment;
   return (
-    <Stack gap="xs" data-testid="subscription-details">
+    <>
       {firstYear?.status === "available" ? (
         <>
           <Text size="sm" c="var(--mantine-color-text)">
@@ -57,6 +45,62 @@ export default function SubscriptionDetails({
           Current price: {currentPrice}/{period}, before tax.
         </Text>
       )}
+    </>
+  );
+}
+
+function renewalLine(
+  details: AvailableDetails,
+  period: string,
+  renewalPrice: string | null,
+) {
+  return details.cancelAtPeriodEnd
+    ? details.renewalAt
+      ? `Cancels on ${date(details.renewalAt)}. No automatic renewal.`
+      : "Cancellation is scheduled. The provider has not supplied the end date."
+    : details.renewalAt
+      ? renewalPrice
+        ? `Next renewal: ${renewalPrice}/${period} on ${date(details.renewalAt)}, before tax.`
+        : `Next billing date: ${date(details.renewalAt)}. Renewal price is not yet confirmed by the provider.`
+      : "The provider has not supplied the next renewal date.";
+}
+
+function renewalPriceFor(
+  details: AvailableDetails,
+  currentPrice: string,
+  regularPrice: string,
+) {
+  return details.discount && !details.discount.endsAt
+    ? null
+    : details.discount?.endsAt &&
+        details.renewalAt &&
+        Date.parse(details.renewalAt) >= Date.parse(details.discount.endsAt)
+      ? regularPrice
+      : currentPrice;
+}
+
+export default function SubscriptionDetails({
+  details,
+}: {
+  details: ProviderSubscriptionDetails | null | undefined;
+}) {
+  if (!details || details.status === "unavailable")
+    return (
+      <Text size="sm" c="var(--mantine-color-text)">
+        Provider price and renewal details are unavailable. Review payment and
+        cancellation in Manage billing.
+      </Text>
+    );
+  const period = details.interval === "year" ? "year" : "month";
+  const currentPrice = formatCurrency(
+    details.discountedUnitAmount ?? details.unitAmount,
+    details.currency,
+  );
+  const regularPrice = formatCurrency(details.unitAmount, details.currency);
+  const renewalPrice = renewalPriceFor(details, currentPrice, regularPrice);
+  return (
+    <Stack gap="xs" data-testid="subscription-details">
+      {currentPeriodPayment({ details, currentPrice, period })}
       {details.discount?.introductory ? (
         <Text size="sm" c="var(--mantine-color-text)">
           {details.discount.endsAt
@@ -66,15 +110,7 @@ export default function SubscriptionDetails({
         </Text>
       ) : null}
       <Text size="sm" c="var(--mantine-color-text)">
-        {details.cancelAtPeriodEnd
-          ? details.renewalAt
-            ? `Cancels on ${date(details.renewalAt)}. No automatic renewal.`
-            : "Cancellation is scheduled. The provider has not supplied the end date."
-          : details.renewalAt
-            ? renewalPrice
-              ? `Next renewal: ${renewalPrice}/${period} on ${date(details.renewalAt)}, before tax.`
-              : `Next billing date: ${date(details.renewalAt)}. Renewal price is not yet confirmed by the provider.`
-            : "The provider has not supplied the next renewal date."}
+        {renewalLine(details, period, renewalPrice)}
       </Text>
       {details.planChangesRestricted ? (
         <Alert

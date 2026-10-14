@@ -33,6 +33,16 @@ import {
   annualSubscriber,
 } from "./basicIntroFixtures";
 
+function previewSubscriptionStatus(
+  tier: "free" | "basic" | "pro",
+  source: "free" | "stripe" | "manual_comp" | "forced",
+  canceled: boolean,
+) {
+  if (canceled) return "canceled";
+  if (source === "manual_comp") return "comped";
+  return tier === "free" ? "free" : "active";
+}
+
 function previewBilling(
   tier: "free" | "basic" | "pro",
   billingSource?: "free" | "stripe" | "manual_comp" | "forced",
@@ -41,13 +51,7 @@ function previewBilling(
   const source = billingSource ?? (tier === "free" ? "free" : "stripe");
   return {
     tier,
-    status: canceledSubscription
-      ? "canceled"
-      : source === "manual_comp"
-        ? "comped"
-        : tier === "free"
-          ? "free"
-          : "active",
+    status: previewSubscriptionStatus(tier, source, canceledSubscription),
     billingSource: source,
     stripeTier: source === "stripe" && tier !== "free" ? tier : null,
     grantTier: source === "manual_comp" ? tier : null,
@@ -68,6 +72,113 @@ function previewBilling(
   };
 }
 
+type UpgradePreviewProps = {
+  path?: string;
+  tier?: "free" | "basic" | "pro";
+  colorScheme?: "light" | "dark";
+  signedIn?: boolean;
+  errorFor?: "billing.me" | "pricing.plans" | "servers.listEligible";
+  billingSource?: "free" | "stripe" | "manual_comp" | "forced";
+  introStatus?: BasicIntroOffer["status"];
+  subscriptionDetails?: ProviderSubscriptionDetails;
+  loadingBilling?: boolean;
+  staleQuote?: boolean;
+  pendingCheckout?: boolean;
+  missingPrices?: boolean;
+  canceledSubscription?: boolean;
+};
+
+function previewResponses({
+  tier = "free",
+  signedIn = true,
+  billingSource,
+  canceledSubscription = false,
+  subscriptionDetails,
+  introStatus,
+  staleQuote,
+  missingPrices,
+}: UpgradePreviewProps): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    "auth.me": signedIn
+      ? {
+          id: "story-user",
+          username: "Preview",
+          avatar: null,
+        }
+      : null,
+    "servers.listEligible": {
+      guilds: [{ id: "example", name: "Engineering HQ", canManage: true }],
+    },
+    "pricing.plans": {
+      plans: [
+        {
+          tier: "basic",
+          interval: "month",
+          priceId: "basic",
+          unitAmount: 1000,
+          currency: "usd",
+        },
+        {
+          tier: "pro",
+          interval: "month",
+          priceId: "pro",
+          unitAmount: 2000,
+          currency: "usd",
+        },
+        {
+          tier: "basic",
+          interval: "year",
+          priceId: "basic-year",
+          unitAmount: 10000,
+          currency: "usd",
+        },
+        {
+          tier: "pro",
+          interval: "year",
+          priceId: "pro-year",
+          unitAmount: 20000,
+          currency: "usd",
+        },
+      ],
+    },
+    "billing.me": {
+      ...previewBilling(tier, billingSource, canceledSubscription),
+      subscriptionDetails,
+      introOffer:
+        introStatus === "available"
+          ? monthlyIntroOffer
+          : { status: introStatus ?? "inactive" },
+      annualIntroOffer:
+        introStatus === "available"
+          ? annualIntroOffer
+          : { status: introStatus ?? "inactive" },
+    },
+  };
+  if (introStatus)
+    data["pricing.plans"] = {
+      plans: introPlans,
+      introOffer:
+        introStatus === "available"
+          ? monthlyIntroOffer
+          : { status: introStatus },
+      annualIntroOffer:
+        introStatus === "available"
+          ? annualIntroOffer
+          : { status: introStatus },
+    };
+  if (staleQuote)
+    data["billing.me"] = {
+      ...previewBilling(tier, billingSource, canceledSubscription),
+      introOffer: { ...monthlyIntroOffer, priceId: "stale-price" },
+      annualIntroOffer: {
+        ...annualIntroOffer,
+        priceId: "stale-price",
+      },
+    };
+  if (missingPrices) data["pricing.plans"] = { plans: [] };
+  return data;
+}
+
 export function UpgradePreview({
   path = "/upgrade/select-server?serverId=example",
   tier = "free",
@@ -82,21 +193,7 @@ export function UpgradePreview({
   pendingCheckout = false,
   missingPrices = false,
   canceledSubscription = false,
-}: {
-  path?: string;
-  tier?: "free" | "basic" | "pro";
-  colorScheme?: "light" | "dark";
-  signedIn?: boolean;
-  errorFor?: "billing.me" | "pricing.plans" | "servers.listEligible";
-  billingSource?: "free" | "stripe" | "manual_comp" | "forced";
-  introStatus?: BasicIntroOffer["status"];
-  subscriptionDetails?: ProviderSubscriptionDetails;
-  loadingBilling?: boolean;
-  staleQuote?: boolean;
-  pendingCheckout?: boolean;
-  missingPrices?: boolean;
-  canceledSubscription?: boolean;
-}) {
+}: UpgradePreviewProps) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => setColorScheme(colorScheme), [colorScheme, setColorScheme]);
   const [queryClient] = useState(
@@ -114,86 +211,16 @@ export function UpgradePreview({
         httpBatchLink({
           url: "/trpc",
           fetch: async (url) => {
-            const data: Record<string, unknown> = {
-              "auth.me": signedIn
-                ? {
-                    id: "story-user",
-                    username: "Preview",
-                    avatar: null,
-                  }
-                : null,
-              "servers.listEligible": {
-                guilds: [
-                  { id: "example", name: "Engineering HQ", canManage: true },
-                ],
-              },
-              "pricing.plans": {
-                plans: [
-                  {
-                    tier: "basic",
-                    interval: "month",
-                    priceId: "basic",
-                    unitAmount: 1000,
-                    currency: "usd",
-                  },
-                  {
-                    tier: "pro",
-                    interval: "month",
-                    priceId: "pro",
-                    unitAmount: 2000,
-                    currency: "usd",
-                  },
-                  {
-                    tier: "basic",
-                    interval: "year",
-                    priceId: "basic-year",
-                    unitAmount: 10000,
-                    currency: "usd",
-                  },
-                  {
-                    tier: "pro",
-                    interval: "year",
-                    priceId: "pro-year",
-                    unitAmount: 20000,
-                    currency: "usd",
-                  },
-                ],
-              },
-              "billing.me": {
-                ...previewBilling(tier, billingSource, canceledSubscription),
-                subscriptionDetails,
-                introOffer:
-                  introStatus === "available"
-                    ? monthlyIntroOffer
-                    : { status: introStatus ?? "inactive" },
-                annualIntroOffer:
-                  introStatus === "available"
-                    ? annualIntroOffer
-                    : { status: introStatus ?? "inactive" },
-              },
-            };
-            if (introStatus)
-              data["pricing.plans"] = {
-                plans: introPlans,
-                introOffer:
-                  introStatus === "available"
-                    ? monthlyIntroOffer
-                    : { status: introStatus },
-                annualIntroOffer:
-                  introStatus === "available"
-                    ? annualIntroOffer
-                    : { status: introStatus },
-              };
-            if (staleQuote)
-              data["billing.me"] = {
-                ...previewBilling(tier, billingSource, canceledSubscription),
-                introOffer: { ...monthlyIntroOffer, priceId: "stale-price" },
-                annualIntroOffer: {
-                  ...annualIntroOffer,
-                  priceId: "stale-price",
-                },
-              };
-            if (missingPrices) data["pricing.plans"] = { plans: [] };
+            const data = previewResponses({
+              tier,
+              signedIn,
+              billingSource,
+              canceledSubscription,
+              subscriptionDetails,
+              introStatus,
+              staleQuote,
+              missingPrices,
+            });
             const paths = new URL(String(url), window.location.origin).pathname
               .split("/")
               .at(-1)!

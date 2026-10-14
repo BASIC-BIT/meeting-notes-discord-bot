@@ -5,7 +5,14 @@ import {
   recordingLimitAnalytics,
   resolvePurchaseSource,
 } from "../../utils/purchaseAnalytics";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type ChangeEvent,
+} from "react";
 import {
   Alert,
   Badge,
@@ -374,7 +381,191 @@ const BillingPaidPanel = ({
   </Surface>
 );
 
-const BillingPlansSection = ({
+function basicPlanCta(data: BillingData, isComped: boolean): string {
+  const basicCta =
+    data.tier === "basic"
+      ? isComped
+        ? "Start paying for Basic"
+        : "Current plan"
+      : data.tier === "pro"
+        ? "Included in Pro"
+        : "Upgrade to Basic";
+  return basicCta;
+}
+function proPlanCta(data: BillingData, isComped: boolean): string {
+  const proCta =
+    data.tier === "pro"
+      ? isComped
+        ? "Start paying for Pro"
+        : "Current plan"
+      : "Upgrade to Pro";
+  return proCta;
+}
+function basicPlanDisabled(
+  data: BillingData,
+  basicPlan: ReturnType<typeof resolvePaidPlan>,
+  busy: boolean,
+  checkoutBlocked: boolean,
+  offer: BasicIntroOffer,
+  isComped: boolean,
+): boolean {
+  const basicDisabled =
+    !basicPlan ||
+    requiresStripeManagement(data) ||
+    data.billingSource === "forced" ||
+    busy ||
+    checkoutBlocked ||
+    offer.status === "unavailable" ||
+    data.tier === "pro" ||
+    (data.tier === "basic" && !isComped);
+  return basicDisabled;
+}
+function proPlanDisabled(
+  data: BillingData,
+  proPlan: ReturnType<typeof resolvePaidPlan>,
+  busy: boolean,
+  checkoutBlocked: boolean,
+  isComped: boolean,
+): boolean {
+  const proDisabled =
+    !proPlan ||
+    requiresStripeManagement(data) ||
+    data.billingSource === "forced" ||
+    busy ||
+    checkoutBlocked ||
+    (data.tier === "pro" && !isComped);
+  return proDisabled;
+}
+
+function BillingPlanCards({
+  data,
+  interval,
+  basicPlan,
+  proPlan,
+  offer,
+  busy,
+  checkoutBlocked,
+  onCheckout,
+  shownOffer,
+}: Pick<
+  BillingPlansProps,
+  | "data"
+  | "interval"
+  | "basicPlan"
+  | "proPlan"
+  | "offer"
+  | "busy"
+  | "checkoutBlocked"
+  | "onCheckout"
+> & { shownOffer: BasicIntroOffer }) {
+  const isComped = data.billingSource === "manual_comp";
+  const basicCta = basicPlanCta(data, isComped);
+  const proCta = proPlanCta(data, isComped);
+  const basicDisabled = basicPlanDisabled(
+    data,
+    basicPlan,
+    busy,
+    checkoutBlocked,
+    offer,
+    isComped,
+  );
+  const proDisabled = proPlanDisabled(
+    data,
+    proPlan,
+    busy,
+    checkoutBlocked,
+    isComped,
+  );
+  const checkoutBasic = () => onCheckout("basic");
+  const checkoutPro = () => onCheckout("pro");
+  return (
+    <div className={classes.plans}>
+      <PricingCard
+        name="Free"
+        price="$0"
+        description="Lightweight coverage for smaller servers."
+        features={[
+          "4 recording hours per rolling week",
+          "Up to 90 minutes per meeting",
+          "Ask across up to 5 meetings",
+          "Notes, tags, and summaries",
+        ]}
+        cta={data.tier === "free" ? "Current plan" : "Available"}
+        ctaDisabled={data.tier !== "free"}
+        ctaProps={{
+          variant: data.tier === "free" ? "light" : "outline",
+        }}
+        badge={data.tier === "free" ? "Current plan" : "Free forever"}
+        billingLabel="Always free"
+        testId="billing-plan-free"
+      />
+      <PricingCard
+        name="Basic"
+        price={introOfferPrice(shownOffer, basicPlan, interval)}
+        description="Unlock longer sessions and deeper recall."
+        features={[
+          "20 recording hours per rolling week",
+          "Up to 2 hours per meeting",
+          "Ask across up to 25 meetings",
+          "Live voice mode",
+        ]}
+        cta={basicCta}
+        ctaDisabled={basicDisabled}
+        ctaProps={
+          basicDisabled
+            ? { variant: "light" }
+            : { variant: "filled", onClick: checkoutBasic }
+        }
+        highlighted
+        badge={data.tier === "basic" ? "Current plan" : "Best value"}
+        billingLabel={billingLabelForInterval(interval)}
+        terms={<BasicIntroTerms offer={shownOffer} />}
+        introOffer={shownOffer}
+        testId="billing-plan-basic"
+      />
+      <PricingCard
+        name="Pro"
+        price={formatPlanPrice(proPlan, interval)}
+        description="More recording time and a wider Ask history."
+        features={[
+          "No weekly recording limit",
+          "Ask across up to 100 meetings",
+          "Up to 2 hours per meeting",
+          "Priority features + support",
+        ]}
+        cta={proCta}
+        ctaDisabled={proDisabled}
+        ctaProps={proDisabled ? { variant: "light" } : { onClick: checkoutPro }}
+        badge={data.tier === "pro" ? "Current plan" : "More recording time"}
+        tone="default"
+        borderColor={uiColors.accentBorder}
+        borderWidth={uiBorders.accentWidth}
+        billingLabel={billingLabelForInterval(interval)}
+        testId="billing-plan-pro"
+      />
+    </div>
+  );
+}
+
+function IntroOfferAvailability({ offer }: { offer: BasicIntroOffer }) {
+  return (
+    <>
+      {offer.status === "unavailable" && (
+        <Alert title="Introductory pricing unavailable" color="yellow">
+          Refresh offers before starting Basic checkout.
+        </Alert>
+      )}
+      {offer.status === "expired" && (
+        <Alert title="Introductory enrollment ended" color="gray">
+          The regular Basic price is shown. Choose a plan to continue at that
+          price.
+        </Alert>
+      )}
+    </>
+  );
+}
+
+function BillingPlansSection({
   data,
   interval,
   onIntervalChange,
@@ -392,7 +583,7 @@ const BillingPlansSection = ({
   onOfferChoiceChange,
   busy,
   checkoutBlocked,
-}: BillingPlansProps) => {
+}: BillingPlansProps) {
   const isFreePlan = data.tier === "free";
   const isComped = data.billingSource === "manual_comp";
   const plansExpanded = isFreePlan || isComped ? true : showPlans;
@@ -403,36 +594,11 @@ const BillingPlansSection = ({
     offerChoice === "promotion" && hasPromo
       ? { status: "inactive" as const }
       : offer;
-  const basicCta =
-    data.tier === "basic"
-      ? isComped
-        ? "Start paying for Basic"
-        : "Current plan"
-      : data.tier === "pro"
-        ? "Included in Pro"
-        : "Upgrade to Basic";
-  const proCta =
-    data.tier === "pro"
-      ? isComped
-        ? "Start paying for Pro"
-        : "Current plan"
-      : "Upgrade to Pro";
-  const basicDisabled =
-    !basicPlan ||
-    requiresStripeManagement(data) ||
-    data.billingSource === "forced" ||
-    busy ||
-    checkoutBlocked ||
-    offer.status === "unavailable" ||
-    data.tier === "pro" ||
-    (data.tier === "basic" && !isComped);
-  const proDisabled =
-    !proPlan ||
-    requiresStripeManagement(data) ||
-    data.billingSource === "forced" ||
-    busy ||
-    checkoutBlocked ||
-    (data.tier === "pro" && !isComped);
+  const changeInterval = (value: string) =>
+    onIntervalChange(value as BillingInterval);
+  const changePromo = (event: ChangeEvent<HTMLInputElement>) =>
+    onPromoCodeChange(event.currentTarget.value);
+  const clearPromo = () => onPromoCodeChange("");
   return (
     <Surface
       p="lg"
@@ -457,7 +623,7 @@ const BillingPlansSection = ({
           </Group>
           <SegmentedControl
             value={interval}
-            onChange={(value) => onIntervalChange(value as BillingInterval)}
+            onChange={changeInterval}
             data={[
               { label: "Monthly", value: "month" },
               {
@@ -496,9 +662,7 @@ const BillingPlansSection = ({
                 className="ph-no-capture"
                 value={promoCode}
                 disabled={busy || checkoutBlocked}
-                onChange={(event) =>
-                  onPromoCodeChange(event.currentTarget.value)
-                }
+                onChange={changePromo}
                 style={{ flex: "1 1 220px" }}
               />
               {hasPromo ? (
@@ -507,7 +671,7 @@ const BillingPlansSection = ({
                   color="gray"
                   size="xs"
                   disabled={busy || checkoutBlocked}
-                  onClick={() => onPromoCodeChange("")}
+                  onClick={clearPromo}
                 >
                   Clear
                 </Button>
@@ -525,17 +689,7 @@ const BillingPlansSection = ({
             disabled={busy || checkoutBlocked}
           />
         )}
-        {offer.status === "unavailable" && (
-          <Alert title="Introductory pricing unavailable" color="yellow">
-            Refresh offers before starting Basic checkout.
-          </Alert>
-        )}
-        {offer.status === "expired" && (
-          <Alert title="Introductory enrollment ended" color="gray">
-            The regular Basic price is shown. Choose a plan to continue at that
-            price.
-          </Alert>
-        )}
+        <IntroOfferAvailability offer={offer} />
         {!plansExpanded ? (
           <Text size="sm" c="dimmed">
             Compare plan details when you are ready to change tiers.
@@ -543,306 +697,125 @@ const BillingPlansSection = ({
         ) : null}
         <Collapse expanded={plansExpanded}>
           <Divider my="sm" />
-          <div className={classes.plans}>
-            <PricingCard
-              name="Free"
-              price="$0"
-              description="Lightweight coverage for smaller servers."
-              features={[
-                "4 recording hours per rolling week",
-                "Up to 90 minutes per meeting",
-                "Ask across up to 5 meetings",
-                "Notes, tags, and summaries",
-              ]}
-              cta={data.tier === "free" ? "Current plan" : "Available"}
-              ctaDisabled={data.tier !== "free"}
-              ctaProps={{
-                variant: data.tier === "free" ? "light" : "outline",
-              }}
-              badge={data.tier === "free" ? "Current plan" : "Free forever"}
-              billingLabel="Always free"
-              testId="billing-plan-free"
-            />
-            <PricingCard
-              name="Basic"
-              price={introOfferPrice(shownOffer, basicPlan, interval)}
-              description="Unlock longer sessions and deeper recall."
-              features={[
-                "20 recording hours per rolling week",
-                "Up to 2 hours per meeting",
-                "Ask across up to 25 meetings",
-                "Live voice mode",
-              ]}
-              cta={basicCta}
-              ctaDisabled={basicDisabled}
-              ctaProps={
-                data.tier === "basic" && !isComped
-                  ? { variant: "light" }
-                  : basicDisabled
-                    ? { variant: "light" }
-                    : { variant: "filled", onClick: () => onCheckout("basic") }
-              }
-              highlighted
-              badge={data.tier === "basic" ? "Current plan" : "Best value"}
-              billingLabel={billingLabelForInterval(interval)}
-              terms={<BasicIntroTerms offer={shownOffer} />}
-              introOffer={shownOffer}
-              testId="billing-plan-basic"
-            />
-            <PricingCard
-              name="Pro"
-              price={formatPlanPrice(proPlan, interval)}
-              description="More recording time and a wider Ask history."
-              features={[
-                "No weekly recording limit",
-                "Ask across up to 100 meetings",
-                "Up to 2 hours per meeting",
-                "Priority features + support",
-              ]}
-              cta={proCta}
-              ctaDisabled={proDisabled}
-              ctaProps={
-                data.tier === "pro" && !isComped
-                  ? { variant: "light" }
-                  : proDisabled
-                    ? { variant: "light" }
-                    : { onClick: () => onCheckout("pro") }
-              }
-              badge={
-                data.tier === "pro" ? "Current plan" : "More recording time"
-              }
-              tone="default"
-              borderColor={uiColors.accentBorder}
-              borderWidth={uiBorders.accentWidth}
-              billingLabel={billingLabelForInterval(interval)}
-              testId="billing-plan-pro"
-            />
-          </div>
+          <BillingPlanCards
+            data={data}
+            interval={interval}
+            basicPlan={basicPlan}
+            proPlan={proPlan}
+            offer={offer}
+            busy={busy}
+            checkoutBlocked={checkoutBlocked}
+            onCheckout={onCheckout}
+            shownOffer={shownOffer}
+          />
         </Collapse>
       </Stack>
     </Surface>
   );
-};
+}
 
-export function Billing() {
-  const [showPlans, setShowPlans] = useState(false);
-  const search = useSearch({ from: "/portal/server/$serverId/billing" });
-  const navigate = useNavigate({ from: "/portal/server/$serverId/billing" });
-  const interval = search.interval ?? "month";
-  const source =
-    search.source === undefined
-      ? "portal_billing"
-      : resolvePurchaseSource(search.source);
-  const limitContext = useMemo(
-    () => resolveRecordingLimitContext(search),
-    [search.limitType, search.limitSurface],
-  );
-  const arrivedServers = useRef(new Set<string>());
-  const { serverId: routeServerId } = useParams({
-    from: "/portal/server/$serverId/billing",
-  });
-  const [promoCode, setPromoCode] = useState(() => search.promo ?? "");
-  const offerChoice = promoCode.trim()
-    ? (search.offerChoice ?? "automatic")
-    : "automatic";
-  useEffect(() => setPromoCode(search.promo ?? ""), [search.promo]);
-  const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
-  const billingQuery = trpc.billing.me.useQuery(
-    { serverId: selectedGuildId ?? undefined },
-    { enabled: Boolean(selectedGuildId) },
-  );
-  const pricingQuery = trpc.pricing.plans.useQuery(undefined, {
-    staleTime: 1000 * 60 * 5,
-  });
-  const checkoutMutation = trpc.billing.checkout.useMutation();
-  const portalMutation = trpc.billing.portal.useMutation();
-  const attemptIdentity = JSON.stringify([
-    routeServerId,
+type CheckoutRequest = inferRouterInputs<AppRouter>["billing"]["checkout"];
+function billingCheckoutRequest({
+  serverId: selectedGuildId,
+  tier,
+  interval,
+  promotionCode,
+  offer,
+  offerChoice,
+  source,
+  limitContext,
+}: {
+  serverId: string;
+  tier: PaidTier;
+  interval: BillingInterval;
+  promotionCode: string;
+  offer: BasicIntroOffer;
+  offerChoice: IntroOfferChoice;
+  source: CheckoutRequest["source"];
+  limitContext: ReturnType<typeof resolveRecordingLimitContext>;
+}): CheckoutRequest {
+  const request: inferRouterInputs<AppRouter>["billing"]["checkout"] = {
+    serverId: selectedGuildId,
+    tier,
     interval,
+    promotionCode:
+      tier === "basic" &&
+      offer.status === "available" &&
+      offerChoice === "automatic"
+        ? undefined
+        : promotionCode || undefined,
+    savedPromotionCode: promotionCode || undefined,
+    expectedOffer:
+      tier === "basic" &&
+      offer.status === "available" &&
+      offerChoice === "automatic"
+        ? offer.id
+        : "none",
     offerChoice,
-    promoCode.trim(),
     source,
-    limitContext,
-  ]);
-  const checkoutAttempt = useCheckoutAttempt(attemptIdentity, () =>
-    Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
-  );
-  const failedCheckout = checkoutAttempt.attempt?.request ?? null;
-  const frozenOffer = checkoutAttempt.attempt?.offer ?? null;
-
-  const serverName = useMemo(
-    () =>
-      guilds.find((g) => g.id === selectedGuildId)?.name || "Unknown server",
-    [guilds, selectedGuildId],
-  );
-  const data = billingQuery.data ?? null;
-  const loading =
-    billingQuery.isLoading ||
-    guildLoading ||
-    Boolean(selectedGuildId && selectedGuildId !== routeServerId);
-  const error = billingQuery.error ? "Unable to load billing status." : null;
-  const paidPlans = pricingQuery.data?.plans ?? [];
-  const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
-  const basicPlan = resolvePaidPlan(planLookup, "basic", interval);
-  const proPlan = resolvePaidPlan(planLookup, "pro", interval);
-  const normalPlan = resolvePaidPlan(
-    planLookup,
-    data?.tier === "pro" ? "pro" : "basic",
-    "month",
-  );
-  const offer =
-    frozenOffer ??
-    resolveIntroOffer(
-      interval === "year" ? data?.annualIntroOffer : data?.introOffer,
-      basicPlan,
-    );
-  const busy = checkoutMutation.isPending || portalMutation.isPending;
-  const hasAnnualPlans = paidPlans.some((plan) => plan.interval === "year");
-  const isPortalPending = portalMutation.isPending;
-  const isFreeTier = data?.tier === "free";
-  const displayedOffer =
-    offer.status === "available" && offerChoice === "automatic"
-      ? offer.id
-      : "none";
-  useIntroOfferExposure({
-    offer: displayedOffer,
-    entry: `portal_billing:${routeServerId}`,
-    surface: "portal_billing",
-    guildId: selectedGuildId ?? undefined,
-    enabled: !loading && !error && showPlans,
-  });
-
-  useEffect(() => {
-    if (isFreeTier) {
-      setShowPlans(true);
-    }
-  }, [isFreeTier]);
-
-  useEffect(() => {
-    if (
-      loading ||
-      error ||
-      !data ||
-      !selectedGuildId ||
-      arrivedServers.current.has(selectedGuildId)
-    )
-      return;
-    arrivedServers.current.add(selectedGuildId);
-    track("billing_entry_arrived", {
-      guild_id: selectedGuildId,
-      source,
-      ...recordingLimitAnalytics(limitContext ?? {}),
-      current_tier: data.tier,
-      event_version: 1,
-    });
-  }, [loading, error, data, selectedGuildId, source, limitContext]);
-
-  const handleCheckout = async (tier: PaidTier) => {
-    let attempt: ReturnType<typeof checkoutAttempt.begin> | null = null;
-    try {
-      if (!selectedGuildId || selectedGuildId !== routeServerId) return;
-      if (
-        busy ||
-        checkoutAttempt.refreshing ||
-        failedCheckout ||
-        billingQuery.isFetching ||
-        pricingQuery.isFetching ||
-        pricingQuery.isError ||
-        (data && requiresStripeManagement(data)) ||
-        data?.billingSource === "forced" ||
-        (tier === "basic" && offer.status === "unavailable")
-      )
-        return;
-      const plan = resolvePaidPlan(planLookup, tier, interval);
-      if (!plan) {
-        notifications.show({
-          color: "red",
-          title: "Pricing unavailable",
-          message: "We could not find pricing for that plan. Please try again.",
-        });
-        return;
-      }
-      const promotionCode = promoCode.trim();
-      track("upgrade_plan_clicked", {
-        guild_id: selectedGuildId,
-        tier,
-        interval,
-        source,
-        ...recordingLimitAnalytics(limitContext ?? {}),
-        promo_present: Boolean(promotionCode),
-        offer: tier === "basic" ? displayedOffer : "none",
-        event_version: 1,
-      });
-      const request: inferRouterInputs<AppRouter>["billing"]["checkout"] = {
-        serverId: selectedGuildId,
-        tier,
-        interval,
-        promotionCode:
-          tier === "basic" &&
-          offer.status === "available" &&
-          offerChoice === "automatic"
-            ? undefined
-            : promotionCode || undefined,
-        savedPromotionCode: promotionCode || undefined,
-        expectedOffer:
-          tier === "basic" &&
-          offer.status === "available" &&
-          offerChoice === "automatic"
-            ? offer.id
-            : "none",
-        offerChoice,
-        source,
-        ...limitContext,
-        ...(isDoNotTrackEnabled() ? { analyticsDisabled: true } : {}),
-      };
-      attempt = checkoutAttempt.begin(request, offer);
-      const body = await checkoutMutation.mutateAsync(request);
-      if (checkoutAttempt.isCurrent(attempt)) window.location.href = body.url;
-    } catch (err) {
-      if (attempt && checkoutAttempt.isCurrent(attempt)) {
-        console.error(err);
-        showBillingError(err, "checkout");
-      }
-    }
+    ...limitContext,
+    ...(isDoNotTrackEnabled() ? { analyticsDisabled: true } : {}),
   };
+  return request;
+}
 
-  const handlePortal = async () => {
-    try {
-      if (!selectedGuildId || selectedGuildId !== routeServerId) return;
-      if (busy) return;
-      const body = await portalMutation.mutateAsync({
-        serverId: selectedGuildId,
-      });
-      window.location.href = body.url;
-    } catch (err) {
-      console.error(err);
-      showBillingError(err, "portal");
-    }
-  };
+function checkoutIsBlocked({
+  busy,
+  refreshing,
+  failedCheckout,
+  billingFetching,
+  pricingFetching,
+  pricingError,
+  data,
+  tier,
+  offer,
+}: {
+  busy: boolean;
+  refreshing: boolean;
+  failedCheckout: CheckoutRequest | null;
+  billingFetching: boolean;
+  pricingFetching: boolean;
+  pricingError: boolean;
+  data: BillingData | null;
+  tier: PaidTier;
+  offer: BasicIntroOffer;
+}): boolean {
+  return Boolean(
+    busy ||
+    refreshing ||
+    failedCheckout ||
+    billingFetching ||
+    pricingFetching ||
+    pricingError ||
+    (data && requiresStripeManagement(data)) ||
+    data?.billingSource === "forced" ||
+    (tier === "basic" && offer.status === "unavailable"),
+  );
+}
 
-  if (loading) {
-    return <BillingLoadingState />;
-  }
-
-  if (error) {
-    return <BillingErrorState message={error} />;
-  }
-
-  if (!data) {
-    return <BillingNoServerState />;
-  }
-
-  if (!data.billingEnabled) {
-    return <BillingDisabledState />;
-  }
-
+function BillingCurrentPlan({
+  data,
+  serverName,
+  isPortalPending,
+  selectedGuildId,
+  busy,
+  onPortal: handlePortal,
+  normalPlan,
+}: {
+  data: BillingData;
+  serverName: string;
+  isPortalPending: boolean;
+  selectedGuildId: string | null;
+  busy: boolean;
+  onPortal: () => void;
+  normalPlan: ReturnType<typeof resolvePaidPlan>;
+}) {
+  const isFreeTier = data.tier === "free";
+  const hasCanceledPaidSubscription = isCanceledStripeHistory(data);
   const statusLabel = formatStatusLabel(data.status);
   const statusLine = formatStatusLine(statusLabel, data.nextBillingDate);
-  const hasCanceledPaidSubscription = isCanceledStripeHistory(data);
-
   return (
-    <BillingShell>
-      <RecordingPlanContext context={limitContext} />
+    <>
       {(isFreeTier && !data.hasStripeBilling) || hasCanceledPaidSubscription ? (
         <BillingFreePanel serverName={serverName} usage={data.usage} />
       ) : (
@@ -883,47 +856,194 @@ export function Billing() {
           </Stack>
         </Surface>
       ) : null}
-      <BillingPlansSection
-        data={data}
-        interval={interval}
-        onIntervalChange={(value) =>
-          navigate({
-            replace: true,
-            search: {
-              ...search,
-              interval: value,
-              promo: promoCode.trim() || undefined,
-            },
-          })
-        }
-        hasAnnualPlans={hasAnnualPlans}
-        showPlans={showPlans}
-        onExpandPlans={() => setShowPlans(true)}
-        onTogglePlans={() => setShowPlans((prev) => !prev)}
-        onCheckout={handleCheckout}
-        promoCode={promoCode}
-        onPromoCodeChange={(value) => {
-          setPromoCode(value);
-          navigate({
-            replace: true,
-            search: { ...search, promo: value.trim() || undefined },
-          });
-        }}
-        basicPlan={basicPlan}
-        proPlan={proPlan}
-        offer={offer}
-        offerChoice={offerChoice}
-        onOfferChoiceChange={(value) =>
-          navigate({ replace: true, search: { ...search, offerChoice: value } })
-        }
-        busy={
-          busy ||
-          billingQuery.isFetching ||
-          pricingQuery.isFetching ||
-          checkoutAttempt.refreshing
-        }
-        checkoutBlocked={Boolean(failedCheckout) || pricingQuery.isError}
-      />
+    </>
+  );
+}
+
+function useBillingRoute() {
+  const search = useSearch({ from: "/portal/server/$serverId/billing" });
+  const navigate = useNavigate({ from: "/portal/server/$serverId/billing" });
+  const interval = search.interval ?? "month";
+  const source =
+    search.source === undefined
+      ? "portal_billing"
+      : resolvePurchaseSource(search.source);
+  const limitContext = useMemo(
+    () => resolveRecordingLimitContext(search),
+    [search.limitType, search.limitSurface],
+  );
+  const { serverId: routeServerId } = useParams({
+    from: "/portal/server/$serverId/billing",
+  });
+  const [promoCode, setPromoCode] = useState(() => search.promo ?? "");
+  const offerChoice = promoCode.trim()
+    ? (search.offerChoice ?? "automatic")
+    : "automatic";
+  useEffect(() => setPromoCode(search.promo ?? ""), [search.promo]);
+  return {
+    search,
+    navigate,
+    interval,
+    source,
+    limitContext,
+    routeServerId,
+    promoCode,
+    setPromoCode,
+    offerChoice,
+  };
+}
+
+function useBillingPricing(
+  pricingData: RouterOutput["pricing"]["plans"] | undefined,
+  data: BillingData | null,
+  frozenOffer: BasicIntroOffer | null,
+  interval: BillingInterval,
+) {
+  const paidPlans = pricingData?.plans ?? [];
+  const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
+  const basicPlan = resolvePaidPlan(planLookup, "basic", interval);
+  const proPlan = resolvePaidPlan(planLookup, "pro", interval);
+  const normalPlan = resolvePaidPlan(
+    planLookup,
+    data?.tier === "pro" ? "pro" : "basic",
+    "month",
+  );
+  const offer =
+    frozenOffer ??
+    resolveIntroOffer(
+      interval === "year" ? data?.annualIntroOffer : data?.introOffer,
+      basicPlan,
+    );
+  const hasAnnualPlans = paidPlans.some((plan) => plan.interval === "year");
+  return { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans };
+}
+
+function useBillingEntryAnalytics({
+  loading,
+  error,
+  data,
+  selectedGuildId,
+  source,
+  limitContext,
+}: {
+  loading: boolean;
+  error: string | null;
+  data: BillingData | null;
+  selectedGuildId: string | null;
+  source: CheckoutRequest["source"];
+  limitContext: ReturnType<typeof resolveRecordingLimitContext>;
+}) {
+  const arrivedServers = useRef(new Set<string>());
+  useEffect(() => {
+    if (
+      loading ||
+      error ||
+      !data ||
+      !selectedGuildId ||
+      arrivedServers.current.has(selectedGuildId)
+    )
+      return;
+    arrivedServers.current.add(selectedGuildId);
+    track("billing_entry_arrived", {
+      guild_id: selectedGuildId,
+      source,
+      ...recordingLimitAnalytics(limitContext ?? {}),
+      current_tier: data.tier,
+      event_version: 1,
+    });
+  }, [loading, error, data, selectedGuildId, source, limitContext]);
+}
+
+function useBillingQueries(routeServerId: string) {
+  const { selectedGuildId, guilds, loading: guildLoading } = useGuildContext();
+  const billingQuery = trpc.billing.me.useQuery(
+    { serverId: selectedGuildId ?? undefined },
+    { enabled: Boolean(selectedGuildId) },
+  );
+  const pricingQuery = trpc.pricing.plans.useQuery(undefined, {
+    staleTime: 1000 * 60 * 5,
+  });
+  const serverName = useMemo(
+    () =>
+      guilds.find((g) => g.id === selectedGuildId)?.name || "Unknown server",
+    [guilds, selectedGuildId],
+  );
+  const data = billingQuery.data ?? null;
+  const loading =
+    billingQuery.isLoading ||
+    guildLoading ||
+    Boolean(selectedGuildId && selectedGuildId !== routeServerId);
+  const error = billingQuery.error ? "Unable to load billing status." : null;
+
+  return {
+    selectedGuildId,
+    billingQuery,
+    pricingQuery,
+    serverName,
+    data,
+    loading,
+    error,
+  };
+}
+
+function useBillingOfferExposure({
+  data,
+  offer,
+  offerChoice,
+  routeServerId,
+  selectedGuildId,
+  loading,
+  error,
+  showPlans,
+  setShowPlans,
+}: {
+  data: BillingData | null;
+  offer: BasicIntroOffer;
+  offerChoice: IntroOfferChoice;
+  routeServerId: string;
+  selectedGuildId: string | null;
+  loading: boolean;
+  error: string | null;
+  showPlans: boolean;
+  setShowPlans: (value: boolean) => void;
+}) {
+  const isFreeTier = data?.tier === "free";
+  const displayedOffer =
+    offer.status === "available" && offerChoice === "automatic"
+      ? offer.id
+      : "none";
+  useIntroOfferExposure({
+    offer: displayedOffer,
+    entry: `portal_billing:${routeServerId}`,
+    surface: "portal_billing",
+    guildId: selectedGuildId ?? undefined,
+    enabled: !loading && !error && showPlans,
+  });
+
+  useEffect(() => {
+    if (isFreeTier) {
+      setShowPlans(true);
+    }
+  }, [isFreeTier]);
+
+  return displayedOffer;
+}
+
+function BillingCheckoutRecovery({
+  offer,
+  failedCheckout,
+  busy,
+  retryCheckout,
+  refreshOffers,
+}: {
+  offer: BasicIntroOffer;
+  failedCheckout: CheckoutRequest | null;
+  busy: boolean;
+  retryCheckout: () => void;
+  refreshOffers: () => void;
+}) {
+  return (
+    <>
       {(offer.status === "unavailable" || failedCheckout) && (
         <Stack gap="xs">
           <Text size="sm">
@@ -932,45 +1052,263 @@ export function Billing() {
           </Text>
           <Group>
             {failedCheckout && (
-              <Button
-                disabled={busy}
-                onClick={async () => {
-                  const attempt = checkoutAttempt.attempt;
-                  if (
-                    busy ||
-                    !selectedGuildId ||
-                    selectedGuildId !== routeServerId ||
-                    !attempt ||
-                    !checkoutAttempt.isCurrent(attempt)
-                  )
-                    return;
-                  try {
-                    const body = await checkoutMutation.mutateAsync(
-                      attempt.request,
-                    );
-                    if (checkoutAttempt.isCurrent(attempt))
-                      window.location.href = body.url;
-                  } catch (error) {
-                    if (checkoutAttempt.isCurrent(attempt))
-                      showBillingError(error, "checkout");
-                  }
-                }}
-              >
+              <Button disabled={busy} onClick={retryCheckout}>
                 Retry checkout
               </Button>
             )}
-            <Button
-              disabled={busy}
-              variant="light"
-              onClick={() => {
-                checkoutAttempt.refresh();
-              }}
-            >
+            <Button disabled={busy} variant="light" onClick={refreshOffers}>
               Refresh offers
             </Button>
           </Group>
         </Stack>
       )}
+    </>
+  );
+}
+
+function savedCheckoutQuote(
+  checkoutAttempt: ReturnType<typeof useCheckoutAttempt>,
+) {
+  return {
+    failedCheckout: checkoutAttempt.attempt?.request ?? null,
+    frozenOffer: checkoutAttempt.attempt?.offer ?? null,
+  };
+}
+
+export function Billing() {
+  const [showPlans, setShowPlans] = useState(false);
+  const {
+    search,
+    navigate,
+    interval,
+    source,
+    limitContext,
+    routeServerId,
+    promoCode,
+    setPromoCode,
+    offerChoice,
+  } = useBillingRoute();
+  const {
+    selectedGuildId,
+    billingQuery,
+    pricingQuery,
+    serverName,
+    data,
+    loading,
+    error,
+  } = useBillingQueries(routeServerId);
+  const checkoutMutation = trpc.billing.checkout.useMutation();
+  const portalMutation = trpc.billing.portal.useMutation();
+  const attemptIdentity = JSON.stringify([
+    routeServerId,
+    interval,
+    offerChoice,
+    promoCode.trim(),
+    source,
+    limitContext,
+  ]);
+  const checkoutAttempt = useCheckoutAttempt(attemptIdentity, () =>
+    Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
+  );
+  const { failedCheckout, frozenOffer } = savedCheckoutQuote(checkoutAttempt);
+
+  const { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans } =
+    useBillingPricing(pricingQuery.data, data, frozenOffer, interval);
+  const busy = checkoutMutation.isPending || portalMutation.isPending;
+  const isPortalPending = portalMutation.isPending;
+  const displayedOffer = useBillingOfferExposure({
+    data,
+    offer,
+    offerChoice,
+    routeServerId,
+    selectedGuildId,
+    loading,
+    error,
+    showPlans,
+    setShowPlans,
+  });
+
+  useBillingEntryAnalytics({
+    loading,
+    error,
+    data,
+    selectedGuildId,
+    source,
+    limitContext,
+  });
+
+  const handleCheckout = async (tier: PaidTier) => {
+    let attempt: ReturnType<typeof checkoutAttempt.begin> | null = null;
+    try {
+      if (!selectedGuildId || selectedGuildId !== routeServerId) return;
+      if (
+        checkoutIsBlocked({
+          busy,
+          refreshing: checkoutAttempt.refreshing,
+          failedCheckout,
+          billingFetching: billingQuery.isFetching,
+          pricingFetching: pricingQuery.isFetching,
+          pricingError: pricingQuery.isError,
+          data,
+          tier,
+          offer,
+        })
+      )
+        return;
+      const plan = resolvePaidPlan(planLookup, tier, interval);
+      if (!plan) {
+        notifications.show({
+          color: "red",
+          title: "Pricing unavailable",
+          message: "We could not find pricing for that plan. Please try again.",
+        });
+        return;
+      }
+      const promotionCode = promoCode.trim();
+      track("upgrade_plan_clicked", {
+        guild_id: selectedGuildId,
+        tier,
+        interval,
+        source,
+        ...recordingLimitAnalytics(limitContext ?? {}),
+        promo_present: Boolean(promotionCode),
+        offer: tier === "basic" ? displayedOffer : "none",
+        event_version: 1,
+      });
+      const request = billingCheckoutRequest({
+        serverId: selectedGuildId,
+        tier,
+        interval,
+        promotionCode,
+        offer,
+        offerChoice,
+        source,
+        limitContext,
+      });
+      attempt = checkoutAttempt.begin(request, offer);
+      const body = await checkoutMutation.mutateAsync(request);
+      if (checkoutAttempt.isCurrent(attempt)) window.location.href = body.url;
+    } catch (err) {
+      if (attempt && checkoutAttempt.isCurrent(attempt)) {
+        console.error(err);
+        showBillingError(err, "checkout");
+      }
+    }
+  };
+
+  const handlePortal = async () => {
+    try {
+      if (!selectedGuildId || selectedGuildId !== routeServerId) return;
+      if (busy) return;
+      const body = await portalMutation.mutateAsync({
+        serverId: selectedGuildId,
+      });
+      window.location.href = body.url;
+    } catch (err) {
+      console.error(err);
+      showBillingError(err, "portal");
+    }
+  };
+
+  const changeInterval = (value: BillingInterval) =>
+    navigate({
+      replace: true,
+      search: {
+        ...search,
+        interval: value,
+        promo: promoCode.trim() || undefined,
+      },
+    });
+  const changePromo = (value: string) => {
+    setPromoCode(value);
+    navigate({
+      replace: true,
+      search: { ...search, promo: value.trim() || undefined },
+    });
+  };
+  const changeOffer = (value: IntroOfferChoice) =>
+    navigate({ replace: true, search: { ...search, offerChoice: value } });
+  const expandPlans = () => setShowPlans(true);
+  const togglePlans = () => setShowPlans((prev) => !prev);
+  const refreshOffers = () => checkoutAttempt.refresh();
+  const retryCheckout = async () => {
+    const attempt = checkoutAttempt.attempt;
+    if (
+      busy ||
+      !selectedGuildId ||
+      selectedGuildId !== routeServerId ||
+      !attempt ||
+      !checkoutAttempt.isCurrent(attempt)
+    )
+      return;
+    try {
+      const body = await checkoutMutation.mutateAsync(attempt.request);
+      if (checkoutAttempt.isCurrent(attempt)) window.location.href = body.url;
+    } catch (error) {
+      if (checkoutAttempt.isCurrent(attempt))
+        showBillingError(error, "checkout");
+    }
+  };
+
+  if (loading) {
+    return <BillingLoadingState />;
+  }
+
+  if (error) {
+    return <BillingErrorState message={error} />;
+  }
+
+  if (!data) {
+    return <BillingNoServerState />;
+  }
+
+  if (!data.billingEnabled) {
+    return <BillingDisabledState />;
+  }
+
+  return (
+    <BillingShell>
+      <RecordingPlanContext context={limitContext} />
+      <BillingCurrentPlan
+        data={data}
+        serverName={serverName}
+        isPortalPending={isPortalPending}
+        selectedGuildId={selectedGuildId}
+        busy={busy}
+        onPortal={handlePortal}
+        normalPlan={normalPlan}
+      />
+      <BillingPlansSection
+        data={data}
+        interval={interval}
+        onIntervalChange={changeInterval}
+        hasAnnualPlans={hasAnnualPlans}
+        showPlans={showPlans}
+        onExpandPlans={expandPlans}
+        onTogglePlans={togglePlans}
+        onCheckout={handleCheckout}
+        promoCode={promoCode}
+        onPromoCodeChange={changePromo}
+        basicPlan={basicPlan}
+        proPlan={proPlan}
+        offer={offer}
+        offerChoice={offerChoice}
+        onOfferChoiceChange={changeOffer}
+        busy={
+          busy ||
+          billingQuery.isFetching ||
+          pricingQuery.isFetching ||
+          checkoutAttempt.refreshing
+        }
+        checkoutBlocked={Boolean(failedCheckout) || pricingQuery.isError}
+      />
+      <BillingCheckoutRecovery
+        offer={offer}
+        failedCheckout={failedCheckout}
+        busy={busy}
+        retryCheckout={retryCheckout}
+        refreshOffers={refreshOffers}
+      />
     </BillingShell>
   );
 }

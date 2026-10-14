@@ -9,14 +9,39 @@ import {
   annualIntroOffer,
 } from "../../src/frontend/pages/basicIntroFixtures";
 
+type IntroBillingOptions = {
+  status?: BasicIntroOffer["status"];
+  details?: ProviderSubscriptionDetails;
+  legacy?: boolean;
+  canceledSubscription?: boolean;
+};
+
+function introBillingData(options: IntroBillingOptions) {
+  return {
+    tier: options.details ? "basic" : "free",
+    billingSource: options.details || options.legacy ? "stripe" : "free",
+    status: options.canceledSubscription
+      ? "canceled"
+      : options.details
+        ? "active"
+        : "free",
+    billingEnabled: true,
+    hasStripeBilling: Boolean(options.details || options.legacy),
+    canManageBillingPortal: Boolean(options.details || options.legacy),
+    usage: options.canceledSubscription
+      ? {
+          usedMinutes: 45,
+          limitMinutes: 240,
+          remainingMinutes: 195,
+        }
+      : null,
+    subscriptionDetails: options.details,
+  };
+}
+
 export async function useIntroBilling(
   page: Page,
-  options: {
-    status?: BasicIntroOffer["status"];
-    details?: ProviderSubscriptionDetails;
-    legacy?: boolean;
-    canceledSubscription?: boolean;
-  } = {},
+  options: IntroBillingOptions = {},
 ) {
   const status = options.status ?? "available";
   await page.route("**/trpc/**", async (route) => {
@@ -41,27 +66,7 @@ export async function useIntroBilling(
           ? {
               result: {
                 data: {
-                  tier: options.details ? "basic" : "free",
-                  billingSource:
-                    options.details || options.legacy ? "stripe" : "free",
-                  status: options.canceledSubscription
-                    ? "canceled"
-                    : options.details
-                      ? "active"
-                      : "free",
-                  billingEnabled: true,
-                  hasStripeBilling: Boolean(options.details || options.legacy),
-                  canManageBillingPortal: Boolean(
-                    options.details || options.legacy,
-                  ),
-                  usage: options.canceledSubscription
-                    ? {
-                        usedMinutes: 45,
-                        limitMinutes: 240,
-                        remainingMinutes: 195,
-                      }
-                    : null,
-                  subscriptionDetails: options.details,
+                  ...introBillingData(options),
                   ...offers,
                 },
               },
