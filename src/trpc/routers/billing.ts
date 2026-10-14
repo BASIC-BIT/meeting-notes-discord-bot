@@ -47,6 +47,7 @@ const me = authedProcedure
     return getBillingSnapshot({
       stripe,
       guildId: input.serverId,
+      payerId: ctx.user.id,
     });
   });
 
@@ -57,6 +58,11 @@ const checkout = manageGuildProcedure
       tier: z.enum(["basic", "pro"]),
       interval: z.enum(["month", "year"]).default("month"),
       promotionCode: z.string().optional(),
+      savedPromotionCode: z.string().max(200).optional(),
+      expectedOffer: z
+        .enum(["none", "basic_intro_v1", "basic_annual_intro_v1"])
+        .optional(),
+      offerChoice: z.enum(["automatic", "promotion"]).default("automatic"),
       source: z.enum(PURCHASE_SOURCES).catch("unknown").default("direct"),
       limitType: z.enum(RECORDING_LIMIT_TYPES).optional().catch(undefined),
       limitSurface: z
@@ -94,6 +100,16 @@ const checkout = manageGuildProcedure
     }
     let reason = "provider_failed";
     try {
+      if (
+        input.promotionCode?.trim() &&
+        input.savedPromotionCode?.trim() &&
+        input.promotionCode.trim() !== input.savedPromotionCode.trim()
+      )
+        throw new BillingActionError(
+          "BAD_REQUEST",
+          "Saved and selected promotion codes do not match.",
+          "discount_choice_required",
+        );
       let priceId =
         (await resolvePaidPlanPriceId({
           stripe,
@@ -138,6 +154,9 @@ const checkout = manageGuildProcedure
         priceId,
         promotionCodeId,
         promotionCode,
+        savedPromotionCode: input.savedPromotionCode?.trim(),
+        expectedOffer: input.expectedOffer,
+        offerChoice: input.offerChoice,
         tier: input.tier as PaidTier,
         interval: input.interval as BillingInterval,
         source: input.source,
@@ -151,8 +170,7 @@ const checkout = manageGuildProcedure
           userId: ctx.user.id,
           guildId: input.serverId,
           properties: {
-            reason:
-              err instanceof BillingActionError ? "transition_guarded" : reason,
+            reason: err instanceof BillingActionError ? err.reason : reason,
             surface: "billing",
             source: input.source,
             ...recordingLimitAnalytics(input),

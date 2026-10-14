@@ -16,10 +16,13 @@ flowchart LR
   Discord["Useful notes in Discord"] --> Offer["Offer delivered"]
   Offer -. "native click unknown" .-> Arrival["Upgrade arrival"]
   Home["Homepage pricing"] --> Arrival
-  Arrival --> Auth["Sign in if needed"] --> Ready["Server, billing and selected-period price ready"]
+  Direct["Direct upgrade or promotion link"] --> Arrival
+  Arrival --> Auth["Discord sign-in if needed"] --> Select["Choose a managed server if needed"]
+  Select --> Ready["Server, billing and selected-period price ready"]
   Ready --> Click["Direct plan action (Monthly or Annual)"] --> Checkout["Checkout URL created"]
   Billing["Portal billing"] --> Click
-  Checkout --> Paid["Paid invoice and active entitlement saved"] --> Return["Return to server"]
+  Checkout --> Paid["Paid invoice and active entitlement saved"] --> Success["Existing success page"]
+  Success --> Return["Return to intended server task"]
   Checkout --> Cancel["Cancel/recover"] --> Arrival
 ```
 
@@ -27,16 +30,78 @@ The purchase page defaults to Monthly unless the arrival link requests Annual.
 Its billing selector changes prices on the same page, without adding a checkout
 step. Savings use the configured monthly/yearly pair in the same currency.
 
+Current pages and the proposed introductory pricing use this same journey. No
+new route or intermediate purchase step is added. Homepage terms are conditional;
+signed-in Upgrade and Billing terms use the selected server's offer. After
+payment, the existing success page lets the purchaser return to the intended
+server task. Canceled checkout returns to its purchase page with the original
+server, cadence, source and saved promotion intent. Future measurement views
+must keep visibility, buying actions and paid invoices separate.
+
+## Introductory offer event contract
+
+`offer` is always one of `none`, `basic_intro_v1` or `basic_annual_intro_v1`.
+It is added to `upgrade_ready`, `upgrade_plan_clicked`,
+`billing_checkout_created` and `billing_entitlement_saved`, with event version 1.
+Readiness and actions describe the displayed selected Basic offer. Pro actions
+use `none`. Checkout describes the frozen native offer, and paid capture
+describes the original fixed subscription cohort. No offer category authorizes
+a purchase or proves a particular invoice was discounted.
+
+`basic_intro_offer_exposed` has event version 1, fixed `offer` excluding `none`,
+`interval` (`month` or `year`) and `surface` (`homepage_pricing`, `upgrade` or
+`portal_billing`). An authenticated resolved server uses the existing `guild_id`;
+homepage exposure adds no guild. The existing signed-in browser identity applies.
+There are no new stable identifiers or price/content properties.
+
+Its counting unit is one distinct displayed offer per mounted page entry and
+selected server. It observes the actual `basic-intro-terms` element with
+IntersectionObserver at threshold 1 and requires a visible document and nonzero
+element area. Horizontal clipping, offscreen terms, hidden tabs and rendering
+alone do not count. Switching from monthly to annual can count the annual offer;
+switching back cannot count monthly again. Cadence query changes retain the entry.
+Changing the route/page or selected server starts a new entry. There is no timer
+polling. DNT suppresses capture, and delivery remains best effort. These counts
+are visibility observations, not proof of reading, unique people or causal
+attribution. Repeated page entries can count the same person again.
+
+Canonical paid capture adds `invoice_price`, one of `intro_discounted`,
+`regular_price`, `other_discount` or `unknown`. It classifies the actual event
+invoice from native amounts and discount associations, independently of the
+current subscription period. Supported evidence is a single settled, nonprorated
+subscription line with a known fixed recurring Price, consistent subtotal and
+tax-exclusive total, no balance/credit-note adjustment and coherent line/invoice
+discount references. Regular price requires zero native discounts and equal
+subtotal/tax-exclusive total. Intro pricing additionally requires the matching
+frozen native coupon, correct cadence/duration and exact 40% amount. Other
+supported native discounts use `other_discount`. Missing, ambiguous or failed
+native evidence uses `unknown`.
+
+String invoice discount references trigger retrieval of that exact invoice with
+coupon expansion, never a latest-invoice lookup. Annual once coupons can be
+consumed at finalization and absent from current subscription discounts while
+remaining on the first invoice. Reordered initial events are classified using
+their own invoice. Current-period `getAnnualIntroFirstYearPayment` is for billing
+display and is not used to classify older webhook events. Native classification
+failure cannot retry billing or change entitlement/receipt behavior.
+
+`promo_present` still means a code originally supplied through Chronote. Both
+checkout and paid capture use frozen `purchase_promo_present=true` or existing
+`promo_code` presence, never native coupon use. No raw code enters analytics.
+Existing DNT opt-outs and invoice receipts apply unchanged. Public privacy,
+provider-table and What's New notice must publish before new capture takes effect.
+
 | Event                       | Boundary                                                                       | Safe properties beyond environment/surface/identity                                                                                 |
 | --------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `upgrade_arrived`           | Once per mounted purchase-route entry                                          | source, canceled, event_version=1                                                                                                   |
+| `basic_intro_offer_exposed` | Fully visible actual terms once per distinct offer per page/server entry       | offer, interval, surface=homepage_pricing/upgrade/portal_billing, event_version=1                                                   |
 | `upgrade_auth_started`      | Explicit purchase-page sign-in action                                          | source, promo_present, event_version=1                                                                                              |
 | `upgrade_blocked`           | Displayed blocking reason changes                                              | source, requested tier/interval, promo_present, reason, event_version=1                                                             |
-| `upgrade_ready`             | Authenticated manageable server, fresh billing and exact requested price       | source, tier/interval, promo_present, event_version=1                                                                               |
-| `upgrade_plan_clicked`      | Explicit eligible paid-tier action on Upgrade or Billing                       | source, tier/interval, promo_present, event_version=1                                                                               |
-| `billing_checkout_created`  | New Stripe subscription checkout returns a URL                                 | source, tier/interval, promo_present, billing_kind, event_version=1                                                                 |
+| `upgrade_ready`             | Authenticated manageable server, fresh billing and exact requested price       | source, tier/interval, promo_present, offer, event_version=1                                                                        |
+| `upgrade_plan_clicked`      | Explicit eligible paid-tier action on Upgrade or Billing                       | source, tier/interval, promo_present, offer, event_version=1                                                                        |
+| `billing_checkout_created`  | New Stripe subscription checkout returns a URL                                 | source, tier/interval, promo_present, offer, billing_kind, event_version=1                                                          |
 | `billing_checkout_rejected` | Billing configuration, price, promotion or guarded transition refuses checkout | fixed reason, source, optional tier/interval, event_version=1                                                                       |
-| `billing_entitlement_saved` | Verified paid positive-value invoice, persisted active Stripe entitlement      | source, tier/interval, promo_present, billing_kind, event_version=1                                                                 |
+| `billing_entitlement_saved` | Verified paid positive-value invoice, persisted active Stripe entitlement      | source, tier/interval, promo_present, offer, invoice_price, billing_kind, event_version=1                                           |
 | `upgrade_offer_delivered`   | Successful CTA-bearing summary or final-notes message                          | surface=discord_summary or discord_notes, event_version=1                                                                           |
 | `meeting_completed`         | Existing finalization and cancellation paths                                   | existing flags/counts plus transcription_outcome, notes_outcome, history_persistence, notes_delivery, usable_notes, event_version=2 |
 
@@ -247,3 +312,12 @@ This change adds context to existing pages. It creates no new purchase step or
 live recording extension. Production capture still depends on public notice
 publication. Saved insights and real conversion evidence follow deployment;
 local tests do not establish ingestion or revenue.
+
+## Checkout rejection categories
+
+The existing fixed blocking-reason field distinguishes `offer_unavailable`,
+`offer_changed_terms`, `discount_choice_required`, `purchase_pending`,
+`purchase_needs_review` and `purchase_expired` from `transition_guarded`.
+Services supply this category explicitly; messages and native provider errors
+are never parsed or sent as analytics properties. The event, identifiers,
+Do Not Track behavior and existing content exclusions remain the same.

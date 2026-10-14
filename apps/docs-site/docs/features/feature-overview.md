@@ -16,6 +16,30 @@ charge and any savings compared with twelve monthly payments. Savings labels
 reflect the available prices. Choose **Continue with Basic** or **Continue with
 Pro** to open checkout for that plan. One subscription covers the server.
 
+### Basic introductory pricing
+
+When an introductory offer is available for your server, Basic costs $6/month
+for the first three months, then $10/month. Annual Basic costs $60 for the first
+year, then $100/year. Annual billing is one yearly payment. Prices are in US
+dollars. Tax may apply. Subscriptions renew automatically unless canceled.
+
+Each server can use the monthly offer once and the annual offer once. Using one
+does not consume the other. Regular paid subscriptions and complimentary access
+do not consume either offer. Changing payer or canceling does not reset a used
+offer. The available offer is shown for the selected server before checkout.
+Pro pricing is unchanged. Introductory pricing cannot be combined with another
+promotion. If you entered a code, choose the introductory offer or that promotion
+before checkout. Any enrollment cutoff is shown with the offer terms. After the
+deadline, the offer no longer applies to new purchases. An existing checkout
+reservation keeps its agreed price while the reservation remains valid. If no
+cutoff is shown,
+enrollment remains open while the offer is available.
+
+Use **Manage billing** for an existing subscription. Billing shows the available
+management actions, payment status and verified renewal details. When verified,
+it shows the first annual invoice's amount paid separately from its subtotal and
+the next annual renewal price.
+
 | Limit                             | Free       | Basic    | Pro             |
 | --------------------------------- | ---------- | -------- | --------------- |
 | Recording time per rolling 7 days | 4 hours    | 20 hours | No weekly limit |

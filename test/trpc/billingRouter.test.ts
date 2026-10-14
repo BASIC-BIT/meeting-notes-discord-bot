@@ -12,12 +12,14 @@ import {
   BillingActionError,
   createCheckoutSession,
   createPortalSession,
+  resolvePromotionCodeId,
 } from "../../src/services/billingService";
 
 jest.mock("../../src/services/billingService", () => ({
   ...jest.requireActual("../../src/services/billingService"),
   createCheckoutSession: jest.fn(),
   createPortalSession: jest.fn(),
+  resolvePromotionCodeId: jest.fn(async () => "promo_other"),
 }));
 jest.mock("../../src/services/stripeClient", () => ({
   getStripeClient: () => ({}),
@@ -48,6 +50,47 @@ const caller = (dnt?: string) =>
     res: {} as Response,
     user: { ...getMockUser(), accessToken: "fixture-token" },
   });
+
+test("saved introductory code is return intent and never looked up for redemption", async () => {
+  await caller().checkout({
+    serverId: "111111111111111111",
+    tier: "basic",
+    expectedOffer: "basic_intro_v1",
+    offerChoice: "automatic",
+    savedPromotionCode: "SAVE20",
+  });
+  expect(resolvePromotionCodeId).not.toHaveBeenCalled();
+  expect(createCheckoutSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      savedPromotionCode: "SAVE20",
+      promotionCode: undefined,
+      promotionCodeId: null,
+      offerChoice: "automatic",
+    }),
+  );
+});
+test("rejects conflicting saved and redeemed codes before provider work", async () => {
+  await expect(
+    caller().checkout({
+      serverId: "111111111111111111",
+      tier: "basic",
+      promotionCode: "ONE",
+      savedPromotionCode: "TWO",
+      offerChoice: "promotion",
+    }),
+  ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  expect(resolvePromotionCodeId).not.toHaveBeenCalled();
+  expect(createCheckoutSession).not.toHaveBeenCalled();
+  expect(captureEvent).toHaveBeenCalledWith(
+    "billing_checkout_rejected",
+    expect.objectContaining({
+      properties: expect.objectContaining({
+        reason: "discount_choice_required",
+      }),
+    }),
+  );
+  expect(resolvePaidPlanPriceId).not.toHaveBeenCalled();
+});
 
 test.each(["header", "input"])(
   "browser %s opt-out suppresses synchronous server analytics",
@@ -200,5 +243,81 @@ test.each([
       expect(request).not.toHaveProperty("limitType");
       expect(request).not.toHaveProperty("limitSurface");
     }
+  },
+);
+
+// These tests catch missed router choice propagation and stale offer expectations.
+test("checkout forwards expected offer and explicit promotion choice to the shared boundary", async () => {
+  jest
+    .mocked(createCheckoutSession)
+    .mockResolvedValue("https://checkout.stripe.com/test");
+  await caller().checkout({
+    serverId: "111111111111111111",
+    tier: "basic",
+    expectedOffer: "none",
+    offerChoice: "promotion",
+    promotionCode: "OTHER",
+  });
+  expect(createCheckoutSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      expectedOffer: "none",
+      offerChoice: "promotion",
+      promotionCode: "OTHER",
+    }),
+  );
+});
+
+test.each(["basic_intro_v1", "basic_annual_intro_v1"] as const)(
+  "checkout accepts %s and defaults offer choice to automatic",
+  async (expectedOffer) => {
+    jest
+      .mocked(createCheckoutSession)
+      .mockResolvedValue("https://checkout.stripe.com/test");
+    await caller().checkout({
+      serverId: "111111111111111111",
+      tier: "basic",
+      expectedOffer,
+    });
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedOffer,
+        offerChoice: "automatic",
+      }),
+    );
+  },
+);
+
+test.each([
+  "offer_unavailable",
+  "offer_changed_terms",
+  "discount_choice_required",
+  "purchase_pending",
+  "purchase_needs_review",
+  "purchase_expired",
+  "transition_guarded",
+] as const)(
+  "checkout records bounded %s without private error content",
+  async (reason) => {
+    jest
+      .mocked(createCheckoutSession)
+      .mockRejectedValue(
+        new BillingActionError(
+          "BAD_REQUEST",
+          "Customer-facing safe message",
+          reason,
+        ),
+      );
+    await expect(
+      caller().checkout({ serverId: "111111111111111111", tier: "basic" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(captureEvent).toHaveBeenCalledWith(
+      "billing_checkout_rejected",
+      expect.objectContaining({
+        properties: expect.objectContaining({ reason }),
+      }),
+    );
+    expect(JSON.stringify(jest.mocked(captureEvent).mock.calls)).not.toContain(
+      "Customer-facing safe message",
+    );
   },
 );

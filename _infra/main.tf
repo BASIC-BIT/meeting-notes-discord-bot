@@ -394,6 +394,42 @@ variable "STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED" {
   default     = false
 }
 
+variable "STRIPE_INTRO_OFFER_LEDGER_ENABLED" {
+  description = "Enable fresh introductory offers only after reviewed writer registration and history coverage"
+  type        = bool
+  default     = false
+}
+
+variable "STRIPE_BASIC_INTRO_COUPON_ID" {
+  description = "Existing native 40-percent three-month Basic monthly intro coupon ID; empty disables monthly enrollment"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID" {
+  description = "Separate native 40 percent once coupon for Basic first-year annual enrollment; empty disables annual enrollment"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_BASIC_INTRO_STARTS_AT" {
+  description = "Basic intro enrollment start as ISO timestamp; empty leaves the offer inactive"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT" {
+  description = "Optional Basic intro enrollment cutoff as ISO timestamp; empty means open-ended when enabled"
+  type        = string
+  default     = ""
+}
+
+variable "STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID" {
+  description = "Existing safe portal configuration for introductory subscribers; disables plan updates"
+  type        = string
+  default     = ""
+}
+
 variable "STRIPE_PRICE_BASIC" {
   description = "Optional fallback Stripe price ID for basic plan"
   type        = string
@@ -1892,6 +1928,30 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "STRIPE_CANCEL_URL"
           value = var.STRIPE_CANCEL_URL
+        },
+        {
+          name  = "STRIPE_INTRO_OFFER_LEDGER_ENABLED"
+          value = tostring(var.STRIPE_INTRO_OFFER_LEDGER_ENABLED)
+        },
+        {
+          name  = "STRIPE_BASIC_INTRO_COUPON_ID"
+          value = var.STRIPE_BASIC_INTRO_COUPON_ID
+        },
+        {
+          name  = "STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID"
+          value = var.STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID
+        },
+        {
+          name  = "STRIPE_BASIC_INTRO_STARTS_AT"
+          value = var.STRIPE_BASIC_INTRO_STARTS_AT
+        },
+        {
+          name  = "STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT"
+          value = var.STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT
+        },
+        {
+          name  = "STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID"
+          value = var.STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID
         },
         {
           name  = "STRIPE_PORTAL_RETURN_URL"

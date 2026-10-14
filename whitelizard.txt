@@ -98,3 +98,10 @@ src/bot.ts:handleUserJoin
 src\bot.ts:handleUserJoin
 src/db.ts:updateMeetingNotes
 src\db.ts:updateMeetingNotes
+
+# Pure native invoice evidence predicates retain one auditable cross-field contract.
+# Provider I/O, classification and mutations remain subject to the normal gate.
+src/api/billing.ts:hasUnsupportedInvoiceEvidence
+src\api\billing.ts:hasUnsupportedInvoiceEvidence
+src/services/basicIntroOfferService.ts:hasUnsupportedAnnualPaymentEvidence
+src\services\basicIntroOfferService.ts:hasUnsupportedAnnualPaymentEvidence
