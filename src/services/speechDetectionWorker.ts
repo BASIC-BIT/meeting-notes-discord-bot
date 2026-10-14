@@ -1,0 +1,182 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { parentPort, workerData } from "node:worker_threads";
+import { z } from "zod";
+import { DEFAULT_SPEECH_POLICY } from "./speechDetectionPolicy";
+import { assessWavSpeech } from "./speechDetectionCore";
+import type { SileroSession, SpeechWorkerReply } from "./speechDetectionTypes";
+
+const assetSchema = z.object({
+  file: z.string(),
+  bytes: z.number().int().positive(),
+  sha256: z.string(),
+});
+const manifestSchema = z.object({
+  model: assetSchema,
+  runtime: z.object({
+    package: z.literal("onnxruntime-web"),
+    version: z.literal("1.30.0"),
+    assets: z.array(assetSchema).length(3),
+  }),
+});
+const requestSchema = z.object({
+  type: z.literal("assess"),
+  requestId: z.number().int().positive(),
+  wav: z.instanceof(ArrayBuffer),
+  policyFingerprint: z.literal(DEFAULT_SPEECH_POLICY.policyFingerprint),
+});
+const sha256 = (bytes: Uint8Array): string =>
+  createHash("sha256").update(bytes).digest("hex");
+
+async function loadSession(): Promise<
+  import("onnxruntime-web").InferenceSession
+> {
+  try {
+    z.object({
+      policyFingerprint: z.literal(DEFAULT_SPEECH_POLICY.policyFingerprint),
+    }).parse(workerData);
+    const assets = path.resolve(
+      __dirname,
+      path.extname(__filename) === ".ts"
+        ? "../../assets/speech-detection"
+        : "../assets/speech-detection",
+    );
+    const manifest = manifestSchema.parse(
+      JSON.parse(await readFile(path.join(assets, "manifest.json"), "utf8")),
+    );
+    if (
+      manifest.model.file !== "silero-v6.2.1.onnx" ||
+      manifest.model.sha256 !== DEFAULT_SPEECH_POLICY.modelSha256
+    )
+      throw Error("Model manifest mismatch");
+    const model = await readFile(path.join(assets, manifest.model.file));
+    if (
+      sha256(model) !== DEFAULT_SPEECH_POLICY.modelSha256 ||
+      model.length !== manifest.model.bytes
+    )
+      throw Error("Model integrity mismatch");
+    const runtimeEntry = require.resolve("onnxruntime-web");
+    const runtimeRoot = path.dirname(path.dirname(runtimeEntry));
+    const runtimePackage = z
+      .object({
+        name: z.literal("onnxruntime-web"),
+        version: z.literal("1.30.0"),
+      })
+      .parse(
+        JSON.parse(
+          await readFile(path.join(runtimeRoot, "package.json"), "utf8"),
+        ),
+      );
+    if (
+      DEFAULT_SPEECH_POLICY.engineVersion !==
+      `${runtimePackage.name}@${runtimePackage.version}`
+    )
+      throw Error("Runtime policy mismatch");
+    const expectedFiles = [
+      "dist/ort.node.min.js",
+      "dist/ort-wasm-simd-threaded.mjs",
+      "dist/ort-wasm-simd-threaded.wasm",
+    ];
+    if (
+      manifest.runtime.assets.map((asset) => asset.file).join(",") !==
+      expectedFiles.join(",")
+    )
+      throw Error("Runtime manifest mismatch");
+    for (const asset of manifest.runtime.assets) {
+      const bytes = await readFile(path.join(runtimeRoot, asset.file));
+      if (sha256(bytes) !== asset.sha256 || bytes.length !== asset.bytes)
+        throw Error("Runtime integrity mismatch");
+    }
+    const ort = await import("onnxruntime-web");
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.proxy = false;
+    ort.env.wasm.wasmPaths = pathToFileURL(
+      path.join(runtimeRoot, "dist") + path.sep,
+    ).href;
+    return await ort.InferenceSession.create(new Uint8Array(model), {
+      executionProviders: ["wasm"],
+    });
+  } catch {
+    throw Error("asset_error");
+  }
+}
+
+async function main(): Promise<void> {
+  const port = parentPort;
+  if (!port) throw Error("worker_error");
+  const session = await loadSession();
+  const ort = await import("onnxruntime-web");
+  const silero: SileroSession = {
+    async infer(input, state) {
+      const output = await session.run({
+        input: new ort.Tensor("float32", input, [1, 576]),
+        state: new ort.Tensor("float32", state, [2, 1, 128]),
+        sr: new ort.Tensor("int64", BigInt64Array.of(16000n), []),
+      });
+      if (
+        output.output.type !== "float32" ||
+        output.output.data.length !== 1 ||
+        output.stateN.type !== "float32" ||
+        output.stateN.dims.join(",") !== "2,1,128"
+      )
+        throw Error("invalid_output");
+      return {
+        probability: z.number().parse(output.output.data[0]),
+        state: z.instanceof(Float32Array).parse(output.stateN.data),
+      };
+    },
+  };
+  // Run one frame before readiness so lazy engine work stays in bounded startup.
+  // assessWavSpeech owns fresh recurrent/context state, discarded after this call.
+  const silence = Buffer.alloc(44 + DEFAULT_SPEECH_POLICY.frameSamples * 2);
+  silence.write("RIFF", 0);
+  silence.writeUInt32LE(silence.length - 8, 4);
+  silence.write("WAVEfmt ", 8);
+  silence.writeUInt32LE(16, 16);
+  silence.writeUInt16LE(1, 20);
+  silence.writeUInt16LE(1, 22);
+  silence.writeUInt32LE(DEFAULT_SPEECH_POLICY.sampleRate, 24);
+  silence.writeUInt32LE(DEFAULT_SPEECH_POLICY.sampleRate * 2, 28);
+  silence.writeUInt16LE(2, 32);
+  silence.writeUInt16LE(16, 34);
+  silence.write("data", 36);
+  silence.writeUInt32LE(silence.length - 44, 40);
+  const primed = await assessWavSpeech(silence, silero, DEFAULT_SPEECH_POLICY);
+  if (primed.kind === "unavailable") {
+    await session.release();
+    throw Error(primed.reason);
+  }
+  let busy = false;
+  port.on("message", async (message: unknown) => {
+    const parsed = requestSchema.safeParse(message);
+    if (!parsed.success || busy) throw Error("invalid_output");
+    busy = true;
+    try {
+      const request = parsed.data;
+      const assessment = await assessWavSpeech(
+        new Uint8Array(request.wav),
+        silero,
+        DEFAULT_SPEECH_POLICY,
+      );
+      port.postMessage({
+        type: "assessment",
+        requestId: request.requestId,
+        assessment,
+      } satisfies SpeechWorkerReply);
+    } finally {
+      busy = false;
+    }
+  });
+  port.on("close", () => {
+    void session.release();
+  });
+  port.postMessage({
+    type: "ready",
+    policyFingerprint: DEFAULT_SPEECH_POLICY.policyFingerprint,
+  } satisfies SpeechWorkerReply);
+}
+void main().catch((error) => {
+  throw error;
+});

@@ -9,7 +9,7 @@
     "start:mock": "node scripts/dev.js start:mock",
     "start:mock:inner": "nodemon --exec \"ts-node src/index.ts --mock\"",
     "start:mock:once": "ts-node src/index.ts --mock",
-    "build": "tsc",
+    "build": "tsc && node scripts/build-speech-assets.mjs",
     "build:web": "vite build && node scripts/build-route-html.mjs",
     "build:all": "yarn build && yarn build:web",
     "serve": "node dist/index.js",

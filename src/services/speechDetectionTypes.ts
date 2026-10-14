@@ -79,3 +79,29 @@ export interface SileroSession {
     state: Float32Array,
   ): Promise<{ probability: number; state: Float32Array }>;
 }
+
+export type SpeechUnavailableReason = Extract<
+  SpeechAssessment,
+  { kind: "unavailable" }
+>["reason"];
+export type SpeechWorkerRequest = {
+  type: "assess";
+  requestId: number;
+  wav: ArrayBuffer;
+  policyFingerprint: string;
+};
+export type SpeechWorkerReply =
+  | { type: "ready"; policyFingerprint: string }
+  | { type: "assessment"; requestId: number; assessment: SpeechAssessment };
+export interface SpeechWorkerTransport {
+  post(request: SpeechWorkerRequest): void;
+  onReply(listener: (reply: SpeechWorkerReply) => void): () => void;
+  onFailure(listener: (reason: SpeechUnavailableReason) => void): () => void;
+  terminate(): Promise<void>;
+}
+export type SpeechDetectorBindings = {
+  policy: SpeechPolicy;
+  spawn: (policy: SpeechPolicy) => SpeechWorkerTransport;
+  now: () => number;
+  schedule: (callback: () => void, delayMs: number) => { cancel(): void };
+};
