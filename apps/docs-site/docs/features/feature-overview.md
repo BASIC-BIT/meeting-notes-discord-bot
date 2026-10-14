@@ -29,8 +29,9 @@ server, so paying for another server does not by itself exclude this one.
 Existing paid or legacy billing, complimentary access and forced plans are not
 eligible. Pro pricing is unchanged. Introductory pricing cannot be combined with
 another promotion. If you entered a code, choose the introductory offer
-or that promotion before checkout. Enrollment has no announced end date and
-remains open until we end the offer.
+or that promotion before checkout. Any enrollment cutoff is shown with the
+offer terms before purchase. If no cutoff is shown, enrollment remains open
+while the offer is available.
 
 Use **Manage billing** for an existing subscription. While an introductory
 discount remains active on your shared billing account, plan changes can be

@@ -1,8 +1,8 @@
 import { TRPCError } from "@trpc/server";
-import { getBasicIntroOffer } from "../../services/basicIntroOfferService";
+import { getPublicPricingSnapshot } from "../../services/publicPricingService";
 import type { BasicIntroOffer } from "../../types/pricing";
 import { config } from "../../services/configService";
-import { getPaidPlans, getMockPaidPlans } from "../../services/pricingService";
+import { getMockPaidPlans } from "../../services/pricingService";
 import { getStripeClient } from "../../services/stripeClient";
 import { publicProcedure, router } from "../trpc";
 
@@ -32,16 +32,7 @@ export const pricingRouter = router({
       };
     }
     try {
-      const plans = await getPaidPlans(stripe);
-      return {
-        plans: plans.length ? plans : getMockPaidPlans(),
-        introOffer: await getBasicIntroOffer({ stripe, plans }),
-        annualIntroOffer: await getBasicIntroOffer({
-          stripe,
-          plans,
-          interval: "year",
-        }),
-      };
+      return await getPublicPricingSnapshot(stripe);
     } catch (err) {
       console.error("Failed to load pricing from Stripe", err);
       throw new TRPCError({

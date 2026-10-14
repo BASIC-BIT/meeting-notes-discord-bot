@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { getPublicPricingSnapshot } from "../../src/services/publicPricingService";
 import { config } from "../../src/services/configService";
 import * as entitlementService from "../../src/services/entitlementService";
 import { captureEvent } from "../../src/services/analyticsService";
@@ -352,6 +353,54 @@ describe("authoritative initial-purchase offer", () => {
     config.subscription.forceTier = "";
     clearGuildSubscriptionCache();
   });
+
+  test("Checkout revalidates provider terms even while public pricing stays cached", async () => {
+    const { request, coupon, stripe } = purchaseFixture();
+    expect(
+      (await getPublicPricingSnapshot(request.stripe)).introOffer.status,
+    ).toBe("available");
+    coupon.valid = false;
+    expect(
+      (await getPublicPricingSnapshot(request.stripe)).introOffer.status,
+    ).toBe("available");
+    await expect(
+      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+    ).rejects.toMatchObject({ reason: "offer_unavailable" });
+    expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+    expect(stripe.customers.create).not.toHaveBeenCalled();
+  });
+
+  test.each([29, 35, 59])(
+    "stale unknown introductory checkout is classified before a fresh-page quote at %i minutes",
+    async (minutes) => {
+      const { request, stripe } = purchaseFixture();
+      stripe.checkout.sessions.create.mockRejectedValueOnce(
+        new Error("lost response"),
+      );
+      await expect(
+        createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      ).rejects.toThrow("lost response");
+      jest.setSystemTime(new Date(Date.now() + minutes * 60000));
+      expect(
+        await getGuildBasicIntroOffer({
+          stripe: request.stripe,
+          guildId: request.guildId,
+          payerId: "payer",
+        }),
+      ).toEqual({ status: "ineligible" });
+      await expect(
+        createCheckoutSession({ ...request, expectedOffer: "none" }),
+      ).rejects.toMatchObject({
+        reason: "purchase_needs_review",
+        message: expect.stringContaining("needs review"),
+      });
+      expect(getMockStore().purchaseAttempts.get(request.guildId)?.state).toBe(
+        "needs_review",
+      );
+      expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
+      expect(stripe.customers.create).toHaveBeenCalledTimes(1);
+    },
+  );
 
   test("eligible Free purchase freezes native coupon and cohort, preserving promotion analytics meaning", async () => {
     const { request } = purchaseFixture();

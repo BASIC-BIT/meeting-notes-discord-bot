@@ -312,3 +312,12 @@ This change adds context to existing pages. It creates no new purchase step or
 live recording extension. Production capture still depends on public notice
 publication. Saved insights and real conversion evidence follow deployment;
 local tests do not establish ingestion or revenue.
+
+## Checkout rejection categories
+
+The existing fixed blocking-reason field distinguishes `offer_unavailable`,
+`offer_changed_terms`, `discount_choice_required`, `purchase_pending`,
+`purchase_needs_review` and `purchase_expired` from `transition_guarded`.
+Services supply this category explicitly; messages and native provider errors
+are never parsed or sent as analytics properties. The event, identifiers,
+Do Not Track behavior and existing content exclusions remain the same.

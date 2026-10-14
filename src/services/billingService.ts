@@ -534,6 +534,7 @@ function assertExistingOfferQuote(
     throw new BillingActionError(
       "BAD_REQUEST",
       "Offer terms changed. Review the current price before continuing.",
+      "offer_changed_terms",
     );
   }
 }

@@ -84,3 +84,15 @@ are part of source validation. Merging master starts deployment, so publishing a
 release remain separately authorized steps. If enabled in the provider endpoint,
 `checkout.session.expired` accelerates cleanup; it is not required for safe
 request-time recovery.
+
+Sessionless preparing attempts are classified before checking a newly displayed
+offer quote. At the safe replay deadline, an unknown creation outcome is saved
+as needs_review with a conditional write. It is not expired or released based
+only on elapsed time, and no new customer or Checkout session is created.
+
+Public price and campaign verification uses an in-process shared snapshot for
+up to 30 seconds. Requests for the same current provider client and configuration
+coalesce. Provider mode, lookup keys or campaign configuration changes invalidate
+it; campaign start and enrollment cutoff bound its lifetime. Unavailable terms
+are retained for at most one second. Server eligibility, frozen attempts and
+Checkout preparation use authoritative reads independently of this public cache.

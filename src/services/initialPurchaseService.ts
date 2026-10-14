@@ -24,11 +24,13 @@ const pending = () =>
   new BillingActionError(
     "BAD_REQUEST",
     "A purchase for this server is already in progress. Retry shortly or contact support.",
+    "purchase_pending",
   );
 const review = () =>
   new BillingActionError(
     "BAD_REQUEST",
     "Server purchase needs review. Contact support before purchasing again.",
+    "purchase_needs_review",
   );
 const terminal = (status: string) =>
   ["canceled", "incomplete_expired"].includes(status);
@@ -247,6 +249,7 @@ export async function createInitialPurchase(
     throw new BillingActionError(
       "BAD_REQUEST",
       "The checkout expired. Retry to start a new purchase.",
+      "purchase_expired",
     );
   }
   if (session.status === "complete") {
@@ -324,6 +327,8 @@ async function refreshAttempt(
 ) {
   const repo = getPurchaseRepository();
   let current = initial;
+  if (current?.state === "preparing")
+    await checkCheckoutReplayWindow(input, current);
   if (current?.sessionId && current.state === "open" && !current.incidentKey) {
     const session = await input.stripe.checkout.sessions.retrieve(
       current.sessionId,

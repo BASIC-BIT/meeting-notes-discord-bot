@@ -169,8 +169,7 @@ const checkout = manageGuildProcedure
           userId: ctx.user.id,
           guildId: input.serverId,
           properties: {
-            reason:
-              err instanceof BillingActionError ? "transition_guarded" : reason,
+            reason: err instanceof BillingActionError ? err.reason : reason,
             surface: "billing",
             source: input.source,
             ...recordingLimitAnalytics(input),

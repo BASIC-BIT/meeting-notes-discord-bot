@@ -277,3 +277,38 @@ test.each(["basic_intro_v1", "basic_annual_intro_v1"] as const)(
     );
   },
 );
+
+test.each([
+  "offer_unavailable",
+  "offer_changed_terms",
+  "discount_choice_required",
+  "purchase_pending",
+  "purchase_needs_review",
+  "purchase_expired",
+  "transition_guarded",
+] as const)(
+  "checkout records bounded %s without private error content",
+  async (reason) => {
+    jest
+      .mocked(createCheckoutSession)
+      .mockRejectedValue(
+        new BillingActionError(
+          "BAD_REQUEST",
+          "Customer-facing safe message",
+          reason,
+        ),
+      );
+    await expect(
+      caller().checkout({ serverId: "111111111111111111", tier: "basic" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(captureEvent).toHaveBeenCalledWith(
+      "billing_checkout_rejected",
+      expect.objectContaining({
+        properties: expect.objectContaining({ reason }),
+      }),
+    );
+    expect(JSON.stringify(jest.mocked(captureEvent).mock.calls)).not.toContain(
+      "Customer-facing safe message",
+    );
+  },
+);

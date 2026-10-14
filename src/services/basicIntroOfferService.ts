@@ -260,16 +260,19 @@ const changedTerms = () =>
   new BillingActionError(
     "BAD_REQUEST",
     "Offer terms changed. Review the current price before continuing.",
+    "offer_changed_terms",
   );
 const unavailableOffer = () =>
   new BillingActionError(
     "BAD_REQUEST",
     "The Basic introductory offer is unavailable. Retry shortly before purchasing.",
+    "offer_unavailable",
   );
 const choiceRequired = () =>
   new BillingActionError(
     "BAD_REQUEST",
     "Choose the introductory offer or your promotion code before continuing.",
+    "discount_choice_required",
   );
 
 async function serverIsEligible(
@@ -572,6 +575,7 @@ export async function prepareBasicIntroCheckout(params: {
     throw new BillingActionError(
       "BAD_REQUEST",
       "Enter a promotion code before choosing a promotion.",
+      "discount_choice_required",
     );
   const settingsBeforeVerification = JSON.stringify(
     config.stripe.basicIntroOffer,
