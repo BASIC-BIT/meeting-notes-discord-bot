@@ -57,24 +57,26 @@ export const getHistoricalOfferImportRepository = () => ({
       pointer?.stripeSyncRevision !== input.pointer?.stripeSyncRevision
     )
       return false;
-    if (next.state === "unused") {
-      const boundary = store.historyWriterBoundaries.get(
-        historyWriterBoundaryKey(next.accountId, next.mode),
-      );
-      if (
-        !boundary ||
-        boundary.revision !== next.writerBoundaryRevision ||
-        boundary.accountId !== next.accountId ||
-        boundary.mode !== next.mode ||
-        boundary.state !== "verified" ||
-        boundary.writerVersion !== HISTORY_WRITER_VERSION ||
-        boundary.cutoverAt > next.createdBefore * 1000 ||
-        boundary.verifiedAt > next.verifiedAt
-      )
-        return false;
-    }
+    if (!matchesStoredBoundary(next)) return false;
     if (usageNext) store.offerUsages.set(usageKey, structuredClone(usageNext));
     store.historicalOfferImports.set(key, structuredClone(next));
     return true;
   },
 });
+
+function matchesStoredBoundary(next: HistoricalOfferImport): boolean {
+  if (next.state !== "unused") return true;
+  const boundary = getMockStore().historyWriterBoundaries.get(
+    historyWriterBoundaryKey(next.accountId, next.mode),
+  );
+  return Boolean(
+    boundary &&
+    boundary.revision === next.writerBoundaryRevision &&
+    boundary.accountId === next.accountId &&
+    boundary.mode === next.mode &&
+    boundary.state === "verified" &&
+    boundary.writerVersion === HISTORY_WRITER_VERSION &&
+    boundary.cutoverAt <= next.createdBefore * 1000 &&
+    boundary.verifiedAt <= next.verifiedAt,
+  );
+}

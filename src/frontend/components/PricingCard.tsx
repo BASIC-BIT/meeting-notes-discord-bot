@@ -112,6 +112,8 @@ export function PricingCard({
   const computedBorderWidth = resolveBorderWidth(highlighted, borderWidth);
   const computedBorderColor = resolveBorderColor(highlighted, borderColor);
   const badgeColor = resolveBadgeColor(highlighted);
+  const priceTypography =
+    introOffer?.status === "available" ? { fz: 32, lh: 1.2 } : { fz: "xl" };
   return (
     <Surface
       p="xl"
@@ -141,11 +143,7 @@ export function PricingCard({
         </Stack>
         <Stack gap={4}>
           {introOffer ? <IntroPriceComparison offer={introOffer} /> : null}
-          <Text
-            fw={700}
-            fz={introOffer?.status === "available" ? 32 : "xl"}
-            lh={introOffer?.status === "available" ? 1.2 : undefined}
-          >
+          <Text fw={700} {...priceTypography}>
             {price}
           </Text>
           <Text size="sm" c="dimmed">

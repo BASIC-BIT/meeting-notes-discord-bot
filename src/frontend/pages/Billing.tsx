@@ -439,6 +439,18 @@ function proPlanDisabled(
   return proDisabled;
 }
 
+type BillingPlanCardsProps = Pick<
+  BillingPlansProps,
+  | "data"
+  | "interval"
+  | "basicPlan"
+  | "proPlan"
+  | "offer"
+  | "busy"
+  | "checkoutBlocked"
+  | "onCheckout"
+> & { shownOffer: BasicIntroOffer };
+
 function BillingPlanCards({
   data,
   interval,
@@ -449,17 +461,7 @@ function BillingPlanCards({
   checkoutBlocked,
   onCheckout,
   shownOffer,
-}: Pick<
-  BillingPlansProps,
-  | "data"
-  | "interval"
-  | "basicPlan"
-  | "proPlan"
-  | "offer"
-  | "busy"
-  | "checkoutBlocked"
-  | "onCheckout"
-> & { shownOffer: BasicIntroOffer }) {
+}: BillingPlanCardsProps) {
   const isComped = data.billingSource === "manual_comp";
   const basicCta = basicPlanCta(data, isComped);
   const proCta = proPlanCta(data, isComped);
@@ -904,9 +906,7 @@ function useBillingPricing(
   data: BillingData | null,
   frozenOffer: BasicIntroOffer | null,
   interval: BillingInterval,
-  refetchOffers: () => Promise<unknown>,
 ) {
-  const liveOffers = useIntroOfferExpiry(data, refetchOffers);
   const paidPlans = pricingData?.plans ?? [];
   const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
   const basicPlan = resolvePaidPlan(planLookup, "basic", interval);
@@ -919,7 +919,7 @@ function useBillingPricing(
   const offer =
     frozenOffer ??
     resolveIntroOffer(
-      interval === "year" ? liveOffers.annualIntroOffer : liveOffers.introOffer,
+      interval === "year" ? data?.annualIntroOffer : data?.introOffer,
       basicPlan,
     );
   const hasAnnualPlans = paidPlans.some((plan) => plan.interval === "year");
@@ -976,7 +976,20 @@ function useBillingQueries(routeServerId: string) {
       guilds.find((g) => g.id === selectedGuildId)?.name || "Unknown server",
     [guilds, selectedGuildId],
   );
-  const data = billingQuery.data ?? null;
+  const liveOffers = useIntroOfferExpiry(billingQuery.data, () =>
+    Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
+  );
+  const data = useMemo(
+    () =>
+      billingQuery.data
+        ? {
+            ...billingQuery.data,
+            introOffer: liveOffers.introOffer,
+            annualIntroOffer: liveOffers.annualIntroOffer,
+          }
+        : null,
+    [billingQuery.data, liveOffers.introOffer, liveOffers.annualIntroOffer],
+  );
   const loading =
     billingQuery.isLoading ||
     guildLoading ||
@@ -1121,9 +1134,7 @@ export function Billing() {
   const { failedCheckout, frozenOffer } = savedCheckoutQuote(checkoutAttempt);
 
   const { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans } =
-    useBillingPricing(pricingQuery.data, data, frozenOffer, interval, () =>
-      Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
-    );
+    useBillingPricing(pricingQuery.data, data, frozenOffer, interval);
   const busy = checkoutMutation.isPending || portalMutation.isPending;
   const isPortalPending = portalMutation.isPending;
   const displayedOffer = useBillingOfferExposure({

@@ -11,12 +11,13 @@ function deadline(offer: BasicIntroOffer | undefined): number | null {
     ? Date.parse(offer.enrollmentEndsAt)
     : null;
 }
+const expiredOffer: BasicIntroOffer = { status: "expired" };
 function expire(
   offer: BasicIntroOffer | undefined,
   now: number,
 ): BasicIntroOffer | undefined {
   const ends = deadline(offer);
-  return ends !== null && now >= ends ? { status: "expired" } : offer;
+  return ends !== null && now >= ends ? expiredOffer : offer;
 }
 export function useIntroOfferExpiry(
   offers: Offers | null | undefined,

@@ -56,6 +56,13 @@ export function validateBoundarySample(
     !next.deployment.taskArns.includes(witness.taskArn)
   )
     throw new Error("Writer boundary does not match a normal purchase witness");
+  validateBoundaryRevision(next, expected);
+}
+
+function validateBoundaryRevision(
+  next: HistoryWriterBoundary,
+  expected: HistoryWriterBoundary | undefined,
+) {
   if (
     expected &&
     (historyWriterBoundaryKey(next.accountId, next.mode) !==

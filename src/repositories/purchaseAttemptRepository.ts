@@ -62,8 +62,6 @@ export const getPurchaseRepository = () => ({
       subscription?.stripeSyncRevision !== pointer?.stripeSyncRevision
     )
       return false;
-    if (usage?.authority && !matchesMockOfferAuthority(usage.authority))
-      return false;
     if (usage && !writeMockUsage(usage)) return false;
     store.purchaseAttempts.set(next.guildId, structuredClone(next));
     if (incident) {
@@ -91,6 +89,8 @@ export function advanceAttempt(
 function writeMockUsage(
   usage: ReturnType<typeof parseOfferUsageChange>,
 ): boolean {
+  if (usage.authority && !matchesMockOfferAuthority(usage.authority))
+    return false;
   const store = getMockStore();
   const key = offerUsageKey(
     usage.next.guildId,

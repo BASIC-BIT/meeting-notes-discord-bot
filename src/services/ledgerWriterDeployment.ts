@@ -1,5 +1,6 @@
 import {
   ECSClient,
+  type Task,
   DescribeServicesCommand,
   ListTasksCommand,
   DescribeTasksCommand,
@@ -66,28 +67,8 @@ export async function verifyLedgerWriterDeployment(
     if (result.failures?.length || result.tasks?.length !== expected.length)
       throw mismatch();
     const seen = new Set<string>();
-    for (const task of result.tasks) {
-      if (
-        !task.taskArn ||
-        seen.has(task.taskArn) ||
-        !expected.includes(task.taskArn) ||
-        task.clusterArn !== target.clusterArn ||
-        task.lastStatus !== "RUNNING" ||
-        task.desiredStatus !== "RUNNING" ||
-        task.taskDefinitionArn !== before.taskDefinition
-      )
-        throw mismatch();
-      seen.add(task.taskArn);
-      const containers = task.containers?.filter(
-        (container) => container.name === target.containerName,
-      );
-      if (
-        containers?.length !== 1 ||
-        containers[0].imageDigest !== target.imageDigest ||
-        containers[0].lastStatus !== "RUNNING"
-      )
-        throw mismatch();
-    }
+    for (const task of result.tasks)
+      verifyWriterTask(task, expected, seen, target, before.taskDefinition);
   }
   const after = await stableService(ecs, target);
   if (!isDeepStrictEqual(before, after)) throw mismatch();
@@ -97,6 +78,35 @@ export async function verifyLedgerWriterDeployment(
     taskArns: taskArns.sort(),
   };
 }
+function verifyWriterTask(
+  task: Task,
+  expected: string[],
+  seen: Set<string>,
+  target: LedgerWriterDeploymentTarget,
+  taskDefinition: string,
+) {
+  if (
+    !task.taskArn ||
+    seen.has(task.taskArn) ||
+    !expected.includes(task.taskArn) ||
+    task.clusterArn !== target.clusterArn ||
+    task.lastStatus !== "RUNNING" ||
+    task.desiredStatus !== "RUNNING" ||
+    task.taskDefinitionArn !== taskDefinition
+  )
+    throw mismatch();
+  seen.add(task.taskArn);
+  const containers = task.containers?.filter(
+    (container) => container.name === target.containerName,
+  );
+  if (
+    containers?.length !== 1 ||
+    containers[0].imageDigest !== target.imageDigest ||
+    containers[0].lastStatus !== "RUNNING"
+  )
+    throw mismatch();
+}
+
 const mismatch = () =>
   new Error(
     "Normal ledger writer deployment is not stable or does not match its witness",
