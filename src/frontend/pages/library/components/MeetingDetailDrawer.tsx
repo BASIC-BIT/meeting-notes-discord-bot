@@ -36,10 +36,9 @@ import {
   endLiveMeeting,
   fetchLiveMeetingStatus,
 } from "../../../services/liveMeetingControl";
-import {
-  MEETING_STATUS,
-  type MeetingStatus,
-} from "../../../../types/meetingLifecycle";
+import { MEETING_STATUS } from "../../../../types/meetingLifecycle";
+import type { LiveMeetingStatus } from "../../../../types/liveMeeting";
+import { MeetingDetailStreamNotice } from "./MeetingDetailStreamNotice";
 import type { MeetingEventType } from "../../../../types/meetingTimeline";
 import { useMeetingDetail } from "../hooks/useMeetingDetail";
 import { resolveDetailErrorMessage } from "../../../utils/meetingLibrary";
@@ -77,8 +76,14 @@ const resolveRenameDraft = (meeting: {
   return "";
 };
 
-const renderDetailStatusBadge = (status?: MeetingStatus) => {
+const renderDetailStatusBadge = (status?: LiveMeetingStatus) => {
   switch (status) {
+    case "unavailable":
+      return (
+        <Badge color="yellow" variant="light">
+          Status unavailable
+        </Badge>
+      );
     case MEETING_STATUS.INTERRUPTED:
       return (
         <Badge color="yellow" variant="light">
@@ -331,7 +336,11 @@ export default function MeetingDetailDrawer({
           Archived
         </Badge>
       ) : null}
-      {renderDetailStatusBadge(displayStatus)}
+      {renderDetailStatusBadge(
+        liveStreamEnabled && liveStream.status === "connecting"
+          ? undefined
+          : displayStatus,
+      )}
     </Group>
   ) : (
     <Text fw={600} size="lg">
@@ -1035,8 +1044,16 @@ export default function MeetingDetailDrawer({
 
   const summarySection = meeting ? (
     <MeetingSummaryPanel
-      summary={meeting.summary}
-      notes={meeting.notes}
+      summary={
+        displayStatus === "unavailable" &&
+        !detail?.notes?.trim() &&
+        !detail?.summarySentence?.trim()
+          ? ""
+          : meeting.summary
+      }
+      notes={
+        displayStatus === "unavailable" ? (detail?.notes ?? "") : meeting.notes
+      }
       processing={meeting.processing}
       capture={meeting.capture}
       captureCoverage={meeting.captureCoverage}
@@ -1223,6 +1240,12 @@ export default function MeetingDetailDrawer({
                 onImport={handleNotesImport}
               />
               <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
+                {liveStreamEnabled ? (
+                  <MeetingDetailStreamNotice
+                    status={liveStream.status}
+                    onRecheck={liveStream.retry}
+                  />
+                ) : null}
                 <MeetingDetailHeader
                   meeting={meeting}
                   displayStatus={displayStatus}
@@ -1301,13 +1324,6 @@ export default function MeetingDetailDrawer({
                     right={
                       meeting.transcriptAccessEnabled ? (
                         <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>
-                          {liveStreamEnabled &&
-                          liveStream.status === "error" ? (
-                            <Text size="sm" c="dimmed">
-                              Unable to connect to the live transcript. Try
-                              refreshing.
-                            </Text>
-                          ) : null}
                           <Surface
                             p="md"
                             style={{

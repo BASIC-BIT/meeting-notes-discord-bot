@@ -1,4 +1,4 @@
-﻿import type { ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   ActionIcon,
   Badge,
@@ -160,7 +160,10 @@ export function MeetingList({
                   </Group>
                   <MeetingCaptureNotice {...meetingItem} />
                   <Text size="xs" c="dimmed">
-                    {meetingItem.summary || "No summary yet."}
+                    {meetingItem.summary ||
+                      (meetingItem.recovery?.disposition === "done"
+                        ? "No summary available."
+                        : "No summary yet.")}
                   </Text>
                   <Group gap="md" align="center" mt={2}>
                     <Group gap={4} align="center">

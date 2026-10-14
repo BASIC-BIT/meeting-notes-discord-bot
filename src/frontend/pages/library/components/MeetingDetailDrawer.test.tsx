@@ -429,6 +429,79 @@ describe("MeetingDetailDrawer summary copy", () => {
     });
   });
 
+  it("shows unavailable status with a recheck in both drawer layouts while canonical history stays live", async () => {
+    const retry = jest.fn();
+    const detail = buildDetail({
+      status: "in_progress",
+      notes: "",
+      summarySentence: null,
+    });
+    const meeting = buildMeeting({
+      status: "in_progress",
+      notes: "",
+      summary: "Notes will appear after the meeting is processed.",
+    });
+    const result = {
+      ...buildUseMeetingDetailResult({ detail, meeting }),
+      liveStreamEnabled: true,
+      displayStatus: "unavailable" as const,
+      liveStream: {
+        meeting: null,
+        status: "unavailable" as const,
+        events: [],
+        attendees: [],
+        retry,
+      },
+      timelineEmptyLabel:
+        "Recording status cannot be confirmed. Recheck to resume live updates.",
+    };
+    useMeetingDetailMock.mockReturnValue(result);
+    const view = renderDrawer();
+    expect(screen.getByText("Status unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Live transcript")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Notes will appear after the meeting is processed."),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Recheck recording status" }),
+    );
+    expect(retry).toHaveBeenCalledTimes(1);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Open fullscreen" })[0],
+    );
+    expect(
+      await screen.findByText(result.timelineEmptyLabel),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Recheck recording status" }),
+    ).toBeInTheDocument();
+    expect(detail.status).toBe("in_progress");
+    expect(meeting.status).toBe("in_progress");
+    useMeetingDetailMock.mockReturnValue({
+      ...result,
+      displayStatus: "in_progress",
+      liveStream: { ...result.liveStream, status: "live" },
+      timelineEmptyLabel: "Waiting for the first transcript line...",
+    });
+    view.rerender(
+      <MantineProvider>
+        <MeetingDetailDrawer
+          opened
+          selectedMeetingId="m1"
+          selectedGuildId="g1"
+          canManageSelectedGuild
+          channelNameMap={new Map([["c1", "general"]])}
+          invalidateMeetingLists={jest.fn(async () => {})}
+          onClose={jest.fn()}
+        />
+      </MantineProvider>,
+    );
+    expect(screen.getByText("Live transcript")).toBeInTheDocument();
+    expect(screen.queryByText("Status unavailable")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Recheck recording status" }),
+    ).not.toBeInTheDocument();
+  });
   it("copies summary notes as Markdown", async () => {
     const notesMarkdown = "- Decision: Ship it\n- Action: Follow up";
     useMeetingDetailMock.mockReturnValue(

@@ -102,6 +102,20 @@ export const formatDurationLabel = (seconds: number) => {
   return `${minutes}m`;
 };
 
+export const formatMeetingDurationLabel = (
+  meeting: Pick<MeetingDetailInput, "capture" | "duration">,
+) =>
+  meeting.capture?.kind === "interrupted" && !meeting.capture.endedAt
+    ? "Unknown duration"
+    : formatDurationLabel(meeting.duration);
+
+export const deriveMeetingSummary = (
+  meeting: Pick<MeetingDetailInput, "notes" | "summarySentence" | "recovery">,
+) =>
+  meeting.recovery && !meeting.notes?.trim() && !meeting.summarySentence?.trim()
+    ? ""
+    : deriveSummary(meeting.notes ?? "", meeting.summarySentence);
+
 export const formatDateLabel = (timestamp: string) => {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) {
@@ -303,10 +317,7 @@ export const buildMeetingDetails = (
     summaryFeedback: detail.summaryFeedback ?? null,
     dateLabel: formatDateLabel(detail.timestamp),
     recencyLabel: formatRelativeRecencyLabel(detail.timestamp),
-    durationLabel:
-      detail.capture?.kind === "interrupted" && !detail.capture.endedAt
-        ? "Unknown duration"
-        : formatDurationLabel(detail.duration),
+    durationLabel: formatMeetingDurationLabel(detail),
     tags: resolveTags(detail.tags),
     channel: channelLabel,
     audioUrl: detail.audioUrl ?? null,
