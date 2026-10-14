@@ -1,3 +1,4 @@
+import { finalPassSettingsSchema } from "../types/recordingContent";
 import { resolveChatParamsForRole } from "./openaiModelParams";
 import { liveFinalPassSettings } from "./transcriptionProcessingSettings";
 import type { FinalPassSettings } from "../types/recordingContent";
@@ -348,6 +349,12 @@ const buildChunkWindows = (
     return [];
   }
 
+  if (
+    !Number.isFinite(chunkSeconds) ||
+    chunkSeconds < 1 ||
+    durationSeconds > 7200
+  )
+    throw new Error("Invalid or nonprogressing finalized-pass chunk window");
   const windows: ChunkWindow[] = [];
   for (
     let startSeconds = 0, index = 0;
@@ -928,6 +935,7 @@ async function runOwnedTranscriptionFinalPass(
     return createResult({ enabled: false });
   }
 
+  finalPassSettingsSchema.parse(meeting.settings);
   const dependencies: FinalPassDependencies = {
     ...defaultDependencies,
     ...dependencyOverrides,

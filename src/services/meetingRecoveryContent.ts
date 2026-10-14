@@ -192,75 +192,112 @@ export function transcriptionInput(
     }),
   };
 }
-export async function recoverTranscript(
-  content: RecoveryContent,
+async function recoverAudioIntervals(
+  item: Extract<CheckpointArtifact, { kind: "audio" }>,
   reader: RecoveryReader,
-  signal: AbortSignal,
-  effect: TranscriptionContentInput["effect"],
-): Promise<string> {
-  if (content.processing) return content.processing.finalText;
-  if (content.entries) {
-    const files: AudioFileData[] = content.entries.map((entry) => ({
-      userId: entry.userId,
-      timestamp: entry.timestamp,
-      transcript: entry.text,
-      source: entry.source,
-      processing: false,
-      audioOnlyProcessing: false,
-    }));
-    return processRecoveryTranscript(content, reader, files, signal, effect);
-  }
-  const audio = content.verified
-    .filter((item) => item.kind === "audio")
-    .sort(
-      (a, b) =>
-        (a.coverage.kind === "known"
-          ? (a.coverage.intervals[0]?.startOffsetMs ?? 0)
-          : 0) -
-          (b.coverage.kind === "known"
-            ? (b.coverage.intervals[0]?.startOffsetMs ?? 0)
-            : 0) || a.sequence - b.sequence,
+  input: TranscriptionContentInput,
+  startedAt: number,
+): Promise<AudioFileData[]> {
+  const signal = input.signal;
+  signal.throwIfAborted();
+  if (
+    item.format.sampleRate !== 48000 ||
+    item.format.channels !== 2 ||
+    item.object.byteLength > 64 * 1024 * 1024 ||
+    item.coverage.kind !== "known"
+  )
+    throw new InvalidRecoveryContent("Unsupported or unaligned PCM checkpoint");
+  const bytes = await reader.readVerifiedObject(item.object, signal);
+  if (!bytes) throw new InvalidRecoveryContent("Audio verification changed");
+  const userId = item.sourceId.split(":").slice(1).join(":");
+  if (!/^[a-zA-Z0-9_-]+$/.test(userId))
+    throw new InvalidRecoveryContent("Invalid saved source identity");
+  const intervals = item.coverage.intervals.map((interval) => ({
+    ...interval,
+    length: Math.round(interval.durationMs * 192),
+  }));
+  if (
+    intervals.some(
+      (interval) => interval.sourceId !== item.sourceId || interval.length <= 0,
+    ) ||
+    intervals.reduce((length, interval) => length + interval.length, 0) !==
+      bytes.byteLength
+  )
+    throw new InvalidRecoveryContent(
+      "PCM interval coverage differs from saved bytes",
     );
-  if (!audio.length) return "";
-  const input = transcriptionInput(content.context, signal, effect);
   const files: AudioFileData[] = [];
-  for (const item of audio) {
+  let cursor = 0;
+  for (const interval of intervals) {
     signal.throwIfAborted();
-    if (
-      item.format.sampleRate !== 48000 ||
-      item.format.channels !== 2 ||
-      item.object.byteLength > 64 * 1024 * 1024 ||
-      item.coverage.kind !== "known"
-    )
-      throw new InvalidRecoveryContent(
-        "Unsupported or unaligned PCM checkpoint",
-      );
-    const bytes = await reader.readVerifiedObject(item.object, signal);
-    if (!bytes) throw new InvalidRecoveryContent("Audio verification changed");
-    const userId = item.sourceId.split(":").slice(1).join(":");
-    if (!/^[a-zA-Z0-9_-]+$/.test(userId))
-      throw new InvalidRecoveryContent("Invalid saved source identity");
+    const timestamp = startedAt + interval.startOffsetMs;
     const result = await transcribeContentSnippet(
       input,
-      { userId, timestamp: item.sequence, chunks: [Buffer.from(bytes)] },
+      {
+        userId,
+        timestamp,
+        chunks: [Buffer.from(bytes.subarray(cursor, cursor + interval.length))],
+      },
       { tempSuffix: "recovery" },
     );
+    cursor += interval.length;
     signal.throwIfAborted();
     if (result.status !== "succeeded")
       throw new Error("Recovery transcription failed");
     if (!getTranscriptionTextQuality(result.text).trivial)
       files.push({
         userId,
-        timestamp:
-          Date.parse(content.manifest.capture.captureStartedAt!) +
-          item.coverage.intervals[0].startOffsetMs,
+        timestamp,
         transcript: result.text,
         source: item.sourceId.startsWith("bot:") ? "bot" : "voice",
         processing: false,
         audioOnlyProcessing: false,
       });
   }
-  return processRecoveryTranscript(content, reader, files, signal, effect);
+  return files;
+}
+export async function recoverTranscript(
+  content: RecoveryContent,
+  reader: RecoveryReader,
+  signal: AbortSignal,
+  effect: TranscriptionContentInput["effect"],
+): Promise<string> {
+  const audio = content.verified.filter((item) => item.kind === "audio");
+  // Opportunistic entries and final text have no exact audio-object coverage receipt.
+  // Preserve them, but never let them hide verified PCM that remains unproved.
+  const acknowledgedText = content.processing?.finalText;
+  if (acknowledgedText !== undefined && !audio.length) return acknowledgedText;
+  const files: AudioFileData[] =
+    acknowledgedText === undefined
+      ? (content.entries ?? []).map((entry) => ({
+          userId: entry.userId,
+          timestamp: entry.timestamp,
+          transcript: entry.text,
+          source: entry.source,
+          processing: false,
+          audioOnlyProcessing: false,
+        }))
+      : [];
+  if (audio.length) {
+    const input = transcriptionInput(content.context, signal, effect);
+    const startedAt = Date.parse(
+      content.manifest.capture.captureStartedAt ?? "",
+    );
+    if (!Number.isFinite(startedAt))
+      throw new InvalidRecoveryContent("Original capture timing unavailable");
+    for (const item of audio)
+      files.push(
+        ...(await recoverAudioIntervals(item, reader, input, startedAt)),
+      );
+  }
+  return processRecoveryTranscript(
+    content,
+    reader,
+    files,
+    signal,
+    effect,
+    acknowledgedText,
+  );
 }
 export function recoveryNotesInput(
   history: MeetingHistory,

@@ -88,6 +88,96 @@ async function verifyNewWorkerCursorContinuation(
   }
 }
 
+async function verifyCursorFailurePolling(
+  f: Awaited<ReturnType<typeof recoveryFixture>>,
+  lifecycle: ReturnType<typeof createRuntimeLifecycle>,
+  mode: "exact" | "unavailable" | "different" | "read",
+) {
+  const original = f.histories.get("guild")!;
+  const control = await f.repository.getRecord("ENV", "CONTROL");
+  if (control?.recordType !== "control") throw new Error("fixture");
+  const baseline = lifecycle.getWorkCounts().pending_admission;
+  f.histories.set(
+    "guild",
+    Array.from({ length: 11 }, (_, index) => ({
+      ...original[0],
+      channelId_timestamp: `cursor-${mode}#${String(index).padStart(2, "0")}`,
+      status: "processing" as const,
+      recovery: undefined,
+    })),
+  );
+  const reads = jest
+    .spyOn(f.repository, "getMeetingHistory")
+    .mockResolvedValue(undefined);
+  if (mode === "read")
+    reads.mockRejectedValueOnce(new Error("read failed before any mutation"));
+  const get = f.repository.getRecord.bind(f.repository);
+  const readback = jest.spyOn(f.repository, "getRecord");
+  const save = f.repository.saveRecoveryCursor.bind(f.repository);
+  const writes = jest.spyOn(f.repository, "saveRecoveryCursor");
+  if (mode !== "read")
+    writes.mockImplementationOnce(async (...args) => {
+      const result = await save(...args);
+      expect(result).toBe(true);
+      if (mode === "unavailable")
+        readback.mockRejectedValueOnce(new Error("readback unavailable"));
+      if (mode === "different") {
+        const current = f.records.get(JSON.stringify(["ENV", "CONTROL"]));
+        current.coordinatorToken = "later-coordinator";
+      }
+      throw new Error("cursor committed but response lost");
+    });
+  const worker = createMeetingRecoveryWorker({
+    repository: f.repository,
+    begin: beginRuntimeWorkClaim,
+    recover: recoverMeeting,
+    now: () => Math.floor(Date.now() / 1000),
+    content: {
+      reader: f.reader,
+      upload: f.upload,
+      transcript: recoverTranscript,
+      notes: async () => undefined,
+      summaries: async () => ({}),
+      send: async () => {
+        throw new Error("Unexpected send");
+      },
+    },
+  });
+  try {
+    await worker.poll();
+    expect(reads).toHaveBeenCalledTimes(5);
+    expect(lifecycle.getWorkCounts().pending_admission).toBe(
+      baseline + (mode === "unavailable" || mode === "different" ? 1 : 0),
+    );
+    await worker.poll();
+    expect(reads).toHaveBeenCalledTimes(10);
+    await worker.poll();
+    expect(
+      new Set(reads.mock.calls.map(([key]) => key.channelId_timestamp)).size,
+    ).toBe(11);
+    if (mode === "different") {
+      expect(writes).toHaveBeenCalledTimes(1);
+      expect(lifecycle.getWorkCounts().pending_admission).toBe(baseline + 1);
+    } else expect(lifecycle.getWorkCounts().pending_admission).toBe(baseline);
+    if (mode === "read") {
+      await worker.poll();
+      expect(
+        reads.mock.calls.filter(([key]) =>
+          key.channelId_timestamp.endsWith("#00"),
+        ),
+      ).toHaveLength(2);
+    }
+  } finally {
+    await worker.stop();
+    reads.mockRestore();
+    writes.mockRestore();
+    readback.mockRestore();
+    f.histories.set("guild", original);
+    f.records.set(JSON.stringify(["ENV", "CONTROL"]), control);
+    expect(await get("ENV", "CONTROL")).toEqual(control);
+  }
+}
+
 test("actual compatible replacement discovers recovery, owns renewal tails, seals synchronously and retains unknown delivery", async () => {
   jest.useFakeTimers({ now: Date.parse("2026-10-14T00:00:00Z") });
   const f = await recoveryFixture();
@@ -246,6 +336,8 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
   );
   await worker.poll();
   expect(send).toHaveBeenCalledTimes(1);
+  for (const mode of ["exact", "unavailable", "read", "different"] as const)
+    await verifyCursorFailurePolling(f, lifecycle, mode);
   fenceRuntimeWorkAdmissions();
   await lifecycle.shutdown();
   jest.useRealTimers();

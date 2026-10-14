@@ -1,5 +1,13 @@
 /** @jest-environment node */
 jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
+jest.mock("../../src/services/transcriptionService", () => ({
+  ...jest.requireActual("../../src/services/transcriptionService"),
+  transcribeContentSnippet: jest.fn(async () => ({
+    status: "succeeded",
+    text: "New verified interval.",
+  })),
+}));
+import { transcribeContentSnippet } from "../../src/services/transcriptionService";
 jest.mock("../../src/services/transcriptionFinalPassService", () => ({
   runContentTranscriptionFinalPass: jest.fn(async () => ({
     fallbackApplied: false,
@@ -162,4 +170,22 @@ test("known missing coverage never masquerades as a full finalized recording", a
   await recoverTranscript(f.content, f.reader, f.signal, (run) => run());
   expect(runContentTranscriptionFinalPass).not.toHaveBeenCalled();
   expect(f.content.processing?.finalPass).toBe("not_applicable");
+});
+
+test("processed transcript without exact audio coverage cannot bypass newer PCM", async () => {
+  const f = await fixture(true);
+  f.content.processing = {
+    finalPass: "acknowledged",
+    cleanup: "disabled",
+    finalText: "Previously acknowledged processed text.",
+  };
+  if (f.content.context.settings.availability !== "available")
+    throw new Error("fixture");
+  f.content.context.settings.value.premiumTranscription.enabled = false;
+  const text = await recoverTranscript(f.content, f.reader, f.signal, (run) =>
+    run(),
+  );
+  expect(text).toContain("Previously acknowledged processed text.");
+  expect(text).toContain("New verified interval.");
+  expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
 });

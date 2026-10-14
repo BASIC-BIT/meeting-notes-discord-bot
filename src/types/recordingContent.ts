@@ -80,29 +80,44 @@ const transcription = z
       .strict(),
   })
   .strict();
+// Saved executable budgets stay within the two-hour recording and 25MiB request bounds.
+const seconds = number.int().min(1).max(7200);
+const bytes = number
+  .int()
+  .min(1)
+  .max(25 * 1024 * 1024);
+const chars = number.int().min(1).max(1_000_000);
 export const finalPassSettingsSchema = z
   .object({
-    maxSnippetMilliseconds: number.nonnegative(),
-    chunkSeconds: number.nonnegative(),
-    maxRequestBytes: number.nonnegative(),
-    targetMaxChunkBytes: number.nonnegative(),
-    segmentBatchMaxChars: number.nonnegative(),
-    minConfidence: number.nonnegative(),
-    maxDropRatio: number.nonnegative(),
-    maxChangeRatio: number.nonnegative(),
-    previousTailChars: number.nonnegative(),
-    minChunkSeconds: number.nonnegative(),
-    estimatedMp3BytesPerSecond: number.nonnegative(),
-    repeatWindowSeconds: number.nonnegative(),
+    maxSnippetMilliseconds: number.int().min(1).max(7_200_000),
+    chunkSeconds: seconds,
+    maxRequestBytes: bytes,
+    targetMaxChunkBytes: bytes,
+    segmentBatchMaxChars: chars,
+    minConfidence: number.min(0).max(1),
+    maxDropRatio: number.min(0).max(1),
+    maxChangeRatio: number.min(0).max(1),
+    previousTailChars: number.int().min(0).max(1_000_000),
+    minChunkSeconds: seconds,
+    estimatedMp3BytesPerSecond: bytes,
+    repeatWindowSeconds: seconds,
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) =>
+      value.minChunkSeconds <= value.chunkSeconds &&
+      value.targetMaxChunkBytes <= value.maxRequestBytes &&
+      value.minChunkSeconds * value.estimatedMp3BytesPerSecond <=
+        value.targetMaxChunkBytes,
+    { message: "Final-pass timing and byte budgets are incoherent" },
+  );
 export type FinalPassSettings = z.infer<typeof finalPassSettingsSchema>;
 export const savedRecordingSettingsSchema = z
   .object({
     autoCompletion: autoCompletionPolicySchema.optional(),
     processing: z
       .object({
-        cleanupMinimumRetainedLineRatio: number,
+        cleanupMinimumRetainedLineRatio: number.min(0).max(1),
         finalPass: finalPassSettingsSchema,
       })
       .strict()

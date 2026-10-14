@@ -16,6 +16,15 @@ import type { MeetingHistory, ActiveMeetingLease } from "../../src/types/db";
 import type { CheckpointArtifactInput } from "../../src/types/recordingCheckpoint";
 export async function recoveryFixture(
   text = "We agreed to finish the release testing tomorrow.",
+  options: {
+    artifacts?: CheckpointArtifactInput[];
+    context?: (
+      context: ReturnType<typeof generationContextSchema.parse>,
+    ) => void;
+    transcript?: (
+      transcript: ReturnType<typeof completedTranscriptionSchema.parse>,
+    ) => void;
+  } = {},
 ) {
   const now = Math.floor(Date.now() / 1000);
   const row: MeetingHistory = {
@@ -194,6 +203,8 @@ export async function recoveryFixture(
       checksumSha256: createHash("sha256").update(bytes).digest("hex"),
     };
   }
+  options.context?.(payload);
+  options.transcript?.(transcript);
   const result = await reader.flush({
     signal: new AbortController().signal,
     ownership,
@@ -204,6 +215,7 @@ export async function recoveryFixture(
     artifacts: [
       artifact("context", payload),
       artifact("transcription", transcript),
+      ...(options.artifacts ?? []),
     ],
   });
   if (result.kind !== "committed")

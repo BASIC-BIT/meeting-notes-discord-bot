@@ -1,5 +1,15 @@
 /** @jest-environment node */
 jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
+jest.mock("../../src/services/transcriptionService", () => ({
+  ...jest.requireActual("../../src/services/transcriptionService"),
+  transcribeContentSnippet: jest.fn(async () => ({
+    status: "succeeded",
+    text: "Later verified discussion.",
+  })),
+}));
+import { transcribeContentSnippet } from "../../src/services/transcriptionService";
+import { createHash } from "node:crypto";
+import { liveTranscriptionProcessingSettings } from "../../src/services/transcriptionProcessingSettings";
 const mockCompletionBodies: unknown[] = [];
 jest.mock("../../src/services/openaiClient", () => ({
   buildOpenAISafetyIdentifier: (id: string) => `safety:${id}`,
@@ -44,8 +54,11 @@ import {
 } from "../../src/services/meetingNotesService";
 import { createOpenAIClient } from "../../src/services/openaiClient";
 import { recoveryFixture } from "./meetingRecoveryFixtures";
-async function fixture(text?: string) {
-  const f = await recoveryFixture(text);
+async function fixture(
+  text?: string,
+  options?: Parameters<typeof recoveryFixture>[1],
+) {
+  const f = await recoveryFixture(text, options);
   let messages = 0;
   const send = jest.fn(async () => ({ id: `message-${++messages}` }));
   const notes = jest.fn(ensureMeetingNotes);
@@ -255,3 +268,97 @@ test("restart resumes acknowledged notes and verified transcript, retrying only 
   expect(f.claim.history.recovery?.disposition).toBe("done");
   expect(f.notes.mock.calls[0][0].notesText).toBeTruthy();
 });
+
+test.each(["Earlier acknowledged discussion.", "Thanks."])(
+  "opportunistic transcript %s does not suppress later PCM intervals",
+  async (text) => {
+    const bytes = Buffer.alloc(384000);
+    const f = await fixture(text, {
+      transcript: (saved) => {
+        saved.entries[0].revision = 2;
+      },
+      context: (saved) => {
+        saved.prompts.transcription = {
+          availability: "available",
+          value: {
+            name: "original",
+            type: "text",
+            label: "original",
+            version: 1,
+            template: "Saved transcription prompt",
+          },
+        };
+      },
+      artifacts: [
+        {
+          kind: "audio",
+          sourceId: "user:456",
+          sequence: 2,
+          contentType: "audio/pcm",
+          bytes,
+          checksumSha256: createHash("sha256").update(bytes).digest("hex"),
+          format: { encoding: "pcm_s16le", channels: 2, sampleRate: 48000 },
+          coverage: {
+            kind: "known",
+            intervals: [
+              { sourceId: "user:456", startOffsetMs: 5000, durationMs: 1000 },
+              { sourceId: "user:456", startOffsetMs: 15000, durationMs: 1000 },
+            ],
+          },
+        },
+      ],
+    });
+    await recoverMeeting(f.claim, f.deps);
+    expect(transcribeContentSnippet).toHaveBeenCalledTimes(2);
+    const calls = jest.mocked(transcribeContentSnippet).mock.calls;
+    expect(calls.map(([, snippet]) => snippet.timestamp)).toEqual([
+      Date.parse(f.claim.history.timestamp) + 5000,
+      Date.parse(f.claim.history.timestamp) + 15000,
+    ]);
+    expect(calls.map(([, snippet]) => snippet.chunks[0].length)).toEqual([
+      192000, 192000,
+    ]);
+    expect(f.notes.mock.calls[0][0].finalTranscript).toContain(
+      "Later verified discussion.",
+    );
+    if (text.startsWith("Earlier"))
+      expect(f.notes.mock.calls[0][0].finalTranscript).toContain(text);
+    expect(f.claim.history.recovery).toMatchObject({
+      disposition: "done",
+      outcome: "completed",
+    });
+  },
+);
+
+test.each([
+  { chunkSeconds: 0, minChunkSeconds: 0 },
+  { estimatedMp3BytesPerSecond: 0 },
+  { targetMaxChunkBytes: 0 },
+  { maxRequestBytes: 0 },
+  { chunkSeconds: -1 },
+  { minChunkSeconds: 901 },
+  { targetMaxChunkBytes: 30000000 },
+  { chunkSeconds: 1e12 },
+])(
+  "checksum-valid malformed final-pass budgets reconcile before dispatch: %j",
+  async (invalid) => {
+    const f = await fixture(undefined, {
+      context: (saved) => {
+        if (saved.settings.availability !== "available")
+          throw new Error("fixture");
+        saved.settings.value.processing = structuredClone(
+          liveTranscriptionProcessingSettings,
+        );
+        Object.assign(saved.settings.value.processing.finalPass, invalid);
+      },
+    });
+    await recoverMeeting(f.claim, f.deps);
+    expect(f.claim.history.recovery).toMatchObject({
+      disposition: "needs_reconciliation",
+      reason: "invalid_payload",
+    });
+    expect(transcribeContentSnippet).not.toHaveBeenCalled();
+    expect(f.notes).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+  },
+);

@@ -4,11 +4,12 @@ import { isDeepStrictEqual } from "node:util";
 import { getDeploymentControlRepository } from "../db";
 import type { DeploymentControlRepository } from "../repositories/deploymentControlRepository";
 import { prepareRecoveryClaim } from "../repositories/meetingRecoveryRepository";
-import type { HistoryKey } from "../types/deploymentControl";
+import type { ControlRecord, HistoryKey } from "../types/deploymentControl";
 import type { RecoveryClaim } from "../types/meetingRecovery";
 import {
   beginRuntimeWorkClaim,
   type RuntimeWorkClaim,
+  releaseAcknowledgedRuntimeWork,
 } from "./runtimeWorkAdmissionService";
 import { createRecordingCheckpointService } from "./recordingCheckpointService";
 import {
@@ -38,6 +39,15 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
   let timer: ReturnType<typeof setInterval> | undefined;
   let pending: Promise<void> | undefined;
   const handlers = new Set<Promise<void>>();
+  let unresolvedCursor:
+    { id: string; work: RuntimeWorkClaim; expected: ControlRecord } | undefined;
+  let transientCursor: HistoryKey | undefined;
+  const sameControl = (actual: unknown, expected: ControlRecord) =>
+    isDeepStrictEqual(
+      JSON.parse(JSON.stringify(actual ?? null)),
+      JSON.parse(JSON.stringify(expected)),
+    );
+
   function register(claim: RecoveryClaim, work: RuntimeWorkClaim) {
     work.recordClaim({
       claimId: claim.lease.recoveryAttemptId,
@@ -46,7 +56,11 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
       expiresAt: claim.lease.leaseExpiresAt,
     });
   }
-  async function claimKey(key: HistoryKey, work: RuntimeWorkClaim) {
+  async function claimKey(
+    key: HistoryKey,
+    work: RuntimeWorkClaim,
+    submitted: () => void,
+  ) {
     const authority = await work.authority();
     if (authority.kind !== "serving")
       throw new Error("Recovery requires serving admission");
@@ -65,11 +79,12 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
     };
     const expected = prepareRecoveryClaim(input);
     if (!expected) return;
-    register(expected, work);
     try {
-      return await work.trackEffect(() =>
-        deps.repository.claimRecordingRecovery(input),
-      );
+      return await work.trackEffect(() => {
+        register(expected, work);
+        submitted();
+        return deps.repository.claimRecordingRecovery(input);
+      });
     } catch (error) {
       const [current, owned] = await Promise.all([
         work.trackEffect(() =>
@@ -126,9 +141,12 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
     const handler = work.trackPromise(async () => {
       let renewal: ReturnType<typeof setInterval> | undefined;
       let renewing: Promise<void> | undefined;
+      let submitted = false;
       try {
         if (stopped) return;
-        const claim = await claimKey(key, work);
+        const claim = await claimKey(key, work, () => {
+          submitted = true;
+        });
         if (!claim) return;
         register(claim, work);
         work.claimed();
@@ -169,6 +187,7 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
       } finally {
         clearInterval(renewal);
         await renewing;
+        if (!submitted) work.acknowledgeReadOnlyRecoveryPoll();
         await work.settle();
       }
     });
@@ -176,8 +195,42 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
     void handler.finally(() => handlers.delete(handler));
     return handler;
   }
-  async function runPoll(work: RuntimeWorkClaim) {
-    let cursorSubmitted = false;
+  async function saveCursor(
+    work: RuntimeWorkClaim,
+    id: string,
+    control: ControlRecord,
+    context: Parameters<DeploymentControlRepository["saveRecoveryCursor"]>[0],
+    next: HistoryKey | undefined,
+  ) {
+    const expected = { ...control, recoveryScanCursor: next };
+    let submitted = false;
+    try {
+      await work.trackEffect(() => {
+        submitted = true;
+        return deps.repository.saveRecoveryCursor(
+          context,
+          control.recoveryScanCursor,
+          next,
+        );
+      });
+      return true;
+    } catch {
+      if (!submitted) return true;
+      try {
+        const current = await work.trackEffect(() =>
+          deps.repository.getRecord("ENV", "CONTROL"),
+        );
+        if (sameControl(current, expected)) return true;
+      } catch {
+        /* The original cursor mutation remains owned when readback is unavailable. */
+      }
+      unresolvedCursor = { id, work, expected };
+      transientCursor = next;
+      return false;
+    }
+  }
+  async function runPoll(work: RuntimeWorkClaim, id: string) {
+    let cursorKnown = true;
     try {
       const authority = await work.authority();
       if (authority.kind !== "serving") return;
@@ -185,27 +238,38 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
         deps.repository.getRecord("ENV", "CONTROL"),
       );
       if (control?.recordType !== "control" || stopped) return;
+      if (unresolvedCursor && sameControl(control, unresolvedCursor.expected)) {
+        unresolvedCursor.work.acknowledgeReadOnlyRecoveryPoll();
+        releaseAcknowledgedRuntimeWork(unresolvedCursor.id);
+        unresolvedCursor = undefined;
+        transientCursor = undefined;
+      }
       const page = await work.trackEffect(() =>
-        deps.repository.discoverRecordingRecoveries(control.recoveryScanCursor),
+        deps.repository.discoverRecordingRecoveries(
+          unresolvedCursor ? transientCursor : control.recoveryScanCursor,
+        ),
       );
       for (const key of page.keys) {
         if (stopped) break;
         await process(key);
       }
       if (stopped) return;
-      cursorSubmitted = true;
-      await work.trackEffect(() =>
-        deps.repository.saveRecoveryCursor(
-          { ...authority.context, now: deps.now() },
-          control.recoveryScanCursor,
-          page.cursor,
-        ),
+      if (unresolvedCursor) {
+        transientCursor = page.cursor;
+        return;
+      }
+      cursorKnown = await saveCursor(
+        work,
+        id,
+        control,
+        { ...authority.context, now: deps.now() },
+        page.cursor,
       );
-      cursorSubmitted = false;
+      if (!cursorKnown) work.fence();
     } catch {
       work.fence();
     } finally {
-      if (!cursorSubmitted) work.acknowledgeReadOnlyRecoveryPoll();
+      if (cursorKnown) work.acknowledgeReadOnlyRecoveryPoll();
       await work.settle();
     }
   }
@@ -213,12 +277,13 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
     if (stopped) return Promise.resolve();
     if (pending) return pending;
     let work: RuntimeWorkClaim;
+    const id = `recovery:poll:${randomUUID()}`;
     try {
-      work = deps.begin("recovery", "recovery:poll");
+      work = deps.begin("recovery", id);
     } catch {
       return Promise.resolve();
     }
-    const actual = work.trackPromise(() => runPoll(work));
+    const actual = work.trackPromise(() => runPoll(work, id));
     pending = actual;
     void actual.finally(() => {
       if (pending === actual) pending = undefined;
