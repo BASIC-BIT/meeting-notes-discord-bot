@@ -135,8 +135,8 @@ jobs:
           cache: yarn
       - name: Install dependencies
         run: bash scripts/ci-install-dependencies.sh
-      - name: Build deployment fixture image before Jest
-        run: docker build -f test/deployment/fixtures/Dockerfile -t "$DEPLOYMENT_TEST_IMAGE" test/deployment/fixtures
+      - name: Build application image for native deployment fixtures
+        run: docker build -t "$DEPLOYMENT_TEST_IMAGE" .
       - name: Run real deployment transactions
         run: yarn test:deployment:integration
 
