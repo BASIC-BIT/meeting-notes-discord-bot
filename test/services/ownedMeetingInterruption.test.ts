@@ -44,6 +44,7 @@ jest.mock("../../src/commands/endMeeting", () => ({
   }),
 }));
 jest.mock("../../src/services/meetingProcessingLifetime", () => ({
+  ...jest.requireActual("../../src/services/meetingProcessingLifetime"),
   stopMeetingProcessing: jest.fn(async () => {}),
 }));
 jest.mock("../../src/services/guildVoiceOperationService", () => ({

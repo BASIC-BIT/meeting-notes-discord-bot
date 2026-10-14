@@ -419,6 +419,7 @@ describe("handleEndMeetingOther", () => {
         }),
         meeting.textChannel,
         meeting.recordingLimitNotice,
+        meeting,
       );
       expect(meeting.setFinished).toHaveBeenCalled();
       expect(deleteMeeting).toHaveBeenCalledWith(meeting.guildId);
@@ -833,7 +834,7 @@ describe("handleEndMeetingOther", () => {
     expect(mockedDeleteMeeting).not.toHaveBeenCalled();
   });
 
-  it("preserves cancelled artifacts, history and cleanup when cancellation delivery fails", async () => {
+  it("retains cancelled artifacts and ownership when cancellation delivery has no ACK", async () => {
     mockedWithMeetingEndTrace.mockImplementation(async (_meeting, fn) => fn());
     mockedWaitForAudioOnlyFinishProcessing.mockResolvedValue(undefined);
     mockedCloseOutputFile.mockResolvedValue(undefined);
@@ -899,18 +900,13 @@ describe("handleEndMeetingOther", () => {
       chatFilePath: expect.stringContaining("chat.txt"),
       transcriptText: "Transcript without cues",
     });
-    expect(mockedSaveMeetingHistoryToDatabase).toHaveBeenCalledWith(meeting);
-    expect(meeting.delivery?.cancellation).toMatchObject({
-      outcome: "failed",
-      intended: 1,
-      sent: 0,
-    });
-    expect(meeting.finished).toBe(true);
-    expect(mockedCleanupSpeakerTracks).toHaveBeenCalledWith(meeting);
-    expect(
-      mockedUploadMeetingArtifacts.mock.invocationCallOrder[0],
-    ).toBeLessThan(
-      mockedSaveMeetingHistoryToDatabase.mock.invocationCallOrder[0],
+    expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
+    expect(meeting.finished).toBe(false);
+    expect(mockedCleanupSpeakerTracks).not.toHaveBeenCalled();
+    expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+    expect(interruptOwnedMeeting).toHaveBeenCalledWith(
+      meeting,
+      expect.objectContaining({ reason: "processing_failure" }),
     );
   });
 
@@ -1232,7 +1228,12 @@ describe("handleEndMeetingButton", () => {
       voiceChannel: { id: "voice-1", name: "Voice" },
       textChannel: {
         send: jest.fn().mockResolvedValue(undefined),
-        messages: { fetch: jest.fn() },
+        messages: {
+          fetch: jest.fn().mockResolvedValue({
+            id: "start-message",
+            edit: jest.fn().mockResolvedValue(undefined),
+          }),
+        },
       },
       connection: {
         disconnect: jest.fn(),
@@ -1527,6 +1528,42 @@ it("held ancillary delivery remains counted until completion", async () => {
   finish();
   await promise;
   expect(meeting.setFinished).toHaveBeenCalledTimes(1);
+});
+
+it("held minutes limits read cannot dispatch a notice after the finalizer is fenced", async () => {
+  jest.clearAllMocks();
+  mockedCloseOutputFile.mockResolvedValue(undefined);
+  mockedSaveMeetingHistoryToDatabase.mockResolvedValue(undefined);
+  mockedReleaseMeetingLeaseForMeeting.mockResolvedValue(true);
+  mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
+  mockedUploadMeetingArtifacts.mockResolvedValue(successfulArtifactUpload);
+  jest
+    .mocked(transitionOwnedMeetingHistoryService)
+    .mockResolvedValue(undefined);
+  let finish!: () => void;
+  mockedGetGuildLimits.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = () =>
+        resolve({ limits: { maxMeetingMinutesRolling: 240 } } as never);
+    }),
+  );
+  const meeting = finalizationFixture();
+  const promise = runEndMeetingFlow({ client: {} as Client, meeting });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(notifyRecordingLimit).not.toHaveBeenCalled();
+  const rejection = expect(promise).rejects.toThrow();
+  fenceMeetingFinalization(meeting);
+  expect(meeting.setFinished).not.toHaveBeenCalled();
+  expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
+  expect(meeting.reservation?.workHandle.transition).toHaveBeenCalledWith(
+    "finalization",
+  );
+  expect(meeting.reservation?.workHandle.settle).not.toHaveBeenCalled();
+  finish();
+  await rejection;
+  expect(notifyRecordingLimit).not.toHaveBeenCalled();
+  expect(meeting.setFinished).not.toHaveBeenCalled();
+  expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
 });
 
 describe("H4 review outcome and fence regressions", () => {

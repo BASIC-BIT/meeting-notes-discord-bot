@@ -1,6 +1,7 @@
 import {
   getMeetingProcessingSignal,
   runMeetingProcessingEffect,
+  runMeetingNoticeMutation,
 } from "./services/meetingProcessingLifetime";
 import {
   beginRecordingDelivery,
@@ -212,13 +213,42 @@ function buildSummaryComponents(
   }
   return rows;
 }
-export async function updateMeetingMessage(
+export function updateMeetingMessage(
   meeting: MeetingData,
   payload: MeetingMessagePayload,
   phase: Exclude<DeliveryPhase, "notes">,
   finalization = false,
 ): Promise<{ message?: Message; delivery: DeliveryResult }> {
-  const signal = finalization ? getMeetingProcessingSignal(meeting) : undefined;
+  const ownedNotice = Boolean(meeting.finalization) && !finalization;
+  const run = () =>
+    deliverMeetingMessage(meeting, payload, phase, finalization, ownedNotice);
+  return ownedNotice ? runMeetingProcessingEffect(meeting, run) : run();
+}
+function missingMeetingMessage(error: unknown): boolean {
+  return (
+    error instanceof DiscordAPIError &&
+    error.code === 10008 &&
+    error.status === 404
+  );
+}
+function rejectedMeetingMessage(error: unknown): boolean {
+  return (
+    error instanceof DiscordAPIError &&
+    error.status >= 400 &&
+    error.status < 500
+  );
+}
+async function deliverMeetingMessage(
+  meeting: MeetingData,
+  payload: MeetingMessagePayload,
+  phase: Exclude<DeliveryPhase, "notes">,
+  finalization: boolean,
+  ownedNotice: boolean,
+): Promise<{ message?: Message; delivery: DeliveryResult }> {
+  const signal =
+    finalization || ownedNotice
+      ? getMeetingProcessingSignal(meeting)
+      : undefined;
   signal?.throwIfAborted();
   const channel = meeting.textChannel;
   const errors: DeliveryResult["errors"] = [];
@@ -226,7 +256,13 @@ export async function updateMeetingMessage(
     try {
       const message = await channel.messages.fetch(meeting.startMessageId);
       signal?.throwIfAborted();
-      await message.edit(payload);
+      if (ownedNotice)
+        await runMeetingNoticeMutation(
+          meeting,
+          () => message.edit(payload),
+          rejectedMeetingMessage,
+        );
+      else await message.edit(payload);
       if (finalization)
         await acknowledgeRecordingDeliveryMessage(
           meeting,
@@ -244,14 +280,7 @@ export async function updateMeetingMessage(
       };
     } catch (error) {
       signal?.throwIfAborted();
-      if (
-        finalization &&
-        !(
-          error instanceof DiscordAPIError &&
-          error.code === 10008 &&
-          error.status === 404
-        )
-      )
+      if ((finalization || ownedNotice) && !missingMeetingMessage(error))
         throw error;
       errors.push(deliveryError(error));
     }
@@ -259,7 +288,13 @@ export async function updateMeetingMessage(
 
   try {
     signal?.throwIfAborted();
-    const message = await channel.send(payload);
+    const message = ownedNotice
+      ? await runMeetingNoticeMutation(
+          meeting,
+          () => channel.send(payload),
+          rejectedMeetingMessage,
+        )
+      : await channel.send(payload);
     if (finalization)
       await acknowledgeRecordingDeliveryMessage(meeting, "summary", message.id);
     meeting.startMessageId = message.id;
@@ -273,7 +308,7 @@ export async function updateMeetingMessage(
       }),
     };
   } catch (error) {
-    if (finalization) throw error;
+    if (finalization || ownedNotice) throw error;
     errors.push(deliveryError(error));
     return {
       delivery: recordDelivery(meeting, phase, {

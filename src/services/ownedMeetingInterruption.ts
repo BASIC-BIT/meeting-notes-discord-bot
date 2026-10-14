@@ -12,7 +12,10 @@ import {
   restoreVoiceSessionNickname,
 } from "../meetings";
 import { fenceAndSettleSessionWork } from "./runtimeWorkAdmissionService";
-import { stopMeetingProcessing } from "./meetingProcessingLifetime";
+import {
+  stopMeetingProcessing,
+  areMeetingNoticesSettled,
+} from "./meetingProcessingLifetime";
 import {
   settleOwnedVoiceSession,
   waitOwnedVoiceEffects,
@@ -278,7 +281,11 @@ async function release(
     !(await work.children)
   )
     return false;
-  if (meeting.recordingPreservationNotification?.outcome === "unknown")
+  if (
+    !areMeetingNoticesSettled(meeting, work.reservation) ||
+    meeting.recordingLimitNotice?.deliveryUnknown ||
+    meeting.recordingPreservationNotification?.outcome === "unknown"
+  )
     return false;
   budget.signal.throwIfAborted();
   if (!(await restoreVoiceSessionNickname(meeting, budget.signal)))

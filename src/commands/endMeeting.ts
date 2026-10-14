@@ -1,3 +1,4 @@
+import { getMeetingProcessingSignal } from "../services/meetingProcessingLifetime";
 import type { RuntimeWorkClaim } from "../services/runtimeWorkAdmissionService";
 import { initiatingStopInterruption } from "../services/meetingStopInterruption";
 import { acknowledgeRecordingDeliveryHistory } from "../services/recordingDeliveryService";
@@ -909,11 +910,15 @@ async function markMeetingProcessing(meeting: MeetingData) {
 }
 
 async function maybeSendMinutesLimitNotice(meeting: MeetingData) {
+  const signal = getMeetingProcessingSignal(meeting);
+  signal.throwIfAborted();
   const resolved = await getGuildLimits(meeting.guildId);
+  signal.throwIfAborted();
   const { limits } = resolved;
   if (!limits.maxMeetingMinutesRolling) return;
 
   const usage = await getRollingUsageForGuild(meeting.guildId);
+  signal.throwIfAborted();
   const limitSeconds = limits.maxMeetingMinutesRolling * 60;
   const remainingSeconds = limitSeconds - usage.usedSeconds;
   const remainingMinutes = Math.max(0, Math.ceil(remainingSeconds / 60));
@@ -949,6 +954,7 @@ async function maybeSendMinutesLimitNotice(meeting: MeetingData) {
       },
       meeting.textChannel,
       meeting.recordingLimitNotice,
+      meeting,
     );
     return;
   }
@@ -968,6 +974,7 @@ async function maybeSendMinutesLimitNotice(meeting: MeetingData) {
       },
       meeting.textChannel,
       meeting.recordingLimitNotice,
+      meeting,
     );
   }
 }
