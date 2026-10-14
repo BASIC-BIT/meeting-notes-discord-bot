@@ -202,6 +202,7 @@ async function exerciseShutdown(mode: "terminal" | "renewal" | "stage") {
     recover: recoverMeeting,
     now: () => Math.floor(Date.now() / 1000),
     content: {
+      autoExport: async () => {},
       reader: f.reader,
       upload: f.upload,
       transcript: recoverTranscript,

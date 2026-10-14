@@ -62,6 +62,7 @@ async function fixture(
   let messages = 0;
   const send = jest.fn(async () => ({ id: `message-${++messages}` }));
   const notes = jest.fn(ensureMeetingNotes);
+  const autoExport = jest.fn(async () => {});
   const deps: RecoveryDependencies = {
     repository: f.repository,
     reader: f.reader,
@@ -73,8 +74,9 @@ async function fixture(
     transcript: recoverTranscript,
     upload: f.upload,
     send,
+    autoExport,
   };
-  return { ...f, deps, send, notes };
+  return { ...f, deps, send, notes, autoExport };
 }
 beforeEach(() => {
   jest.clearAllMocks();
@@ -85,6 +87,7 @@ test("notesDisabledRemainDisabled", async () => {
     requested: { transcribeMeeting: true, generateNotes: false },
   });
   await recoverMeeting(f.claim, f.deps);
+  expect(f.autoExport).not.toHaveBeenCalled();
   expect(f.notes).not.toHaveBeenCalled();
   expect(f.send).not.toHaveBeenCalled();
   expect(f.claim.history.notes).toBeUndefined();
@@ -94,6 +97,7 @@ test("partialSpeechGeneratesNotesWithoutVoiceJoin and verifiedTranscriptRecovers
   const f = await fixture();
   await readRecoveryContent(f.claim.history, f.reader, f.deps.signal);
   await recoverMeeting(f.claim, f.deps);
+  expect(f.autoExport).toHaveBeenCalledWith(f.claim.history, f.deps.signal);
   expect(f.claim.history.status).toBe("interrupted");
   expect(f.claim.history.recovery).toMatchObject({
     disposition: "done",
@@ -129,6 +133,7 @@ test("partialSpeechGeneratesNotesWithoutVoiceJoin and verifiedTranscriptRecovers
 test("noUsableSpeechSkipsNotes", async () => {
   const f = await fixture("");
   await recoverMeeting(f.claim, f.deps);
+  expect(f.autoExport).not.toHaveBeenCalled();
   expect(f.notes).not.toHaveBeenCalled();
   expect(f.send).not.toHaveBeenCalled();
   expect(f.claim.history.recovery).toMatchObject({
@@ -147,12 +152,14 @@ test("uncertainDeliveryIsNotResent", async () => {
     reason: "delivery_uncertain",
   });
   await recoverMeeting(f.claim, f.deps);
+  expect(f.autoExport).not.toHaveBeenCalled();
   expect(f.send).toHaveBeenCalledTimes(1);
 });
 test("missingManifestCommitIsReconciled and transcriptionLogAloneDoesNotAuthorizeRecovery", async () => {
   const f = await fixture();
   f.objects.delete(f.claim.history.checkpoint!.manifest.key);
   await recoverMeeting(f.claim, f.deps);
+  expect(f.autoExport).not.toHaveBeenCalled();
   expect(f.notes).not.toHaveBeenCalled();
   expect(f.claim.history.recovery?.disposition).not.toBe("done");
 });
@@ -169,6 +176,7 @@ test("invalid checksum-valid semantic context does not fall back to live setting
     disposition: "needs_reconciliation",
     reason: "invalid_payload",
   });
+  expect(f.autoExport).not.toHaveBeenCalled();
   expect(f.notes).not.toHaveBeenCalled();
 });
 test("exhaustedAttemptsClearAutomaticEligibility", async () => {
@@ -216,6 +224,7 @@ test.each(["complete", "interrupted"] as const)(
       f.histories.get("guild")![0],
       structuredClone(f.claim.history),
     );
+    f.autoExport.mockClear();
     f.send.mockClear();
     f.notes.mockClear();
     await recoverMeeting(f.claim, f.deps);
@@ -223,6 +232,7 @@ test.each(["complete", "interrupted"] as const)(
     expect(f.claim.history.capture).toEqual(capture);
     expect(f.claim.history.recovery?.disposition).toBe("done");
     expect(f.send).not.toHaveBeenCalled();
+    expect(f.autoExport).not.toHaveBeenCalled();
     expect(f.notes).not.toHaveBeenCalled();
   },
 );
@@ -261,6 +271,7 @@ test("partial IDs and missing original policy keep explicit reconciliation", asy
     disposition: "needs_reconciliation",
     reason: "policy_unknown",
   });
+  expect(complete.autoExport).not.toHaveBeenCalled();
   expect(complete.notes).not.toHaveBeenCalled();
 });
 test("restart resumes acknowledged notes and verified transcript, retrying only failed summary", async () => {
@@ -372,7 +383,32 @@ test.each([
       reason: "invalid_payload",
     });
     expect(transcribeContentSnippet).not.toHaveBeenCalled();
+    expect(f.autoExport).not.toHaveBeenCalled();
     expect(f.notes).not.toHaveBeenCalled();
     expect(f.send).not.toHaveBeenCalled();
   },
 );
+
+test("handled generation failure never reaches the ancillary callback", async () => {
+  const f = await fixture();
+  f.deps.notes = async () => {
+    throw new Error("Generated notes failure");
+  };
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.claim.history.recovery?.disposition).toBe("failed");
+  expect(f.send).not.toHaveBeenCalled();
+  expect(f.autoExport).not.toHaveBeenCalled();
+});
+test("transcription disabled never reaches the ancillary callback", async () => {
+  const f = await fixture(undefined, {
+    requested: { transcribeMeeting: false, generateNotes: true },
+  });
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.claim.history.recovery).toMatchObject({
+    disposition: "done",
+    outcome: "disabled",
+  });
+  expect(f.notes).not.toHaveBeenCalled();
+  expect(f.send).not.toHaveBeenCalled();
+  expect(f.autoExport).not.toHaveBeenCalled();
+});

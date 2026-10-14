@@ -26,6 +26,8 @@ import { resolveCompletionPolicy } from "./meetingCompletionPolicyService";
 import { createDiscordMessage } from "./discordMessageService";
 import { uploadObjectToS3 } from "./storageService";
 import type { TranscriptionContentInput } from "./transcriptionService";
+import { maybeAutoExportCompletedMeeting } from "./notionAutomationService";
+import { registerNotionMutationTracker } from "./notionOperationLifetime";
 
 type RecoveryPatch = Parameters<
   DeploymentControlRepository["updateRecordingRecovery"]
@@ -45,6 +47,7 @@ export type RecoveryDependencies = {
   transcript: typeof recoverTranscript;
   upload: typeof uploadObjectToS3;
   send: typeof createDiscordMessage;
+  autoExport: typeof maybeAutoExportCompletedMeeting;
 };
 export async function persistRecovery(
   claim: RecoveryClaim,
@@ -536,5 +539,18 @@ export async function recoverMeeting(
     await recoverGeneration(claim, content, transcript, deps);
   } catch (error) {
     await recoverFailure(claim, error, deps);
+    return;
+  }
+  deps.signal.throwIfAborted();
+  if (!terminalDeliveryAcknowledged(claim.history))
+    throw new RecoveryMutationUnknown(
+      "Recovered terminal content is not acknowledged",
+    );
+  const unregister = registerNotionMutationTracker(deps.signal, deps.effect);
+  try {
+    await deps.effect(() => deps.autoExport(claim.history, deps.signal));
+    deps.signal.throwIfAborted();
+  } finally {
+    unregister();
   }
 }

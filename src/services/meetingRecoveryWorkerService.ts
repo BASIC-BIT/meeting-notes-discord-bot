@@ -23,6 +23,7 @@ import {
 } from "./meetingNotesService";
 import { uploadObjectToS3 } from "./storageService";
 import { createDiscordMessage } from "./discordMessageService";
+import { maybeAutoExportCompletedMeeting } from "./notionAutomationService";
 
 type WorkerDependencies = {
   repository: DeploymentControlRepository;
@@ -328,6 +329,7 @@ export function startMeetingRecoveryWorker() {
       transcript: recoverTranscript,
       upload: uploadObjectToS3,
       send: createDiscordMessage,
+      autoExport: maybeAutoExportCompletedMeeting,
     },
   });
   worker.start();

@@ -47,6 +47,7 @@ async function verifyNewWorkerCursorContinuation(
       recover: recoverMeeting,
       now: () => Math.floor(Date.now() / 1000),
       content: {
+        autoExport: async () => {},
         reader: f.reader,
         upload: f.upload,
         transcript: recoverTranscript,
@@ -133,6 +134,7 @@ async function verifyCursorFailurePolling(
     recover: recoverMeeting,
     now: () => Math.floor(Date.now() / 1000),
     content: {
+      autoExport: async () => {},
       reader: f.reader,
       upload: f.upload,
       transcript: recoverTranscript,
@@ -286,6 +288,7 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
     recover: recoverMeeting,
     now: () => Math.floor(Date.now() / 1000),
     content: {
+      autoExport: async () => {},
       reader: f.reader,
       upload: f.upload,
       transcript: recoverTranscript,
