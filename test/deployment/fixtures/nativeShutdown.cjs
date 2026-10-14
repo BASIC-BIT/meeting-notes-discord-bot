@@ -205,6 +205,12 @@ async function startFixture() {
     : process.argv[1].includes("/api/")
       ? "api"
       : "all";
+  if (process.env.RECORDING_FAULT_FIXTURE === "true")
+    await require("/app/nativeRecoveryFaults.cjs")(
+      output,
+      generatedPcm(),
+      publish,
+    );
   if (mode !== "api") await recordingFixture();
   const {
     runRuntimeApiOperation,

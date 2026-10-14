@@ -21,6 +21,11 @@ process.env.AWS_REGION = "local";
 
 const config: Config.InitialOptions = {
   preset: "ts-jest",
+  transform: {
+    "^.+\\.(ts|tsx)$": "ts-jest",
+    "^.+\\.(js|jsx|mjs)$": "babel-jest",
+  },
+  transformIgnorePatterns: ["node_modules/(?!cockatiel/)"],
   testEnvironment: "node",
   setupFiles: ["<rootDir>/test/deployment/integrationSetup.ts"],
   testMatch: ["**/test/deployment/**/*.integration.test.ts"],

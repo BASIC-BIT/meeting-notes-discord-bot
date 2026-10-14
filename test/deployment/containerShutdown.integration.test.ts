@@ -10,7 +10,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { requireDeploymentTestImage } from "./containerFixture";
+import {
+  requireDeploymentTestImage,
+  writeDeploymentFixtureReceipt,
+} from "./containerFixture";
 import type { MeetingHistory } from "../../src/types/db";
 import type {
   CheckpointObject,
@@ -21,6 +24,11 @@ const docker = (...args: string[]) =>
 const image = requireDeploymentTestImage();
 const fixture = path.resolve("test/deployment/fixtures/nativeShutdown.cjs");
 const pause = () => new Promise((resolve) => setTimeout(resolve, 100));
+function entrypoint(mode: "all" | "bot" | "api" | "fault") {
+  return ["all", "fault"].includes(mode)
+    ? []
+    : ["node", `dist/apps/${mode}/main.js`];
+}
 function json<T>(directory: string, file: string): T {
   return JSON.parse(readFileSync(path.join(directory, file), "utf8")) as T;
 }
@@ -47,7 +55,7 @@ function audioBytes(directory: string, history: MeetingHistory): number {
   }, 0);
 }
 async function ready(container: string, directory: string) {
-  const deadline = Date.now() + 30000;
+  const deadline = Date.now() + 95000;
   while (!existsSync(path.join(directory, "ready.json"))) {
     if (
       docker("inspect", "--format", "{{.State.Running}}", container) !== "true"
@@ -80,10 +88,12 @@ function assertOwned(container: string, owner: string) {
     ),
   ).toBe(owner);
 }
-test.each(["all", "bot", "api"] as const)(
-  "native %s entrypoint preserves on SIGTERM and confirms no tail after SIGKILL",
+test.each(["all", "bot", "api", "fault"] as const)(
+  "native %s entrypoint retains truthful checkpoints and owned shutdown",
   async (mode) => {
-    for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    for (const signal of mode === "fault"
+      ? (["SIGTERM"] as const)
+      : (["SIGTERM", "SIGKILL"] as const)) {
       const owner = randomUUID();
       const directory = mkdtempSync(path.join(tmpdir(), "chronote-r3-native-"));
       let container: string | undefined;
@@ -102,10 +112,14 @@ test.each(["all", "bot", "api"] as const)(
           `type=bind,source=${directory},target=/fixture-output`,
           "--mount",
           `type=bind,source=${fixture},target=/app/nativeShutdown.cjs,readonly`,
+          "--mount",
+          `type=bind,source=${path.resolve("test/deployment/fixtures/nativeRecoveryFaults.cjs")},target=/app/nativeRecoveryFaults.cjs,readonly`,
+          "--env",
+          `RECORDING_FAULT_FIXTURE=${mode === "fault"}`,
           "--env",
           "NODE_OPTIONS=--require=/app/nativeShutdown.cjs",
           image,
-          ...(mode === "all" ? [] : ["node", `dist/apps/${mode}/main.js`]),
+          ...entrypoint(mode),
         );
         await ready(container, directory);
         if (process.platform === "linux") {
@@ -122,7 +136,42 @@ test.each(["all", "bot", "api"] as const)(
           mode: string;
           counts: Record<string, number>;
         }>(directory, "ready.json");
-        expect(readiness).toMatchObject({ pid: 1, node: "v24.15.0", mode });
+        expect(readiness).toMatchObject({
+          pid: 1,
+          node: "v24.15.0",
+          mode: mode === "fault" ? "all" : mode,
+        });
+        if (mode === "fault") {
+          const faults = json<{
+            closureMs: number;
+            cutoffMs: number;
+            tempBytes: number;
+            sourceBytes: number;
+            reservedAtCutoff: number;
+            limitBytes: number;
+            rssBytes: number;
+          }>(directory, "faults.json");
+          expect(faults).toMatchObject({
+            reason: "storage_preservation",
+            attempts: 1,
+            sourceCount: 4,
+            earlyReleaseRefused: true,
+            intakeAfterCutoff: false,
+            reservedAfterSettlement: 0,
+          });
+          expect(faults.closureMs).toBeGreaterThanOrEqual(29900);
+          expect(faults.closureMs).toBeLessThan(35000);
+          expect(faults.cutoffMs).toBeGreaterThanOrEqual(59900);
+          expect(faults.cutoffMs).toBeLessThan(65000);
+          expect(faults.tempBytes).toBe(faults.sourceBytes * 4);
+          expect(faults.reservedAtCutoff).toBe(faults.tempBytes * 4);
+          expect(faults.limitBytes).toBe(64 * 1024 * 1024);
+          writeDeploymentFixtureReceipt("native-recovery-faults", {
+            image,
+            ...faults,
+          });
+          console.log(`Native fault measurements: ${JSON.stringify(faults)}`);
+        }
         expect(readiness.counts.ancillary_delivery).toBeGreaterThan(0);
         const before =
           mode === "api"
