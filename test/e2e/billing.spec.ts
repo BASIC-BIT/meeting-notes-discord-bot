@@ -803,6 +803,8 @@ test("basic intro Billing shows actual monthly discount and cancellation", async
   await useIntroBilling(page, {
     status: "ineligible",
     details: { ...monthlySubscriber, cancelAtPeriodEnd: true },
+    cancellationAt: monthlySubscriber.renewalAt,
+    nextBillingDate: monthlySubscriber.renewalAt,
   });
   await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
   await expect(page.getByTestId("subscription-details")).toContainText(
@@ -814,6 +816,33 @@ test("basic intro Billing shows actual monthly discount and cancellation", async
   await expect(page.getByTestId("subscription-details")).not.toContainText(
     "Next renewal",
   );
+  await expect(page.getByTestId("billing-current-plan")).toContainText(
+    `Active, ends ${new Date(monthlySubscriber.renewalAt!).toLocaleDateString()}`,
+  );
+  await expect(page.getByTestId("billing-current-plan")).not.toContainText(
+    "next billing",
+  );
+});
+
+test("scheduled cancellation remains visible when price details are unavailable", async ({
+  page,
+}) => {
+  const cancellationAt = "2026-11-12T12:00:00.000Z";
+  await useIntroBilling(page, {
+    status: "ineligible",
+    details: { status: "unavailable" },
+    cancellationAt,
+    nextBillingDate: cancellationAt,
+  });
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+  const current = page.getByTestId("billing-current-plan");
+  await expect(current).toContainText(
+    `Active, ends ${new Date(cancellationAt).toLocaleDateString()}`,
+  );
+  await expect(current).not.toContainText("next billing");
+  await expect(
+    page.getByRole("button", { name: "Manage billing" }),
+  ).toBeEnabled();
 });
 test("basic intro unavailable quotes block signup and legacy billing stays management-only", async ({
   page,

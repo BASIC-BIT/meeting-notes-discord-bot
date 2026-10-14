@@ -1,3 +1,4 @@
+import { resolveSubscriptionCancellationAt } from "../utils/stripeCancellation";
 import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
 import { getPaymentTransactionRepository } from "../repositories/paymentTransactionRepository";
 import { config } from "./configService";
@@ -52,6 +53,7 @@ export type BillingSnapshot = {
   grantTier: "basic" | "pro" | null;
   activeGrant: PublicEntitlementGrant | null;
   nextBillingDate: string | null;
+  cancellationAt: string | null;
   subscriptionId: string | null;
   customerId: string | null;
   hasStripeBilling: boolean;
@@ -85,6 +87,7 @@ export function buildBillingDisabledSnapshot(): BillingSnapshot {
     grantTier: null,
     activeGrant: null,
     nextBillingDate: null,
+    cancellationAt: null,
     subscriptionId: null,
     customerId: null,
     hasStripeBilling: false,
@@ -120,22 +123,24 @@ export async function getBillingSnapshot(params: {
     subscription?.stripeSubscriptionId || subscription?.stripeCustomerId,
   );
 
-  const [introOffer, annualIntroOffer, subscriptionDetails] = await Promise.all(
-    [
-      getGuildBasicIntroOffer({ stripe, guildId, payerId: params.payerId }),
-      getGuildBasicIntroOffer({
-        stripe,
-        guildId,
-        payerId: params.payerId,
-        interval: "year",
-      }),
-      loadProviderSubscriptionDetails(stripe, guildId, subscription),
-    ],
-  );
+  const [introOffer, annualIntroOffer, providerState] = await Promise.all([
+    getGuildBasicIntroOffer({ stripe, guildId, payerId: params.payerId }),
+    getGuildBasicIntroOffer({
+      stripe,
+      guildId,
+      payerId: params.payerId,
+      interval: "year",
+    }),
+    loadProviderBillingState(stripe, guildId, subscription),
+  ]);
   return {
     introOffer,
     annualIntroOffer,
-    subscriptionDetails,
+    subscriptionDetails: providerState.details,
+    cancellationAt:
+      resolvedSubscription.billingSource === "stripe"
+        ? providerState.cancellationAt
+        : null,
     tier: resolvedSubscription.tier,
     status: resolvedSubscription.status,
     stripeStatus: subscription?.stripeSubscriptionId
@@ -146,7 +151,8 @@ export async function getBillingSnapshot(params: {
     grantTier: resolvedSubscription.grantTier,
     activeGrant: resolvedSubscription.activeGrant,
     nextBillingDate:
-      resolvedSubscription.billingSource === "stripe"
+      resolvedSubscription.billingSource === "stripe" &&
+      !providerState.cancellationAt
         ? subscription?.nextBillingDate || null
         : null,
     subscriptionId: subscription?.stripeSubscriptionId || null,
@@ -185,6 +191,10 @@ export async function getMockBillingSnapshot(
     introOffer: { status: "inactive" },
     annualIntroOffer: { status: "inactive" },
     subscriptionDetails: null,
+    cancellationAt:
+      resolvedSubscription.billingSource === "stripe"
+        ? (subscription?.cancellationAt ?? null)
+        : null,
     tier: resolvedSubscription.tier,
     status: resolvedSubscription.status,
     stripeStatus: subscription?.stripeSubscriptionId
@@ -195,7 +205,8 @@ export async function getMockBillingSnapshot(
     grantTier: resolvedSubscription.grantTier,
     activeGrant: resolvedSubscription.activeGrant,
     nextBillingDate:
-      resolvedSubscription.billingSource === "stripe"
+      resolvedSubscription.billingSource === "stripe" &&
+      !subscription?.cancellationAt
         ? subscription?.nextBillingDate || null
         : null,
     subscriptionId: subscription?.stripeSubscriptionId || null,
@@ -702,7 +713,10 @@ export async function createPortalSession(params: {
     customer: customerId,
     ...(configuration ? { configuration } : {}),
 
-    return_url: config.stripe.portalReturnUrl || config.stripe.successUrl,
+    return_url: new URL(
+      `/portal/server/${encodeURIComponent(guildId)}/billing`,
+      config.frontend.siteUrl,
+    ).toString(),
   });
   if (!portal.url) {
     throw new Error("Stripe did not return a portal URL");
@@ -710,12 +724,19 @@ export async function createPortalSession(params: {
   return portal.url;
 }
 
-async function loadProviderSubscriptionDetails(
+type ProviderBillingState = {
+  details: ProviderSubscriptionDetails | null;
+  cancellationAt: string | null;
+};
+
+async function loadProviderBillingState(
   stripe: StripeClient,
   guildId: string,
   subscription: GuildSubscription | undefined,
-): Promise<ProviderSubscriptionDetails | null> {
-  if (!subscription?.stripeSubscriptionId) return null;
+): Promise<ProviderBillingState> {
+  if (!subscription?.stripeSubscriptionId)
+    return { details: null, cancellationAt: null };
+  let cancellationAt = subscription.cancellationAt ?? null;
   try {
     const provider = await stripe.subscriptions.retrieve(
       subscription.stripeSubscriptionId,
@@ -731,19 +752,26 @@ async function loadProviderSubscriptionDetails(
       (subscription.stripeCustomerId &&
         subscription.stripeCustomerId !== customerId)
     )
-      return { status: "unavailable" };
+      return { details: { status: "unavailable" }, cancellationAt: null };
+    const canceledAt = resolveSubscriptionCancellationAt(provider);
+    cancellationAt =
+      canceledAt === null ? null : new Date(canceledAt * 1000).toISOString();
     const [details, restriction] = await Promise.all([
       getProviderSubscriptionDetails(stripe, provider),
       getBasicIntroCustomerRestriction(stripe, customerId, provider),
     ]);
-    return details.status === "available"
-      ? {
-          ...details,
-          planChangesRestricted: Boolean(restriction),
-          planChangeRestrictionEndsAt: restriction?.endsAt ?? null,
-        }
-      : details;
+    return {
+      cancellationAt,
+      details:
+        details.status === "available"
+          ? {
+              ...details,
+              planChangesRestricted: Boolean(restriction),
+              planChangeRestrictionEndsAt: restriction?.endsAt ?? null,
+            }
+          : details,
+    };
   } catch {
-    return { status: "unavailable" };
+    return { details: { status: "unavailable" }, cancellationAt };
   }
 }

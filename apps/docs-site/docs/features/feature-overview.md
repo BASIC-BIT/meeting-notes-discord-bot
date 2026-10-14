@@ -38,7 +38,9 @@ enrollment remains open while the offer is available.
 Use **Manage billing** for an existing subscription. Billing shows the available
 management actions, payment status and verified renewal details. When verified,
 it shows the first annual invoice's amount paid separately from its subtotal and
-the next annual renewal price.
+the next annual renewal price. If cancellation is scheduled, Billing shows when
+your paid plan ends instead of a renewal date. Returning from Stripe takes you
+back to the same server's Billing page.
 
 | Limit                             | Free       | Basic    | Pro             |
 | --------------------------------- | ---------- | -------- | --------------- |

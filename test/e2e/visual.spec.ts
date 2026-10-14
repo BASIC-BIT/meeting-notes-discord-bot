@@ -636,6 +636,40 @@ test.describe("visual regression", () => {
   for (const viewport of marketingViewports.filter(
     (item) => item.name === "desktop" || item.name === "mobile",
   )) {
+    test(`billing scheduled cancellation ${viewport.name} @visual`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      const cancellationAt = "2026-11-12T12:00:00.000Z";
+      await useIntroBilling(page, {
+        status: "ineligible",
+        details: { status: "unavailable" },
+        cancellationAt,
+        nextBillingDate: cancellationAt,
+      });
+      for (const mode of visualModes) {
+        await page.goto(
+          withVisualMode(`/portal/server/${mockGuilds.ddm.id}/billing`, mode),
+        );
+        const currentPlan = page.getByTestId("billing-current-plan");
+        await expect(currentPlan).toContainText(
+          `Active, ends ${new Date(cancellationAt).toLocaleDateString()}`,
+        );
+        await expect(currentPlan).not.toContainText("next billing");
+        await assertPageCanScroll(page);
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await expectVisualScreenshot(
+          page,
+          `billing-scheduled-cancellation-${viewport.name}`,
+          mode,
+        );
+      }
+    });
+  }
+
+  for (const viewport of marketingViewports.filter(
+    (item) => item.name === "desktop" || item.name === "mobile",
+  )) {
     test(`billing canceled subscription intro ${viewport.name} @visual`, async ({
       page,
     }) => {

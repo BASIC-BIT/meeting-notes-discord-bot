@@ -1069,7 +1069,7 @@ describe("existing native introductory discount", () => {
     },
   );
 
-  test.each([-86400, 0, 86400])(
+  test.each([-86400, 86400])(
     "custom cancel_at offset %i does not promise a normal renewal",
     async (offset) => {
       const f = subscriberFixture();
@@ -1085,6 +1085,118 @@ describe("existing native introductory discount", () => {
       ).toEqual({ status: "unavailable" });
     },
   );
+  test("native dated period-end cancellation keeps the date and no-renewal display", async () => {
+    const f = subscriberFixture();
+    const cancellationAt = "2026-11-12T12:00:00.000Z";
+    getMockStore().subscriptions.get(f.request.guildId)!.nextBillingDate =
+      cancellationAt;
+    Object.assign(f.subscription, {
+      cancel_at: f.subscription.items.data[0].current_period_end,
+      cancel_at_period_end: false,
+    });
+    const snapshot = await getBillingSnapshot({
+      stripe: f.request.stripe,
+      guildId: f.request.guildId,
+    });
+    expect(snapshot).toMatchObject({ cancellationAt, nextBillingDate: null });
+    expect(snapshot.subscriptionDetails).toMatchObject({
+      status: "available",
+      cancelAtPeriodEnd: true,
+      renewalAt: cancellationAt,
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        {},
+        createElement(SubscriptionDetails, {
+          details: snapshot.subscriptionDetails,
+        }),
+      ),
+    );
+    expect(html).toContain("Cancels on");
+    expect(html).toContain("No automatic renewal.");
+    expect(html).not.toContain("Next renewal:");
+  });
+
+  test.each([-86400, 86400])(
+    "keeps a custom cancellation date when price details are unavailable (%i)",
+    async (offset) => {
+      const f = subscriberFixture();
+      const cancelAt = f.subscription.items.data[0].current_period_end + offset;
+      Object.assign(f.subscription, {
+        cancel_at: cancelAt,
+        cancel_at_period_end: false,
+      });
+      const snapshot = await getBillingSnapshot({
+        stripe: f.request.stripe,
+        guildId: f.request.guildId,
+      });
+      expect(snapshot).toMatchObject({
+        cancellationAt: new Date(cancelAt * 1000).toISOString(),
+        subscriptionDetails: { status: "unavailable" },
+      });
+    },
+  );
+
+  test("saved cancellation date survives a provider outage without promising renewal", async () => {
+    const f = subscriberFixture();
+    const cancellationAt = "2026-11-12T12:00:00.000Z";
+    Object.assign(getMockStore().subscriptions.get(f.request.guildId)!, {
+      cancellationAt,
+      nextBillingDate: cancellationAt,
+    });
+    f.stripe.subscriptions.retrieve.mockRejectedValue(
+      new Error("provider unavailable"),
+    );
+    const snapshot = await getBillingSnapshot({
+      stripe: f.request.stripe,
+      guildId: f.request.guildId,
+    });
+    expect(snapshot).toMatchObject({
+      cancellationAt,
+      nextBillingDate: null,
+      subscriptionDetails: { status: "unavailable" },
+    });
+  });
+
+  test("mismatched provider identity cannot supply a cancellation date", async () => {
+    const f = subscriberFixture();
+    Object.assign(f.subscription, {
+      customer: "cus_another",
+      cancel_at: f.subscription.items.data[0].current_period_end,
+    });
+    const snapshot = await getBillingSnapshot({
+      stripe: f.request.stripe,
+      guildId: f.request.guildId,
+    });
+    expect(snapshot).toMatchObject({
+      cancellationAt: null,
+      subscriptionDetails: { status: "unavailable" },
+    });
+  });
+
+  test("a verified provider removal clears a stale saved cancellation date", async () => {
+    const f = subscriberFixture();
+    getMockStore().subscriptions.set(f.request.guildId, {
+      ...getMockStore().subscriptions.get(f.request.guildId),
+      guildId: f.request.guildId,
+      subscriptionType: "stripe",
+      tier: "basic",
+      status: "active",
+      startDate: "2026-10-12T12:00:00Z",
+      cancellationAt: "2026-11-12T12:00:00.000Z",
+      nextBillingDate: "2026-11-12T12:00:00.000Z",
+    });
+    const snapshot = await getBillingSnapshot({
+      stripe: f.request.stripe,
+      guildId: f.request.guildId,
+    });
+    expect(snapshot).toMatchObject({
+      cancellationAt: null,
+      nextBillingDate: "2026-11-12T12:00:00.000Z",
+    });
+  });
+
   test("known native cancellation period survives the snapshot and actual display", async () => {
     const f = subscriberFixture();
     Object.assign(f.subscription, { cancel_at_period_end: true });

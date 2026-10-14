@@ -834,6 +834,44 @@ describe("billing webhook routes", () => {
     },
   );
 
+  test.each(["flag", "date"])(
+    "persists scheduled cancellation and clears it on provider resume (%s)",
+    async (shape) => {
+      const periodEnd =
+        activeStripeSubscription.items.data[0].current_period_end;
+      const scheduled = {
+        ...activeStripeSubscription,
+        cancel_at_period_end: shape === "flag",
+        cancel_at: shape === "date" ? periodEnd : null,
+      };
+      const event = subscriptionEvent("active", `evt_scheduled_${shape}`);
+      const retrieve = jest.fn(async () => scheduled);
+      const { server, baseUrl } = createServer(createStripe(event, retrieve));
+      try {
+        expect((await postWebhook(baseUrl)).statusCode).toBe(200);
+        const saved = await getSubscriptionRepository().get(guildId);
+        expect(saved).toMatchObject({
+          tier: "basic",
+          status: "active",
+          cancellationAt: new Date(periodEnd * 1000).toISOString(),
+        });
+        expect(saved?.endDate).toBeUndefined();
+        retrieve.mockResolvedValue({
+          ...scheduled,
+          cancel_at: null,
+          cancel_at_period_end: false,
+        });
+        event.id = `evt_resumed_${shape}`;
+        expect((await postWebhook(baseUrl)).statusCode).toBe(200);
+        const resumed = await getSubscriptionRepository().get(guildId);
+        expect(resumed).toMatchObject({ tier: "basic", status: "active" });
+        expect(resumed?.cancellationAt).toBeUndefined();
+      } finally {
+        await closeServer(server);
+      }
+    },
+  );
+
   test("does not mark a recovered subscription past due for a delayed failed invoice", async () => {
     const { server, baseUrl } = createServer(
       createStripe(

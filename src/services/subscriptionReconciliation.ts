@@ -1,3 +1,4 @@
+import { resolveSubscriptionCancellationAt } from "../utils/stripeCancellation";
 import type { SettlementInvoice } from "./offerUsageSettlement";
 import { randomUUID } from "node:crypto";
 import type { GuildSubscription } from "../types/db";
@@ -63,6 +64,7 @@ const buildSubscriptionPayload = (params: {
   startDate?: string;
   endDate?: string;
   nextBillingDate?: string;
+  cancellationAt?: string;
   paymentMethod?: string;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
@@ -76,6 +78,7 @@ const buildSubscriptionPayload = (params: {
   startDate: params.startDate ?? new Date().toISOString(),
   endDate: params.endDate,
   nextBillingDate: params.nextBillingDate,
+  cancellationAt: params.cancellationAt,
   paymentMethod: params.paymentMethod,
   subscriptionType: "stripe",
   stripeCustomerId: params.stripeCustomerId,
@@ -152,6 +155,9 @@ export const reconcileSubscription = async (
           startDate: toIso(subscription.start_date),
           endDate: toIso(subscription.ended_at),
           nextBillingDate: toIso(resolveSubscriptionPeriodEnd(subscription)),
+          cancellationAt: toIso(
+            resolveSubscriptionCancellationAt(subscription),
+          ),
           paymentMethod: subscription.default_payment_method
             ? "card"
             : "unknown",

@@ -1,3 +1,4 @@
+import { resolveSubscriptionCancellationAt } from "../utils/stripeCancellation";
 import { providerModeSchema } from "../types/offerUsage";
 import { readIntroOfferDecision } from "./introOfferEligibility";
 import { readLedgerWriterRuntime } from "./ledgerWriterRuntime";
@@ -1096,7 +1097,8 @@ export async function getProviderSubscriptionDetails(
     !["month", "year"].includes(item.price.recurring?.interval ?? "")
   )
     return { status: "unavailable" };
-  if (hasUnsupportedCancellation(subscription))
+  const cancellationAt = resolveSubscriptionCancellationAt(subscription);
+  if (![null, item.current_period_end].includes(cancellationAt))
     return { status: "unavailable" };
   const price = item.price;
   const unitAmount = price.unit_amount;
@@ -1122,7 +1124,7 @@ export async function getProviderSubscriptionDetails(
     renewalAt: ["canceled", "incomplete_expired"].includes(subscription.status)
       ? null
       : new Date(item.current_period_end * 1000).toISOString(),
-    cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
+    cancelAtPeriodEnd: cancellationAt !== null,
     discount: discountDetails,
     firstYearPayment: await getAnnualIntroFirstYearPayment(
       stripe,
@@ -1211,10 +1213,4 @@ export async function getBasicIntroCustomerRestriction(
     configurationId,
     endsAt: unknownEnd ? null : new Date(latestEnd * 1000).toISOString(),
   };
-}
-
-function hasUnsupportedCancellation(
-  subscription: Stripe.Subscription,
-): boolean {
-  return Boolean(subscription.cancel_at && !subscription.cancel_at_period_end);
 }

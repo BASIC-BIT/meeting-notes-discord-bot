@@ -12,6 +12,8 @@ import {
 type IntroBillingOptions = {
   status?: BasicIntroOffer["status"];
   details?: ProviderSubscriptionDetails;
+  cancellationAt?: string | null;
+  nextBillingDate?: string | null;
   legacy?: boolean;
   terminalStatus?: "canceled" | "incomplete_expired";
 };
@@ -40,6 +42,8 @@ function introBillingData(options: IntroBillingOptions) {
         }
       : null,
     subscriptionDetails: options.details,
+    cancellationAt: options.cancellationAt ?? null,
+    nextBillingDate: options.nextBillingDate ?? null,
   };
 }
 

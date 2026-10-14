@@ -15,6 +15,7 @@ export interface GuildSubscription {
   startDate: string;
   endDate?: string;
   nextBillingDate?: string;
+  cancellationAt?: string;
   paymentMethod?: string;
   subscriptionType: string;
   stripeCustomerId?: string;

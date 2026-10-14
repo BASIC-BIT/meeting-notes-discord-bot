@@ -89,6 +89,7 @@ type UpgradePreviewProps = {
   billingSource?: "free" | "stripe" | "manual_comp" | "forced";
   introStatus?: BasicIntroOffer["status"];
   subscriptionDetails?: ProviderSubscriptionDetails;
+  cancellationAt?: string | null;
   loadingBilling?: boolean;
   staleQuote?: boolean;
   pendingCheckout?: boolean;
@@ -103,6 +104,7 @@ function previewResponses({
   billingSource,
   terminalStatus,
   subscriptionDetails,
+  cancellationAt,
   paymentSettling,
   introStatus,
   staleQuote,
@@ -157,6 +159,7 @@ function previewResponses({
         ? { status: "incomplete", stripeStatus: "incomplete" }
         : {}),
       subscriptionDetails,
+      cancellationAt: cancellationAt ?? null,
       introOffer:
         introStatus === "available"
           ? monthlyIntroOffer
@@ -204,6 +207,7 @@ export function UpgradePreview({
   billingSource,
   introStatus,
   subscriptionDetails,
+  cancellationAt,
   loadingBilling = false,
   staleQuote = false,
   pendingCheckout = false,
@@ -235,6 +239,7 @@ export function UpgradePreview({
               billingSource,
               terminalStatus,
               subscriptionDetails,
+              cancellationAt,
               paymentSettling,
               introStatus,
               staleQuote,
@@ -859,9 +864,33 @@ export const IntroAnnualSharedRestriction: Story = {
 };
 export const IntroSubscriberCanceled: Story = {
   ...IntroAnnualSubscriber,
+  tags: ["cancellation-status"],
   args: {
     ...IntroAnnualSubscriber.args,
+    cancellationAt: annualSubscriber.renewalAt,
     subscriptionDetails: { ...annualSubscriber, cancelAtPeriodEnd: true },
+  },
+  play: async ({ canvasElement }) => {
+    const current = within(
+      await within(canvasElement).findByTestId("billing-current-plan"),
+    );
+    await expect(current.getByText(/Active, ends/)).toBeVisible();
+    await expect(current.queryByText(/next billing/)).toBeNull();
+    await expect(current.getByText(/No automatic renewal/)).toBeVisible();
+  },
+};
+export const CancellationPriceUnavailable: Story = {
+  ...IntroSubscriberCanceled,
+  args: {
+    ...IntroSubscriberCanceled.args,
+    subscriptionDetails: { status: "unavailable" },
+  },
+  play: async ({ canvasElement }) => {
+    const current = within(
+      await within(canvasElement).findByTestId("billing-current-plan"),
+    );
+    await expect(current.getByText(/Active, ends/)).toBeVisible();
+    await expect(current.queryByText(/next billing/)).toBeNull();
   },
 };
 export const IntroProviderUnavailable: Story = {

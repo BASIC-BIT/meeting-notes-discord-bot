@@ -170,12 +170,15 @@ const formatStatusLabel = (status: string) =>
 const formatStatusLine = (
   statusLabel: string,
   nextBillingDate?: string | null,
+  cancellationAt?: string | null,
 ) =>
-  nextBillingDate
-    ? `${statusLabel} - next billing ${new Date(
-        nextBillingDate,
-      ).toLocaleDateString()}`
-    : statusLabel;
+  cancellationAt
+    ? `${statusLabel}, ends ${new Date(cancellationAt).toLocaleDateString()}`
+    : nextBillingDate
+      ? `${statusLabel} - next billing ${new Date(
+          nextBillingDate,
+        ).toLocaleDateString()}`
+      : statusLabel;
 
 const BillingShell = ({
   children,
@@ -817,7 +820,11 @@ function BillingCurrentPlan({
   const isFreeTier = data.tier === "free";
   const hasTerminalSubscription = isTerminalStripeHistory(data);
   const statusLabel = formatStatusLabel(data.status);
-  const statusLine = formatStatusLine(statusLabel, data.nextBillingDate);
+  const statusLine = formatStatusLine(
+    statusLabel,
+    data.nextBillingDate,
+    data.cancellationAt,
+  );
   return (
     <>
       {isFreeTier && (!data.hasStripeBilling || hasTerminalSubscription) ? (
