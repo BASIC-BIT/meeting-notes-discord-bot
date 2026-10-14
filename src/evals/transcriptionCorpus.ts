@@ -64,6 +64,8 @@ export const transcriptionCorpusSchema = z
             split: z.enum(["tune", "holdout"]),
             tags: z.array(z.string()).default([]),
             label,
+            familyId: z.string().trim().min(1).optional(),
+            speakerDeviceProfileId: z.string().trim().min(1).optional(),
           })
           .strict(),
       )
@@ -84,3 +86,22 @@ export const referenceForCase = (
     : item.label.kind === "nonspeech"
       ? ""
       : undefined;
+
+export function selectCorpusBatch<T extends { id: string }>(
+  cases: T[],
+  size: number,
+  index: number,
+): T[] {
+  if (
+    !Number.isInteger(size) ||
+    size < 1 ||
+    size > 25 ||
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index * size >= cases.length
+  )
+    throw new Error("Invalid corpus batch selection");
+  return [...cases]
+    .sort((a, b) => a.id.localeCompare(b.id, "en"))
+    .slice(index * size, (index + 1) * size);
+}

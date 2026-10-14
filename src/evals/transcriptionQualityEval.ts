@@ -1,3 +1,8 @@
+import { DEFAULT_SPEECH_POLICY } from "../services/speechDetectionPolicy";
+import {
+  getSpeechDetector,
+  shutdownSpeechDetector,
+} from "../services/speechDetectionService";
 import { createHash } from "node:crypto";
 import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
@@ -7,6 +12,7 @@ import { BYTES_PER_SAMPLE, CHANNELS, RECORD_SAMPLE_RATE } from "../constants";
 import { convertTranscriptionPcmToWav } from "../services/transcriptionAudioService";
 import {
   referenceForCase,
+  selectCorpusBatch,
   transcriptionCorpusSchema,
   transcriptionPolicySchema,
   type TranscriptionCorpusCase,
@@ -71,12 +77,15 @@ export function decodeTranscriptionEvalAudio(
 }
 
 type CorpusRun = TranscriptionQualityRun & {
+  stages: TranscriptionQualityRun["stages"] & { decodeMs: number };
   caseId: string;
   run: number;
   split: TranscriptionCorpusCase["split"];
   tags: string[];
   label: TranscriptionCorpusCase["label"];
   sha256: string;
+  familyId?: string;
+  speakerDeviceProfileId?: string;
 };
 
 export function summarizeQualityRuns(results: CorpusRun[]) {
@@ -118,6 +127,10 @@ export async function runTranscriptionQualityEval(args: string[]) {
     "--force",
     "--vad-report",
     "--artifact-dir",
+    "--speech-detector",
+    "--speech-mode",
+    "--batch-size",
+    "--batch-index",
   ]);
   for (const argument of args.filter((item) => item.startsWith("--")))
     if (!allowed.has(argument))
@@ -149,7 +162,27 @@ export async function runTranscriptionQualityEval(args: string[]) {
     ? await fs.readFile(path.resolve(promptFile), "utf8")
     : corpus.prompt;
   const force = args.includes("--force");
-  const cases = corpus.cases.filter((item) => !split || item.split === split);
+  const selected = corpus.cases.filter(
+    (item) => !split || item.split === split,
+  );
+  const batchSize = numberFlag(args, "--batch-size", 25, 25);
+  const batchIndex = Number(flag(args, "--batch-index") ?? 0);
+  const cases = selectCorpusBatch(selected, batchSize, batchIndex);
+  const speechDetector = flag(args, "--speech-detector") ?? "off";
+  if (speechDetector !== "off" && speechDetector !== "production")
+    throw new Error("Invalid speech detector");
+  const speechMode = flag(args, "--speech-mode") ?? "enforce";
+  if (speechMode !== "shadow" && speechMode !== "enforce")
+    throw new Error("Invalid speech mode");
+  if (speechDetector === "off" && flag(args, "--speech-mode"))
+    throw new Error("Speech mode requires production detector");
+  if (
+    speechDetector === "production" &&
+    (flag(args, "--vad-report") || mode === "provider")
+  )
+    throw new Error(
+      "Production detector conflicts with external VAD or provider-only mode",
+    );
   const vadFile = flag(args, "--vad-report");
   if (vadFile && mode === "provider")
     throw new Error("Provider baseline does not accept a VAD gate");
@@ -198,6 +231,11 @@ export async function runTranscriptionQualityEval(args: string[]) {
     "src/utils/transcriptionText.ts",
     "src/utils/text.ts",
     "src/services/transcriptionAudioService.ts",
+    "src/services/transcriptionInputService.ts",
+    "src/services/speechDetectionService.ts",
+    "src/services/speechDetectionPolicy.ts",
+    "src/services/speechDetectionWorker.ts",
+    "src/services/speechDetectionCore.ts",
     "src/services/transcriptionSelectionService.ts",
     "src/evals/transcriptionCorpus.ts",
     "src/evals/transcriptionMetrics.ts",
@@ -205,6 +243,10 @@ export async function runTranscriptionQualityEval(args: string[]) {
     "src/evals/transcriptionQualityEval.ts",
     "src/evals/transcriptionVadReport.ts",
   ];
+  const detector =
+    speechDetector === "production" ? getSpeechDetector() : undefined;
+  let warmMs: number | null = null;
+  let warmed: boolean | null = null;
   try {
     const sourceSha256 = Object.fromEntries(
       await Promise.all(
@@ -216,37 +258,33 @@ export async function runTranscriptionQualityEval(args: string[]) {
         ]),
       ),
     );
+    if (detector) {
+      const start = performance.now();
+      warmed = await detector.warm();
+      warmMs = performance.now() - start;
+    }
     // Validate and decode the entire corpus before spending any provider requests.
     const prepared: {
       item: TranscriptionCorpusCase;
       pcm: Buffer;
       wavFile: string;
+      decodeMs: number;
+      conversionMs: number;
     }[] = [];
     for (const item of cases) {
-      const file = path.resolve(path.dirname(manifestPath), item.file);
-      const stat = await fs.stat(file);
-      if (!stat.isFile() || stat.size > 32 * 1024 * 1024)
-        throw new Error(`Invalid or oversized audio for ${item.id}`);
-      const digest = createHash("sha256")
-        .update(await fs.readFile(file))
-        .digest("hex");
-      if (digest !== item.sha256)
-        throw new Error(
-          `Audio hash changed for ${item.id}; review its label again`,
-        );
-      const pcmFile = path.join(tempDir, `${item.id}.pcm`);
-      const wavFile = path.join(tempDir, `${item.id}.wav`);
-      await decodeTranscriptionEvalAudio(file, pcmFile, maxSeconds);
-      const pcm = await fs.readFile(pcmFile);
-      const seconds =
-        pcm.length / (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE);
-      if (!seconds || seconds > maxSeconds)
-        throw new Error(
-          `Audio duration for ${item.id} must be between 0 and ${maxSeconds} seconds`,
-        );
-      if (mode !== "preflight")
+      const { pcm, pcmFile, wavFile, decodeMs } = await prepareCorpusAudio(
+        item,
+        manifestPath,
+        tempDir,
+        maxSeconds,
+      );
+      let conversionMs = 0;
+      if (mode !== "preflight" && !detector) {
+        const start = performance.now();
         await convertTranscriptionPcmToWav(pcmFile, wavFile);
-      prepared.push({ item, pcm, wavFile });
+        conversionMs = performance.now() - start;
+      }
+      prepared.push({ item, pcm, wavFile, decodeMs, conversionMs });
     }
     if (mode !== "preflight") {
       const { createOpenAIClient } = await import("../services/openaiClient");
@@ -258,7 +296,13 @@ export async function runTranscriptionQualityEval(args: string[]) {
         timeout: 60000,
       });
     }
-    outer: for (const { item, pcm, wavFile } of prepared) {
+    outer: for (const {
+      item,
+      pcm,
+      wavFile,
+      decodeMs,
+      conversionMs,
+    } of prepared) {
       for (let run = 1; run <= runs; run++) {
         const result = await runTranscriptionQualityCase({
           pcm,
@@ -267,6 +311,15 @@ export async function runTranscriptionQualityEval(args: string[]) {
           mode,
           policy,
           force,
+          production: detector
+            ? {
+                detector,
+                mode: speechMode,
+                pcmFile: path.join(tempDir, `${item.id}.pcm`),
+                wavFile,
+                policyFingerprint: DEFAULT_SPEECH_POLICY.policyFingerprint,
+              }
+            : undefined,
           reference: referenceForCase(item),
           vad: vadReport ? validateVadCase(item, vadReport.cases) : undefined,
           transcribe: async (requestPrompt) => {
@@ -293,12 +346,19 @@ export async function runTranscriptionQualityEval(args: string[]) {
         });
         results.push({
           ...result,
+          stages: {
+            ...result.stages,
+            decodeMs,
+            conversionMs: detector ? result.stages.conversionMs : conversionMs,
+          },
           caseId: item.id,
           run,
           split: item.split,
           tags: item.tags,
           label: item.label,
           sha256: item.sha256,
+          familyId: item.familyId,
+          speakerDeviceProfileId: item.speakerDeviceProfileId,
         });
         console.log(
           `${item.id} run ${run}: ${result.status}, ${result.requests} requests`,
@@ -345,6 +405,33 @@ export async function runTranscriptionQualityEval(args: string[]) {
           startedAt,
           nodeVersion: process.version,
           sourceSha256,
+          runSha256: createHash("sha256")
+            .update(
+              JSON.stringify({
+                sourceSha256,
+                cases,
+                runs,
+                policy,
+                prompt,
+                mode,
+                passMode,
+                speechDetector,
+                speechMode,
+              }),
+            )
+            .digest("hex"),
+          selection: {
+            split: split ?? null,
+            batchSize,
+            batchIndex,
+            selectedCaseIds: cases.map((item) => item.id),
+            totalSelectedCases: selected.length,
+          },
+          speechDetector,
+          speechMode: detector ? speechMode : "off",
+          speechPolicy: DEFAULT_SPEECH_POLICY,
+          warmMs,
+          warmed,
           finishedAt: new Date().toISOString(),
           mode,
           passMode,
@@ -384,7 +471,40 @@ export async function runTranscriptionQualityEval(args: string[]) {
       process.exitCode = 1;
     return output;
   } finally {
+    if (detector) await shutdownSpeechDetector();
     // Delete only the temporary directory created by this invocation.
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+export async function prepareCorpusAudio(
+  item: TranscriptionCorpusCase,
+  manifestPath: string,
+  tempDir: string,
+  maxSeconds: number,
+) {
+  const file = path.resolve(path.dirname(manifestPath), item.file);
+  const stat = await fs.stat(file);
+  if (!stat.isFile() || stat.size > 32 * 1024 * 1024)
+    throw new Error(`Invalid or oversized audio for ${item.id}`);
+  const digest = createHash("sha256")
+    .update(await fs.readFile(file))
+    .digest("hex");
+  if (digest !== item.sha256)
+    throw new Error(
+      `Audio hash changed for ${item.id}; review its label again`,
+    );
+  const pcmFile = path.join(tempDir, `${item.id}.pcm`);
+  const wavFile = path.join(tempDir, `${item.id}.wav`);
+  const decodeStarted = performance.now();
+  await decodeTranscriptionEvalAudio(file, pcmFile, maxSeconds);
+  const decodeMs = performance.now() - decodeStarted;
+  const pcm = await fs.readFile(pcmFile);
+  const seconds =
+    pcm.length / (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE);
+  if (!seconds || seconds > maxSeconds)
+    throw new Error(
+      `Audio duration for ${item.id} must be between 0 and ${maxSeconds} seconds`,
+    );
+  return { pcm, pcmFile, wavFile, seconds, decodeMs };
 }

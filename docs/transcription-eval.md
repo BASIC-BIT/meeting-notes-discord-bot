@@ -133,3 +133,159 @@ Notes:
 - Chat prompt files are reduced to their system messages before use.
 - Bedrock evals require AWS S3 and ignore STORAGE_ENDPOINT overrides.
 - Sample dataset payloads live in docs/evals/transcription-eval.dataset.json.
+
+## Production speech detector evaluation
+
+The runtime default remains `off`. The October 13 constrained development benchmark
+failed steady availability and memory overhead gates. Human-reviewed release
+holdout evidence is also missing. This is tested evaluation tooling, not approval
+to enforce speech rejection. Preserve the failed measurements when revising the
+design. Do not increase CPU, memory, deadlines, or substitute model/runtime assets
+without reviewing that design change.
+
+Build first (`npx tsc` and the normal packaged asset build). The detector-only and
+benchmark scripts load `dist`, including the actual production worker. Pipeline
+runs call `withPreparedTranscriptionInput` and the shared transcription selection
+service. They do not maintain another VAD classifier or admission policy.
+
+```powershell
+node scripts/speech-detection/evaluate-detector.mjs --manifest <private-manifest> --split holdout --runs 3 --artifact-dir D:/bench/chronote-ops/.cache/transcription-eval --output D:/bench/chronote-ops/.cache/transcription-eval/detector.json
+npm run eval:transcription -- --manifest <private-manifest> --mode pipeline --pass-mode slow --speech-detector production --speech-mode enforce --runs 3 --max-requests 150 --split holdout --batch-size 25 --batch-index 0 --artifact-dir D:/bench/chronote-ops/.cache/transcription-eval
+```
+
+Detector-only evaluation makes zero provider calls, grades every clip regardless of
+amplitude/duration admission, checks the source audio hash/size/duration, and
+records each repetition's assessment and timings. `--pass-mode fast|slow` controls
+its production deadline. Default maximum clip duration is 60 seconds, with a
+32 MiB input limit. Run detector-only controls without converting their labels
+into human ground truth. An unavailable assessment makes detector-only evidence
+incomplete, exits nonzero, and retains the measured result.
+
+Pipeline provider replay of private recordings requires its separate authorization.
+For an authorized replay, repeat each numbered batch until the split is exhausted,
+replace `production` with `off` for baseline (omit `--speech-mode`), and repeat
+both comparisons with `--pass-mode fast`. Baseline and candidate must use identical
+source, model, prompt, echo and other policy settings, split, and repetitions.
+Selection sorts case IDs after split filtering, then takes at most 25 cases.
+An out-of-range batch errors before decoding or provider setup. Three repetitions
+of 25 slow clips allow at most 150 SDK invocations, including prompt/no-prompt
+voting. SDK retries are disabled. Failed submitted calls count toward work;
+budget exhaustion is incomplete. Eligible preflight rows remain unscored and
+cannot satisfy pipeline acceptance.
+
+`--speech-detector off|production` defaults to `off`. Explicit production evals
+use `--speech-mode enforce` by default, or `shadow` to observe without changing
+provider admission. Shadow assessment completion is collected after provider
+submission. External `--vad-report` and production detection conflict. Reports
+include source/run/manifest/model/policy hashes, selection, decode/conversion,
+admission/assessment, provider and end-to-end time. Comparison concerns snippet
+ASR work only. Final-pass exact-coverage reuse, changed PCM and whole-meeting
+reprocessing can add SDK calls that this snippet replay does not model; use live
+SDK counters to measure those calls, and never extrapolate guaranteed savings.
+
+### Human review and holdout freeze
+
+Keep clips, references, label worksheets, provider evidence, and reports in private
+ops or an ignored artifact directory. An unreviewed candidate pool is not a frozen
+release holdout. Before freezing, a human listens to each clip and records the
+label/reference, review identity/date, family and speaker/device profile in the
+private review worksheet. Do not fill references from ASR/model output, infer a
+human signature, or tune on the proposed holdout.
+
+The strict version 1 manifest accepts optional `familyId` and
+`speakerDeviceProfileId`; release acceptance requires both. Related recordings
+share a family. Put whole families in tune or holdout, never both. Collect at least
+100 speech and 50 nonspeech unique audio hashes, at least 20 speech clips tagged
+`quiet` and 20 tagged `short`, and at least five speech speaker/device profiles.
+Every holdout label must carry `provenance: "human-reviewed"`. Speech references
+must be nonempty. Nonspeech labels contain no transcript. After human review,
+freeze the manifest bytes and record this private review evidence:
+
+```json
+{
+  "version": 1,
+  "manifestSha256": "<sha256 of frozen manifest bytes>",
+  "reviewedAt": "<actual review timestamp>",
+  "holdoutUntouchedSinceFreeze": true,
+  "tuningFamilyIds": ["<every family used for tuning>"]
+}
+```
+
+The checker verifies counts, hashes, label provenance fields, family separation
+and matching artifacts. It cannot verify that a person reviewed labels or that
+the holdout was untouched. Those statements remain operator attestations and
+require final review. There is no invented age-based expiry.
+
+### Resource evidence and comparison report
+
+Run in the approved immutable Alpine image with `--network none --cpus 0.5
+--memory 1g`, mounting final compiled artifacts and these scripts read-only when
+needed. Record the image ID and mount hashes with private results. Never build
+from a dirty/private context.
+
+```powershell
+node scripts/speech-detection/benchmark.mjs --duration-seconds 120 --fast-per-second 4 --slow-per-second 1 --artifact-dir <private-artifact-dir> --output <private-benchmark.json>
+node scripts/speech-detection/check-acceptance.mjs --manifest <private-manifest> --review-evidence <private-review.json> --detector <detector.json> --baseline <baseline-list.json> --candidate <candidate-list.json> --benchmark <benchmark.json> --output <private-comparison.json>
+```
+
+Each batch list is a JSON array of report paths, relative to the list file or
+absolute. Include every holdout case three times in both fast and slow phases.
+The benchmark measures a fixed alternating speech/nonspeech two-second schedule,
+120 seconds detector-off and 120 seconds mixed load, then 0.3/2/10/60/180-second
+buckets and ten simultaneous jobs. Buckets start with a ready worker per phase
+and recover readiness after a timeout so the next bucket does not measure a
+previous bucket's cooldown. Those recovery times are excluded from assessment
+latencies and worker starts are reported. Steady load retains ordinary production
+cooldown/restart behavior. RSS is sampled every 20 ms for the whole process,
+including worker threads; overhead is steady peak minus detector-off peak in the
+same process, before duration-bucket measurements. Resource quotas come from
+cgroup v1/v2 files; absent quota evidence remains unknown. Successful assessment
+p95 and all-outcome p95 are separate so fast failures cannot look healthy.
+
+Acceptance exits nonzero for missing/mismatched evidence or a failed gate:
+verified speech rejection, less than 50% rejection of baseline-admitted nonspeech,
+increased WER, genuine-speech empty-output rate or nonspeech false-positive rate,
+warm p95 beyond the phase deadlines, steady availability below 95%, overhead at
+least 128 MiB, added event-loop p95 at least 20 ms, or missing fail-open burst
+behavior. Quality gates apply to each phase and their aggregate. Quiet/short
+speech and families are reported separately. Savings never override failed
+quality. The report distinguishes `pass`, `fail` and `incomplete`, raw numerators
+and denominators, unique clips and repeated attempts, absolute and relative
+changes, and attestations from machine checks. Undefined relative changes and
+unverified dollar amounts are
+ull`. Pipeline provenance retains source hashes,
+ASR model, mode, phase, selection and repetitions, plus prompt/config hashes without
+prompt content. Detector and benchmark compiled hashes identify their runtime.
+A machine pass still requires review of the
+report and its interpretation before promotion.
+
+### Matching internal metrics
+
+Use existing private Prometheus/Grafana access. Record exact UTC start/end,
+mode-at-meeting-start, runtime/image/policy, phase, traffic composition and captured
+recording volume for each window. Newly selected mode applies to new meetings;
+active meetings retain their captured setting. Compare equal windows or normalize
+by captured audio minutes, never by the shrinking submitted-audio denominator.
+For a chosen range such as `[1h]`, use:
+
+```promql
+sum by (mode, phase) (increase(chronote_speech_detection_provider_submissions_total[1h]))
+/ on (mode) group_left
+(sum by (mode) (increase(chronote_speech_detection_captured_audio_seconds_total[1h])) / 60)
+
+sum by (mode, phase) (increase(chronote_speech_detection_submitted_audio_seconds_total[1h]))
+/ on (mode) group_left
+(sum by (mode) (increase(chronote_speech_detection_captured_audio_seconds_total[1h])) / 60)
+
+sum by (mode, phase, kind, reason) (increase(chronote_speech_detection_assessments_total[1h]))
+sum by (mode, phase, outcome) (increase(chronote_speech_detection_snippet_outcomes_total[1h]))
+sum by (phase) (increase(chronote_speech_detection_queue_saturation_total[1h]))
+sum(increase(chronote_speech_detection_worker_restarts_total[1h]))
+histogram_quantile(0.95, sum by (le, mode, phase) (rate(chronote_speech_detection_assessment_duration_seconds_bucket[1h])))
+histogram_quantile(0.95, sum by (le, mode, phase) (rate(chronote_speech_detection_end_to_end_duration_seconds_bucket[1h])))
+```
+
+SDK counters include voting and failed invocations, not hidden transport retries
+or verified billable usage. Live text/shadow disagreement is not ground truth.
+Keep live query output, runtime windows, provider rates and billing evidence in
+private ops; no new analytics event or content-bearing metric label is needed.

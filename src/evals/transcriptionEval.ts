@@ -1036,6 +1036,14 @@ async function runEval() {
 }
 
 runEval().catch((error) => {
-  console.error("Transcription eval failed:", error);
+  if (process.argv.includes("--manifest")) {
+    const status = z
+      .object({ status: z.number().int().min(100).max(599) })
+      .safeParse(error);
+    console.error({
+      category: "corpus_eval_failed",
+      status: status.success ? status.data.status : null,
+    });
+  } else console.error("Transcription eval failed:", error);
   process.exit(1);
 });

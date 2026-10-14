@@ -1,3 +1,12 @@
+import { z } from "zod";
+import {
+  withPreparedTranscriptionInput,
+  type TranscriptionInputRequest,
+} from "../services/transcriptionInputService";
+import type {
+  SpeechAssessment,
+  SpeechAdmission,
+} from "../services/speechDetectionTypes";
 import {
   BYTES_PER_SAMPLE,
   CHANNELS,
@@ -28,8 +37,21 @@ export type TranscriptionQualityRun = {
     | "minimum_duration"
     | "noise_gate"
     | "vad"
+    | "non_speech"
     | "request_error"
     | "budget_exhausted";
+  assessment?: SpeechAssessment;
+  admission?: SpeechAdmission;
+  error?: {
+    category: "request_error" | "budget_exhausted";
+    status: number | null;
+  };
+  stages: {
+    admissionMs: number;
+    conversionMs: number;
+    assessmentMs: number | null;
+    providerMs: number;
+  };
   audioSeconds: number;
   submittedAudioSeconds: number;
   requests: number;
@@ -62,6 +84,10 @@ export async function runTranscriptionQualityCase(input: {
   policy: TranscriptionEvalPolicy;
   force: boolean;
   vad?: TranscriptionVadDecision;
+  production?: Pick<
+    TranscriptionInputRequest,
+    "mode" | "pcmFile" | "wavFile" | "policyFingerprint" | "detector"
+  >;
   transcribe: (prompt?: string) => Promise<RawTranscriptionCandidate>;
 }): Promise<TranscriptionQualityRun> {
   const started = Date.now();
@@ -74,6 +100,12 @@ export async function runTranscriptionQualityCase(input: {
   const gate = evaluateNoiseGate(input.pcm, gateConfig);
   const result: TranscriptionQualityRun = {
     status: "eligible",
+    stages: {
+      admissionMs: 0,
+      conversionMs: 0,
+      assessmentMs: null,
+      providerMs: 0,
+    },
     audioSeconds,
     submittedAudioSeconds: 0,
     requests: 0,
@@ -105,72 +137,133 @@ export async function runTranscriptionQualityCase(input: {
       return finish();
     }
   }
-  if (input.mode === "preflight") return finish();
-  const request = async (prompt?: string) => {
-    // The callback enforces the global budget before making an HTTP request.
-    // A rejected HTTP request counts too; a budget refusal does not.
-    result.requests++;
-    result.submittedAudioSeconds += audioSeconds;
-    try {
-      return await input.transcribe(prompt);
-    } catch (error) {
-      if (error instanceof TranscriptionBudgetExhausted) {
-        result.requests--;
-        result.submittedAudioSeconds -= audioSeconds;
+  const execute = async () => {
+    if (input.mode === "preflight") return finish();
+    const request = async (prompt?: string) => {
+      // The callback enforces the global budget before making an HTTP request.
+      // A rejected HTTP request counts too; a budget refusal does not.
+      result.requests++;
+      result.submittedAudioSeconds += audioSeconds;
+      const requestStarted = performance.now();
+      try {
+        return await input.transcribe(prompt);
+      } catch (error) {
+        if (error instanceof TranscriptionBudgetExhausted) {
+          result.requests--;
+          result.submittedAudioSeconds -= audioSeconds;
+        }
+        throw error;
+      } finally {
+        result.stages.providerMs += performance.now() - requestStarted;
       }
-      throw error;
+    };
+    try {
+      if (input.mode === "provider") {
+        const raw = await request(input.prompt.trim() || undefined);
+        result.candidates.push({
+          id: "prompt",
+          raw,
+          flags: [],
+          text: raw.text,
+        });
+        result.text = raw.text;
+        result.selectedId = "prompt";
+      } else {
+        const rawCandidates: RawTranscriptionCandidate[] = [];
+        const guardConfig = resolveTranscriptionGuardConfig(
+          input.policy,
+          input.force ? false : undefined,
+        );
+        const selection = await selectTranscription({
+          transcribe: async (prompt) => {
+            const raw = await request(prompt);
+            rawCandidates.push(raw);
+            return raw;
+          },
+          prompt: input.prompt.trim() || undefined,
+          passMode: input.passMode,
+          voteEnabled: input.policy.voteEnabled ?? true,
+          guardConfig,
+          audioSeconds,
+          noiseGateMetrics:
+            input.pcm.length &&
+            ((isNoiseGateEnabled(gateConfig, input.passMode) && !input.force) ||
+              guardConfig.suppressionEnabled)
+              ? gate.metrics
+              : undefined,
+          onCandidate: (candidate) =>
+            result.candidates.push({
+              id: candidate.candidateId,
+              raw: rawCandidates[rawCandidates.length - 1],
+              flags: candidate.guardResult.flags,
+              text: candidate.guardResult.text,
+            }),
+        });
+        result.text = selection.selected.guardResult.text;
+        result.selectedId = selection.selected.candidateId;
+        result.voteDecision = selection.voteDecision;
+      }
+      result.status = "succeeded";
+      result.score = scoreTranscription(input.reference, result.text);
+    } catch (error) {
+      result.status = "failed";
+      result.reason =
+        error instanceof TranscriptionBudgetExhausted
+          ? "budget_exhausted"
+          : "request_error";
+      const status = z
+        .object({ status: z.number().int().min(100).max(599) })
+        .safeParse(error);
+      result.error = {
+        category: result.reason,
+        status: status.success ? status.data.status : null,
+      };
+      // Partial candidates are retained, but a failed run is never graded as silence.
     }
+    return finish();
   };
-  try {
-    if (input.mode === "provider") {
-      const raw = await request(input.prompt.trim() || undefined);
-      result.candidates.push({ id: "prompt", raw, flags: [], text: raw.text });
-      result.text = raw.text;
-      result.selectedId = "prompt";
-    } else {
-      const rawCandidates: RawTranscriptionCandidate[] = [];
-      const guardConfig = resolveTranscriptionGuardConfig(
-        input.policy,
-        input.force ? false : undefined,
+  if (!input.production || input.mode === "provider") return execute();
+  const admissionStarted = performance.now();
+  let observed!: () => void;
+  const observation = new Promise<void>((resolve) => {
+    observed = resolve;
+  });
+  const output = await withPreparedTranscriptionInput(
+    {
+      ...input.production,
+      pcm: input.pcm,
+      phase: input.passMode,
+      force: input.force,
+      observe: (assessment, durationMs) => {
+        result.assessment = assessment;
+        result.stages.assessmentMs = durationMs;
+        observed();
+      },
+    },
+    async ({ admission }) => {
+      result.admission = admission;
+      result.stages.admissionMs = performance.now() - admissionStarted;
+      result.stages.conversionMs = Math.max(
+        0,
+        result.stages.admissionMs -
+          (input.production?.mode === "enforce"
+            ? (result.stages.assessmentMs ?? 0)
+            : 0),
       );
-      const selection = await selectTranscription({
-        transcribe: async (prompt) => {
-          const raw = await request(prompt);
-          rawCandidates.push(raw);
-          return raw;
-        },
-        prompt: input.prompt.trim() || undefined,
-        passMode: input.passMode,
-        voteEnabled: input.policy.voteEnabled ?? true,
-        guardConfig,
-        audioSeconds,
-        noiseGateMetrics:
-          input.pcm.length &&
-          ((isNoiseGateEnabled(gateConfig, input.passMode) && !input.force) ||
-            guardConfig.suppressionEnabled)
-            ? gate.metrics
-            : undefined,
-        onCandidate: (candidate) =>
-          result.candidates.push({
-            id: candidate.candidateId,
-            raw: rawCandidates[rawCandidates.length - 1],
-            flags: candidate.guardResult.flags,
-            text: candidate.guardResult.text,
-          }),
-      });
-      result.text = selection.selected.guardResult.text;
-      result.selectedId = selection.selected.candidateId;
-      result.voteDecision = selection.voteDecision;
-    }
-    result.status = "succeeded";
-    result.score = scoreTranscription(input.reference, result.text);
-  } catch (error) {
-    result.status = "failed";
-    result.reason =
-      error instanceof TranscriptionBudgetExhausted
-        ? "budget_exhausted"
-        : "request_error";
-    // Partial candidates are retained, but a failed run is never graded as silence.
-  }
-  return finish();
+      if (
+        admission.kind === "assessed" &&
+        admission.assessment.kind === "non_speech"
+      ) {
+        result.status = "skipped";
+        result.reason = "non_speech";
+        result.text = "";
+        result.score = scoreTranscription(input.reference, "");
+        return finish();
+      }
+      return execute();
+    },
+  );
+  // Shadow observes completion only after provider work; it never delays submission.
+  if (input.production.mode === "shadow" && !input.force) await observation;
+  return { ...output, assessment: result.assessment, stages: result.stages };
 }
