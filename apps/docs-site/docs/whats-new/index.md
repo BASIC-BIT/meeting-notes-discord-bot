@@ -7,6 +7,11 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Recording continuity during service handoffs
+
+- A ready replacement can accept new recordings while the previous runtime finishes its existing work. A start caught at the handoff can ask you to retry; active recordings keep their original owner.
+- Interrupted results retain their saved-coverage warnings. Unconfirmed recording or delivery state stays unavailable or needs review instead of appearing complete. See [Discord meeting notes](/discord-meeting-notes/#updates-and-interrupted-recordings).
+
 ### Clearer interrupted recording outcomes
 
 - Chronote can recover saved conversation after an interrupted recording while respecting the original transcription and notes settings. It does not rejoin the voice channel or fill missing conversation with invented content.

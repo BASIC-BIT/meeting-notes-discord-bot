@@ -1,0 +1,102 @@
+# Recording handoff and recovery
+
+This change lets a healthy replacement accept new work while the previous runtime finishes its recordings. It also preserves verified recording material for offline recovery after an interruption. The approved scope is implementation and review in one product PR. Deployment and hosted acceptance require a separate instruction for this task.
+
+Local tests and generated native fixtures provide different evidence. Neither establishes the current Sandbox or production runtime. First activation remains blocked until an approved introduction procedure can prevent legacy admission races and preserve a compatible rollback route.
+
+## What a participant experiences
+
+A recording already in progress keeps its owner during an ordinary handoff. Other eligible servers can start on the replacement after it is ready. A start that reaches the old runtime after the switch can receive a retryable result. Existing server permissions, limits and explicit-stop suppression still apply.
+
+### Start or finish a recording during a handoff
+
+```mermaid
+flowchart TD
+  A[Discord start or auto-record] --> D[Shared admission]
+  B[Signed-in portal or MCP start] --> C[Queued start]
+  C --> D
+  D -->|Serving owner and available guild| E[Recording and live transcript]
+  D -->|Old runtime after switch| F[Retryable result]
+  F --> D
+  E --> G[Stop routed to original owner]
+  G --> H[Saved result in Discord and Library]
+```
+
+### Read an interrupted recording
+
+```mermaid
+flowchart TD
+  A[Recording becomes unavailable] --> B[Recheck live state or open Library]
+  B --> C{Verified saved material?}
+  C -->|Yes, original settings permit| D[Offline recovery]
+  C -->|No canonical checkpoint| E[Unavailable, preservation unknown]
+  D --> F[Partial result with coverage warning]
+  D -->|Unknown delivery or policy| G[Needs review, no automatic resend]
+```
+
+Recovery never rejoins voice. Successful notes do not make interrupted capture complete. An unknown physical end time remains unknown. A no-first-checkpoint orphan has no canonical recovery claim; the live view can become unavailable without inventing saved coverage or a recovery promise.
+
+## Runtime and deployment contract
+
+`Control.servingMembers` names exact identities under one generation. Admission checks that map, runtime mode, fresh readiness, protection and the runtime's original authorization in the write transaction. An epoch change alone does not interrupt healthy serving work. Promotion checks the coordinator token/epoch, expected member map and fresh candidate proof. Selected retained bot/API members can continue under the next generation. API readiness does not pretend to have a Discord gateway.
+
+An ECS control cannot be bootstrapped by a local identity. Local bootstrap is restricted to explicit mock storage or opted-in loopback DynamoDB with local/dummy credentials. It preserves existing leases, histories and unresolved voice guards, retains fresh disjoint bot/API members and refuses overlapping fresh owners.
+
+Both workflows use the same coordinator. It requests minimum healthy percent 100, maximum percent 200, unchanged desired count and stopTimeout 120. ECS early success uses healthyPercent 100 with sourceServiceRevisionCleanup `DEFERRED`. That result is not application readiness, promotion or retirement. A health-only listener starts before bounded exact-task protection retries; full application readiness remains unqualified until protection and boot complete. Warming requests receive retryable responses.
+
+After promotion, existing work renews and finishes under its original claim. Runtime retirement moves through `draining`, `releasing`, then `retired`. The releasing state is durable before the native disable call. Unknown disable outcomes retain uncertainty. A coordinator never uses a missing task, lease expiry or zero cached counters to release protection.
+
+Rollback to the exact prior serving identities is allowed only before any retirement request, with a matching durable deployment phase and fresh readiness/protection. It advances the generation while preserving candidate-owned work. A later rollback or insufficient surge capacity requires operational reconciliation, never stopping a busy task to make room.
+
+A same-compatible-image replacement can enter serving through exact completed-deployment lineage or the durable compatible-replacement receipt. Incomplete, rolled-back, newer or absent lineage refuses it. The old runtime becomes draining, with its counts and voice guard retained. This is not a general restart or legacy bootstrap policy.
+
+## Ownership, preservation and delivery
+
+Seven actual producers contribute to retirement: pending admission, recording, finalization, personal processing, recovery processing, voice operation and ancillary delivery. Registration precedes awaits. An admitted reservation stays counted through initialization; finalization transitions the same handle. Existing owner controls have a separately counted child plus exact lease/attempt proof. Personal and recovery workers own their real claim, provider, renewal and ancillary promises.
+
+Voice settlement is independent of capture and processing. An attempted connection needs sealed callbacks, settled transports, a closed connection and a matching session/sequence gateway leave acknowledgment. Expiry or task disappearance does not satisfy it. Offline recovery never clears that guard.
+
+Checkpoint uploads precede manifest publication and canonical history CAS. The original capture provenance and requested flags remain immutable when recovery advances the execution version. Frozen context includes only validated inputs required by the existing notes and summary engines. Original cancellation/proceed intent and the original completion policy survive replacement. Complete short automatic recordings with unknown policy require review.
+
+Verified saved text can recover without audio. Saved text with no exact processing-coverage proof does not suppress verified PCM. Each confirmed PCM interval is processed separately, preserving gaps. This can cost extra transcription requests or duplicate wording; it does not silently discard preserved speech.
+
+Before final summary or notes mutations, ordinary finalization persists coarse delivery intent. Unknown intent prevents dispatch. Unknown sends or acknowledgment writes retain known message IDs and `needs_reconciliation`; recovery never automatically replays them. Exact terminal readback can reconcile already acknowledged delivery without sending again. Existing enabled Notion automation follows newly recovered usable notes only after delivery proof. An unknown ancillary mutation retains its own ownership and is never reclassified as a generation retry.
+
+## Evidence and remaining acceptance
+
+| Evidence               | What it establishes                                                                                                                  | Limit                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| H7 combined test       | Actual producers, real local Dynamo transactions, failed warmup, promotion, old controls, persisted results, retirement and rollback | Generated external responses; no hosted provider proof |
+| R6 native fixtures     | Node 24.15 PID 1, native Opus/ffmpeg, real signals and generated storage acknowledgments                                             | Network disabled; no ECS/S3/Discord acceptance         |
+| R6 timing receipt      | Segment closure about 30.014 seconds and cutoff about 60.005 seconds with four short PCM sources                                     | Not representative load or a loss guarantee            |
+| Shutdown composition   | Earliest shared 100-second budget and retained actual tails                                                                          | No real 100-second provider outage measured            |
+| Sandbox and production | UNKNOWN                                                                                                                              | No hosted operation authorized in this task            |
+
+The 64 MiB bound is additional PCM accounting, not total process RSS. The native RSS observation is one sample, not a peak bound. Host audio verification is unavailable because the host Opus binding is missing. Use the retained native receipt and current runtime-source correspondence, then fresh exact-head hosted CI for merged code. Do not infer acceptance from an image tag or a green workflow alone.
+
+## Prepare a Sandbox acceptance dry-run
+
+`scripts/deployment/verify-sandbox-handoff.cjs` accepts only `--dry-run --config <file>`. It validates an explicit Sandbox configuration, prints its checksum, fixture checksums and intended stages, and runs no providers or tests. Its resource labels do not verify an account or environment. It has no production defaults and no execution mode.
+
+The JSON must contain `environment: "sandbox"`, `accountId`, `region`, `cluster`, `service`, `tablePrefix`, `bucket`, and `old`, `candidate`, `rollback` artifacts. Each artifact supplies full `sourceCommit`, `imageDigest` and `taskDefinition`. Each resource name must explicitly identify Sandbox. `fixture` supplies `runId` as a UUID, generated `guildId`, `voiceChannelId`, `textChannelId`, `ownerUserId`, `prefix` equal to `generated/handoff/<runId>/`, and at least one SHA-256 in `checksums`. Keep actual resource identities and generated audio out of public reports.
+
+The private unpublished introduction packet records the resource route, identity evidence, legacy admission bridge, compatible rollback, retained voice proof and acceptance receipts. Current/old/candidate/rollback bindings remain UNKNOWN until refreshed under an authorized scope. A quiet lease scan or task protection alone cannot make the legacy binary obey the new gate.
+
+## Retention gap
+
+The transcript bucket currently aborts incomplete multipart uploads after seven days. It does not delete completed objects. No completed-meeting-object deletion route was found in product storage code or the private Sandbox runbook. Placing checkpoints under a meeting folder does not close that gap.
+
+The dry-run module includes `planGeneratedDescendantRemoval`, a pure generated-local review helper. It requires exact terminal history, independent verified capture/recovery/current-work settlement receipts, complete descendant enumeration and an exact fixture folder. Active, uncertain, absent or expired ownership evidence refuses the plan. It covers completed checkpoint objects and unreferenced attempt descendants, while refusing foreign paths. Its accepted plan is neither a live ownership fence nor deletion authority.
+
+An authorized operational deletion procedure, with current ownership revalidation and complete descendant coverage, is still MISSING. No retention period, expiry rule, live deletion command or deletion permission is introduced. Do not delete histories, leases, voice guards or unverified legacy artifacts as a substitute.
+
+## Engineering references
+
+- [Approved design](superpowers/specs/2026-10-12-deployment-drain-and-interruption-design.md)
+- [Handoff implementation plan](superpowers/plans/2026-10-12-deployment-handoff-plan.md)
+- [Recovery implementation plan](superpowers/plans/2026-10-12-interrupted-recording-recovery-plan.md)
+- Combined local acceptance: `test/deployment/warmHandoff.integration.test.ts`.
+- Fault and compatible-replacement acceptance: `test/deployment/recordingRecoveryFaults.integration.test.ts`.
+- Generated cleanup refusal and dry-run validation: `test/deployment/sandboxHandoffRunner.test.ts`.
+
+Whole-branch review, published exact-head checks, clean mergeability and the post-30-minute feedback audit remain the PR readiness gate. Sandbox acceptance, first production activation and historical repair are separate outcomes.

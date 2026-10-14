@@ -25,9 +25,13 @@ export function barrier() {
   return { promise, release };
 }
 
-export function createRecoveryFaultDatabase() {
+export function createRecoveryFaultDatabase(names?: {
+  deploymentControl: string;
+  meetingHistory: string;
+  activeMeeting: string;
+}) {
   const prefix = `recovery-fault-${randomUUID()}-`;
-  const tables = {
+  const tables = names ?? {
     deploymentControl: `${prefix}Control`,
     meetingHistory: `${prefix}History`,
     activeMeeting: `${prefix}Lease`,
@@ -50,6 +54,7 @@ export function createRecoveryFaultDatabase() {
   }
   return {
     tables,
+    client,
     repository,
     put,
     async start() {

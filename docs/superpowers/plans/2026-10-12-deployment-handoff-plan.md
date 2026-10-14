@@ -10,6 +10,14 @@
 
 **Spec:** [Approved deployment and interruption design](../specs/2026-10-12-deployment-drain-and-interruption-design.md).
 
+## Approved outcome and current decision status
+
+The approved change keeps existing recordings on their original owner while a ready replacement accepts new work. Verified saved material can produce clearly partial notes after interruption. The user authorized implementation and subagent review in one PR through merge readiness. H1-H6 and R1-R6 have passed task review; H7 combines their contracts and operational introduction artifacts. Whole-branch review and exact-head PR readiness remain required.
+
+No new product decision is requested by this reconciliation. Hosted Sandbox acceptance, first activation, compatible live rollback and historical repair remain separate. This task does not authorize deployment even where a standing Sandbox permission exists. The private introduction packet retains UNKNOWN identities until an authorized refresh. Completed-object cleanup still lacks a live operating route.
+
+Read [Recording handoff and recovery](../../deployment-handoff.md) for the participant journey, final contracts and evidence limits. The task checklists below preserve the original verification obligations; they are not a claim that every named command ran on the final head. Task reports and the final PR audit provide that evidence.
+
 ## Global constraints
 
 - The user authorized implementation, commits, one feature PR and iteration until merge-ready on October 13, 2026. No deployment, production mutation, meeting termination, lease deletion, historical repair or external messages to humans are authorized.
@@ -31,14 +39,14 @@
 
 ## Execution baseline and sequence
 
-The primary checkout is `codex/add-claude-reviewer` with unrelated changes. Its local `origin/master` resolves to deployed `c46df7a8d5aacadc65a4b413e56fd259c2f0105d`; that is the source baseline inspected for this plan, not a promise that remote master will remain there.
+Implementation uses the isolated recording-safe-deployments worktree. Preserve unrelated primary-checkout changes. The initial source snapshot and exact execution metadata belong in the evidence appendix; they do not establish a current deployed runtime.
 
 - [ ] At execution, use using-git-worktrees and the native worktree tools to obtain a clean `codex/` worktree from freshly verified `origin/master`. Record exact base SHA and review relevant drift before editing. Copy only the approved spec and these plan files into it; do not stash, rebase or clean the primary checkout.
 - [ ] Read that worktree's AGENTS.md, applicable implementation/review skills, and chronote-ops Sandbox identity/runbook. Discover expected operational tools before choosing a fallback.
 - [ ] Run baseline focused lifecycle tests and backend build. Existing failures get recorded before feature changes.
 
 ```mermaid
-flowchart LR
+flowchart TD
   H1[H1 protocol and storage] --> H2[H2 runtime protection and readiness]
   H2 --> H3[H3 session admission and voice settlement]
   H3 --> H4[H4 finalization durability]
@@ -50,6 +58,12 @@ flowchart LR
 ```
 
 Do not release intermediate protocol pieces against a mixed legacy fleet. Independent testability is a review boundary, not permission to activate an incomplete protocol. Complete both workstreams before enabling it in Sandbox. Existing recordings remain owned by their original runtime throughout handoff.
+
+## Accepted contract refinements
+
+The final membership, mode, local-bootstrap and retirement rules are in [the runtime contract](../../deployment-handoff.md#runtime-and-deployment-contract). `servingMembers` contains exact identities under one generation. Coordinator epoch changes alone do not seal healthy admission. Promotion pins the expected member map and candidate mode; selected disjoint bot/API members may be retained. Local bootstrap is limited to explicit mock or opted-in loopback local/dummy storage and preserves every lease/history/voice guard.
+
+Retirement is `draining -> releasing -> retired`, with durable ineligibility before native protection release. Voice settlement needs matching gateway session/sequence and settled transport proof. Compatible replacement requires completed lineage, exact image/candidate/protocol/mode proof and independent retained voice guards. No task absence or expired lease supplies those proofs.
 
 ## File responsibilities and shared contracts
 
@@ -166,7 +180,7 @@ expect(cleanupBeforeDurableDisposition).toBe(false);
 
 ## Task 5 (H5): Worker admission, interaction ownership and suppression handoff
 
-**Files:** Modify `src/services/meetingControlWorkerService.ts`, `meetingControlBotService.ts`, `personalMediaUploadWorkerService.ts`, corresponding repositories, `autoRecordJoinSuppressionService.ts`, `src/db.ts`, `src/bot.ts`, `src/webserver.ts`; extend repository/control/suppression suites and create `test/deployment/runtimeWorkAdmission.test.ts`.
+**Files:** Modify `src/services/meetingControlWorkerService.ts`, `meetingControlBotService.ts`, `personalMediaUploadWorkerService.ts`, corresponding repositories, `autoRecordJoinSuppressionService.ts`, `src/db.ts`, `src/bot.ts`; reuse the existing `src/webserver.ts` startup gate through `whenRuntimeServing`, verified during H5 review without a cosmetic source edit; extend repository/control/suppression suites and create `test/deployment/runtimeWorkAdmission.test.ts`.
 
 **Interfaces:** Claim repositories accept `AdmissionContext` for new start/processing claims and use H1 checks inside the same claim transaction. Already owned stop/status/transcript commands target their lease owner. Suppression repository methods in the H1 control repository publish conditional state/version used by auto admission.
 
@@ -198,7 +212,7 @@ expect(stopBusyTasksToMakeRollbackSpace).toBe(0);
 ```
 
 - [ ] Run coordinator tests; confirm red.
-- [ ] Implement serialized per-environment orchestration, old protection confirmation before ECS update, candidate warm/readiness proof, atomic promotion and owner-acknowledged retirement. Derive `DDB_TABLE_PREFIX` from the validated existing `SECRETS_PREFIX` plus its trailing hyphen, and confirm it matches the task's configured table route without retrieving secrets. Install runner dependencies and run backend build before invoking the compiled pure builders. Configure proposed minimum health 100/maximum 200 and explicit stopTimeout 120. Preserve task-definition fields and generation identity. Retain old healthy serving generation on pre-promotion failure; after promotion, use fresh-generation rollback to a ready compatible old runtime when possible. If capacity or safe rollback target is missing, preserve work and report required recovery. No `always()` unprotect/reopen shortcut, no automatic cleanup of uncertain tasks.
+- [ ] Implement serialized per-environment orchestration, old protection confirmation before ECS update, candidate warm/readiness proof, atomic promotion and owner-acknowledged retirement. Derive `DDB_TABLE_PREFIX` from the validated existing `SECRETS_PREFIX` plus its trailing hyphen, and confirm it matches the task's configured table route without retrieving secrets. Install runner dependencies and run backend build before invoking the compiled pure builders. Configure minimum health 100/maximum 200 and explicit stopTimeout 120. Request supported ECS early success at healthyPercent 100 with sourceServiceRevisionCleanup DEFERRED, and read it back. Early ECS success is not application readiness or retirement. Start a health-only listener before bounded exact-task protection retry; full readiness and application routes wait for protected boot. Preserve task-definition fields and generation identity. Retain old healthy serving generation on pre-promotion failure; after promotion, use fresh-generation rollback to the exact ready prior members only before any retirement request and under matching durable deployment authority. If capacity or safe rollback target is missing, preserve work and report required recovery. No `always()` unprotect/reopen shortcut, no automatic cleanup of uncertain tasks.
 - [ ] Run coordinator tests, backend build, scoped YAML/Terraform checks and image-definition tests. Both workflows call the same phases and have compatible concurrency/cancellation behavior. Do not invoke them now.
 - [ ] Commit `feat: coordinate warm recording-safe deployments`; obtain scoped review.
 
@@ -206,16 +220,20 @@ expect(stopBusyTasksToMakeRollbackSpace).toBe(0);
 
 **Files:** Create `test/deployment/warmHandoff.integration.test.ts`, `scripts/deployment/verify-sandbox-handoff.cjs`, internal `docs/deployment-handoff.md`; update `apps/docs-site/docs/discord-meeting-notes.md` and `apps/docs-site/docs/whats-new/index.md`. Detailed operating procedure/evidence files go in chronote-ops during execution.
 
-**Interfaces:** Depends on H1-H6 and recovery R1-R6. Synthetic acceptance runner accepts explicit Sandbox resource/fixture identities, reports metadata/checksums/stage outcomes, and never defaults to production. A dry-run prints intended tests without provider mutation.
+**Interfaces:** Depends on reviewed H1-H6 and recovery R1-R6. The initial runner is dry-run only, with no provider execution mode. Its pure generated-local descendant validator requires terminal history plus independent settled capture/recovery/current-work receipts; it supplies no live fence or deletion authority. The actual completed-object deletion route remains MISSING. Synthetic acceptance runner accepts explicit Sandbox resource/fixture identities, reports metadata/checksums/stage outcomes, and never defaults to production. A dry-run prints intended tests without provider mutation.
 
 - [ ] Write a deterministic integrated test: old recording, successful starts during candidate warmup, failed candidate leaving old admission open, good candidate promotion, unrelated new-guild recording on candidate, old stop/finalization/retirement, and rollback while candidate owns work. Assert both runtime ownership and persisted outcomes, not just workflow success.
 - [ ] Run `yarn test:deployment:integration --runTestsByPath test/deployment/warmHandoff.integration.test.ts`, then the relevant broader suites and `yarn lint:check`, `yarn build:all`, `yarn docs:check`, scoped format/Markdown checks. Expected: all changed contracts and regression tests pass. UI-specific checks are in R5.
 - [ ] Write the legacy introduction package with exact old/current/candidate identities, a compatible rollback artifact, verified Sandbox route and explicit unresolved legacy-admission limits. Keep it operational and private. The current binary cannot obey the new gate; a quiet snapshot or task protection alone is not a race-free introduction. No production rollout may start until an approved, proved bridge/maintenance procedure exists. This is a production activation boundary, not a reason to leave product implementation unfinished.
-- [ ] Only after the user explicitly extends this task to Sandbox acceptance, perform synthetic hosted handoff and interruption tests, including actual ECS protection, fresh bot readiness, DynamoDB concurrency, voice settlement and artifact metadata. The original no-deployment restriction still applies; general standing Sandbox approval does not override it. Within an authorized acceptance scope, use the standing route and confirmed identity. This planning request executes none of it.
+- [ ] Only after the user explicitly extends this task to Sandbox acceptance, perform synthetic hosted handoff and interruption tests, including actual ECS protection, fresh bot readiness, DynamoDB concurrency, voice settlement and artifact metadata. The original no-deployment restriction still applies; general standing Sandbox approval does not override it. Within an authorized acceptance scope, use the standing route and confirmed identity. This implementation task executes no hosted acceptance.
 - [ ] Record separate local, container, Sandbox and production-unverified evidence. Review the whole branch; follow PR recycle/exact-head gates before claiming merge-ready. Commit `test: prove warm handoff and interrupted-recording acceptance` with only scoped product files.
 
 ## Completion and execution handoff
 
-The implementation is complete only when both plans pass their local/container checks and the authorized Sandbox sequence proves the combined behavior. Production activation and historical orphan repair remain separate. Preserve the exact execution worktree, commit/head, evidence and any blocked introduction step in the private owner note.
+Code and PR completion require the local/container checks, independent whole-branch review and the exact-head readiness gate. Hosted acceptance is complete only after a separately authorized Sandbox sequence proves the combined behavior. These are separate completion claims. Production activation and historical orphan repair remain separate. Preserve the exact execution worktree, commit/head, evidence and any blocked introduction step in the private owner note.
 
 Recommended execution method is subagent-driven task implementation/review because the shared admission, external Discord effects and recovery contracts need independent scrutiny. Native execution remains an option. The user selected subagent-driven implementation and review, one PR, and iteration until merge-ready. Preserve separate deployment and hosted-acceptance boundaries.
+
+## Evidence appendix
+
+The original design source snapshot was `c46df7a8d5aacadc65a4b413e56fd259c2f0105d`. It is historical source evidence, not a current running identity. Exact task commits, commands, output and current-head checks are retained in the implementation reports and PR audit. Detailed provider identities stay in chronote-ops.

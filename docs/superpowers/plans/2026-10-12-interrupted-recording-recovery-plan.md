@@ -10,6 +10,14 @@
 
 **Spec:** [Approved deployment and interruption design](../specs/2026-10-12-deployment-drain-and-interruption-design.md).
 
+## Approved outcome and current decision status
+
+The approved change keeps existing recordings on their original owner while a ready replacement accepts new work. Verified saved material can produce clearly partial notes after interruption. The user authorized implementation and subagent review in one PR through merge readiness. H1-H6 and R1-R6 have passed task review; H7 combines their contracts and operational introduction artifacts. Whole-branch review and exact-head PR readiness remain required.
+
+No new product decision is requested by this reconciliation. Hosted Sandbox acceptance, first activation, compatible live rollback and historical repair remain separate. This task does not authorize deployment even where a standing Sandbox permission exists. The private introduction packet retains UNKNOWN identities until an authorized refresh. Completed-object cleanup still lacks a live operating route.
+
+Read [Recording handoff and recovery](../../deployment-handoff.md) for the participant journey, final contracts and evidence limits. The task checklists below preserve the original verification obligations; they are not a claim that every named command ran on the final head. Task reports and the final PR audit provide that evidence.
+
 ## Global constraints
 
 - Subagent-driven implementation and review are authorized. Use the main plan's worktree, authority, privacy, review and version constraints. No production repair, customer-content retrieval or deployment.
@@ -53,7 +61,7 @@ formatMeetingCaptureNotice(input: CaptureNoticeInput): string | undefined;
 
 ## Task 1 (R1): Checkpoint schema, immutable storage and recovery metadata
 
-**Files:** Create checkpoint types/service; modify `src/services/storageService.ts`, `src/services/uploadService.ts`, `src/types/db.ts`, `src/types/meetingLifecycle.ts`, history repository/service, `src/repositories/mockStore.ts`; create `test/services/recordingCheckpointService.test.ts`, `test/deployment/checkpointPersistence.integration.test.ts`.
+**Files:** Create checkpoint types/service; modify `src/services/storageService.ts`, `src/services/uploadService.ts`, `src/types/db.ts`, `src/types/meetingLifecycle.ts`, reuse the existing history repository owned-operations forwarding, history transition field allowlist and typed mock maps; create `test/services/recordingCheckpointService.test.ts`, `test/deployment/checkpointPersistence.integration.test.ts`.
 
 **Interfaces:** Consumes H1 conditional history/ownership and `starting`, `interrupted`, `failed` statuses; produces checkpoint contracts and append/flush functions. Add capture/recovery metadata without changing old complete-row compatibility or auto-classifying legacy orphans.
 
@@ -113,7 +121,7 @@ expect(lateSuccessPublishedAfterInterruption).toBe(false);
 
 **Files:** Create recovery service/worker; modify history repository/service, `src/services/notesService.ts`, `notesPromptService.ts`, `meetingNotesService.ts`, `meetingSummaryService.ts`, `openaiChatService.ts`, `meetingModelOverrides.ts`, `src/utils/meetingAttendees.ts`, `src/types/meeting-data.ts`, bot/webserver runtime startup; create `test/services/meetingRecoveryService.test.ts`, `test/services/meetingRecoveryWorkerService.test.ts`; extend notes/prompt/mention tests.
 
-**Interfaces:** Produces `MeetingNotesInput` and `recoverMeeting`. Narrow existing notes/chat helper input types to the fields they actually consume, then migrate live and recovery callers. Preserve model selection, safety identity, context, trace handling, user/role allowlists and `stripUnknownMentions`. Do not duplicate the notes pipeline or cast a disconnected object to MeetingData.
+**Interfaces:** Produces `MeetingNotesInput` and `recoverMeeting`. The actual startup/periodic worker claims a discriminated offline recovery lease under serving admission. Compatible replacement uses completed-deployment lineage and preserves independent old voice/count evidence. Frozen original completion policy and durable cancel/proceed intent precede notices; complete short-auto policy uncertainty requires reconciliation. Narrow existing notes/chat helper input types to the fields they actually consume, then migrate live and recovery callers. Preserve model selection, safety identity, context, trace handling, user/role allowlists and `stripUnknownMentions`. Do not duplicate the notes pipeline or cast a disconnected object to MeetingData.
 
 - [ ] Write `terminalInterruptedPendingWorkIsRecovered`, `liveRenewedOwnerBeatsRecoveryClaim`, `twoRecoverersProduceOneAttempt`, `oldFinalizerCannotOverwriteRecovery`, `partialSpeechGeneratesNotesWithoutVoiceJoin`, `noUsableSpeechSkipsNotes`, `uncertainDeliveryIsNotResent`, `exhaustedAttemptsClearAutomaticEligibility`, `missingManifestCommitIsReconciled`, `verifiedTranscriptRecoversWithoutAudio`, `transcriptionLogAloneDoesNotAuthorizeRecovery`, `bothPromptsStateAbruptEndAndGaps`, and `unknownInterruptionDoesNotClaimServiceFailure`:
 
@@ -125,7 +133,7 @@ expect(resendCallsAfterUnknownAcknowledgment).toBe(0);
 ```
 
 - [ ] Run new recovery suites and existing notes/prompt/mention suites; confirm red for new recovery contracts.
-- [ ] Implement paginated projected candidate discovery with persisted cursor, five-minute initial scan cadence, batch size five and maximum four automated attempts: an initial attempt plus retries after one, five and fifteen minutes. These are bounded initial defaults, not options. Eligibility covers abandoned nonterminal work and interrupted captures with pending stages independently of capture status. Claim with H1 version/lease transaction; actual processing also needs serving admission and available guild lease. Verify/checksum objects before assembly; reconstruct only confirmed intervals, use usable-speech gates, original settings and context/config checkpoints. Accept a verified durable transcription checkpoint without requiring surviving audio, but never accept a successful log marker as input. Carry interruption and coverage into both notes and summary prompts, explicitly warning about abrupt ending and gaps and forbidding invented conversation. Classify the cause from persisted evidence; stale leases or missing task records alone yield unknown interruption. Resume acknowledged stages; bypass ordinary auto-record short-meeting cancellation for a real interruption. Unknown sends and uncertain voice settlement require explicit reconciliation, not guesses.
+- [ ] Implement paginated projected candidate discovery with persisted cursor, five-minute initial scan cadence, batch size five and maximum four automated attempts: an initial attempt plus retries after one, five and fifteen minutes. These are bounded initial defaults, not options. Eligibility covers abandoned nonterminal work and interrupted captures with pending stages independently of capture status. Claim with H1 version/lease transaction; actual processing also needs serving admission and available guild lease. Verify/checksum objects before assembly; reconstruct only confirmed intervals, use usable-speech gates, original settings and context/config checkpoints. Accept a verified durable transcription checkpoint without requiring surviving audio, but never accept a successful log marker as input. Carry interruption and coverage into both notes and summary prompts, explicitly warning about abrupt ending and gaps and forbidding invented conversation. Classify the cause from persisted evidence; stale leases or missing task records alone yield unknown interruption. Preserve acknowledged stages. Saved text never suppresses verified PCM without exact processing-coverage proof; process confirmed intervals separately and retain gaps. Bypass ordinary auto-record short-meeting cancellation only for a real interruption, while preserving original cancellation/proceed intent and policy. Ordinary and recovery final delivery persist coarse intent before the first mutation. Unknown intent prevents dispatch; unknown sends or metadata ACKs retain known IDs and require reconciliation without automatic replay. Exact acknowledged terminal proof can reconcile without a send. Unknown ancillary Notion mutations retain their own claim/count and do not become generation retries. Uncertain voice settlement remains independent.
 - [ ] Run recovery/notes/prompt/mention and personal-upload regressions plus backend build. Stop/restart the worker between each stage in synthetic tests; metadata alone cannot claim notes success.
 - [ ] Commit `feat: recover interrupted recordings and partial notes`; obtain scoped review.
 
@@ -154,15 +162,23 @@ expect(statusAfterSuccessfulPartialDelivery).toBe("interrupted");
 
 **Files:** Create `test/deployment/recordingRecoveryFaults.integration.test.ts`, extend container tests, add generated fixture helpers under `test/deployment/fixtures/`; extend main-plan Sandbox acceptance runner and private evidence checklist.
 
-**Interfaces:** Consumes all preceding tasks. Reuse H7 acceptance metadata/checksum reporting. No operational repair helper reads customer artifacts.
+**Interfaces:** Consumes all preceding tasks. Provide generated native receipts and a private evidence checklist for H7, which owns the dry-run runner. Reuse H7 metadata/checksum reporting when that runner is added. No operational repair helper reads customer artifacts.
 
 - [ ] Write a barrier-driven fault matrix for crash before upload, after upload/before manifest commit, after complete capture/before AI, after notes/before delivery and after send/before acknowledgment persistence. Add storage/Dynamo outages, overlapping owners, uncertain old Discord operation, invalid/corrupt/missing segments and concurrent recovery claims. Expected verified coverage and recovery stage disposition are explicit fixture values.
 - [ ] Run `yarn test:deployment:integration` for fault/container suites, then focused lifecycle unit suites and `yarn lint:check`, `yarn build:all`, `yarn docs:check`. Assert every fault either produces verified recovery or explicit unknown/failed/reconciliation-required state, never fabricated complete status.
 - [ ] After the user explicitly authorizes Sandbox acceptance as described in H7, repeat representative hard-stop, shutdown, preservation-cutoff and automatic partial-note cases with generated audio. Confirm the proposed 30/60/100-second targets and queue/protection margins under representative speaker/source load. Record actual timings and revise constants if evidence requires, without changing the agreed policy silently.
 - [ ] Join H7 handoff acceptance and collect local/container/Sandbox evidence separately. Exact historical incident audio recovery stays UNKNOWN; this work does not repair it. Commit `test: cover recording interruption fault boundaries`; obtain whole-branch review before merge readiness.
 
+## Accepted preservation and presentation refinements
+
+The process owns one earliest monotonic shutdown allowance and retains actual promises after a bounded exit result. The additional PCM accounting cap is 64 MiB, with early pressure at 32 MiB; it is not a process RSS bound. Original PCM source cursors survive rotation and known timeline gaps remain gaps. No first canonical checkpoint means no automatic recovery claim and an unavailable live state, not verified zero coverage.
+
+Original requested settings, context, model and prompt inputs are frozen and validated. Recovered usable notes follow existing enabled Notion destinations only after exact final-delivery proof. No-speech, disabled notes, policy uncertainty and uncertain delivery do not invoke that export. Recovery success cannot clear old recording counts or voice guards.
+
+R5 keeps warnings outside editable notes and exposes only allowlisted scalar outcome/coverage data. Complete capture with failed transcription can still warn; ordinary notes failure does not become interrupted capture. Returning-owner confirmation can restore live display without changing canonical history. R6 local/native receipts do not establish hosted load bounds or provider acceptance.
+
 ## Self-review coverage and handoff
 
 The approved spec maps to H1-H6 for runtime admission/protection/controls/coordinator, H3 for external voice settlement, H4/R1-R4 for truthful durability, R5 for user journeys and exports, and H7/R6 for race/fault/hosted acceptance. Legacy introduction, rollback artifact compatibility and historical repair are operational boundaries in H7, not silently solved by a new binary. Every Review Focus item has an owning test task above.
 
-These plans name intended interfaces and acceptance tests; none has been implemented or run in this planning turn. Use the execution method selected after the user reviews the main plan.
+The approved implementation and subagent review are underway in one product PR. H1-H6 and R1-R6 have passed scoped review. H7, whole-branch review and final published-head checks complete the code work; hosted acceptance and activation remain deferred under their existing authority boundaries.

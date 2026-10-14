@@ -316,7 +316,7 @@ test("complete capture with undecided original auto policy does not use changed 
   expect(f.autoExport).not.toHaveBeenCalled();
 });
 
-test("notes persisted before delivery resume without claiming complete capture", async () => {
+test("notes remain persisted after generation failure without claiming complete capture", async () => {
   const f = await published();
   const claim = await f.claim();
   const entered = barrier(),
