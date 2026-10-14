@@ -1,3 +1,7 @@
+import type {
+  SpeechAdmission,
+  SpeechCoverage,
+} from "../services/speechDetectionTypes";
 import { FfmpegCommand } from "fluent-ffmpeg";
 import { PassThrough } from "node:stream";
 
@@ -27,7 +31,8 @@ export type CoalesceMeta = {
 };
 
 export type SnippetTranscriptionResult =
-  | { status: "succeeded"; text: string }
+  | { status: "succeeded"; text: string; admission: SpeechAdmission }
+  | { status: "skipped"; reason: "non_speech"; coverage: SpeechCoverage }
   | {
       status: "failed";
       reason: "transcription_error" | "conversion_error";

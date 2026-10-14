@@ -145,6 +145,7 @@ describe("transcribeSnippet terminal result", () => {
     const { service } = await loadModule({ providerResult: "" });
     await expect(service.transcribeSnippet(meeting, snippet)).resolves.toEqual({
       status: "succeeded",
+      admission: { kind: "not_enforced", reason: "off" },
       text: "",
     });
   });
@@ -166,6 +167,7 @@ describe("transcribeSnippet terminal result", () => {
     });
     await expect(service.transcribeSnippet(meeting, snippet)).resolves.toEqual({
       status: "succeeded",
+      admission: { kind: "not_enforced", reason: "off" },
       text: "recovered",
     });
   });
@@ -188,6 +190,7 @@ describe("transcribeSnippet terminal result", () => {
 
     await expect(service.transcribeSnippet(meeting, snippet)).resolves.toEqual({
       status: "succeeded",
+      admission: { kind: "not_enforced", reason: "off" },
       text: "kept",
     });
     expect(unlinkSync).toHaveBeenCalledTimes(2);

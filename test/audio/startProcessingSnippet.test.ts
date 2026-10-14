@@ -80,6 +80,44 @@ describe("startProcessingSnippet", () => {
     await meeting.audioData.speakerTracks?.get(fileData.userId)?.writePromise;
   };
 
+  it("passes explicit speech detection bypass for a pending forced live command", async () => {
+    const snippet: AudioSnippet = {
+      userId: "user-1",
+      timestamp: new Date("2025-01-01T00:00:01.000Z").getTime(),
+      chunks: [Buffer.alloc(100)],
+    };
+    const fileData: AudioFileData = {
+      userId: snippet.userId,
+      timestamp: snippet.timestamp,
+      processing: true,
+      audioOnlyProcessing: false,
+    };
+    snippet.audioFileData = fileData;
+    const meeting = buildMeeting(snippet, fileData);
+    meeting.liveVoiceCommandPending = {
+      type: "end_meeting",
+      userId: snippet.userId,
+      requestedAt: Date.now(),
+      expiresAt: Date.now() + 10000,
+    };
+    jest.mocked(transcribeSnippet).mockResolvedValue({
+      status: "succeeded",
+      text: "command",
+      admission: { kind: "not_enforced", reason: "forced" },
+    });
+    userStopTalking(meeting, snippet.userId);
+    await waitForSnippetWork(meeting, fileData);
+    expect(transcribeSnippet).toHaveBeenCalledWith(
+      meeting,
+      snippet,
+      expect.objectContaining({
+        speechDetectionBypass: true,
+        noiseGateEnabledOverride: false,
+        suppressionEnabledOverride: false,
+      }),
+    );
+  });
+
   it("skips slow transcription when fast covers the snippet", async () => {
     const snippet: AudioSnippet = {
       userId: "user-1",
@@ -145,6 +183,7 @@ describe("startProcessingSnippet", () => {
     const meeting = buildMeeting(snippet, audioFileData);
     (transcribeSnippet as jest.Mock).mockResolvedValue({
       status: "succeeded",
+      admission: { kind: "not_enforced", reason: "off" },
       text: "slow text",
     });
 
@@ -207,6 +246,7 @@ describe("startProcessingSnippet", () => {
     const meeting = buildMeeting(snippet, audioFileData);
     (transcribeSnippet as jest.Mock).mockResolvedValue({
       status: "succeeded",
+      admission: { kind: "not_enforced", reason: "off" },
       text: "",
     });
 
@@ -219,12 +259,18 @@ describe("startProcessingSnippet", () => {
 
   it("ignores a stale fast revision after slow transcription succeeds", async () => {
     jest.useFakeTimers();
-    let resolveFast!: (value: { status: "succeeded"; text: string }) => void;
-    const fastResult = new Promise<{ status: "succeeded"; text: string }>(
-      (resolve) => {
-        resolveFast = resolve;
-      },
-    );
+    let resolveFast!: (value: {
+      status: "succeeded";
+      text: string;
+      admission: { kind: "not_enforced"; reason: "off" };
+    }) => void;
+    const fastResult = new Promise<{
+      status: "succeeded";
+      text: string;
+      admission: { kind: "not_enforced"; reason: "off" };
+    }>((resolve) => {
+      resolveFast = resolve;
+    });
     const snippet: AudioSnippet = {
       userId: "user-1",
       timestamp: new Date("2025-01-01T00:00:01.000Z").getTime(),
@@ -242,13 +288,21 @@ describe("startProcessingSnippet", () => {
     const meeting = buildMeeting(snippet, audioFileData);
     (transcribeSnippet as jest.Mock)
       .mockReturnValueOnce(fastResult)
-      .mockResolvedValueOnce({ status: "succeeded", text: "slow complete" });
+      .mockResolvedValueOnce({
+        status: "succeeded",
+        text: "slow complete",
+        admission: { kind: "not_enforced", reason: "off" },
+      });
 
     userStopTalking(meeting, snippet.userId);
     jest.advanceTimersByTime(400);
     startProcessingSnippet(meeting, snippet.userId);
     await waitForSnippetWork(meeting, audioFileData);
-    resolveFast({ status: "succeeded", text: "stale prefix" });
+    resolveFast({
+      status: "succeeded",
+      text: "stale prefix",
+      admission: { kind: "not_enforced", reason: "off" },
+    });
     await Promise.resolve();
 
     expect(audioFileData.transcript).toBe("slow complete");
@@ -319,6 +373,7 @@ describe("startProcessingSnippet", () => {
     meeting.runtimeConfig!.premiumTranscription.enabled = true;
     (transcribeSnippet as jest.Mock).mockResolvedValue({
       status: "succeeded",
+      admission: { kind: "not_enforced", reason: "off" },
       text: "slow baseline",
     });
     (coalesceTranscription as jest.Mock).mockRejectedValue(

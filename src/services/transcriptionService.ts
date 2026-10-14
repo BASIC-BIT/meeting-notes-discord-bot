@@ -1,13 +1,18 @@
 import type OpenAI from "openai";
 import type { TranscriptionCreateParamsNonStreaming } from "openai/resources/audio";
-import {
-  createReadStream,
-  existsSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { createReadStream } from "node:fs";
 import path from "node:path";
-import { convertTranscriptionPcmToWav } from "./transcriptionAudioService";
+import { withPreparedTranscriptionInput } from "./transcriptionInputService";
+import { DEFAULT_SPEECH_POLICY } from "./speechDetectionPolicy";
+import { getSpeechDetector } from "./speechDetectionService";
+import type { SpeechDetectionMode } from "../config/speechDetection";
+import type { SpeechPhase } from "./speechDetectionTypes";
+import {
+  recordSpeechAssessment,
+  recordSpeechProviderSubmission,
+  recordSpeechRequestSkipped,
+  recordSpeechSnippetOutcome,
+} from "../metrics";
 import {
   bulkhead,
   circuitBreaker,
@@ -68,6 +73,8 @@ import { getMeetingModelOverrides } from "./meetingModelOverrides";
 import { getTranscriptionTextQuality } from "../utils/transcriptionText";
 
 type TranscriptionTraceContext = {
+  speechDetectionMode: SpeechDetectionMode;
+  speechPhase: SpeechPhase;
   userId: string;
   timestamp: number;
   audioSeconds: number;
@@ -123,6 +130,14 @@ async function transcribeInternal(
       include: ["logprobs"],
       ...(promptText ? { prompt: promptText } : {}),
     };
+    if (context) {
+      recordSpeechProviderSubmission({
+        mode: context.speechDetectionMode,
+        phase: context.speechPhase,
+        candidate: promptText ? "prompt" : "no_prompt",
+        audioSeconds: context.audioSeconds,
+      });
+    }
     const transcription =
       await openAIClient.audio.transcriptions.create(request);
     return {
@@ -510,23 +525,6 @@ const resolveNoiseGateContext = (input: {
   return { noiseGateEnabled, noiseGateMetrics };
 };
 
-const cleanupTempFile = (filePath: string, label: string) => {
-  try {
-    if (existsSync(filePath)) {
-      unlinkSync(filePath);
-      return;
-    }
-    console.log(`failed cleaning up temp ${label} file, continuing`);
-  } catch {
-    console.warn(`Failed cleaning up temp ${label} file, continuing.`);
-  }
-};
-
-const cleanupTempFiles = (files: TempSnippetFiles) => {
-  cleanupTempFile(files.pcmFile, "pcm");
-  cleanupTempFile(files.wavFile, "wav");
-};
-
 export async function transcribeSnippet(
   meeting: MeetingData,
   snippet: AudioSnippet,
@@ -535,10 +533,17 @@ export async function transcribeSnippet(
     noiseGateMode?: "fast" | "slow";
     noiseGateEnabledOverride?: boolean;
     suppressionEnabledOverride?: boolean;
+    speechDetectionBypass?: boolean;
   } = {},
 ): Promise<SnippetTranscriptionResult> {
+  const startedAt = performance.now();
+  const mode =
+    meeting.runtimeConfig?.transcription.speechDetectionMode ?? "off";
+  const phase = options.noiseGateMode ?? "slow";
+  const force = options.speechDetectionBypass === true;
+  let outcome: Parameters<typeof recordSpeechSnippetOutcome>[0]["outcome"] =
+    "conversion_error";
   const suffix = options.tempSuffix ? `_${options.tempSuffix}` : "";
-  const tempFiles = buildSnippetTempFiles(meeting, snippet, suffix);
   const buffer = Buffer.concat(snippet.chunks);
   const { audioBytes, audioSeconds } = buildAudioStats(buffer);
   const suppressionEnabled = resolveSuppressionEnabled(
@@ -556,20 +561,46 @@ export async function transcribeSnippet(
 
   let stage: "conversion" | "transcription" = "conversion";
   try {
-    writeFileSync(tempFiles.pcmFile, buffer);
-    await convertTranscriptionPcmToWav(tempFiles.pcmFile, tempFiles.wavFile);
-    stage = "transcription";
-    const text = await transcribe(meeting, tempFiles.wavFile, {
-      userId: snippet.userId,
-      timestamp: snippet.timestamp,
-      audioSeconds,
-      audioBytes,
-      noiseGateEnabled,
-      noiseGateMode: resolvedNoiseGateMode,
-      noiseGateMetrics,
-      suppressionEnabledOverride: options.suppressionEnabledOverride,
-    });
-    return { status: "succeeded", text };
+    const tempFiles = buildSnippetTempFiles(meeting, snippet, suffix);
+    return await withPreparedTranscriptionInput<SnippetTranscriptionResult>(
+      {
+        pcm: buffer,
+        ...tempFiles,
+        mode,
+        phase,
+        force,
+        policyFingerprint: DEFAULT_SPEECH_POLICY.policyFingerprint,
+        detector: mode === "off" || force ? undefined : getSpeechDetector(),
+        observe: (assessment, durationMs) =>
+          recordSpeechAssessment({ mode, phase, assessment, durationMs }),
+      },
+      async ({ wavFile, admission, coverage }) => {
+        if (
+          admission.kind === "assessed" &&
+          admission.assessment.kind === "non_speech"
+        ) {
+          outcome = "vad_skipped";
+          recordSpeechRequestSkipped({ phase, audioSeconds });
+          return { status: "skipped", reason: "non_speech", coverage };
+        }
+        stage = "transcription";
+        outcome = "provider_error";
+        const text = await transcribe(meeting, wavFile, {
+          userId: snippet.userId,
+          timestamp: snippet.timestamp,
+          audioSeconds,
+          audioBytes,
+          speechDetectionMode: mode,
+          speechPhase: phase,
+          noiseGateEnabled,
+          noiseGateMode: resolvedNoiseGateMode,
+          noiseGateMetrics,
+          suppressionEnabledOverride: options.suppressionEnabledOverride,
+        });
+        outcome = "transcribed";
+        return { status: "succeeded", text, admission };
+      },
+    );
   } catch (error) {
     const providerError = error as { status?: unknown; code?: unknown };
     const failureLabel = stage === "conversion" ? "convert" : "transcribe";
@@ -592,7 +623,13 @@ export async function transcribeSnippet(
         stage === "conversion" ? "conversion_error" : "transcription_error",
     };
   } finally {
-    cleanupTempFiles(tempFiles);
+    recordSpeechSnippetOutcome({
+      mode,
+      phase,
+      outcome,
+      audioSeconds,
+      durationMs: performance.now() - startedAt,
+    });
   }
 }
 

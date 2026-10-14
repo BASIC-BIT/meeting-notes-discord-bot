@@ -1,3 +1,4 @@
+import { recordSpeechCapturedAudio } from "./metrics";
 import {
   BYTES_PER_SAMPLE,
   CHANNELS,
@@ -499,7 +500,7 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
   })
     .then((result) => {
       if (snippet.fastRevision !== revision) return;
-      if (result.status === "failed") {
+      if (result.status !== "succeeded") {
         return;
       }
       const transcription = result.text;
@@ -615,6 +616,7 @@ export function startProcessingSnippet(
       promises.push(
         transcribeSnippet(meeting, snippet, {
           noiseGateMode: "slow",
+          speechDetectionBypass: options.forceTranscribe,
           noiseGateEnabledOverride: options.forceTranscribe ? false : undefined,
           suppressionEnabledOverride: options.forceTranscribe
             ? false
@@ -623,6 +625,10 @@ export function startProcessingSnippet(
           .then(async (result) => {
             if (result.status === "failed") {
               audioFileData.transcriptionFailed = true;
+              return;
+            }
+            if (result.status === "skipped") {
+              audioFileData.transcriptionFailed = false;
               return;
             }
             const transcription = result.text;
@@ -876,7 +882,12 @@ export async function subscribeToUserVoice(
     scheduleResubscribe(meeting, userId, "opus-stream-end");
   });
 
-  decodedStream.on("data", (chunk) => {
+  decodedStream.on("data", (chunk: Buffer) => {
+    recordSpeechCapturedAudio({
+      mode: meeting.runtimeConfig?.transcription.speechDetectionMode ?? "off",
+      audioSeconds:
+        chunk.length / (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE),
+    });
     subscriptionState.lastPcmAt = Date.now();
     subscriptionState.consecutiveNoPcmEvents = 0;
     subscriptionState.lastNoPcmAt = undefined;
