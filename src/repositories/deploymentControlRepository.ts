@@ -1,4 +1,10 @@
 import {
+  createDynamoRecoveryRepository,
+  createMockRecoveryRepository,
+} from "./meetingRecoveryRepository";
+import type { RecoveryRepository } from "../types/meetingRecovery";
+import { planCompatibleReplacement } from "../services/runtimeCompatibleReplacementService";
+import {
   recordingCheckpointSchema,
   recoveryDispositionSchema,
 } from "../types/recordingCheckpoint";
@@ -17,6 +23,7 @@ import { isDeepStrictEqual } from "node:util";
 import { planLocalBootstrap } from "../services/runtimeLocalBootstrapPlan";
 import type { ActiveMeetingLease, MeetingHistory } from "../types/db";
 import {
+  buildCompatibleReplacementTransaction,
   buildHistoryTransition,
   buildOwnedCheckpointTransition,
   buildInitialMeetingHistoryPut,
@@ -50,6 +57,7 @@ import {
   type RuntimeRecord,
   type VoiceRecord,
   type LocalBootstrapInput,
+  type CompatibleReplacementInput,
   type SessionReservationInput,
   type SessionReservationWriteResult,
   type WorkAdmissionAuthority,
@@ -114,7 +122,7 @@ async function conditional(
     throw new DeploymentControlError(kind, error);
   }
 }
-export type DeploymentControlRepository = {
+export type DeploymentControlRepository = RecoveryRepository & {
   writeSuppression(input: {
     record: SuppressionRecord;
     expectedVersion?: number;
@@ -123,6 +131,9 @@ export type DeploymentControlRepository = {
   reserveSession(
     input: SessionReservationInput,
   ): Promise<SessionReservationWriteResult>;
+  replaceCompatibleRuntime(
+    input: CompatibleReplacementInput,
+  ): Promise<ConditionalResult>;
   supportsLocalBootstrap(): Promise<boolean>;
   bootstrapLocal(input: LocalBootstrapInput): Promise<ConditionalResult>;
   getRecord(
@@ -176,6 +187,23 @@ export function createDynamoDeploymentControlRepository(
     );
   }
   return {
+    ...createDynamoRecoveryRepository(client, {
+      ...tables,
+      get activeMeeting() {
+        if (!tables.activeMeeting)
+          throw new Error("Active meeting table required for recovery");
+        return tables.activeMeeting;
+      },
+    }),
+    replaceCompatibleRuntime(input) {
+      return conditional(() =>
+        client.send(
+          new TransactWriteItemsCommand(
+            buildCompatibleReplacementTransaction(input, tables),
+          ),
+        ),
+      );
+    },
     async reserveSession(input) {
       const transaction = buildSessionReservationTransaction(input, tables);
       try {
@@ -381,6 +409,7 @@ export function createDynamoDeploymentControlRepository(
       ),
     transitionMeetingHistory: (input) =>
       conditional(() =>
+        input.completionPolicyProof ||
         input.recordingDelivery ||
         input.initialTerminalDisposition ||
         input.terminalPreservation ||
@@ -597,6 +626,9 @@ export function createMockDeploymentControlRepository(
     );
   };
   return {
+    ...createMockRecoveryRepository(records, histories, leases, (context) =>
+      mockWorkAdmissionAllowed({ kind: "serving", context }, records, leases),
+    ),
     async reserveSession(input) {
       buildSessionReservationTransaction(input, {
         deploymentControl: "mock",
@@ -665,6 +697,22 @@ export function createMockDeploymentControlRepository(
       )
         return "stale";
       return store(record);
+    },
+    async replaceCompatibleRuntime(input) {
+      const next = planCompatibleReplacement(input);
+      if (
+        !isDeepStrictEqual(getControl(), structuredClone(input.control)) ||
+        ![input.candidate, ...input.members].every((row) =>
+          isDeepStrictEqual(
+            getRuntime(row.identity.instanceId),
+            structuredClone(row),
+          ),
+        )
+      )
+        return "stale";
+      store(next.control);
+      next.runtimes.forEach(store);
+      return "applied";
     },
     supportsLocalBootstrap: async () => true,
     async bootstrapLocal(input) {
@@ -949,6 +997,7 @@ function checkpointLeaseAllowed(
   leases: Map<string, ActiveMeetingLease>,
 ) {
   const proof =
+    input.completionPolicyProof ??
     input.recordingDelivery ??
     input.initialTerminalDisposition ??
     input.terminalPreservation ??

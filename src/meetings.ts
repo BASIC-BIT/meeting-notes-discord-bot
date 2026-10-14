@@ -1,3 +1,7 @@
+import {
+  reservationTimingReceipt,
+  freezeCompletionPolicy,
+} from "./services/meetingCompletionPolicyService";
 import { getMeetingProcessingSignal } from "./services/meetingProcessingLifetime";
 import { notifyRecordingLimit } from "./services/recordingLimitService";
 import { MeetingData, MeetingSetup } from "./types/meeting-data";
@@ -406,7 +410,9 @@ export function initializeMeeting(
 async function initializeNewMeeting(
   options: MeetingInitOptions & { meetingId: string },
 ): Promise<MeetingData> {
-  const reservedAt = options.reservedAt ?? Date.now();
+  const observedAt = Date.now();
+  const reservedAt = options.reservedAt ?? observedAt;
+  const timingReceipt = reservationTimingReceipt(reservedAt, observedAt);
   const meetingId = options.meetingId;
   const timestamp = new Date(reservedAt).toISOString();
   const shared = {
@@ -422,6 +428,7 @@ async function initializeNewMeeting(
     startTriggeredByUserId: options.startTriggeredByUserId,
     autoRecordRule: options.autoRecordRule,
     reservedAt,
+    timingReceipt,
   };
   const input =
     options.sessionMode === "tts_only"
@@ -649,6 +656,14 @@ async function initializeReservedMeeting(
   };
   options.initialization.meeting = meeting;
   attachMeetingReservation(meeting, options.reservation);
+  meeting.runtimeConfig = await resolveMeetingRuntimeConfig({
+    guildId: meeting.guildId,
+    channelId: meeting.voiceChannel.id,
+    userId: meeting.creator.id,
+    tier: subscriptionTier,
+  });
+  signal.throwIfAborted();
+  if (meeting.sessionMode === "meeting") freezeCompletionPolicy(meeting);
 
   if (meeting.sessionMode === "tts_only") {
     meeting.resetTtsOnlyIdleTimer = () => resetTtsOnlyIdleTimeout(meeting);
@@ -770,17 +785,6 @@ async function initializeReservedMeeting(
         is_auto_recording: meeting.isAutoRecording,
       },
     });
-  }
-
-  try {
-    meeting.runtimeConfig = await resolveMeetingRuntimeConfig({
-      guildId: meeting.guildId,
-      channelId: meeting.voiceChannel.id,
-      userId: meeting.creator.id,
-      tier: subscriptionTier,
-    });
-  } catch (error) {
-    console.warn("Failed to resolve meeting runtime config:", error);
   }
 
   signal.throwIfAborted();

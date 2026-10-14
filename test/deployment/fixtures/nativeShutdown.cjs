@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 require("dotenv").config = () => ({ parsed: {} });
 Object.assign(process.env, {
   MOCK_MODE: "true",
+  MEETING_TEMP_DIR: "/fixture-output/temp",
   ENABLE_OAUTH: "false",
   ENABLE_MCP: "false",
   PORT: "3001",

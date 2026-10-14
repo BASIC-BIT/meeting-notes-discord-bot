@@ -169,6 +169,7 @@ const buildMeeting = (overrides: Partial<MeetingData> = {}): MeetingData =>
     transcribeMeeting: true,
     generateNotes: true,
     participants: new Map(),
+    runtimeConfig: buildRuntimeConfig(),
     ...overrides,
   }) as MeetingData;
 

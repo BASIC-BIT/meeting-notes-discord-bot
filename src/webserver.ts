@@ -1,3 +1,4 @@
+import { startMeetingRecoveryWorker } from "./services/meetingRecoveryWorkerService";
 import { discordInstallStateStore } from "./services/discordInstallStateStore";
 import {
   discordCallbackAuthentication,
@@ -537,6 +538,7 @@ export function setupWebServer(
   registerLiveMeetingRoutes(app);
 
   whenRuntimeServing(() => startPersonalMediaUploadWorker());
+  whenRuntimeServing(() => startMeetingRecoveryWorker());
   if (healthServer) {
     healthServer.activate(app);
     return Promise.resolve();

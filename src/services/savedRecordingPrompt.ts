@@ -81,3 +81,42 @@ export function compileSavedPrompt(
         prompt: saved.template,
       }).compile(variables);
 }
+
+export function compileSavedChatPrompt(
+  saved: SavedRecordingPrompt,
+  variables: Record<string, string | number>,
+): import("./langfusePromptService").ChatPromptResult {
+  if (saved.type !== "chat")
+    throw new Error("Saved generation prompt must be chat");
+  const result = new ChatPromptClient({
+    name: saved.name,
+    version: saved.version,
+    labels: [saved.label],
+    tags: [],
+    type: "chat",
+    prompt: saved.template,
+  }).compile(
+    Object.fromEntries(
+      Object.entries(variables).map(([key, value]) => [key, String(value)]),
+    ),
+  );
+  const messages = z
+    .array(
+      z
+        .object({
+          role: z.enum(["system", "user", "assistant"]),
+          content: z.string(),
+        })
+        .strict(),
+    )
+    .parse(result);
+  return {
+    messages,
+    source: "langfuse",
+    langfusePrompt: {
+      name: saved.name,
+      version: saved.version,
+      isFallback: false,
+    },
+  };
+}

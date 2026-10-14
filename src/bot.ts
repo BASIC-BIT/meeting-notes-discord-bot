@@ -1,3 +1,4 @@
+import { startMeetingRecoveryWorker } from "./services/meetingRecoveryWorkerService";
 import { InitiatingStopInterruption } from "./services/meetingStopInterruption";
 import { waitForGuildInstaller } from "./services/guildInstallerOnboardingService";
 import { randomUUID } from "node:crypto";
@@ -519,6 +520,7 @@ export async function setupBot() {
     setDiscordClient(client);
     whenRuntimeServing(() => {
       startMeetingControlCommandWorker(client);
+      startMeetingRecoveryWorker();
       void runServingBotWork(async () => {
         await setupApplicationCommands();
         await reevaluateOccupiedVoiceChannels();

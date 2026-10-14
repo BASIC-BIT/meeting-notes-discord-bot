@@ -1,3 +1,4 @@
+import { admitCompatibleReplacement } from "./runtimeCompatibleReplacementService";
 import type { DeploymentControlRepository } from "../repositories/deploymentControlRepository";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -184,6 +185,8 @@ export function createRuntimeLifecycle(options: {
     if ((await repository.writeRuntime(next)) !== "applied")
       throw new Error("Runtime changed during heartbeat");
     row = next;
+    if (await admitCompatibleReplacement(repository, next, now()))
+      return refresh();
     allowed = canAcceptWork(control, row);
     if (allowed)
       for (const listener of servingListeners) {

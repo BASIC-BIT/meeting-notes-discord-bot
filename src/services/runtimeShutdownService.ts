@@ -1,3 +1,4 @@
+import { stopMeetingRecoveryWorker } from "./meetingRecoveryWorkerService";
 import { getAllMeetings, stopMeetingInitializations } from "../meetings";
 import {
   getOwnedSessionReservations,
@@ -82,6 +83,7 @@ export function createRuntimeShutdown(resources: {
       const initializations = stopMeetingInitializations();
       const controlPoll = stopMeetingControlCommandWorker();
       const personalPoll = stopPersonalMediaUploadWorker();
+      const recoveryPoll = stopMeetingRecoveryWorker();
       fenceRuntimeWorkAdmissions();
       const claims = settleClaims();
       const sessions = interruptSessions(budget);
@@ -96,6 +98,7 @@ export function createRuntimeShutdown(resources: {
           initializations,
           controlPoll,
           personalPoll,
+          recoveryPoll,
           claims,
           sessions,
           server,

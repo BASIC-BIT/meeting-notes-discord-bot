@@ -74,14 +74,21 @@ const mockConfig = {
 };
 
 jest.mock("../services/configService", () => ({
-  config: mockConfig,
+  config: {
+    ...jest.requireActual("../services/configService").config,
+    ...mockConfig,
+  },
 }));
 
 jest.mock("../services/meetingConfigService", () => ({
-  resolveMeetingRuntimeConfig: jest.fn(async () => ({})),
+  resolveMeetingRuntimeConfig: jest.fn(
+    jest.requireActual("../services/meetingConfigService")
+      .resolveMeetingRuntimeConfig,
+  ),
 }));
 
 jest.mock("../services/unifiedConfigService", () => ({
+  ...jest.requireActual("../services/unifiedConfigService"),
   getSnapshotBoolean: jest.fn(() => false),
   getSnapshotString: jest.fn(() => undefined),
   resolveConfigSnapshot: jest.fn(async () => ({ values: {} })),
@@ -105,6 +112,7 @@ jest.mock("../chatTts", () => ({
 }));
 
 jest.mock("../utils/participants", () => ({
+  ...jest.requireActual("../utils/participants"),
   buildParticipantSnapshot: jest.fn(
     async (_guild: unknown, userId: string) => ({
       id: userId,
@@ -122,6 +130,38 @@ jest.mock("../utils/participants", () => ({
   })),
 }));
 
+jest.mock("../services/contextService", () => ({
+  ...jest.requireActual("../services/contextService"),
+  collectMeetingContext: jest.fn(async () => ({
+    availability: "available",
+    data: {},
+  })),
+}));
+jest.mock("../services/meetingNameService", () => ({
+  listRecentMeetingNamesForPrompt: jest.fn(async () => ""),
+}));
+jest.mock("../services/savedRecordingPrompt", () => ({
+  ...jest.requireActual("../services/savedRecordingPrompt"),
+  snapshotRecordingPrompt: jest.fn(async (name, type, label) => ({
+    name,
+    type,
+    label,
+    version: 1,
+    template:
+      type === "text"
+        ? "{{transcript}}"
+        : [{ role: "user", content: "{{transcript}}" }],
+  })),
+}));
+import { Collection } from "discord.js";
+import { resolveMeetingRuntimeConfig } from "../services/meetingConfigService";
+import { attachMeetingReservation } from "../services/activeMeetingLeaseService";
+import { startRecordingContentCheckpoint } from "../services/recordingContentService";
+import { completionSnapshot } from "../services/meetingCompletionPolicyService";
+import { generationContextSchema } from "../types/recordingContent";
+import type { CheckpointArtifactInput } from "../types/recordingCheckpoint";
+import type { MeetingData } from "../types/meeting-data";
+import { saveMeetingStartToDatabase } from "../commands/saveMeetingHistory";
 import { createAudioPlayer, joinVoiceChannel } from "@discordjs/voice";
 import {
   openOutputFile,
@@ -173,6 +213,11 @@ const buildBotMember = (
 const buildMeetingOptions = (botMember: unknown = null) => {
   const guild = {
     id: "guild-1",
+    name: "Generated guild",
+    roles: new Collection(),
+    scheduledEvents: new Collection(),
+    channels: new Collection(),
+    client: {},
     voiceAdapterCreator: {},
     members: { me: botMember },
   } as unknown as Guild;
@@ -199,6 +244,101 @@ describe("initializeMeeting", () => {
     mockConfig.chatTts.ttsOnlyIdleTimeoutMs = 0;
     jest.mocked(getSnapshotBoolean).mockReturnValue(false);
     jest.mocked(getSnapshotString).mockReturnValue(undefined);
+  });
+
+  it.each([false, true])(
+    "first actual checkpoint has original config before capture (auto=%s)",
+    async (isAutoRecording) => {
+      const artifacts: CheckpointArtifactInput[] = [];
+      jest
+        .mocked(attachMeetingReservation)
+        .mockImplementationOnce((meeting, reservation) => {
+          meeting.reservation = reservation;
+          meeting.ownershipSignal = new AbortController().signal;
+        });
+      jest
+        .mocked(subscribeToUserVoice)
+        .mockImplementationOnce(async (meeting) => {
+          expect(completionSnapshot(meeting)).toBeDefined();
+          meeting.captureStartedAt = new Date();
+          meeting.recordingCapture = {
+            queueContent: (artifact: CheckpointArtifactInput) => {
+              artifacts.push(artifact);
+              return true;
+            },
+          } as MeetingData["recordingCapture"];
+          startRecordingContentCheckpoint(meeting);
+          await meeting.recordingContentTask;
+        });
+      const meeting = await initializeMeeting({
+        ...buildMeetingOptions(),
+        transcribeMeeting: true,
+        generateNotes: true,
+        isAutoRecording,
+      });
+      const first = generationContextSchema.parse(
+        JSON.parse(Buffer.from(artifacts[0].bytes).toString()),
+      );
+      expect(first.settings.availability).toBe("available");
+      if (first.settings.availability !== "available")
+        throw new Error("Original settings missing");
+      expect(first.settings.value.transcription).toEqual(
+        meeting.runtimeConfig!.transcription,
+      );
+      expect(first.settings.value.autoCompletion).toEqual(
+        completionSnapshot(meeting)!.policy,
+      );
+      expect(first.creatorId).toBe("creator-1");
+    },
+  );
+
+  it("held config resolution starts neither capture nor starting-history publication", async () => {
+    let release!: () => void;
+    const runtime = await jest
+      .requireActual("../services/meetingConfigService")
+      .resolveMeetingRuntimeConfig({
+        guildId: "guild-1",
+        channelId: "voice-1",
+        userId: "creator-1",
+      });
+    jest.mocked(resolveMeetingRuntimeConfig).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(runtime);
+        }),
+    );
+    const starting = initializeMeeting({
+      ...buildMeetingOptions(),
+      transcribeMeeting: true,
+      generateNotes: true,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      expect(openOutputFile).not.toHaveBeenCalled();
+      expect(subscribeToUserVoice).not.toHaveBeenCalled();
+      expect(saveMeetingStartToDatabase).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await starting;
+    }
+    expect(subscribeToUserVoice).toHaveBeenCalledTimes(1);
+  });
+
+  it("failed original config resolution unwinds ownership before capture/publication", async () => {
+    jest
+      .mocked(resolveMeetingRuntimeConfig)
+      .mockRejectedValueOnce(new Error("original config unavailable"));
+    await expect(
+      initializeMeeting({
+        ...buildMeetingOptions(),
+        transcribeMeeting: true,
+        generateNotes: true,
+      }),
+    ).rejects.toThrow("original config unavailable");
+    expect(openOutputFile).not.toHaveBeenCalled();
+    expect(subscribeToUserVoice).not.toHaveBeenCalled();
+    expect(saveMeetingStartToDatabase).not.toHaveBeenCalled();
+    expect(unwindSessionInitialization).toHaveBeenCalledTimes(1);
   });
 
   it("TTS nickname restoration remains owned before release", async () => {

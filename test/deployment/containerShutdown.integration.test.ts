@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -90,6 +91,9 @@ test.each(["all", "bot", "api"] as const)(
         container = docker(
           "run",
           "--detach",
+          ...(process.platform === "linux"
+            ? ["--user", `${process.getuid!()}:${process.getgid!()}`]
+            : []),
           "--network",
           "none",
           "--label",
@@ -104,6 +108,14 @@ test.each(["all", "bot", "api"] as const)(
           ...(mode === "all" ? [] : ["node", `dist/apps/${mode}/main.js`]),
         );
         await ready(container, directory);
+        if (process.platform === "linux") {
+          expect(statSync(path.join(directory, "ready.json")).uid).toBe(
+            process.getuid!(),
+          );
+          expect(statSync(path.join(directory, "ready.json")).gid).toBe(
+            process.getgid!(),
+          );
+        }
         const readiness = json<{
           pid: number;
           node: string;
@@ -165,6 +177,7 @@ test.each(["all", "bot", "api"] as const)(
           docker("rm", "--force", container);
         }
         removeFixtureDirectory(directory);
+        expect(existsSync(directory)).toBe(false);
       }
     }
   },

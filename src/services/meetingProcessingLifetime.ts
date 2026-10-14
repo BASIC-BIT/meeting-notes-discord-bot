@@ -9,8 +9,8 @@ type Lifetime = {
     known: boolean;
   };
 };
-const lifetimes = new WeakMap<MeetingData, Lifetime>();
-function lifetime(meeting: MeetingData): Lifetime {
+const lifetimes = new WeakMap<object, Lifetime>();
+function lifetime(meeting: object): Lifetime {
   let value = lifetimes.get(meeting);
   if (!value) {
     value = { controller: new AbortController(), effects: new Set() };
@@ -18,7 +18,9 @@ function lifetime(meeting: MeetingData): Lifetime {
   }
   return value;
 }
-export function getMeetingProcessingSignal(meeting: MeetingData): AbortSignal {
+export function getMeetingProcessingSignal(
+  meeting: Pick<MeetingData, "ownershipSignal" | "finalization">,
+): AbortSignal {
   const signal = lifetime(meeting).controller.signal;
   return AbortSignal.any([
     signal,

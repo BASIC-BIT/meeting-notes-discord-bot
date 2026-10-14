@@ -88,10 +88,8 @@ export interface InteractionReceipt {
   interactionKind: string;
 }
 
-export interface ActiveMeetingLease {
-  sessionMode?: "meeting" | "tts_only";
+interface ActiveMeetingLeaseFields {
   executionVersion?: number;
-  voiceOperationAttemptId?: string;
   guildId: string;
   meetingId: string;
   ownerInstanceId: string;
@@ -114,6 +112,21 @@ export interface ActiveMeetingLease {
   endRequestedAt?: string;
   endRequestedByUserId?: string;
 }
+
+export type ActiveMeetingLease = ActiveMeetingLeaseFields &
+  (
+    | {
+        sessionMode?: "meeting" | "tts_only";
+        voiceOperationAttemptId?: string;
+        recoveryAttemptId?: never;
+      }
+    | {
+        sessionMode: "recovery";
+        recoveryAttemptId: string;
+        executionVersion: number;
+        voiceOperationAttemptId?: never;
+      }
+  );
 
 // Access Logs Type
 export interface AccessLog {
@@ -440,6 +453,11 @@ export interface OnboardingState {
 
 // Meeting History Type
 export interface MeetingHistory {
+  completionPolicy?: import("./meetingCompletionPolicy").CompletionPolicy;
+  recoveryTranscript?: {
+    checkpointRevision: number;
+    object: import("./recordingCheckpoint").CheckpointObject;
+  };
   checkpoint?: RecordingCheckpoint;
   capture?: RecordingCaptureState;
   recovery?: RecordingRecoveryState;

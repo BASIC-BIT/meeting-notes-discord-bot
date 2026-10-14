@@ -9,6 +9,7 @@ type DiscordMessagePayload = {
   content?: string;
   embeds?: Array<Record<string, unknown>>;
   components?: Array<Record<string, unknown>>;
+  allowed_mentions?: { parse: string[] };
 };
 
 const buildHeaders = () => ({
@@ -62,11 +63,13 @@ export async function updateDiscordMessageEmbeds(
 export async function createDiscordMessage(
   channelId: string,
   payload: DiscordMessagePayload,
+  signal?: AbortSignal,
 ): Promise<DiscordMessage> {
   const resp = await fetch(
     `https://discord.com/api/channels/${channelId}/messages`,
     {
       method: "POST",
+      signal,
       headers: buildHeaders(),
       body: JSON.stringify(payload),
     },

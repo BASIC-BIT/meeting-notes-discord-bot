@@ -27,7 +27,7 @@ const createMeeting = (transcript: string): MeetingData => {
     },
     startTime,
     endTime: new Date("2026-03-01T00:02:00.000Z"),
-    creator: null as never,
+    creator: { id: "creator-1" } as never,
     guild: { id: "guild-1" } as never,
     isAutoRecording: false,
     finishing: false,

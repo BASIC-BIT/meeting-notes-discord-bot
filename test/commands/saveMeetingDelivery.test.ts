@@ -50,6 +50,7 @@ it.each([
   }) => {
     const meeting = {
       guildId: "guild",
+      guild: { id: "guild", name: "Fixture guild" },
       meetingId: "meeting",
       voiceChannel: { id: "voice" },
       textChannel: { id: "text" },

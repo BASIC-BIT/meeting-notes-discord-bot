@@ -1,3 +1,4 @@
+import { planCompatibleReplacement } from "./runtimeCompatibleReplacementService";
 import type {
   TransactWriteItem,
   TransactWriteItemsCommandInput,
@@ -24,6 +25,7 @@ import {
   type HistoryTransition,
   type PromotionInput,
   type LocalBootstrapInput,
+  type CompatibleReplacementInput,
   type ControlRecord,
   type RuntimeRecord,
   type SessionReservationInput,
@@ -269,7 +271,14 @@ function snapshotCondition(record: ControlRecord | RuntimeRecord) {
   const fields = [
     ...new Set([
       ...Object.keys(record),
-      ...(record.recordType === "runtime" ? ["expiresAt", "workCounts"] : []),
+      ...(record.recordType === "runtime"
+        ? [
+            "expiresAt",
+            "workCounts",
+            "retirementRequest",
+            "retirementAcknowledgment",
+          ]
+        : ["deployment", "compatibleReplacement", "recoveryScanCursor"]),
     ]),
   ].filter((key) => key !== "pk" && key !== "sk");
   const conditions = fields.map((field, index) => {
@@ -763,6 +772,7 @@ export function buildOwnedCheckpointTransition(
 ): TransactWriteItemsCommandInput {
   const update = buildHistoryTransition(input, tables);
   const proof =
+    input.completionPolicyProof ??
     input.recordingDelivery ??
     input.initialTerminalDisposition ??
     input.terminalPreservation ??
@@ -795,6 +805,36 @@ export function buildOwnedCheckpointTransition(
           Key: marshall(input.key),
         },
       },
+    ],
+  };
+}
+
+export function buildCompatibleReplacementTransaction(
+  input: CompatibleReplacementInput,
+  tables: ControlTableNames,
+): TransactWriteItemsCommandInput {
+  const next = planCompatibleReplacement(input);
+  return {
+    TransactItems: [
+      {
+        Put: {
+          TableName: tables.deploymentControl,
+          Item: marshall(next.control, { removeUndefinedValues: true }),
+          ...snapshotCondition(input.control),
+        },
+      },
+      ...[input.candidate, ...input.members].map((row) => ({
+        Put: {
+          TableName: tables.deploymentControl,
+          Item: marshall(
+            next.runtimes.find(
+              (value) => value.identity.instanceId === row.identity.instanceId,
+            )!,
+            { removeUndefinedValues: true },
+          ),
+          ...snapshotCondition(row),
+        },
+      })),
     ],
   };
 }

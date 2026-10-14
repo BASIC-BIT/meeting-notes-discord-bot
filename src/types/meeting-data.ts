@@ -165,3 +165,46 @@ export interface MeetingData {
 export interface MeetingSetup {
   interaction: CommandInteraction;
 }
+
+/** Plain content and processing state, explicitly prepared for live or recovered notes. */
+export type MeetingNotesInput = Pick<
+  MeetingData,
+  | "meetingId"
+  | "guildId"
+  | "channelId"
+  | "generateNotes"
+  | "transcribeMeeting"
+  | "startTime"
+  | "finalTranscript"
+  | "notesText"
+  | "processing"
+  | "summarySentence"
+  | "summaryLabel"
+  | "meetingName"
+  | "tags"
+  | "participants"
+  | "attendance"
+  | "langfuseParentSpanContext"
+> & {
+  creator: Pick<User, "id">;
+  guild: Pick<Guild, "id" | "name" | "description">;
+  voiceChannel: Pick<VoiceBasedChannel, "id" | "name">;
+  runtimeConfig?: Pick<
+    MeetingRuntimeConfig,
+    "modelChoices" | "modelParams" | "dictionary" | "visionCaptions"
+  >;
+  signal?: AbortSignal;
+  notesPrompt?: import("../services/langfusePromptService").ChatPromptResult & {
+    promptVisibleRoleIds: string[];
+  };
+  savedSummary?: {
+    prompt: import("../services/savedRecordingPrompt").SavedRecordingPrompt;
+    recentMeetingNames: string;
+  };
+  frozenModels?: Pick<
+    import("./recordingContent").SavedRecordingSettings["models"],
+    "notes" | "meetingSummary"
+  >;
+  captureNotice?: string;
+  recovered?: true;
+};

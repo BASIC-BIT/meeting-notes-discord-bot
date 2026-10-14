@@ -49,6 +49,7 @@ async function fixture(transcribeMeeting = true) {
     userId: "creator",
   });
   const meeting = {
+    isAutoRecording: false,
     meetingId: "generated-meeting",
     guildId: "generated",
     channelId: "voice",

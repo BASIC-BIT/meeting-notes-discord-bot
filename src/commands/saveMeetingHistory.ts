@@ -7,9 +7,9 @@ import { MEETING_STATUS } from "../types/meetingLifecycle";
 import { saveOwnedMeetingHistoryService } from "../services/meetingHistoryService";
 import { maybeAutoExportCompletedMeeting } from "../services/notionAutomationService";
 import {
-  ensureMeetingNotes,
-  ensureMeetingSummaries,
-} from "../services/meetingNotesService";
+  ensureLiveMeetingNotes as ensureMeetingNotes,
+  ensureLiveMeetingSummaries as ensureMeetingSummaries,
+} from "../services/liveMeetingNotesService";
 import { trimNotesForHistory } from "../utils/notesHistory";
 import { transitionMeetingHistory } from "../db";
 

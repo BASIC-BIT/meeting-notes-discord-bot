@@ -1,3 +1,4 @@
+import { renderMixedPcmTracks } from "./services/mixedPcmService";
 import { interruptOwnedMeeting } from "./services/ownedMeetingInterruption";
 import { finished } from "node:stream/promises";
 import {
@@ -41,6 +42,7 @@ import { OpusDiagnosticDecoder } from "./utils/opusDiagnosticDecoder";
 import { PassThrough, Readable } from "node:stream";
 import {
   cleanupTranscription,
+  retainCleanupTranscript,
   coalesceTranscription,
   transcribeSnippet,
 } from "./services/transcriptionService";
@@ -1080,7 +1082,12 @@ function getAudioDuration(audio: AudioSnippet): number {
 export async function compileTranscriptions(
   client: Client,
   meeting: MeetingData,
-  options: { includeCues?: boolean } = {},
+  options: {
+    includeCues?: boolean;
+    cleanupAcknowledged?: (
+      outcome: "acknowledged" | "fallback" | "disabled",
+    ) => void;
+  } = {},
 ): Promise<string> {
   const segments = meeting.audioData.audioFiles
     .map((fileData) => ({
@@ -1130,11 +1137,13 @@ export async function compileTranscriptions(
     .join("\n");
 
   if (transcription.length === 0) {
+    options.cleanupAcknowledged?.("disabled");
     return transcription;
   }
 
   const premiumConfig = meeting.runtimeConfig?.premiumTranscription;
   if (!premiumConfig?.enabled || !premiumConfig.cleanupEnabled) {
+    options.cleanupAcknowledged?.("disabled");
     return TRANSCRIPTION_HEADER + transcription;
   }
 
@@ -1144,22 +1153,17 @@ export async function compileTranscriptions(
       transcription,
     );
 
-    const originalLines = transcription.split("\n").length;
-    const cleanedLines = (cleanedUpTranscription || "").split("\n").length;
-    console.log(
-      `Transcription cleanup succeeded. Original lines: ${originalLines}, cleaned lines: ${cleanedLines}`,
+    const retained = retainCleanupTranscript(
+      transcription,
+      cleanedUpTranscription,
+      TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE,
     );
-
-    if (
-      cleanedLines <
-      originalLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
-    ) {
-      console.error("Transcription cleanup failed checks, returning original.");
-      return TRANSCRIPTION_HEADER + transcription;
-    }
-
-    return TRANSCRIPTION_HEADER + cleanedUpTranscription;
+    options.cleanupAcknowledged?.(
+      retained === cleanedUpTranscription ? "acknowledged" : "fallback",
+    );
+    return TRANSCRIPTION_HEADER + retained;
   } catch (error) {
+    options.cleanupAcknowledged?.("fallback");
     console.error("Transcription cleanup failed, returning original:", error);
     return TRANSCRIPTION_HEADER + transcription;
   }
@@ -1287,61 +1291,11 @@ async function buildOwnedMixedAudio(
   });
   if (usable.length === 0) return undefined;
 
-  const outputFileName = path.join(
-    getMeetingTempDir(meeting),
-    "recording_mixed.mp3",
+  return renderMixedPcmTracks(
+    usable,
+    path.join(getMeetingTempDir(meeting), "recording_mixed.mp3"),
+    signal,
   );
-
-  const command = ffmpeg();
-  for (const track of usable)
-    command
-      .input(track.filePath)
-      .inputOptions([
-        "-f s16le",
-        `-ar ${RECORD_SAMPLE_RATE}`,
-        `-ac ${CHANNELS}`,
-      ]);
-  const outputOptions = [
-    `-b:a 128k`,
-    `-ac ${CHANNELS}`,
-    `-ar ${RECORD_SAMPLE_RATE}`,
-  ];
-  if (usable.length > 1) {
-    const mixInputs = usable.map((_track, index) => `[${index}:a]`).join("");
-    command.complexFilter(
-      `${mixInputs}amix=inputs=${usable.length}:dropout_transition=0:normalize=0[mixed]`,
-    );
-    outputOptions.unshift("-map [mixed]");
-  }
-  command.audioCodec("libmp3lame").outputOptions(outputOptions).toFormat("mp3");
-  return finishMixedAudioEncoder(command, outputFileName, signal);
-}
-function finishMixedAudioEncoder(
-  command: ReturnType<typeof ffmpeg>,
-  output: string,
-  signal: AbortSignal,
-): Promise<string | undefined> {
-  return new Promise((resolve, reject) => {
-    signal.throwIfAborted();
-    const cancel = () => command.kill("SIGTERM");
-    signal.addEventListener("abort", cancel, { once: true });
-    const finish = (error?: Error) => {
-      signal.removeEventListener("abort", cancel);
-      if (signal.aborted) {
-        reject(signal.reason);
-        return;
-      }
-      if (error) console.error("Failed to render mixed audio:", error);
-      resolve(error ? undefined : output);
-    };
-    command
-      .on("start", () => {
-        if (signal.aborted) cancel();
-      })
-      .on("end", () => finish())
-      .on("error", finish)
-      .save(output);
-  });
 }
 
 export async function cleanupSpeakerTracks(

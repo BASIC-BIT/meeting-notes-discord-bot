@@ -1,3 +1,14 @@
+jest.mock("../../src/services/meetingCompletionPolicyService", () => ({
+  ...jest.requireActual("../../src/services/meetingCompletionPolicyService"),
+  // This orchestration fixture replaces history persistence; exact policy CAS is tested separately.
+  publishCompletionPolicy: jest.fn(async () => {}),
+}));
+jest.mock("../../src/services/notesPromptService", () => ({
+  prepareLiveNotesPrompt: jest.fn(async () => ({
+    messages: [],
+    promptVisibleRoleIds: [],
+  })),
+}));
 /** @jest-environment node */
 jest.mock("../../src/services/recordingDeliveryService", () => ({
   acknowledgeRecordingDeliveryHistory: jest.fn(async () => {}),
@@ -1370,6 +1381,7 @@ describe("handleEndMeetingButton", () => {
 function finalizationFixture(): MeetingData {
   return {
     guildId: "h4-guild",
+    guild: { id: "h4-guild", name: "Fixture guild" },
     meetingId: "h4-meeting",
     startTime: new Date(),
     creator: { id: "creator" },
@@ -1681,7 +1693,8 @@ describe("H4 review outcome and fence regressions", () => {
         meeting,
         "cancelled_artifact_upload_failed",
       );
-      expect(meeting.cancelled).not.toBe(true);
+      // The cancellation intention survives artifact/notice failure; resources remain unresolved.
+      expect(meeting.cancelled).toBe(true);
       expect(interruptOwnedMeeting).toHaveBeenCalledWith(
         meeting,
         expect.objectContaining({ reason: "processing_failure" }),

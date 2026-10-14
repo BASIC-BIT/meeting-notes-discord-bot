@@ -276,7 +276,13 @@ export async function saveOwnedMeetingHistoryService(
   const patch = Object.fromEntries(
     HISTORY_TRANSITION_FIELDS.map((key) => [key, history[key]]),
   );
-  await transitionOwnedMeetingHistoryService(meeting, patch, ["processing"]);
+  await transitionOwnedMeetingHistoryService(
+    meeting,
+    patch,
+    history.status === "cancelled"
+      ? ["processing", "cancelled"]
+      : ["processing"],
+  );
   try {
     await writeMeetingUserIndexForMeetingService(history);
   } catch (error) {

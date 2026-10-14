@@ -1,5 +1,5 @@
 import type { ChatAttachment, ChatEntry } from "../types/chat";
-import type { MeetingData } from "../types/meeting-data";
+import type { MeetingData, MeetingNotesInput } from "../types/meeting-data";
 import type { Participant } from "../types/participants";
 import { renderChatEntryLine } from "../utils/chatLog";
 import {
@@ -344,7 +344,7 @@ export const formatRoleRoster = (
     .join("\n");
 };
 
-export async function getNotesPrompt(meeting: MeetingData) {
+export async function prepareLiveNotesPrompt(meeting: MeetingData) {
   const contextData = await buildMeetingContext(meeting, isMemoryEnabled());
   const formattedContext = formatContextForPrompt(contextData, "notes");
 
@@ -414,4 +414,19 @@ export async function getNotesPrompt(meeting: MeetingData) {
   });
 
   return { ...prompt, promptVisibleRoleIds };
+}
+
+export async function getNotesPrompt(meeting: MeetingNotesInput) {
+  meeting.signal?.throwIfAborted();
+  if (!meeting.notesPrompt)
+    throw new Error("Verified notes prompt input unavailable");
+  return {
+    ...meeting.notesPrompt,
+    messages: [
+      ...meeting.notesPrompt.messages,
+      ...(meeting.captureNotice
+        ? [{ role: "system" as const, content: meeting.captureNotice }]
+        : []),
+    ],
+  };
 }

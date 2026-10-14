@@ -1,3 +1,7 @@
+import {
+  autoCompletionPolicySchema,
+  completionPolicySchema,
+} from "./meetingCompletionPolicy";
 import { z } from "zod";
 import { savedPromptSchema } from "../services/savedRecordingPrompt";
 import { recordingCaptureProvenanceSchema } from "./recordingCheckpoint";
@@ -76,8 +80,33 @@ const transcription = z
       .strict(),
   })
   .strict();
+export const finalPassSettingsSchema = z
+  .object({
+    maxSnippetMilliseconds: number.nonnegative(),
+    chunkSeconds: number.nonnegative(),
+    maxRequestBytes: number.nonnegative(),
+    targetMaxChunkBytes: number.nonnegative(),
+    segmentBatchMaxChars: number.nonnegative(),
+    minConfidence: number.nonnegative(),
+    maxDropRatio: number.nonnegative(),
+    maxChangeRatio: number.nonnegative(),
+    previousTailChars: number.nonnegative(),
+    minChunkSeconds: number.nonnegative(),
+    estimatedMp3BytesPerSecond: number.nonnegative(),
+    repeatWindowSeconds: number.nonnegative(),
+  })
+  .strict();
+export type FinalPassSettings = z.infer<typeof finalPassSettingsSchema>;
 export const savedRecordingSettingsSchema = z
   .object({
+    autoCompletion: autoCompletionPolicySchema.optional(),
+    processing: z
+      .object({
+        cleanupMinimumRetainedLineRatio: number,
+        finalPass: finalPassSettingsSchema,
+      })
+      .strict()
+      .optional(),
     models: z
       .object({
         notes: model,
@@ -127,6 +156,8 @@ const context = z
         .strict(),
     ),
     formattedContext: text,
+    transcriptionFormattedContext: text.optional(),
+    transcriptionMaxContextLength: number.optional(),
     dictionaryEntries: z.array(
       z
         .object({
@@ -146,6 +177,8 @@ const base = z.object({
 export const generationContextSchema = base
   .extend({
     kind: z.literal("generation_context"),
+    completion: completionPolicySchema.optional(),
+    captureIncomplete: z.boolean().optional(),
     creatorId: text,
     serverName: text,
     serverDescription: text,
@@ -162,6 +195,7 @@ export const generationContextSchema = base
     chatContext: text,
     participantRoster: text,
     roleRoster: text,
+    cleanupRoleNames: text.optional(),
     attendees: text,
     settings: z.union([
       unavailable,
@@ -192,6 +226,19 @@ export const generationContextSchema = base
 export const completedTranscriptionSchema = base
   .extend({
     kind: z.literal("completed_transcription"),
+    processing: z
+      .object({
+        finalPass: z.enum([
+          "acknowledged",
+          "fallback",
+          "disabled",
+          "not_applicable",
+        ]),
+        cleanup: z.enum(["acknowledged", "fallback", "disabled"]),
+        finalText: text,
+      })
+      .strict()
+      .optional(),
     entries: z.array(
       z
         .object({

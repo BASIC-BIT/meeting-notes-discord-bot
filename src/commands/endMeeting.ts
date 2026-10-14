@@ -1,3 +1,9 @@
+import {
+  completionSnapshot,
+  resolveCompletionPolicy,
+  stopCompletionClock,
+  publishCompletionPolicy,
+} from "../services/meetingCompletionPolicyService";
 import { getMeetingProcessingSignal } from "../services/meetingProcessingLifetime";
 import type { RuntimeWorkClaim } from "../services/runtimeWorkAdmissionService";
 import { initiatingStopInterruption } from "../services/meetingStopInterruption";
@@ -68,9 +74,9 @@ import {
 } from "../meetings";
 import { MEETING_END_REASONS, MEETING_STATUS } from "../types/meetingLifecycle";
 import {
-  ensureMeetingNotes,
-  ensureMeetingSummaries,
-} from "../services/meetingNotesService";
+  ensureLiveMeetingNotes as ensureMeetingNotes,
+  ensureLiveMeetingSummaries as ensureMeetingSummaries,
+} from "../services/liveMeetingNotesService";
 import { captionMeetingImages } from "../services/imageCaptionService";
 import {
   cleanupMeetingTempDir,
@@ -187,6 +193,13 @@ function shouldFinalizeDismissedAutoRecording(meeting: MeetingData): boolean {
     );
   }
 
+  const originalPolicy = completionSnapshot(meeting);
+  if (originalPolicy) {
+    const decision = resolveCompletionPolicy(originalPolicy, false);
+    if (decision === "unknown")
+      throw new Error("Original dismissal policy is unavailable");
+    return decision === "proceed";
+  }
   const durationMs = meeting.endTime.getTime() - meeting.startTime.getTime();
   if (durationMs >= DISMISSED_AUTO_RECORD_COMPLETE_MIN_DURATION_MS) {
     return true;
@@ -434,12 +447,14 @@ async function finalizeRecording(
   meeting.finishing = true;
   stopRecordingCapture(meeting);
   meeting.endTime = new Date();
+  stopCompletionClock(meeting);
   checkpointRecordingContext(meeting);
   if (meeting.recordingCapture && !(await meeting.recordingCapture.finish()))
     throw new Error("Durable capture preservation failed");
   if (!meeting.endReason) {
     meeting.endReason = MEETING_END_REASONS.UNKNOWN;
   }
+  await publishCompletionPolicy(meeting);
   const initialEndReason = meeting.endReason;
   await markMeetingProcessing(meeting);
   stopThinkingCueLoop(meeting);
@@ -533,6 +548,7 @@ async function finalizeRecording(
       }
     }
 
+    await publishCompletionPolicy(meeting, "proceed");
     const combinedAudioFile = meeting.audioData.outputFileName!;
     const mixedAudioFile = await runMeetingEndStep(
       meeting,
@@ -592,10 +608,17 @@ async function finalizeRecording(
         ...finalPassResult,
       });
 
+      let cleanupAcknowledged:
+        "acknowledged" | "fallback" | "disabled" | undefined;
       const transcriptions = await runMeetingEndStep(
         meeting,
         "compile-transcriptions",
-        () => compileTranscriptions(client, meeting),
+        () =>
+          compileTranscriptions(client, meeting, {
+            cleanupAcknowledged: (outcome) => {
+              cleanupAcknowledged = outcome;
+            },
+          }),
       );
       meeting.finalTranscript = transcriptions;
       const transcriptionStillPending = meeting.audioData.audioFiles.some(
@@ -615,6 +638,23 @@ async function finalizeRecording(
               getAudioTranscriptionFacts(meeting.audioData),
             ),
       };
+
+      if (!transcriptionStillPending && cleanupAcknowledged) {
+        checkpointCompletedTranscription(meeting, {
+          finalPass: !finalPassResult.enabled
+            ? "disabled"
+            : finalPassResult.fallbackApplied
+              ? "fallback"
+              : "acknowledged",
+          cleanup: cleanupAcknowledged,
+          finalText: transcriptions,
+        });
+        if (
+          meeting.recordingCapture &&
+          !(await meeting.recordingCapture.drainContent())
+        )
+          throw new Error("Processed transcription preservation failed");
+      }
 
       if (meeting.generateNotes) {
         await runMeetingEndStep(
@@ -770,6 +810,12 @@ async function handleAutoRecordCancellation(
   chatLogFilePath: string,
   automaticDecision?: { reason?: string },
 ): Promise<void> {
+  if (automaticDecision) {
+    meeting.cancelled = true;
+    meeting.cancellationReason = automaticDecision.reason;
+    meeting.endReason = MEETING_END_REASONS.AUTO_CANCELLED;
+  }
+  await publishCompletionPolicy(meeting, "cancel");
   const uploadResult = await uploadCancelledMeetingArtifacts(
     client,
     meeting,
@@ -784,11 +830,6 @@ async function handleAutoRecordCancellation(
   }
   assertMeetingProcessingSucceeded(meeting);
   assertMeetingFinalizationActive(meeting);
-  if (automaticDecision) {
-    meeting.cancelled = true;
-    meeting.cancellationReason = automaticDecision.reason;
-    meeting.endReason = MEETING_END_REASONS.AUTO_CANCELLED;
-  }
   await updateAutoRecordCancelledMessage(meeting);
   await deleteTrackedMessages(meeting);
   await saveMeetingHistoryToDatabase(meeting);

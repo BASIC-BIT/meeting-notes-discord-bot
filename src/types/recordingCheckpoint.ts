@@ -96,6 +96,7 @@ export const recoveryDispositionSchema = z
           "invalid_checkpoint",
           "invalid_payload",
           "retry_exhausted",
+          "policy_unknown",
         ]),
       })
       .strict(),

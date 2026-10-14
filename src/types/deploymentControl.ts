@@ -1,3 +1,4 @@
+import { completionPolicySchema } from "./meetingCompletionPolicy";
 import {
   recordingCheckpointSchema,
   recordingCaptureStateSchema,
@@ -143,7 +144,19 @@ export const controlRecordSchema = z
     coordinatorEpoch: generation,
     coordinatorExpiresAt: epochSecond,
     servingGeneration: generation,
+    recoveryScanCursor: z
+      .object({ guildId: id, channelId_timestamp: id })
+      .strict()
+      .optional(),
     deployment: deploymentPhaseSchema.optional(),
+    compatibleReplacement: z
+      .object({
+        runToken: id,
+        servingGeneration: generation,
+        servingMembers: z.record(z.string(), runtimeIdentitySchema),
+      })
+      .strict()
+      .optional(),
     servingMembers: z
       .record(z.string(), runtimeIdentitySchema)
       .refine(
@@ -398,6 +411,7 @@ export type PromotionInput = z.infer<typeof promotionInputSchema>;
 export type AdmissionCheckResult =
   { kind: "admitted" } | { kind: "blocked"; reason: "not_serving" };
 export type SessionReservation = {
+  timingReceipt?: { reservedAt: number; monotonicMilliseconds: number };
   guildId: string;
   meetingId: string;
   ownerInstanceId: string;
@@ -433,6 +447,7 @@ export type HistoryKey = Pick<
   "guildId" | "channelId_timestamp"
 >;
 export const HISTORY_TRANSITION_FIELDS = [
+  "completionPolicy",
   "checkpoint",
   "capture",
   "recovery",
@@ -491,6 +506,11 @@ export type RecordingDeliveryProof = {
   previous: Pick<MeetingHistory, (typeof RECORDING_DELIVERY_FIELDS)[number]>;
 };
 export type HistoryTransition = {
+  completionPolicyProof?: {
+    kind: "completion_policy";
+    ownership: CheckpointPublication["ownership"];
+    now: number;
+  };
   recordingDelivery?: RecordingDeliveryProof;
   initialTerminalDisposition?: InitialTerminalCheckpointDisposition;
   checkpointPublication?: CheckpointPublication;
@@ -513,7 +533,7 @@ const legalTransitions: Record<MeetingStatus, readonly MeetingStatus[]> = {
   interrupted: ["processing", "failed"],
   failed: [],
   complete: [],
-  cancelled: [],
+  cancelled: ["cancelled"],
 };
 export function validateHistoryTransition(input: HistoryTransition): void {
   id.parse(input.key.guildId);
@@ -528,6 +548,7 @@ export function validateHistoryTransition(input: HistoryTransition): void {
   }
   if (!Object.values(input.patch).some((value) => value !== undefined))
     throw new Error("History transition patch is empty");
+  validateCompletionPolicyTransition(input);
   validateCheckpointTransition(input);
   if (input.patch.capture)
     recordingCaptureStateSchema.parse(input.patch.capture);
@@ -543,6 +564,60 @@ export function validateHistoryTransition(input: HistoryTransition): void {
     throw new Error("Illegal history status transition");
 }
 
+function validateCompletionPolicyTransition(input: HistoryTransition) {
+  if (input.patch.completionPolicy && !input.completionPolicyProof)
+    throw new Error("Completion policy requires original-owner proof");
+  if (input.patch.completionPolicy)
+    completionPolicySchema.parse(input.patch.completionPolicy);
+  if (input.completionPolicyProof) {
+    const proof = input.completionPolicyProof;
+    if (
+      proof.kind !== "completion_policy" ||
+      proof.ownership.sessionMode !== "meeting"
+    )
+      throw new Error("Completion policy requires recording authority");
+    id.parse(proof.ownership.voiceOperationAttemptId);
+    epochSecond.parse(proof.now);
+    z.number().int().nonnegative().parse(input.expectedCheckpointRevision);
+    if (
+      [
+        input.recordingDelivery,
+        input.checkpointPublication,
+        input.terminalPreservation,
+        input.initialTerminalDisposition,
+      ].some(Boolean)
+    )
+      throw new Error("Conflicting completion authority");
+    validateCompletionPolicyIdentity(input);
+    if (
+      input.patch.status &&
+      (input.patch.status !== "cancelled" ||
+        input.patch.completionPolicy?.decision !== "cancel")
+    )
+      throw new Error("Completion policy status must encode cancellation");
+  }
+}
+function validateCompletionPolicyIdentity(input: HistoryTransition) {
+  const proof = input.completionPolicyProof!;
+  if (
+    !input.signal ||
+    proof.ownership.guildId !== input.key.guildId ||
+    proof.ownership.meetingId !== input.expectedMeetingId ||
+    proof.ownership.ownerInstanceId !== input.expectedOwnerInstanceId ||
+    proof.ownership.executionVersion !== input.expectedExecutionVersion ||
+    !input.patch.completionPolicy ||
+    Object.keys(input.patch).some(
+      (key) =>
+        ![
+          "completionPolicy",
+          "status",
+          "endReason",
+          "cancellationReason",
+        ].includes(key),
+    )
+  )
+    throw new Error("Completion policy requires exact original authority");
+}
 function validateRecordingDelivery(input: HistoryTransition) {
   const proof = input.recordingDelivery!;
   z.enum(["intent", "acknowledgment"]).parse(proof.phase);
@@ -763,3 +838,10 @@ function validateCheckpointTransition(input: HistoryTransition) {
       throw new Error("Checkpoint capture ownership or revision mismatch");
   }
 }
+
+export type CompatibleReplacementInput = {
+  control: ControlRecord;
+  candidate: RuntimeRecord;
+  members: RuntimeRecord[];
+  now: number;
+};

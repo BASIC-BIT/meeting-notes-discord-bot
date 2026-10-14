@@ -102,6 +102,9 @@ test("final-pass actual SDK cancellation retains its local upload stream until c
 test("final-pass chunk encoder cancellation waits its actual terminal event", async () => {
   const meeting = {
     meetingId: "synthetic-encoder",
+    creator: { id: "synthetic-creator" },
+    guild: { id: "synthetic-guild" },
+    voiceChannel: { id: "synthetic-voice" },
     startTime: new Date(0),
     endTime: new Date(120000),
     participants: new Map(),

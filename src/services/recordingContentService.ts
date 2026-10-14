@@ -1,3 +1,8 @@
+import { liveTranscriptionProcessingSettings } from "./transcriptionProcessingSettings";
+import {
+  freezeCompletionPolicy,
+  completionSnapshot,
+} from "./meetingCompletionPolicyService";
 import { createHash } from "node:crypto";
 import type { MeetingData } from "../types/meeting-data";
 import type { RecordingCaptureProvenance } from "../types/recordingCheckpoint";
@@ -82,6 +87,8 @@ function settings(meeting: MeetingData): SavedRecordingSettings {
     };
   };
   return savedRecordingSettingsSchema.parse({
+    autoCompletion: freezeCompletionPolicy(meeting),
+    processing: liveTranscriptionProcessingSettings,
     models: {
       notes: model("notes"),
       meetingSummary: model("meetingSummary"),
@@ -124,6 +131,8 @@ function snapshotDynamic(
     kind: "generation_context",
     capture: frozen.capture,
     capturedAt: new Date().toISOString(),
+    completion: completionSnapshot(meeting),
+    captureIncomplete: meeting.audioData.captureIncomplete,
     creatorId: meeting.creator.id,
     serverName: meeting.guild.name,
     serverDescription: meeting.guild.description ?? "",
@@ -158,6 +167,10 @@ function snapshotDynamic(
         new Map(roles.map((role) => [role.id, role.name])),
       ) ?? "No participant roster captured.",
     roleRoster: formatRoleRoster(roles, participants),
+    cleanupRoleNames: meeting.guild.roles
+      .valueOf()
+      .map((role) => role.name)
+      .join(", "),
     attendees: resolveMeetingAttendees(meeting).join(", "),
     chatContext:
       formatChatLogForPrompt({
@@ -198,7 +211,10 @@ export function checkpointRecordingContext(meeting: MeetingData): void {
   if (!frozen || !meeting.recordingCapture) return;
   enqueue(meeting, frozen, "context", snapshotDynamic(meeting, frozen));
 }
-export function checkpointCompletedTranscription(meeting: MeetingData): void {
+export function checkpointCompletedTranscription(
+  meeting: MeetingData,
+  processing?: import("../types/recordingContent").CompletedTranscriptionCheckpoint["processing"],
+): void {
   const frozen = snapshots.get(meeting);
   if (!frozen || !frozen.capture.requested.transcribeMeeting) return;
   const completedAt = new Date().toISOString();
@@ -225,6 +241,7 @@ export function checkpointCompletedTranscription(meeting: MeetingData): void {
   const payload = completedTranscriptionSchema.parse({
     schemaVersion: 1,
     kind: "completed_transcription",
+    processing,
     capture: frozen.capture,
     capturedAt: completedAt,
     entries,
@@ -277,6 +294,12 @@ async function captureContext(
       definition: item.definition,
       updatedAt: item.updatedAt,
     })),
+    transcriptionFormattedContext: formatContextForPrompt(
+      data,
+      "transcription",
+      effective.notes.maxContextLength,
+    ),
+    transcriptionMaxContextLength: effective.notes.maxContextLength,
     formattedContext: formatContextForPrompt(
       data,
       "notes",

@@ -51,6 +51,7 @@ export type AcquireMeetingLeaseInput = {
   autoRecordRule?: ActiveMeetingLease["autoRecordRule"];
   admissionContext?: AdmissionContext;
   reservedAt: number;
+  timingReceipt?: SessionReservation["timingReceipt"];
   suppression?: { channelId: string; expectedVersion?: number };
 } & (
   | { sessionMode: "meeting"; history: MeetingHistory }
@@ -153,7 +154,9 @@ export async function getActiveMeetingLeaseForGuild(
   guildId: string,
 ): Promise<ActiveMeetingLease | undefined> {
   const lease = await getActiveMeetingLease(guildId);
-  return lease?.sessionMode === "tts_only" ? undefined : lease;
+  return lease?.sessionMode && lease.sessionMode !== "meeting"
+    ? undefined
+    : lease;
 }
 
 export function tryAcquireMeetingLease(
@@ -292,6 +295,7 @@ async function acquireReservation(
     executionVersion: 1,
     voiceOperationAttemptId,
     reservedAt: input.reservedAt,
+    timingReceipt: input.timingReceipt,
     workHandle,
   };
   const reservation: SessionReservation = history

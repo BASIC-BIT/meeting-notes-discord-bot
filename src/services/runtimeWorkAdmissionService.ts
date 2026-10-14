@@ -15,7 +15,12 @@ import {
 } from "./activeMeetingLeaseService";
 
 type Domain =
-  "control" | "personal" | "interaction" | "ancillary" | "api_correction";
+  | "control"
+  | "personal"
+  | "recovery"
+  | "interaction"
+  | "ancillary"
+  | "api_correction";
 type ClaimCheckpoint = {
   claimId: string;
   instanceId: string;
@@ -37,6 +42,7 @@ type Checkpoint = {
   terminalAcknowledged?: ClaimCheckpoint;
   terminalAcknowledgedDomain?: Domain;
   apiOutcomeKnown?: boolean;
+  recoveryPollAcknowledged?: boolean;
   interactionReceiptAcknowledged?: boolean;
   interactionDeferAcknowledged?: boolean;
   interactionStopAcknowledged?: boolean;
@@ -241,6 +247,11 @@ export function beginRuntimeWorkClaim(
       checkpoint.interactionStopAcknowledged = true;
       return true;
     },
+    acknowledgeReadOnlyRecoveryPoll() {
+      if (checkpoint.domain !== "recovery" || checkpoint.claim)
+        throw new Error("Recovery poll cannot acknowledge a processing claim");
+      checkpoint.recoveryPollAcknowledged = true;
+    },
     acknowledgeTerminal() {
       if (!checkpoint.claim)
         throw new Error("Terminal acknowledgment requires the original claim");
@@ -266,7 +277,11 @@ export function beginRuntimeWorkClaim(
       checkpoint.controller.signal.throwIfAborted();
       checkpoint.stage = "owned";
       registration?.transition(
-        domain === "personal" ? "personal_processing" : "ancillary_delivery",
+        domain === "personal"
+          ? "personal_processing"
+          : domain === "recovery"
+            ? "recovery_processing"
+            : "ancillary_delivery",
       );
     },
     delivering() {
@@ -353,17 +368,16 @@ function sameClaim(left: ClaimCheckpoint, right: ClaimCheckpoint): boolean {
     left.expiresAt === right.expiresAt
   );
 }
+function acknowledgedWithoutClaim(entry: Checkpoint) {
+  if (entry.domain === "api_correction") return entry.apiOutcomeKnown;
+  if (entry.domain === "interaction") return entry.interactionStopAcknowledged;
+  return entry.domain === "recovery" && entry.recoveryPollAcknowledged;
+}
 /** A terminal acknowledgment permits release only after its exact owner's complete local lifetime. */
 export function releaseAcknowledgedRuntimeWork(id: string): boolean {
   const entry = work.get(id);
   if (!entry) return true;
-  if (entry.domain === "api_correction") {
-    if (!localLifetimeSettled(entry) || !entry.apiOutcomeKnown) return false;
-    entry.handle.settle();
-    work.delete(id);
-    return true;
-  }
-  if (entry.domain === "interaction" && entry.interactionStopAcknowledged) {
+  if (acknowledgedWithoutClaim(entry)) {
     if (!localLifetimeSettled(entry)) return false;
     entry.handle.settle();
     work.delete(id);

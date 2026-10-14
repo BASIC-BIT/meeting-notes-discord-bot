@@ -1,7 +1,7 @@
 import { getMeetingProcessingSignal } from "./meetingProcessingLifetime";
 import type OpenAI from "openai";
 import type { SpanContext } from "@opentelemetry/api";
-import type { MeetingData } from "../types/meeting-data";
+import type { MeetingData, MeetingNotesInput } from "../types/meeting-data";
 import {
   buildOpenAISafetyIdentifier,
   createOpenAIClient,
@@ -23,6 +23,7 @@ type ChatInput = Omit<
 >;
 
 type ChatOptions = {
+  frozenModel?: import("../types/recordingContent").SavedRecordingSettings["models"]["notes"];
   signal?: AbortSignal;
   model?: string;
   traceName?: string;
@@ -118,21 +119,44 @@ const runChatLoop = async (input: ChatLoopInput): Promise<ChatLoopResult> => {
   }
 };
 
+export type ChatMeetingInput = Pick<
+  MeetingData,
+  "meetingId" | "ownershipSignal" | "finalization"
+> &
+  Pick<MeetingNotesInput, "runtimeConfig"> & {
+    creator: { id: string };
+    guild: { id: string };
+    voiceChannel: { id: string };
+    signal?: AbortSignal;
+    frozenModels?: MeetingNotesInput["frozenModels"];
+  };
+function resolveMeetingChatModel(
+  meeting: ChatMeetingInput,
+  options: ChatOptions,
+) {
+  const model =
+    options.frozenModel?.model ??
+    meeting.frozenModels?.notes.model ??
+    options.model ??
+    getModelChoice("notes", getMeetingModelOverrides(meeting)).model;
+  const modelParamRole = options.modelParamRole ?? "notes";
+  const modelParams =
+    options.frozenModel?.params ??
+    meeting.frozenModels?.notes.params ??
+    resolveChatParamsForRole({
+      role: modelParamRole,
+      model,
+      config: meeting.runtimeConfig?.modelParams?.[modelParamRole],
+    });
+  return { model, modelParams };
+}
 export async function chat(
-  meeting: MeetingData,
+  meeting: ChatMeetingInput,
   body: ChatInput,
   options: ChatOptions = {},
 ): Promise<string> {
   const traceName = options.traceName ?? "notes";
-  const model =
-    options.model ??
-    getModelChoice("notes", getMeetingModelOverrides(meeting)).model;
-  const modelParamRole = options.modelParamRole ?? "notes";
-  const modelParams = resolveChatParamsForRole({
-    role: modelParamRole,
-    model,
-    config: meeting.runtimeConfig?.modelParams?.[modelParamRole],
-  });
+  const { model, modelParams } = resolveMeetingChatModel(meeting, options);
   const openAIClient = createOpenAIClient({
     traceName,
     generationName: options.generationName ?? traceName,
@@ -149,7 +173,7 @@ export async function chat(
   });
   const { output, count, truncated } = await runChatLoop({
     signal: AbortSignal.any([
-      getMeetingProcessingSignal(meeting),
+      meeting.signal ?? getMeetingProcessingSignal(meeting),
       ...(options.signal ? [options.signal] : []),
     ]),
     openAIClient,
