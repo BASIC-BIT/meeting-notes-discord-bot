@@ -24,6 +24,24 @@ Keep real recordings, references, and results in the private ops workspace. Use 
 
 See [the October 13 findings and run instructions](analysis/2026-10-13-transcription-quality-evals.md) for the corpus format, optional speech detector, observed results, and release limits.
 
+## Bundled speech detection and packaging proof
+
+The Discord pipeline includes `transcription.speechDetection.mode`, with `off`, `shadow`, and `enforce` options. The default is `off`. It is a global superadmin setting in Experimental, captured at meeting start. Switching off changes new meetings and does not cancel detector work in an active meeting.
+
+Enforce mode gates whole snippets, retaining original audio and offsets. Uncertain or unavailable assessments preserve transcription. Forced transcription bypasses the detector. Exact audio and policy coverage can be reused, but uncertainty or a failed coverage proof can require additional final-pass SDK submissions. This behavior alone proves neither quality improvement nor request savings.
+
+The bundled model and matching runtime assets need no meeting-time download. After `npm run build`, verify the production service and worker with synthetic controls:
+
+```powershell
+node scripts/speech-detection/runtime-smoke.mjs --compiled
+npm test -- --runInBand --coverage=false test/scripts/speechDetectionPackaging.test.ts
+docker run --rm --network none --cpus 0.5 --memory 1g meeting-notes-bot-ci node scripts/speech-detection/runtime-smoke.mjs --compiled
+```
+
+The smoke validates model/runtime versions and hashes, requires worker readiness, classifies silence as nonspeech and normal speech as speech, and waits for shutdown. Packaging failures exit nonzero even though production detector failures preserve transcription. The test compiles current service/worker sources into a temporary backend layout with no source tree, tsconfig, or evaluation cache. The Docker check verifies offline inference under the repository's resource budget. These checks prove executable packaging, not hosted deployment or production quality.
+
+Compare matched, human-reviewed recordings with the mode off and enforce before claiming improvement. Report speech rejection separately from empty transcript output, nonspeech retained-text rate, WER, SDK submissions and submitted audio seconds per decoded audio minute, latency, uncertainty/unavailability, queue saturation, restarts, memory, and event-loop delay. Include raw counts, denominators, sample sizes, model/policy versions, and quiet/brief speech groups. SDK invocation counts are not verified transport retries or billable usage. Preserve the private-recording and activation approval boundaries above.
+
 ## Local file runs
 
 ```bash

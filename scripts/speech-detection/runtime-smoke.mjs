@@ -4,7 +4,7 @@ import { performance } from "node:perf_hooks";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 const manifestPath = new URL(
@@ -18,11 +18,28 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 async function main() {
   const { values } = parseArgs({
     options: {
+      compiled: { type: "boolean", default: false },
       "runtime-dir": { type: "string" },
       model: { type: "string" },
     },
   });
-  if (!values["runtime-dir"] || !values.model) {
+  const root = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../..",
+  );
+  const servicePath = path.join(
+    root,
+    "dist/services/speechDetectionService.js",
+  );
+  const requireCompiled = createRequire(servicePath);
+  if (values.compiled) {
+    await readFile(path.join(root, "dist/services/speechDetectionWorker.js"));
+    values.model = path.join(
+      root,
+      "dist/assets/speech-detection/silero-v6.2.1.onnx",
+    );
+  }
+  if (!values.compiled && (!values["runtime-dir"] || !values.model)) {
     throw new Error(
       "Usage: runtime-smoke.mjs --runtime-dir <node_modules-directory> --model <onnx-path>",
     );
@@ -30,14 +47,23 @@ async function main() {
   // Validate model bytes before importing the engine or creating a session.
   const model = await readFile(path.resolve(values.model));
   if (sha256(model) !== modelSha256) throw new Error("Model SHA-256 mismatch");
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const manifest = JSON.parse(
+    await readFile(
+      values.compiled
+        ? path.join(root, "dist/assets/speech-detection/manifest.json")
+        : manifestPath,
+      "utf8",
+    ),
+  );
   if (
     manifest.model.sha256 !== modelSha256 ||
     manifest.model.bytes !== model.length
   ) {
     throw new Error("Model manifest mismatch");
   }
-  const runtimeRoot = path.resolve(values["runtime-dir"], "onnxruntime-web");
+  const runtimeRoot = values.compiled
+    ? path.dirname(path.dirname(requireCompiled.resolve("onnxruntime-web")))
+    : path.resolve(values["runtime-dir"], "onnxruntime-web");
   const runtimePackage = JSON.parse(
     await readFile(path.join(runtimeRoot, "package.json"), "utf8"),
   );
@@ -53,6 +79,52 @@ async function main() {
     if (sha256(bytes) !== asset.sha256 || bytes.length !== asset.bytes) {
       throw new Error(`Runtime asset SHA-256 mismatch: ${asset.file}`);
     }
+  }
+  if (values.compiled) {
+    const { getSpeechDetector, shutdownSpeechDetector } =
+      requireCompiled(servicePath);
+    const started = performance.now();
+    let silence;
+    let normalSpeech;
+    let coldStartMs;
+    try {
+      const detector = getSpeechDetector();
+      if (!(await detector.warm()))
+        throw new Error("Compiled production worker not ready");
+      coldStartMs = performance.now() - started;
+      silence = await detector.assess(
+        await readFile(
+          path.join(root, "test/fixtures/speech-detection/tune-silence.wav"),
+        ),
+        "slow",
+      );
+      normalSpeech = await detector.assess(
+        await readFile(
+          path.join(root, "test/fixtures/speech-detection/yes-normal.wav"),
+        ),
+        "slow",
+      );
+      if (silence.kind !== "non_speech" || normalSpeech.kind !== "speech") {
+        throw new Error(
+          `Compiled worker control mismatch: silence=${silence.kind}, speech=${normalSpeech.kind}`,
+        );
+      }
+    } finally {
+      await shutdownSpeechDetector();
+    }
+    process.stdout.write(
+      JSON.stringify({
+        engine: runtimePackage.name,
+        engineVersion: runtimePackage.version,
+        modelSha256,
+        coldStartMs,
+        startupAndInferenceMs: performance.now() - started,
+        silence,
+        normalSpeech,
+        shutdownComplete: true,
+      }) + "\n",
+    );
+    return;
   }
   const require = createRequire(path.join(runtimeRoot, "package.json"));
   const ort = require(path.join(runtimeRoot, "dist/ort.node.min.js"));
