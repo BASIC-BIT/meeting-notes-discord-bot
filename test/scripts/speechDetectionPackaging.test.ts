@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import ts from "typescript";
+import { compileSpeechFixture } from "../helpers/compiledSpeechDetectionFixture";
 import { z } from "zod";
 
 const root = path.resolve(__dirname, "../..");
@@ -25,42 +25,10 @@ function removeFixture(fixture: string): void {
 }
 beforeAll(() => {
   compiled = mkdtempSync(path.join(tmpdir(), "chronote-packaging-build-"));
-  const config = ts.readConfigFile(
-    path.join(root, "tsconfig.json"),
-    ts.sys.readFile,
-  );
-  if (config.error)
-    throw Error(
-      ts.flattenDiagnosticMessageText(config.error.messageText, "\n"),
-    );
-  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
-  const program = ts.createProgram({
-    rootNames: ["speechDetectionService", "speechDetectionWorker"]
-      .map((name) => path.join(root, `src/services/${name}.ts`))
-      .concat(parsed.fileNames.filter((file) => file.endsWith(".d.ts"))),
-    options: {
-      ...parsed.options,
-      rootDir: path.join(root, "src"),
-      outDir: path.join(compiled, "dist"),
-      noEmitOnError: true,
-      incremental: false,
-    },
-  });
-  const diagnostics = [...parsed.errors, ...ts.getPreEmitDiagnostics(program)];
-  if (diagnostics.length)
-    throw Error(
-      ts.formatDiagnostics(diagnostics, {
-        getCanonicalFileName: (file) => file,
-        getCurrentDirectory: () => root,
-        getNewLine: () => "\n",
-      }),
-    );
-  if (program.emit().emitSkipped) throw Error("Fixture compilation failed");
-  cpSync(
-    path.join(root, "assets/speech-detection"),
-    path.join(compiled, "dist/assets/speech-detection"),
-    { recursive: true },
-  );
+  compileSpeechFixture(root, compiled, [
+    "services/speechDetectionService.ts",
+    "services/speechDetectionWorker.ts",
+  ]);
   cpSync(
     path.join(root, "scripts/speech-detection"),
     path.join(compiled, "scripts/speech-detection"),

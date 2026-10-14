@@ -12,7 +12,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import ts from "typescript";
+import {
+  compileSpeechFixture,
+  removeOwnedFixture,
+} from "../helpers/compiledSpeechDetectionFixture";
 import { z } from "zod";
 
 const root = path.resolve(__dirname, "../..");
@@ -29,67 +32,15 @@ const outputSchema = z.object({
   repeated: z.literal(true),
   unchanged: z.literal(true),
 });
-function removeFixture(fixture: string): void {
-  const resolved = path.resolve(fixture);
-  if (
-    path.dirname(resolved) !== path.resolve(tmpdir()) ||
-    !path.basename(resolved).startsWith("chronote-vad-")
-  )
-    throw Error("Unexpected cleanup path");
-  rmSync(resolved, { recursive: true, force: true });
-}
+const removeFixture = (fixture: string) =>
+  removeOwnedFixture(fixture, "chronote-vad-");
 function prepareCompiledFixture(): string {
   const fixture = mkdtempSync(path.join(tmpdir(), "chronote-vad-compiled-"));
   try {
-    const config = ts.readConfigFile(
-      path.join(root, "tsconfig.json"),
-      ts.sys.readFile,
-    );
-    if (config.error)
-      throw Error(
-        ts.flattenDiagnosticMessageText(config.error.messageText, "\n"),
-      );
-    const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
-    // Both runtime entry points are roots; TypeScript follows every transitive import.
-    // Ambient declarations participate in typechecking but do not emit UI modules.
-    const program = ts.createProgram({
-      rootNames: [
-        path.join(root, "src/services/speechDetectionService.ts"),
-        path.join(root, "src/services/speechDetectionWorker.ts"),
-        ...parsed.fileNames.filter((file) => file.endsWith(".d.ts")),
-      ],
-      options: {
-        ...parsed.options,
-        types: [...new Set(["node", ...(parsed.options.types ?? [])])],
-        rootDir: path.join(root, "src"),
-        outDir: path.join(fixture, "dist"),
-        noEmit: false,
-        noEmitOnError: true,
-        incremental: false,
-      },
-    });
-    const diagnostics = [
-      ...parsed.errors,
-      ...ts.getPreEmitDiagnostics(program),
-    ];
-    const host = {
-      getCanonicalFileName: (file: string) => file,
-      getCurrentDirectory: () => root,
-      getNewLine: () => "\n",
-    };
-    if (diagnostics.length)
-      throw Error(ts.formatDiagnostics(diagnostics, host));
-    const emitted = program.emit();
-    if (emitted.emitSkipped || emitted.diagnostics.length) {
-      throw Error(
-        `Speech fixture compilation failed\n${ts.formatDiagnostics(emitted.diagnostics, host)}`,
-      );
-    }
-    cpSync(
-      path.join(root, "assets/speech-detection"),
-      path.join(fixture, "dist/assets/speech-detection"),
-      { recursive: true },
-    );
+    compileSpeechFixture(root, fixture, [
+      "services/speechDetectionService.ts",
+      "services/speechDetectionWorker.ts",
+    ]);
     return fixture;
   } catch (error) {
     removeFixture(fixture);

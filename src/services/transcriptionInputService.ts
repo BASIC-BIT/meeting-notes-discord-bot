@@ -23,6 +23,7 @@ export type TranscriptionInputRequest = {
 };
 export type PreparedTranscriptionInput = {
   wavFile: string;
+  conversionMs: number;
   coverage: SpeechCoverage;
   admission: SpeechAdmission;
 };
@@ -77,7 +78,9 @@ export async function withPreparedTranscriptionInput<T>(
       request.policyFingerprint,
     );
     writeFileSync(request.pcmFile, request.pcm);
+    const conversionStarted = performance.now();
     await convertTranscriptionPcmToWav(request.pcmFile, request.wavFile);
+    const conversionMs = performance.now() - conversionStarted;
     let admission: SpeechAdmission;
     if (request.force) {
       admission = { kind: "not_enforced", reason: "forced" };
@@ -93,7 +96,12 @@ export async function withPreparedTranscriptionInput<T>(
         coverage,
       };
     }
-    return await consume({ wavFile: request.wavFile, coverage, admission });
+    return await consume({
+      wavFile: request.wavFile,
+      conversionMs,
+      coverage,
+      admission,
+    });
   } finally {
     cleanup(request.pcmFile);
     cleanup(request.wavFile);

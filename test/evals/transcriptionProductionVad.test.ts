@@ -1,6 +1,9 @@
+/** @jest-environment node */
 import { writeFile, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { prepareTranscriptionFixture } from "../helpers/compiledTranscriptionFixture";
+import { removeOwnedFixture } from "../helpers/compiledSpeechDetectionFixture";
 import { runTranscriptionQualityEval } from "../../src/evals/transcriptionQualityEval";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -20,6 +23,14 @@ const options = {
   policy: {},
   force: false,
 };
+const root = path.resolve(__dirname, "../..");
+let compiled: string;
+beforeAll(async () => {
+  compiled = await prepareTranscriptionFixture(root);
+}, 60000);
+afterAll(() => {
+  if (compiled) removeOwnedFixture(compiled, "vad-build-contract-");
+});
 let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), "vad-eval-"));
@@ -241,7 +252,7 @@ test("manifest CLI executes compiled runner and reports its actual loader", asyn
     [
       "-r",
       require.resolve("ts-node/register"),
-      "src/evals/transcriptionEval.ts",
+      path.join(compiled, "src/evals/transcriptionEval.ts"),
       "--manifest",
       manifest,
       "--mode",
@@ -255,10 +266,17 @@ test("manifest CLI executes compiled runner and reports its actual loader", asyn
     ],
     {
       encoding: "utf8",
-      env: { ...process.env, TS_NODE_TRANSPILE_ONLY: "true" },
+      cwd: compiled,
+      env: {
+        ...process.env,
+        NODE_PATH: path.join(root, "node_modules"),
+        TS_NODE_TRANSPILE_ONLY: "true",
+        TS_NODE_PROJECT: path.join(root, "tsconfig.json"),
+      },
       timeout: 60000,
     },
   );
+  expect(cli.stderr).toBe("");
   expect(cli.status).toBe(0);
   const report = JSON.parse(await readFile(output, "utf8"));
   expect(report.implementation.loader).toBe("compiled");
@@ -268,3 +286,129 @@ test("manifest CLI executes compiled runner and reports its actual loader", asyn
   expect(report.summary.requests).toBe(0);
   expect(report.results[0].score.scored).toBe(false);
 });
+
+// Run the public compiled corpus runner. Control external work durations without
+// replacing the case, preparation helper, gates, cleanup or report assembly.
+test.each([
+  ["off", "pipeline", 120, null],
+  ["enforce", "pipeline", 135, 15],
+  ["shadow", "pipeline", 120, 200],
+  ["off", "provider", 120, null],
+] as const)(
+  "%s %s measures per-attempt conversion, provider and cleanup at the same boundary",
+  async (speechMode, mode, durationMs, assessmentMs) => {
+    const inputs = [
+      { id: "admitted", bytes: pcm },
+      ...(mode === "pipeline"
+        ? [
+            { id: "short", bytes: pcm.subarray(0, 19200) },
+            { id: "silence", bytes: Buffer.alloc(pcm.length) },
+          ]
+        : []),
+    ];
+    for (const input of inputs)
+      await writeFile(path.join(dir, `${input.id}.pcm`), input.bytes);
+    const manifest = path.join(dir, "timing-manifest.json"),
+      output = path.join(dir, "timing-output.json"),
+      counts = path.join(dir, "counts.json");
+    await writeFile(
+      manifest,
+      JSON.stringify({
+        version: 1,
+        name: "timing controls",
+        prompt: "",
+        cases: inputs.map((input) => ({
+          id: input.id,
+          file: `${input.id}.pcm`,
+          sha256: createHash("sha256").update(input.bytes).digest("hex"),
+          split: "holdout",
+          label: { kind: "unreviewed" },
+        })),
+      }),
+    );
+    const control = path.join(dir, "timing-control.cjs");
+    await writeFile(
+      control,
+      `
+    const fs = require('node:fs'), path = require('node:path');
+    let now = 0, conversions = 0, submissions = 0, assessments = 0, cleanups = 0, completeShadow;
+    Object.defineProperty(globalThis, 'performance', { value: { now: () => now } });
+    Date.now = () => now;
+    const root = process.argv[2], speechMode = process.argv[3], mode = process.argv[4];
+    const compiled = (file) => require(path.join(root, 'dist', file));
+    compiled('services/transcriptionAudioService.js').convertTranscriptionPcmToWav = async (pcm, wav) => {
+      conversions++; now += 40; fs.copyFileSync(pcm, wav);
+    };
+    const unlink = fs.unlinkSync;
+    fs.unlinkSync = (file) => { unlink(file); now += 5; cleanups++; };
+    compiled('services/openaiClient.js').createOpenAIClient = () => ({ withOptions: () => ({ audio: { transcriptions: { create: async ({file}) => {
+      for await (const chunk of file) { void chunk; } submissions++; now += 70; if (completeShadow) setImmediate(completeShadow); return { text: 'hello', logprobs: [] };
+    } } } }) });
+    const service = compiled('services/speechDetectionService.js');
+    service.getSpeechDetector = () => ({ warm: async () => true, shutdown: async () => {}, assess: async () => {
+      assessments++;
+      if (speechMode === 'shadow') await new Promise((resolve) => { completeShadow = resolve; });
+      now += speechMode === 'shadow' ? 120 : 15;
+      return { kind: 'unavailable', reason: 'not_ready', policyFingerprint: compiled('services/speechDetectionPolicy.js').DEFAULT_SPEECH_POLICY.policyFingerprint };
+    } });
+    service.shutdownSpeechDetector = async () => {};
+    compiled('evals/transcriptionQualityEval.js').runTranscriptionQualityEval([
+      '--manifest', process.argv[5], '--mode', mode, '--runs', '3', '--max-requests', '3',
+      '--model', 'controlled-model', '--artifact-dir', process.argv[6], '--output', process.argv[7],
+      '--speech-detector', speechMode === 'off' ? 'off' : 'production', ...(speechMode === 'off' ? [] : ['--speech-mode', speechMode])
+    ]).then(() => fs.writeFileSync(process.argv[8], JSON.stringify({ conversions, submissions, assessments, cleanups }))).catch((error) => { console.error(error); process.exitCode = 1; });
+  `,
+    );
+    const child = spawnSync(
+      process.execPath,
+      [control, compiled, speechMode, mode, manifest, dir, output, counts],
+      {
+        cwd: compiled,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_PATH: path.join(root, "node_modules"),
+          MOCK_MODE: "true",
+          LANGFUSE_TRACING_ENABLED: "false",
+        },
+        timeout: 60000,
+      },
+    );
+    expect(child.stderr).toBe("");
+    expect(child.status).toBe(0);
+    const report = JSON.parse(await readFile(output, "utf8"));
+    expect(JSON.parse(await readFile(counts, "utf8"))).toEqual({
+      conversions: 3,
+      submissions: 3,
+      assessments: speechMode === "off" ? 0 : 3,
+      cleanups: 6,
+    });
+    const admitted = report.results.filter(
+      (row: { caseId: string }) => row.caseId === "admitted",
+    );
+    expect(admitted).toHaveLength(3);
+    for (const row of admitted) {
+      expect(row.durationMs).toBe(durationMs);
+      expect(row.stages).toMatchObject({
+        conversionMs: 40,
+        providerMs: 70,
+        admissionMs: speechMode === "enforce" ? 55 : 40,
+        assessmentMs,
+      });
+      expect(row.requests).toBe(1);
+    }
+    const skipped = report.results.filter(
+      (row: { status: string }) => row.status === "skipped",
+    );
+    expect(skipped).toHaveLength(mode === "pipeline" ? 6 : 0);
+    for (const row of skipped)
+      expect(row.stages).toMatchObject({
+        conversionMs: 0,
+        admissionMs: 0,
+        assessmentMs: null,
+        providerMs: 0,
+      });
+    expect(report.implementation.loader).toBe("compiled");
+    expect(report.summary.requests).toBe(3);
+  },
+);

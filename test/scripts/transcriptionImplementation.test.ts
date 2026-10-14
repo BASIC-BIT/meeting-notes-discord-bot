@@ -5,21 +5,31 @@ import {
   readFileSync,
   writeFileSync,
   unlinkSync,
-  rmSync,
+  existsSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
+import { prepareTranscriptionFixture } from "../helpers/compiledTranscriptionFixture";
+import { removeOwnedFixture } from "../helpers/compiledSpeechDetectionFixture";
 import { transcriptionBuildSchema } from "../../src/evals/transcriptionImplementation";
 const root = path.resolve(__dirname, "../..");
+let compiled: string;
+beforeAll(async () => {
+  compiled = await prepareTranscriptionFixture(root);
+}, 60000);
+afterAll(() => {
+  if (compiled) removeOwnedFixture(compiled, "vad-build-contract-");
+});
 function run(
   changed: "none" | "source" | "compiled" | "missing-build",
   entry = false,
+  sourceRoot = compiled,
 ) {
   const clone = mkdtempSync(path.join(os.tmpdir(), "vad-build-contract-"));
   try {
-    cpSync(path.join(root, "dist"), path.join(clone, "dist"), {
+    cpSync(path.join(sourceRoot, "dist"), path.join(clone, "dist"), {
       recursive: true,
     });
     const buildPath = path.join(
@@ -36,7 +46,7 @@ function run(
       "yarn.lock",
     ]) {
       mkdirSync(path.dirname(path.join(clone, file)), { recursive: true });
-      cpSync(path.join(root, file), path.join(clone, file));
+      cpSync(path.join(sourceRoot, file), path.join(clone, file));
     }
     if (changed === "source")
       writeFileSync(
@@ -113,7 +123,7 @@ function run(
           : undefined,
     };
   } finally {
-    rmSync(clone, { recursive: true, force: true });
+    removeOwnedFixture(clone, "vad-build-contract-");
   }
 }
 test("fresh normal-build association identifies the compiled runner without provider work", () => {
@@ -139,3 +149,39 @@ test("manifest entry reports a fixed build-required category and actionable hint
   expect(result.stderr).toContain("transcription_eval_build_required");
   expect(result.stderr).toContain("Run npm run build.");
 });
+
+test("current-source provenance suite works in an owned checkout with no dist", async () => {
+  const checkout = mkdtempSync(
+    path.join(os.tmpdir(), "vad-build-contract-source-"),
+  );
+  try {
+    for (const file of [
+      "src",
+      "assets",
+      "package.json",
+      "tsconfig.json",
+      "yarn.lock",
+    ]) {
+      cpSync(path.join(root, file), path.join(checkout, file), {
+        recursive: true,
+        filter: (source) =>
+          source !== path.join(root, "src/frontend") &&
+          source !== path.join(root, "src/setupTests.ts"),
+      });
+    }
+    expect(existsSync(path.join(checkout, "dist"))).toBe(false);
+    const fixture = await prepareTranscriptionFixture(checkout, root);
+    let result: ReturnType<typeof run>;
+    try {
+      result = run("none", false, fixture);
+    } finally {
+      removeOwnedFixture(fixture, "vad-build-contract-");
+    }
+    expect(result.status).toBe(0);
+    expect(result.report.implementation.loader).toBe("compiled");
+    expect(result.report.summary.requests).toBe(0);
+    expect(existsSync(path.join(checkout, "dist"))).toBe(false);
+  } finally {
+    removeOwnedFixture(checkout, "vad-build-contract-");
+  }
+}, 60000);

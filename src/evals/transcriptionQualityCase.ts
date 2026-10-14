@@ -90,7 +90,7 @@ export async function runTranscriptionQualityCase(input: {
   >;
   transcribe: (prompt?: string) => Promise<RawTranscriptionCandidate>;
 }): Promise<TranscriptionQualityRun> {
-  const started = Date.now();
+  const started = performance.now();
   const audioSeconds =
     input.pcm.length / (RECORD_SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE);
   const gateConfig = {
@@ -115,7 +115,7 @@ export async function runTranscriptionQualityCase(input: {
     noiseMetrics: gate.metrics,
     vad: input.vad,
   };
-  const finish = () => ({ ...result, durationMs: Date.now() - started });
+  const finish = () => ({ ...result, durationMs: performance.now() - started });
   if (input.mode !== "provider" && !input.force) {
     const reason =
       audioSeconds <=
@@ -222,7 +222,11 @@ export async function runTranscriptionQualityCase(input: {
     }
     return finish();
   };
-  if (!input.production || input.mode === "provider") return execute();
+  if (
+    !input.production ||
+    (input.mode === "preflight" && input.production.mode === "off")
+  )
+    return execute();
   const admissionStarted = performance.now();
   let observed!: () => void;
   const observation = new Promise<void>((resolve) => {
@@ -240,16 +244,10 @@ export async function runTranscriptionQualityCase(input: {
         observed();
       },
     },
-    async ({ admission }) => {
+    async ({ admission, conversionMs }) => {
       result.admission = admission;
       result.stages.admissionMs = performance.now() - admissionStarted;
-      result.stages.conversionMs = Math.max(
-        0,
-        result.stages.admissionMs -
-          (input.production?.mode === "enforce"
-            ? (result.stages.assessmentMs ?? 0)
-            : 0),
-      );
+      result.stages.conversionMs = conversionMs;
       if (
         admission.kind === "assessed" &&
         admission.assessment.kind === "non_speech"
@@ -263,7 +261,14 @@ export async function runTranscriptionQualityCase(input: {
       return execute();
     },
   );
-  // Shadow observes completion only after provider work; it never delays submission.
+  // The shared helper has finished cleanup. Shadow-only artifact collection is
+  // outside the post-capture processing interval and never delays submission.
+  const durationMs = performance.now() - started;
   if (input.production.mode === "shadow" && !input.force) await observation;
-  return { ...output, assessment: result.assessment, stages: result.stages };
+  return {
+    ...output,
+    durationMs,
+    assessment: result.assessment,
+    stages: result.stages,
+  };
 }

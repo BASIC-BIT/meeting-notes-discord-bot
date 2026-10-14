@@ -13,7 +13,6 @@ import path from "node:path";
 import ffmpeg from "fluent-ffmpeg";
 import type OpenAI from "openai";
 import { BYTES_PER_SAMPLE, CHANNELS, RECORD_SAMPLE_RATE } from "../constants";
-import { convertTranscriptionPcmToWav } from "../services/transcriptionAudioService";
 import {
   referenceForCase,
   selectCorpusBatch,
@@ -244,9 +243,9 @@ export async function runTranscriptionQualityEval(args: string[]) {
     const prepared: {
       item: TranscriptionCorpusCase;
       pcm: Buffer;
+      pcmFile: string;
       wavFile: string;
       decodeMs: number;
-      conversionMs: number;
     }[] = [];
     for (const item of cases) {
       const { pcm, pcmFile, wavFile, decodeMs } = await prepareCorpusAudio(
@@ -255,13 +254,7 @@ export async function runTranscriptionQualityEval(args: string[]) {
         tempDir,
         maxSeconds,
       );
-      let conversionMs = 0;
-      if (mode !== "preflight" && !detector) {
-        const start = performance.now();
-        await convertTranscriptionPcmToWav(pcmFile, wavFile);
-        conversionMs = performance.now() - start;
-      }
-      prepared.push({ item, pcm, wavFile, decodeMs, conversionMs });
+      prepared.push({ item, pcm, pcmFile, wavFile, decodeMs });
     }
     if (mode !== "preflight") {
       const { createOpenAIClient } = await import("../services/openaiClient");
@@ -273,13 +266,7 @@ export async function runTranscriptionQualityEval(args: string[]) {
         timeout: 60000,
       });
     }
-    outer: for (const {
-      item,
-      pcm,
-      wavFile,
-      decodeMs,
-      conversionMs,
-    } of prepared) {
+    outer: for (const { item, pcm, pcmFile, wavFile, decodeMs } of prepared) {
       for (let run = 1; run <= runs; run++) {
         const result = await runTranscriptionQualityCase({
           pcm,
@@ -288,15 +275,13 @@ export async function runTranscriptionQualityEval(args: string[]) {
           mode,
           policy,
           force,
-          production: detector
-            ? {
-                detector,
-                mode: speechMode,
-                pcmFile: path.join(tempDir, `${item.id}.pcm`),
-                wavFile,
-                policyFingerprint: DEFAULT_SPEECH_POLICY.policyFingerprint,
-              }
-            : undefined,
+          production: {
+            detector,
+            mode: detector ? speechMode : "off",
+            pcmFile,
+            wavFile,
+            policyFingerprint: DEFAULT_SPEECH_POLICY.policyFingerprint,
+          },
           reference: referenceForCase(item),
           vad: vadReport ? validateVadCase(item, vadReport.cases) : undefined,
           transcribe: async (requestPrompt) => {
@@ -326,7 +311,6 @@ export async function runTranscriptionQualityEval(args: string[]) {
           stages: {
             ...result.stages,
             decodeMs,
-            conversionMs: detector ? result.stages.conversionMs : conversionMs,
           },
           caseId: item.id,
           run,

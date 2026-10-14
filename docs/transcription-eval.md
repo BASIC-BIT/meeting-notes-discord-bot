@@ -185,7 +185,18 @@ provider admission. Shadow assessment completion is collected after provider
 submission. External `--vad-report` and production detection conflict. Reports
 include source/run/manifest/model/policy hashes, selection, decode/conversion,
 admission/assessment, provider and end-to-end time. Comparison concerns snippet
-ASR work only. Final-pass exact-coverage reuse, changed PCM and whole-meeting
+ASR work only. End-to-end duration uses the same post-capture boundary in off,
+enforce and shadow: duration/amplitude admission, per-attempt preparation,
+provider selection and temporary-file cleanup. Corpus decode and detector warm-up
+are recorded separately and excluded. Gate skips perform zero conversions.
+Conversion time measures the actual conversion call on each attempt; admission
+time includes preparation and any awaited enforce assessment, so these stages
+overlap and must not be summed. Shadow assessment time may overlap provider work.
+Waiting only to collect its completed artifact is excluded from end-to-end time.
+Older reports that cached off-mode conversion used a different boundary and must
+be regenerated before a matched latency comparison.
+
+Final-pass exact-coverage reuse, changed PCM and whole-meeting
 reprocessing can add SDK calls that this snippet replay does not model; use live
 SDK counters to measure those calls, and never extrapolate guaranteed savings.
 
