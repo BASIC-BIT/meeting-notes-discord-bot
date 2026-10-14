@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { cp, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,3 +28,12 @@ for (const file of [
   "PROVENANCE.md",
 ])
   await cp(path.join(source, file), path.join(target, file));
+
+// tsc completed before this script. Associate the exact source/compiled eval bytes.
+const requireCompiled = createRequire(
+  path.join(root, "dist/evals/transcriptionImplementation.js"),
+);
+const { writeTranscriptionBuildAssociation } = requireCompiled(
+  "./transcriptionImplementation.js",
+);
+await writeTranscriptionBuildAssociation(root);

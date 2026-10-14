@@ -7,7 +7,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   artifactWorkspace,
-  compiledProvenance,
+  hash,
+  implementationProvenance,
   percentile,
   requireCompiled,
   root,
@@ -103,6 +104,7 @@ async function main() {
     )
   )
     throw Error("invalid_options");
+  const implementation = await implementationProvenance();
   const workspace = await artifactWorkspace(
     values.output,
     values["artifact-dir"],
@@ -161,7 +163,14 @@ async function main() {
     schedule.sort((a, b) => a.at - b.at);
     for (const job of schedule) {
       await sleep(Math.max(0, start + job.at - performance.now()));
-      jobs.push(assess(detector, two[index++ % 2], job.phase));
+      const sequence = index++;
+      jobs.push(
+        assess(detector, two[sequence % 2], job.phase).then((row) => ({
+          ...row,
+          sequence,
+          control: sequence % 2 === 0 ? "speech" : "nonspeech",
+        })),
+      );
     }
     const rows = await Promise.all(jobs);
     clearInterval(memory);
@@ -226,7 +235,13 @@ async function main() {
     const burstDetector = getSpeechDetector();
     await burstDetector.warm();
     const burstRows = await Promise.all(
-      Array.from({ length: 10 }, () => assess(burstDetector, two[1], "slow")),
+      Array.from({ length: 10 }, (_, sequence) =>
+        assess(burstDetector, two[1], "slow").then((row) => ({
+          ...row,
+          sequence,
+          control: "nonspeech",
+        })),
+      ),
     );
     const burst = {
       ...stats(burstRows),
@@ -240,7 +255,8 @@ async function main() {
       complete: true,
       nodeVersion: process.version,
       limits: await limits(),
-      compiledSha256: await compiledProvenance(),
+      compiledSha256: implementation.compiledSha256,
+      implementation,
       speechPolicy: DEFAULT_SPEECH_POLICY,
       durationSeconds,
       fastPerSecond,
@@ -254,6 +270,18 @@ async function main() {
       overheadBytes: steady.peakRss - baseline.peakRss,
       addedEventLoopP95Ms: steady.eventLoopP95Ms - baseline.eventLoopP95Ms,
       providerRequests: 0,
+      fixtureSha256: Object.fromEntries(
+        await Promise.all(
+          ["yes-normal.wav", "tune-tone.wav"].map(async (file) => [
+            file,
+            hash(
+              await readFile(
+                path.join(root, "test/fixtures/speech-detection", file),
+              ),
+            ),
+          ]),
+        ),
+      ),
       steadyWorkerRestarts,
       isolatedWorkerStarts,
       memoryMethod:

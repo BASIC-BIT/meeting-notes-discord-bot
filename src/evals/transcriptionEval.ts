@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -1017,8 +1018,17 @@ async function runLangfuseEval(options: EvalOptions) {
 
 async function runEval() {
   if (process.argv.includes("--manifest")) {
-    const { runTranscriptionQualityEval } =
-      await import("./transcriptionQualityEval");
+    // Both source and compiled entrypoints route release corpus work to dist.
+    // The compiled runner verifies the normal build association before provider calls.
+    const runnerFile = path.resolve(
+      __dirname,
+      "../../dist/evals/transcriptionQualityEval.js",
+    );
+    const loadCompiledRunner = createRequire(runnerFile);
+    const {
+      runTranscriptionQualityEval,
+    }: typeof import("./transcriptionQualityEval") =
+      loadCompiledRunner(runnerFile);
     await runTranscriptionQualityEval(process.argv.slice(2));
     return;
   }
@@ -1040,8 +1050,18 @@ runEval().catch((error) => {
     const status = z
       .object({ status: z.number().int().min(100).max(599) })
       .safeParse(error);
+    const buildRequired = z
+      .object({
+        message: z.literal(
+          "transcription_eval_build_required: run npm run build; build association is missing or stale",
+        ),
+      })
+      .safeParse(error).success;
     console.error({
-      category: "corpus_eval_failed",
+      category: buildRequired
+        ? "transcription_eval_build_required"
+        : "corpus_eval_failed",
+      ...(buildRequired ? { hint: "Run npm run build." } : {}),
       status: status.success ? status.data.status : null,
     });
   } else console.error("Transcription eval failed:", error);

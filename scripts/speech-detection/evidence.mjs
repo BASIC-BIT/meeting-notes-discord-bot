@@ -21,26 +21,14 @@ export const percentile = (values, p = 0.95) =>
   values.length
     ? [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1]
     : null;
-export async function compiledProvenance() {
-  const files = [
-    "services/speechDetectionService.js",
-    "services/speechDetectionWorker.js",
-    "services/speechDetectionCore.js",
-    "services/speechDetectionPolicy.js",
-    "services/transcriptionInputService.js",
-    "services/transcriptionAudioService.js",
-    "evals/transcriptionQualityCase.js",
-    "evals/transcriptionQualityEval.js",
-    "evals/transcriptionCorpus.js",
-  ];
-  return Object.fromEntries(
-    await Promise.all(
-      files.map(async (file) => [
-        file,
-        hash(await readFile(path.join(root, "dist", file))),
-      ]),
-    ),
+export async function implementationProvenance() {
+  const { collectTranscriptionImplementation } = requireCompiled(
+    "../evals/transcriptionImplementation.js",
   );
+  return collectTranscriptionImplementation(root);
+}
+export async function compiledProvenance() {
+  return (await implementationProvenance()).compiledSha256;
 }
 export async function artifactWorkspace(output, artifactDir) {
   const base = path.resolve(artifactDir ?? ".cache/transcription-eval");

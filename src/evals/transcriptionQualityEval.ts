@@ -1,3 +1,7 @@
+import {
+  collectTranscriptionImplementation,
+  stableJson,
+} from "./transcriptionImplementation";
 import { DEFAULT_SPEECH_POLICY } from "../services/speechDetectionPolicy";
 import {
   getSpeechDetector,
@@ -223,41 +227,14 @@ export async function runTranscriptionQualityEval(args: string[]) {
   let client: OpenAI | undefined;
   let model = flag(args, "--model");
   const startedAt = new Date().toISOString();
-  const sourceFiles = [
-    "src/constants.ts",
-    "src/utils/audioNoiseGate.ts",
-    "src/utils/transcriptionGuards.ts",
-    "src/utils/transcriptionVote.ts",
-    "src/utils/transcriptionText.ts",
-    "src/utils/text.ts",
-    "src/services/transcriptionAudioService.ts",
-    "src/services/transcriptionInputService.ts",
-    "src/services/speechDetectionService.ts",
-    "src/services/speechDetectionPolicy.ts",
-    "src/services/speechDetectionWorker.ts",
-    "src/services/speechDetectionCore.ts",
-    "src/services/transcriptionSelectionService.ts",
-    "src/evals/transcriptionCorpus.ts",
-    "src/evals/transcriptionMetrics.ts",
-    "src/evals/transcriptionQualityCase.ts",
-    "src/evals/transcriptionQualityEval.ts",
-    "src/evals/transcriptionVadReport.ts",
-  ];
   const detector =
     speechDetector === "production" ? getSpeechDetector() : undefined;
   let warmMs: number | null = null;
   let warmed: boolean | null = null;
   try {
-    const sourceSha256 = Object.fromEntries(
-      await Promise.all(
-        sourceFiles.map(async (file) => [
-          file,
-          createHash("sha256")
-            .update(await fs.readFile(file))
-            .digest("hex"),
-        ]),
-      ),
-    );
+    // Refuse missing/stale build before decoding or any paid provider setup.
+    const implementation = await collectTranscriptionImplementation();
+    const sourceSha256 = implementation.sourceSha256;
     if (detector) {
       const start = performance.now();
       warmed = await detector.warm();
@@ -405,9 +382,11 @@ export async function runTranscriptionQualityEval(args: string[]) {
           startedAt,
           nodeVersion: process.version,
           sourceSha256,
+          compiledSha256: implementation.compiledSha256,
+          implementation,
           runSha256: createHash("sha256")
             .update(
-              JSON.stringify({
+              stableJson({
                 sourceSha256,
                 cases,
                 runs,
@@ -416,7 +395,8 @@ export async function runTranscriptionQualityEval(args: string[]) {
                 mode,
                 passMode,
                 speechDetector,
-                speechMode,
+                speechMode: detector ? speechMode : "off",
+                implementation,
               }),
             )
             .digest("hex"),

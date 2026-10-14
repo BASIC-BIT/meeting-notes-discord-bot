@@ -1,3 +1,8 @@
+import {
+  inspectBenchmark,
+  assessmentSchema,
+  pipelineRowSemantics,
+} from "./acceptance-evidence.mjs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
@@ -76,26 +81,34 @@ async function main() {
   let benchmark;
   try {
     benchmark = await readJson(values.benchmark);
+    const { DEFAULT_SPEECH_POLICY } = requireCompiled(
+      "./speechDetectionPolicy.js",
+    );
+    const inspection = inspectBenchmark(
+      benchmark,
+      DEFAULT_SPEECH_POLICY.policyFingerprint,
+    );
+    report.benchmarkEvidence = inspection;
     check(
-      benchmark.version === 1 &&
-        benchmark.complete === true &&
-        benchmark.limits?.cpu === 0.5 &&
-        benchmark.limits?.memoryBytes === 1073741824 &&
-        benchmark.durationSeconds >= 120 &&
-        benchmark.fastPerSecond === 4 &&
-        benchmark.slowPerSecond === 1,
-      "constrained representative benchmark",
+      benchmark.durationSeconds >= 120,
+      "constrained representative duration >=120 seconds",
       true,
     );
-    check(benchmark.steady?.availability >= 0.95, "steady availability >=95%");
     check(
-      finite(benchmark.overheadBytes) &&
-        benchmark.overheadBytes < 128 * 1024 * 1024,
+      inspection.valid,
+      "complete consistent raw benchmark measurements",
+      true,
+    );
+    const measured = inspection.recomputed;
+    check(measured?.steady.availability >= 0.95, "steady availability >=95%");
+    check(
+      finite(measured?.overheadBytes) &&
+        measured.overheadBytes < 128 * 1024 * 1024,
       "detector overhead <128 MiB",
     );
     check(
-      Number.isFinite(benchmark.addedEventLoopP95Ms) &&
-        benchmark.addedEventLoopP95Ms < 20,
+      Number.isFinite(measured?.addedEventLoopP95Ms) &&
+        measured.addedEventLoopP95Ms < 20,
       "added event loop p95 <20ms",
     );
     for (const [phase, deadline] of [
@@ -103,55 +116,61 @@ async function main() {
       ["slow", 1500],
     ])
       check(
-        finite(benchmark.steady?.phases?.[phase]?.p95Ms) &&
-          benchmark.steady.phases[phase].p95Ms <= deadline,
+        finite(measured?.steady.phases[phase].p95Ms) &&
+          measured.steady.phases[phase].p95Ms <= deadline,
         `${phase} warm p95 deadline`,
       );
     check(
-      [0.3, 2, 10, 60, 180].every((s) =>
-        benchmark.buckets?.some(
-          (b) =>
-            b.seconds === s &&
-            ["fast", "slow"].every(
-              (p) =>
-                finite(b.phases?.[p]?.p95Ms) &&
-                b.phases[p].p95Ms <= (p === "fast" ? 500 : 1500) &&
-                b.phases[p].availability > 0,
-            ),
+      measured?.buckets.every((bucket) =>
+        ["fast", "slow"].every(
+          (phase) =>
+            finite(bucket.phases[phase].p95Ms) &&
+            bucket.phases[phase].p95Ms <= (phase === "fast" ? 500 : 1500) &&
+            bucket.phases[phase].availability > 0,
         ),
       ),
       "all duration buckets meet warm phase deadlines",
     );
     check(
-      benchmark.burst?.attempts === 10 &&
-        benchmark.burst.queueFull >= 5 &&
-        benchmark.burst.failOpen === true,
+      measured?.burst.attempts === 10 &&
+        measured.burst.queueFull === 5 &&
+        measured.burst.failOpen,
       "ten-job burst overflow fails open",
-    );
-    check(
-      [0.3, 2, 10, 60, 180].every((seconds) =>
-        benchmark.buckets?.some(
-          (b) =>
-            b.seconds === seconds &&
-            ["fast", "slow"].every((phase) =>
-              Number.isFinite(b.phases?.[phase]?.availability),
-            ),
-        ),
-      ),
-      "all duration buckets measured",
-      true,
     );
     report.benchmark = benchmark;
   } catch {
     report.missing.push("missing or invalid benchmark evidence");
   }
   try {
-    const { transcriptionCorpusSchema, referenceForCase } = requireCompiled(
-      "./../evals/transcriptionCorpus.js",
-    );
+    const {
+      transcriptionCorpusSchema,
+      transcriptionPolicySchema,
+      referenceForCase,
+    } = requireCompiled("./../evals/transcriptionCorpus.js");
     const { DEFAULT_SPEECH_POLICY } = requireCompiled(
       "./speechDetectionPolicy.js",
     );
+    const {
+      transcriptionImplementationSchema,
+      stableJson,
+      implementationHash,
+    } = requireCompiled("../evals/transcriptionImplementation.js");
+    const validImplementation = (artifact) => {
+      const parsed = transcriptionImplementationSchema.safeParse(
+        artifact.implementation,
+      );
+      if (!parsed.success) return false;
+      const i = parsed.data;
+      return (
+        i.loader === "compiled" &&
+        stableJson(i.sourceSha256) === stableJson(i.build.sourceSha256) &&
+        stableJson(i.compiledSha256) === stableJson(i.build.compiledSha256) &&
+        i.buildAssociationSha256 === implementationHash(stableJson(i.build)) &&
+        stableJson(artifact.compiledSha256) === stableJson(i.compiledSha256) &&
+        (!artifact.sourceSha256 ||
+          stableJson(artifact.sourceSha256) === stableJson(i.sourceSha256))
+      );
+    };
     const { scoreTranscription } = requireCompiled(
       "./../evals/transcriptionMetrics.js",
     );
@@ -283,10 +302,18 @@ async function main() {
             p.manifestSha256 === manifestSha256 &&
             p.runs === 3 &&
             p.mode === "pipeline" &&
-            !p.force &&
-            p.model &&
+            p.force === false &&
+            typeof p.model === "string" &&
+            p.model.length > 0 &&
+            typeof p.prompt === "string" &&
+            transcriptionPolicySchema.safeParse(p.policy).success &&
+            validImplementation(p) &&
             p.sourceSha256 &&
-            Object.keys(p.sourceSha256).length > 0 &&
+            typeof p.runSha256 === "string" &&
+            /^[a-f0-9]{64}$/.test(p.runSha256) &&
+            Number.isInteger(p.maxRequests) &&
+            p.maxRequests >= 1 &&
+            p.maxRequests <= 200 &&
             p.selection?.split === "holdout" &&
             !p.vadReport,
         ),
@@ -332,10 +359,43 @@ async function main() {
             ids.length > 0 &&
             same(ids, selection.selectedCaseIds) &&
             p.results.length === ids.length * p.runs &&
-            p.results.every((r) => ids.includes(r.caseId))
+            p.results.every((r) => ids.includes(r.caseId)) &&
+            p.runSha256 ===
+              hash(
+                stableJson({
+                  sourceSha256: p.sourceSha256,
+                  cases: ids.map((id) => known.get(id)),
+                  runs: p.runs,
+                  policy: p.policy,
+                  prompt: p.prompt,
+                  mode: p.mode,
+                  passMode: p.passMode,
+                  speechDetector: p.speechDetector,
+                  speechMode: p.speechMode,
+                  implementation: p.implementation,
+                }),
+              )
           );
         }),
         `${name} deterministic batch provenance`,
+        true,
+      );
+      check(
+        reports.every((p) => {
+          const requests = p.results.reduce((n, r) => n + r.requests, 0),
+            submitted = p.results.reduce(
+              (n, r) => n + r.submittedAudioSeconds,
+              0,
+            ),
+            decoded = p.results.reduce((n, r) => n + r.audioSeconds, 0);
+          return (
+            requests <= p.maxRequests &&
+            p.summary?.requests === requests &&
+            p.summary?.submittedAudioSeconds === submitted &&
+            p.summary?.observedAudioSeconds === decoded
+          );
+        }),
+        `${name} provider budget and summary accounting`,
         true,
       );
       const keys = new Set(rows.map(key));
@@ -367,13 +427,32 @@ async function main() {
             Number.isInteger(r.requests) &&
             finite(r.submittedAudioSeconds) &&
             finite(r.audioSeconds) &&
-            r.audioSeconds > 0
+            r.audioSeconds > 0 &&
+            pipelineRowSemantics(
+              r,
+              r.report,
+              DEFAULT_SPEECH_POLICY.policyFingerprint,
+            )
           );
         }),
         `${name} validated rows`,
         true,
       );
     }
+    check(
+      validImplementation(detector) &&
+        validImplementation(benchmark) &&
+        [...baseline, ...candidate].every(
+          (p) =>
+            validImplementation(p) &&
+            stableJson(p.implementation.build) ===
+              stableJson(detector.implementation.build),
+        ) &&
+        stableJson(detector.implementation.build) ===
+          stableJson(benchmark?.implementation?.build),
+      "complete matched source/build/compiled implementation identity",
+      true,
+    );
     const beforeMap = new Map(before.map((r) => [key(r), r]));
     check(
       after.every((r) => {
@@ -381,7 +460,9 @@ async function main() {
         return (
           b &&
           same(signature(b.report), signature(r.report)) &&
-          b.audioSeconds === r.audioSeconds
+          b.audioSeconds === r.audioSeconds &&
+          (!["minimum_duration", "noise_gate"].includes(b.reason) ||
+            (r.status === "skipped" && r.reason === b.reason))
         );
       }),
       "identical pipeline source/config/prompt/model/repetitions",
@@ -406,6 +487,9 @@ async function main() {
       speechPolicy: detector.speechPolicy,
       detectorCompiledSha256: detector.compiledSha256 ?? null,
       benchmarkCompiledSha256: benchmark?.compiledSha256 ?? null,
+      buildAssociationSha256:
+        detector.implementation?.buildAssociationSha256 ?? null,
+      hashEvidenceAuthenticatesExecution: false,
       pipeline: {
         baseline: pipelineProvenance(baseline),
         candidate: pipelineProvenance(candidate),
@@ -445,8 +529,12 @@ async function main() {
           c &&
           r.sha256 === c.sha256 &&
           same(c.label, r.label) &&
+          same(c.tags, r.tags) &&
+          r.familyId === c.familyId &&
+          r.speakerDeviceProfileId === c.speakerDeviceProfileId &&
           r.assessment?.policyFingerprint === fingerprint &&
-          ["speech", "non_speech", "uncertain"].includes(r.assessment.kind)
+          ["speech", "non_speech", "uncertain"].includes(r.assessment.kind) &&
+          assessmentSchema(fingerprint).safeParse(r.assessment).success
         );
       }),
       "validated available detector assessments",
@@ -458,6 +546,36 @@ async function main() {
         r.assessment.kind === "non_speech",
     );
     check(rejectedSpeech.length === 0, "zero verified speech rejection");
+    const pipelineSpeech = after.filter(
+      (r) => known.get(r.caseId)?.label.kind === "speech",
+    );
+    const rejection = (rows) =>
+      ratio(
+        rows.filter(
+          (r) =>
+            r.assessment?.kind === "non_speech" ||
+            r.admission?.assessment?.kind === "non_speech",
+        ).length,
+        rows.length,
+      );
+    const pipelineRejection = rejection(pipelineSpeech);
+    check(
+      pipelineRejection.numerator === 0,
+      "zero verified pipeline speech rejection",
+    );
+    const pipelineRejectionByPhase = Object.fromEntries(
+      ["fast", "slow"].map((phase) => [
+        phase,
+        rejection(pipelineSpeech.filter((r) => r.phase === phase)),
+      ]),
+    );
+    const pipelineRejectionByGroup = Object.fromEntries(
+      ["quiet", "short"].map((tag) => [
+        tag,
+        rejection(pipelineSpeech.filter((r) => r.tags.includes(tag))),
+      ]),
+    );
+
     const admittedIds = new Set(
       before
         .filter(
@@ -526,7 +644,12 @@ async function main() {
       };
     }
     if (
-      !report.missing.some((s) => s.includes("rows") || s.includes("coverage"))
+      !report.missing.some(
+        (s) =>
+          s.includes("rows") ||
+          s.includes("coverage") ||
+          s.includes("accounting"),
+      )
     ) {
       const b = measures(before),
         a = measures(after);
@@ -592,6 +715,9 @@ async function main() {
         );
     }
     report.detector = {
+      pipelineSpeechRejection: pipelineRejection,
+      pipelineSpeechRejectionByPhase: pipelineRejectionByPhase,
+      pipelineSpeechRejectionByGroup: pipelineRejectionByGroup,
       speechRejection: ratio(
         rejectedSpeech.length,
         detectorRows.filter((r) => known.get(r.caseId)?.label.kind === "speech")

@@ -143,10 +143,16 @@ to enforce speech rejection. Preserve the failed measurements when revising the
 design. Do not increase CPU, memory, deadlines, or substitute model/runtime assets
 without reviewing that design change.
 
-Build first (`npx tsc` and the normal packaged asset build). The detector-only and
+Build first with `npm run build`. The normal build emits
+`dist/assets/speech-detection/eval-build.json` after TypeScript compilation. The detector-only and
 benchmark scripts load `dist`, including the actual production worker. Pipeline
 runs call `withPreparedTranscriptionInput` and the shared transcription selection
-service. They do not maintain another VAD classifier or admission policy.
+service. The manifest entrypoint delegates to the compiled corpus runner for both
+baseline and candidate. Its runtime-free provenance helper verifies the source
+and compiled files against the normal build association before decoding or paid
+provider setup. A missing or stale association requires another normal build.
+Direct source callers report loader `source` and cannot satisfy release acceptance.
+They do not maintain another VAD classifier or admission policy.
 
 ```powershell
 node scripts/speech-detection/evaluate-detector.mjs --manifest <private-manifest> --split holdout --runs 3 --artifact-dir D:/bench/chronote-ops/.cache/transcription-eval --output D:/bench/chronote-ops/.cache/transcription-eval/detector.json
@@ -240,7 +246,14 @@ cooldown/restart behavior. RSS is sampled every 20 ms for the whole process,
 including worker threads; overhead is steady peak minus detector-off peak in the
 same process, before duration-bucket measurements. Resource quotas come from
 cgroup v1/v2 files; absent quota evidence remains unknown. Successful assessment
-p95 and all-outcome p95 are separate so fast failures cannot look healthy.
+p95 and all-outcome p95 are separate so fast failures cannot look healthy. Raw rows retain the
+scheduled phase, control, sequence and bucket repetition. The checker validates
+expected counts and recomputes availability, p95, unavailable/overflow counts and
+resource differences from those rows and measured RSS/event-loop inputs. Edited
+or missing summaries/rows cannot satisfy machine acceptance. A short producer
+smoke may check schema compatibility, but a run below 120 seconds is incomplete
+for release acceptance. Historical reports missing the strengthened metadata stay
+historical; never retrofit invented execution identity into them.
 
 Acceptance exits nonzero for missing/mismatched evidence or a failed gate:
 verified speech rejection, less than 50% rejection of baseline-admitted nonspeech,
@@ -249,13 +262,20 @@ warm p95 beyond the phase deadlines, steady availability below 95%, overhead at
 least 128 MiB, added event-loop p95 at least 20 ms, or missing fail-open burst
 behavior. Quality gates apply to each phase and their aggregate. Quiet/short
 speech and families are reported separately. Savings never override failed
-quality. The report distinguishes `pass`, `fail` and `incomplete`, raw numerators
+quality. Provider-work checks require complete budgets and exact per-row submitted
+seconds, bounded phase request counts, zero-work empty skips, and consistent
+production assessments/admissions. Verified-speech nonspeech assessments in any
+candidate phase/repetition fail even if the baseline transcript was already empty.
+The report distinguishes `pass`, `fail` and `incomplete`, raw numerators
 and denominators, unique clips and repeated attempts, absolute and relative
 changes, and attestations from machine checks. Undefined relative changes and
-unverified dollar amounts are
-ull`. Pipeline provenance retains source hashes,
+unverified dollar amounts are `null`. Pipeline provenance retains source hashes,
 ASR model, mode, phase, selection and repetitions, plus prompt/config hashes without
-prompt content. Detector and benchmark compiled hashes identify their runtime.
+prompt content. Detector, benchmark and pipeline reports must have complete matching source,
+compiled and build maps, including toolchain/config/lock identity and the actual
+compiled loader. The checker also verifies the selected-case run fingerprint.
+Hashes associate bytes and expose mismatches; they do not authenticate execution,
+measurements, human review or untouched-holdout claims.
 A machine pass still requires review of the
 report and its interpretation before promotion.
 

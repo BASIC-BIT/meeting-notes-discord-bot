@@ -1,0 +1,141 @@
+import {
+  cpSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  rmSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import os from "node:os";
+import { transcriptionBuildSchema } from "../../src/evals/transcriptionImplementation";
+const root = path.resolve(__dirname, "../..");
+function run(
+  changed: "none" | "source" | "compiled" | "missing-build",
+  entry = false,
+) {
+  const clone = mkdtempSync(path.join(os.tmpdir(), "vad-build-contract-"));
+  try {
+    cpSync(path.join(root, "dist"), path.join(clone, "dist"), {
+      recursive: true,
+    });
+    const buildPath = path.join(
+      clone,
+      "dist/assets/speech-detection/eval-build.json",
+    );
+    const build = transcriptionBuildSchema.parse(
+      JSON.parse(readFileSync(buildPath, "utf8")),
+    );
+    for (const file of [
+      ...Object.keys(build.sourceSha256),
+      "package.json",
+      "tsconfig.json",
+      "yarn.lock",
+    ]) {
+      mkdirSync(path.dirname(path.join(clone, file)), { recursive: true });
+      cpSync(path.join(root, file), path.join(clone, file));
+    }
+    if (changed === "source")
+      writeFileSync(
+        path.join(clone, "src/services/speechDetectionCore.ts"),
+        "// changed source",
+      );
+    if (changed === "compiled")
+      writeFileSync(
+        path.join(clone, "dist/services/speechDetectionCore.js"),
+        "// changed compiled implementation",
+      );
+    if (changed === "missing-build") unlinkSync(buildPath);
+    const pcm = Buffer.alloc(48000 * 4);
+    for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(4000, i);
+    writeFileSync(path.join(clone, "control.pcm"), pcm);
+    const manifest = path.join(clone, "manifest.json"),
+      output = path.join(clone, "artifacts/result.json");
+    writeFileSync(
+      manifest,
+      JSON.stringify({
+        version: 1,
+        name: "build control",
+        prompt: "",
+        cases: [
+          {
+            id: "one",
+            file: "control.pcm",
+            sha256: createHash("sha256").update(pcm).digest("hex"),
+            split: "holdout",
+            label: { kind: "unreviewed" },
+          },
+        ],
+      }),
+    );
+    const child = spawnSync(
+      process.execPath,
+      [
+        ...(entry
+          ? [path.join(clone, "dist/evals/transcriptionEval.js")]
+          : [
+              "-e",
+              "require(process.argv[1]).runTranscriptionQualityEval(process.argv.slice(2)).catch((error)=>{console.error(error.message);process.exitCode=1})",
+              path.join(clone, "dist/evals/transcriptionQualityEval.js"),
+            ]),
+        "--manifest",
+        manifest,
+        "--mode",
+        "preflight",
+        "--runs",
+        "1",
+        "--artifact-dir",
+        path.join(clone, "artifacts"),
+        "--output",
+        output,
+      ],
+      {
+        cwd: clone,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_PATH: path.join(root, "node_modules"),
+          MOCK_MODE: "true",
+          LANGFUSE_TRACING_ENABLED: "false",
+        },
+        timeout: 60000,
+      },
+    );
+    return {
+      status: child.status,
+      stderr: child.stderr,
+      report:
+        child.status === 0
+          ? JSON.parse(readFileSync(output, "utf8"))
+          : undefined,
+    };
+  } finally {
+    rmSync(clone, { recursive: true, force: true });
+  }
+}
+test("fresh normal-build association identifies the compiled runner without provider work", () => {
+  const result = run("none");
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  expect(result.report.implementation.loader).toBe("compiled");
+  expect(result.report.summary.requests).toBe(0);
+});
+test.each(["source", "compiled", "missing-build"] as const)(
+  "%s identity mismatch stops real CLI before provider setup",
+  (changed) => {
+    const result = run(changed);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("transcription_eval_build_required");
+    expect(result.stderr).not.toContain("OPENAI_API_KEY");
+  },
+);
+
+test("manifest entry reports a fixed build-required category and actionable hint", () => {
+  const result = run("missing-build", true);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("transcription_eval_build_required");
+  expect(result.stderr).toContain("Run npm run build.");
+});

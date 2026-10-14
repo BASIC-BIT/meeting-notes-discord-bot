@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   artifactWorkspace,
-  compiledProvenance,
+  implementationProvenance,
   hash,
   requireCompiled,
   writeJson,
@@ -57,6 +57,7 @@ async function main() {
     .filter((c) => c.split === values.split)
     .sort((a, b) => a.id.localeCompare(b.id, "en"));
   if (!cases.length) throw Error("empty_split");
+  const implementation = await implementationProvenance();
   const workspace = await artifactWorkspace(
     values.output,
     values["artifact-dir"],
@@ -100,7 +101,8 @@ async function main() {
       version: 1,
       complete,
       manifestSha256: hash(bytes),
-      compiledSha256: await compiledProvenance(),
+      compiledSha256: implementation.compiledSha256,
+      implementation,
       nodeVersion: process.version,
       split: values.split,
       phase,

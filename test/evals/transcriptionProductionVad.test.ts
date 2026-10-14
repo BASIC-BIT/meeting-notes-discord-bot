@@ -1,4 +1,6 @@
-import { writeFile } from "node:fs/promises";
+import { writeFile, readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { runTranscriptionQualityEval } from "../../src/evals/transcriptionQualityEval";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -210,4 +212,59 @@ test("shadow submits provider work before detector completion", async () => {
     kind: "unavailable",
     reason: "timeout",
   });
+});
+
+test("manifest CLI executes compiled runner and reports its actual loader", async () => {
+  const audio = path.join(dir, "control.pcm");
+  await writeFile(audio, pcm);
+  const manifest = path.join(dir, "cli-manifest.json"),
+    output = path.join(dir, "cli-output.json");
+  await writeFile(
+    manifest,
+    JSON.stringify({
+      version: 1,
+      name: "loader control",
+      prompt: "",
+      cases: [
+        {
+          id: "one",
+          file: "control.pcm",
+          sha256: createHash("sha256").update(pcm).digest("hex"),
+          split: "holdout",
+          label: { kind: "unreviewed" },
+        },
+      ],
+    }),
+  );
+  const cli = spawnSync(
+    process.execPath,
+    [
+      "-r",
+      require.resolve("ts-node/register"),
+      "src/evals/transcriptionEval.ts",
+      "--manifest",
+      manifest,
+      "--mode",
+      "preflight",
+      "--runs",
+      "1",
+      "--artifact-dir",
+      dir,
+      "--output",
+      output,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, TS_NODE_TRANSPILE_ONLY: "true" },
+      timeout: 60000,
+    },
+  );
+  expect(cli.status).toBe(0);
+  const report = JSON.parse(await readFile(output, "utf8"));
+  expect(report.implementation.loader).toBe("compiled");
+  expect(report.implementation.buildAssociationSha256).toMatch(
+    /^[a-f0-9]{64}$/,
+  );
+  expect(report.summary.requests).toBe(0);
+  expect(report.results[0].score.scored).toBe(false);
 });
