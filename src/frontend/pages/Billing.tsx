@@ -1,3 +1,7 @@
+import {
+  isTerminalStripeHistory,
+  requiresStripeManagement,
+} from "../utils/billingManagement";
 import { useIntroOfferExposure } from "../hooks/useIntroOfferExposure";
 import RecordingPlanContext from "../components/RecordingPlanContext";
 import {
@@ -73,11 +77,6 @@ type RouterOutput = inferRouterOutputs<AppRouter>;
 type BillingData = RouterOutput["billing"]["me"];
 
 type BillingUsage = NonNullable<BillingData["usage"]>;
-
-const isCanceledStripeHistory = (data: BillingData) =>
-  data.tier === "free" && data.hasStripeBilling && data.status === "canceled";
-const requiresStripeManagement = (data: BillingData) =>
-  data.hasStripeBilling && !isCanceledStripeHistory(data);
 
 type BillingShellProps = {
   children: ReactNode;
@@ -811,12 +810,12 @@ function BillingCurrentPlan({
   normalPlan: ReturnType<typeof resolvePaidPlan>;
 }) {
   const isFreeTier = data.tier === "free";
-  const hasCanceledPaidSubscription = isCanceledStripeHistory(data);
+  const hasTerminalSubscription = isTerminalStripeHistory(data);
   const statusLabel = formatStatusLabel(data.status);
   const statusLine = formatStatusLine(statusLabel, data.nextBillingDate);
   return (
     <>
-      {(isFreeTier && !data.hasStripeBilling) || hasCanceledPaidSubscription ? (
+      {(isFreeTier && !data.hasStripeBilling) || hasTerminalSubscription ? (
         <BillingFreePanel serverName={serverName} usage={data.usage} />
       ) : (
         <BillingPaidPanel
@@ -833,12 +832,13 @@ function BillingCurrentPlan({
           normalPrice={normalPlan ? formatPlanPrice(normalPlan, "month") : null}
         />
       )}
-      {hasCanceledPaidSubscription ? (
+      {hasTerminalSubscription ? (
         <Surface p="xl" data-testid="billing-subscription-history">
           <Stack gap="sm">
             <Title order={4}>Billing history</Title>
             <Text size="sm" c="dimmed">
-              Previous paid subscription: Canceled.
+              Previous subscription:{" "}
+              {data.status === "canceled" ? "Canceled" : "Expired"}.
             </Text>
             {data.canManageBillingPortal ? (
               <Group>

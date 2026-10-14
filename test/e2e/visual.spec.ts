@@ -626,7 +626,7 @@ test.describe("visual regression", () => {
       page,
     }) => {
       await page.setViewportSize(viewport);
-      await useFreeBilling(page, { canceledSubscription: true });
+      await useFreeBilling(page, { terminalStatus: "canceled" });
       for (const mode of visualModes) {
         await page.goto(
           withVisualMode(`/portal/server/${mockGuilds.ddm.id}/billing`, mode),
@@ -636,7 +636,7 @@ test.describe("visual regression", () => {
         await expect(currentPlan).not.toContainText("Canceled");
         await expect(
           page.getByTestId("billing-subscription-history"),
-        ).toContainText("Previous paid subscription: Canceled");
+        ).toContainText("Previous subscription: Canceled");
         await expectVisualScreenshot(
           page,
           `billing-canceled-subscription-${viewport.name}`,
@@ -653,7 +653,7 @@ test.describe("visual regression", () => {
       page,
     }) => {
       await page.setViewportSize(viewport);
-      await useIntroBilling(page, { legacy: true, canceledSubscription: true });
+      await useIntroBilling(page, { legacy: true, terminalStatus: "canceled" });
       for (const mode of visualModes) {
         await page.goto(
           withVisualMode(`/portal/server/${mockGuilds.ddm.id}/billing`, mode),
@@ -663,7 +663,7 @@ test.describe("visual regression", () => {
         await expect(currentPlan).not.toContainText("Canceled");
         await expect(
           page.getByTestId("billing-subscription-history"),
-        ).toContainText("Previous paid subscription: Canceled");
+        ).toContainText("Previous subscription: Canceled");
         await expectVisualScreenshot(
           page,
           `billing-canceled-subscription-intro-${viewport.name}`,
@@ -671,6 +671,72 @@ test.describe("visual regression", () => {
         );
       }
     });
+  }
+
+  for (const viewport of marketingViewports.filter(
+    (item) => item.name === "desktop" || item.name === "mobile",
+  )) {
+    test(`billing expired subscription ${viewport.name} @visual`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await useFreeBilling(page, { terminalStatus: "incomplete_expired" });
+      for (const mode of visualModes) {
+        await page.goto(
+          withVisualMode(`/portal/server/${mockGuilds.ddm.id}/billing`, mode),
+        );
+        await expect(page.getByTestId("billing-current-plan")).toContainText(
+          "Free",
+        );
+        await expect(
+          page.getByTestId("billing-subscription-history"),
+        ).toContainText("Previous subscription: Expired");
+        await expect(
+          page.getByRole("button", { name: "Upgrade to Basic" }),
+        ).toBeEnabled();
+        await expect(
+          page.getByRole("button", { name: "Upgrade to Pro" }),
+        ).toBeEnabled();
+        await expectVisualScreenshot(
+          page,
+          `billing-expired-subscription-${viewport.name}`,
+          mode,
+        );
+      }
+    });
+    for (const terminalStatus of ["canceled", "incomplete_expired"] as const) {
+      test(`direct ${terminalStatus} history ${viewport.name} @visual`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(viewport);
+        await useFreeBilling(page, { terminalStatus });
+        for (const mode of visualModes) {
+          await page.goto(
+            withVisualMode(
+              `/upgrade/select-server?serverId=${mockGuilds.ddm.id}`,
+              mode,
+            ),
+          );
+          await expect(
+            page.getByRole("button", { name: "Continue with Basic" }),
+          ).toBeEnabled();
+          await expect(
+            page.getByRole("button", { name: "Continue with Pro" }),
+          ).toBeEnabled();
+          await expect(page.getByTestId("upgrade-plan-free")).toContainText(
+            "Always free",
+          );
+          await expect(
+            page.getByRole("button", { name: "View billing history" }),
+          ).toBeVisible();
+          await expectVisualScreenshot(
+            page,
+            `direct-${terminalStatus}-history-${viewport.name}`,
+            mode,
+          );
+        }
+      });
+    }
   }
 
   test("upgrade flow pages @visual", async ({ page }) => {

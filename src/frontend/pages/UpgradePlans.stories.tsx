@@ -1,6 +1,8 @@
+import type { TerminalSubscriptionStatus } from "../utils/billingManagement";
 import { useEffect, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react";
 import { useMantineColorScheme } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import {
@@ -36,30 +38,29 @@ import {
 function previewSubscriptionStatus(
   tier: "free" | "basic" | "pro",
   source: "free" | "stripe" | "manual_comp" | "forced",
-  canceled: boolean,
+  terminalStatus?: TerminalSubscriptionStatus,
 ) {
-  if (canceled) return "canceled";
+  if (terminalStatus) return terminalStatus;
   if (source === "manual_comp") return "comped";
   return tier === "free" ? "free" : "active";
 }
-
 function previewBilling(
   tier: "free" | "basic" | "pro",
   billingSource?: "free" | "stripe" | "manual_comp" | "forced",
-  canceledSubscription = false,
+  terminalStatus?: TerminalSubscriptionStatus,
 ) {
   const source = billingSource ?? (tier === "free" ? "free" : "stripe");
   return {
     tier,
-    status: previewSubscriptionStatus(tier, source, canceledSubscription),
+    status: previewSubscriptionStatus(tier, source, terminalStatus),
     billingSource: source,
     stripeTier: source === "stripe" && tier !== "free" ? tier : null,
     grantTier: source === "manual_comp" ? tier : null,
     activeGrant: null,
     nextBillingDate: null,
     stripeCustomerId: null,
-    hasStripeBilling: canceledSubscription || source === "stripe",
-    canManageBillingPortal: canceledSubscription || source === "stripe",
+    hasStripeBilling: Boolean(terminalStatus || source === "stripe"),
+    canManageBillingPortal: Boolean(terminalStatus || source === "stripe"),
     upgradeUrl: null,
     portalUrl: null,
     billingEnabled: true,
@@ -85,14 +86,14 @@ type UpgradePreviewProps = {
   staleQuote?: boolean;
   pendingCheckout?: boolean;
   missingPrices?: boolean;
-  canceledSubscription?: boolean;
+  terminalStatus?: TerminalSubscriptionStatus;
 };
 
 function previewResponses({
   tier = "free",
   signedIn = true,
   billingSource,
-  canceledSubscription = false,
+  terminalStatus,
   subscriptionDetails,
   introStatus,
   staleQuote,
@@ -142,7 +143,7 @@ function previewResponses({
       ],
     },
     "billing.me": {
-      ...previewBilling(tier, billingSource, canceledSubscription),
+      ...previewBilling(tier, billingSource, terminalStatus),
       subscriptionDetails,
       introOffer:
         introStatus === "available"
@@ -168,7 +169,7 @@ function previewResponses({
     };
   if (staleQuote)
     data["billing.me"] = {
-      ...previewBilling(tier, billingSource, canceledSubscription),
+      ...previewBilling(tier, billingSource, terminalStatus),
       introOffer: { ...monthlyIntroOffer, priceId: "stale-price" },
       annualIntroOffer: {
         ...annualIntroOffer,
@@ -192,9 +193,10 @@ export function UpgradePreview({
   staleQuote = false,
   pendingCheckout = false,
   missingPrices = false,
-  canceledSubscription = false,
+  terminalStatus,
 }: UpgradePreviewProps) {
   const { setColorScheme } = useMantineColorScheme();
+  useEffect(() => notifications.clean(), []);
   useEffect(() => setColorScheme(colorScheme), [colorScheme, setColorScheme]);
   const [queryClient] = useState(
     () =>
@@ -215,7 +217,7 @@ export function UpgradePreview({
               tier,
               signedIn,
               billingSource,
-              canceledSubscription,
+              terminalStatus,
               subscriptionDetails,
               introStatus,
               staleQuote,
@@ -454,8 +456,8 @@ export const BillingFree: Story = {
   args: { path: "/portal/server/example/billing" },
 };
 export const BillingCanceledSubscription: Story = {
-  tags: ["integration-canceled-history"],
-  args: { path: "/portal/server/example/billing", canceledSubscription: true },
+  tags: ["integration-terminal-history"],
+  args: { path: "/portal/server/example/billing", terminalStatus: "canceled" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const currentPlan = await canvas.findByTestId("billing-current-plan");
@@ -469,9 +471,7 @@ export const BillingCanceledSubscription: Story = {
       canvas.getByRole("button", { name: "Upgrade to Pro" }),
     ).toBeEnabled();
     const history = canvas.getByTestId("billing-subscription-history");
-    await expect(history).toHaveTextContent(
-      "Previous paid subscription: Canceled",
-    );
+    await expect(history).toHaveTextContent("Previous subscription: Canceled");
     await expect(
       within(history).getByRole("button", { name: "View billing history" }),
     ).toBeEnabled();
@@ -480,7 +480,7 @@ export const BillingCanceledSubscription: Story = {
 
 export const BillingCanceledWithIntro: Story = {
   ...BillingCanceledSubscription,
-  tags: ["integration-canceled-history"],
+  tags: ["integration-terminal-history"],
   args: { ...BillingCanceledSubscription.args, introStatus: "available" },
   play: async (context) => {
     await BillingCanceledSubscription.play?.(context);
@@ -500,7 +500,7 @@ export const BillingCanceledWithIntro: Story = {
 };
 export const BillingCanceledOfferUnavailable: Story = {
   ...BillingCanceledSubscription,
-  tags: ["integration-canceled-history"],
+  tags: ["integration-terminal-history"],
   args: { ...BillingCanceledSubscription.args, introStatus: "unavailable" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -512,7 +512,7 @@ export const BillingCanceledOfferUnavailable: Story = {
     ).not.toHaveTextContent("Canceled");
     await expect(
       canvas.getByTestId("billing-subscription-history"),
-    ).toHaveTextContent("Previous paid subscription: Canceled");
+    ).toHaveTextContent("Previous subscription: Canceled");
     await expect(
       canvas.getByRole("button", { name: "Upgrade to Basic" }),
     ).toBeDisabled();
@@ -835,4 +835,48 @@ export const IntroAnnualSubscriberLight: Story = {
 export const IntroMonthlySubscriberLight: Story = {
   ...IntroMonthlySubscriber,
   args: { ...IntroMonthlySubscriber.args, colorScheme: "light" },
+};
+
+export const BillingExpiredSubscription: Story = {
+  tags: ["integration-terminal-history"],
+  args: {
+    path: "/portal/server/example/billing",
+    terminalStatus: "incomplete_expired",
+    introStatus: "inactive",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByTestId("billing-current-plan"),
+    ).toHaveTextContent("Free");
+    const history = canvas.getByTestId("billing-subscription-history");
+    await expect(history).toHaveTextContent("Previous subscription: Expired");
+    await expect(history).not.toHaveTextContent("paid");
+    await expect(
+      canvas.getByRole("button", { name: "Upgrade to Basic" }),
+    ).toBeEnabled();
+    await expect(
+      canvas.getByRole("button", { name: "Upgrade to Pro" }),
+    ).toBeEnabled();
+  },
+};
+export const DirectCanceledHistory: Story = {
+  tags: ["integration-terminal-history"],
+  args: { terminalStatus: "canceled", introStatus: "inactive" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Continue with Basic" }),
+      ).toBeEnabled(),
+    );
+    await expect(
+      canvas.getByRole("button", { name: "Continue with Pro" }),
+    ).toBeEnabled();
+  },
+};
+export const DirectExpiredHistory: Story = {
+  ...DirectCanceledHistory,
+  tags: ["integration-terminal-history"],
+  args: { ...DirectCanceledHistory.args, terminalStatus: "incomplete_expired" },
 };

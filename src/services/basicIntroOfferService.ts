@@ -739,6 +739,81 @@ function hasUnsupportedAnnualPaymentEvidence(
   );
 }
 
+function stripeReferenceId(
+  reference: string | { id: string } | null | undefined,
+): string | undefined {
+  return typeof reference === "string" ? reference : reference?.id;
+}
+function matchesCurrentInvoiceAssociation(
+  invoice: Stripe.Invoice,
+  subscription: Stripe.Subscription,
+  referenceId: string,
+): boolean {
+  return (
+    invoice.id === referenceId &&
+    stripeReferenceId(invoice.customer) ===
+      stripeReferenceId(subscription.customer) &&
+    stripeReferenceId(invoice.parent?.subscription_details?.subscription) ===
+      subscription.id &&
+    invoice.livemode === subscription.livemode &&
+    invoice.livemode === (config.subscription.stripeMode === "live")
+  );
+}
+function matchesCurrentInvoiceLine(
+  invoice: Stripe.Invoice,
+  subscription: Stripe.Subscription,
+): boolean {
+  const line = invoice.lines.data[0];
+  const item = subscription.items.data[0];
+  if (!line || invoice.lines.has_more || invoice.lines.data.length !== 1)
+    return false;
+  const parent = line.parent?.subscription_item_details;
+  return (
+    line.invoice === invoice.id &&
+    line.currency === item.price.currency &&
+    line.livemode === subscription.livemode &&
+    stripeReferenceId(line.pricing?.price_details?.price) === item.price.id &&
+    parent?.subscription === subscription.id &&
+    parent.subscription_item === item.id &&
+    parent.proration === false
+  );
+}
+function hasUndiscountedCurrentTerm(
+  invoice: Stripe.Invoice,
+  subscription: Stripe.Subscription,
+): boolean {
+  const line = invoice.lines.data[0];
+  const item = subscription.items.data[0];
+  return (
+    item.quantity === 1 &&
+    line.quantity === 1 &&
+    item.price.unit_amount !== null &&
+    line.subtotal === item.price.unit_amount &&
+    invoice.subtotal === line.subtotal &&
+    !line.discount_amounts?.length &&
+    line.period.start === item.current_period_start &&
+    line.period.end === item.current_period_end
+  );
+}
+function isVerifiedRegularRenewal(
+  invoice: Stripe.Invoice,
+  subscription: Stripe.Subscription,
+  referenceId: string,
+): boolean {
+  if (
+    invoice.billing_reason !== "subscription_cycle" ||
+    invoice.status !== "paid" ||
+    invoice.discounts.length ||
+    invoice.total_discount_amounts?.length
+  )
+    return false;
+  return (
+    matchesCurrentInvoiceAssociation(invoice, subscription, referenceId) &&
+    matchesCurrentInvoiceLine(invoice, subscription) &&
+    hasUndiscountedCurrentTerm(invoice, subscription)
+  );
+}
+
 // A consumed once discount remains on its invoice, not on subscription.discounts.
 export async function getAnnualIntroFirstYearPayment(
   stripe: StripeClient,
@@ -754,6 +829,14 @@ export async function getAnnualIntroFirstYearPayment(
       typeof reference === "string" ? reference : reference.id,
       { expand: ["discounts.source.coupon"] },
     );
+    if (
+      isVerifiedRegularRenewal(
+        invoice,
+        subscription,
+        typeof reference === "string" ? reference : reference.id,
+      )
+    )
+      return null;
     const discount = invoice.discounts[0];
     if (!discount || typeof discount === "string")
       return { status: "unavailable" };
@@ -916,6 +999,7 @@ export async function getProviderSubscriptionDetails(
   if (
     subscription.items.data.length !== 1 ||
     item.quantity !== 1 ||
+    item.price.recurring?.interval_count !== 1 ||
     !["month", "year"].includes(item.price.recurring?.interval ?? "")
   )
     return { status: "unavailable" };

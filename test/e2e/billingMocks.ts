@@ -13,22 +13,26 @@ type IntroBillingOptions = {
   status?: BasicIntroOffer["status"];
   details?: ProviderSubscriptionDetails;
   legacy?: boolean;
-  canceledSubscription?: boolean;
+  terminalStatus?: "canceled" | "incomplete_expired";
 };
 
 function introBillingData(options: IntroBillingOptions) {
   return {
     tier: options.details ? "basic" : "free",
     billingSource: options.details || options.legacy ? "stripe" : "free",
-    status: options.canceledSubscription
-      ? "canceled"
+    status: options.terminalStatus
+      ? options.terminalStatus
       : options.details
         ? "active"
         : "free",
     billingEnabled: true,
-    hasStripeBilling: Boolean(options.details || options.legacy),
-    canManageBillingPortal: Boolean(options.details || options.legacy),
-    usage: options.canceledSubscription
+    hasStripeBilling: Boolean(
+      options.details || options.legacy || options.terminalStatus,
+    ),
+    canManageBillingPortal: Boolean(
+      options.details || options.legacy || options.terminalStatus,
+    ),
+    usage: options.terminalStatus
       ? {
           usedMinutes: 45,
           limitMinutes: 240,
@@ -83,7 +87,9 @@ export async function useIntroBilling(
 // Keep provider state out of UI purchase tests; the real mock runtime forces Pro.
 export async function useFreeBilling(
   page: Page,
-  { canceledSubscription = false } = {},
+  {
+    terminalStatus,
+  }: { terminalStatus?: "canceled" | "incomplete_expired" } = {},
 ) {
   await page.route("**/trpc/**", async (route) => {
     const paths = decodeURIComponent(
@@ -100,11 +106,11 @@ export async function useFreeBilling(
               data: {
                 tier: "free",
                 billingSource: "free",
-                status: canceledSubscription ? "canceled" : "free",
+                status: terminalStatus ?? "free",
                 billingEnabled: true,
-                hasStripeBilling: canceledSubscription,
-                canManageBillingPortal: canceledSubscription,
-                usage: canceledSubscription
+                hasStripeBilling: Boolean(terminalStatus),
+                canManageBillingPortal: Boolean(terminalStatus),
+                usage: terminalStatus
                   ? {
                       usedMinutes: 45,
                       limitMinutes: 240,

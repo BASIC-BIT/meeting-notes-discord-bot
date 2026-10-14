@@ -1924,6 +1924,74 @@ describe("consumed annual once invoice evidence", () => {
       expect.objectContaining({ starting_after: "sub_annual" }),
     );
   });
+
+  function regularRenewalFixture() {
+    const f = annualInvoiceFixture();
+    f.invoice.id = "in_renewal";
+    f.subscription.latest_invoice = "in_renewal";
+    f.invoice.billing_reason = "subscription_cycle";
+    f.invoice.discounts = [];
+    f.invoice.total_discount_amounts = [];
+    f.invoice.total_excluding_tax = 10000;
+    f.invoice.total = 10000;
+    f.invoice.amount_paid = 10000;
+    const line = f.invoice.lines.data[0];
+    line.invoice = "in_renewal";
+    line.discount_amounts = [];
+    line.period = {
+      start: line.period.end,
+      end: line.period.end + 366 * 86400,
+    };
+    f.subscription.items.data[0].current_period_start = line.period.start;
+    f.subscription.items.data[0].current_period_end = line.period.end;
+    return f;
+  }
+  test("a verified regular annual renewal is not unavailable first-year evidence", async () => {
+    const f = regularRenewalFixture();
+    await expect(
+      getProviderSubscriptionDetails(f.client, f.native),
+    ).resolves.toMatchObject({
+      status: "available",
+      unitAmount: 10000,
+      discountedUnitAmount: null,
+      firstYearPayment: null,
+    });
+    expect(f.stripe.coupons.retrieve).not.toHaveBeenCalled();
+  });
+  test.each(["customer", "subscription", "price", "period"])(
+    "a mismatched regular-cycle %s cannot hide unavailable evidence",
+    async (kind) => {
+      const f = regularRenewalFixture();
+      if (kind === "customer") f.invoice.customer = "cus_other";
+      if (kind === "subscription")
+        f.invoice.parent.subscription_details.subscription = "sub_other";
+      if (kind === "price")
+        f.invoice.lines.data[0].pricing.price_details.price = "price_other";
+      if (kind === "period") f.invoice.lines.data[0].period.end += 86400;
+      await expect(
+        getProviderSubscriptionDetails(f.client, f.native),
+      ).resolves.toMatchObject({
+        status: "available",
+        firstYearPayment: { status: "unavailable" },
+      });
+    },
+  );
+  test.each([
+    { interval: "month", count: 3 },
+    { interval: "year", count: 2 },
+  ])(
+    "does not label a $count-$interval price as one standard interval",
+    async ({ interval, count }) => {
+      const f = annualInvoiceFixture();
+      f.subscription.items.data[0].price.recurring.interval = interval;
+      f.subscription.items.data[0].price.recurring.interval_count = count;
+      await expect(
+        getProviderSubscriptionDetails(f.client, f.native),
+      ).resolves.toEqual({ status: "unavailable" });
+      expect(f.stripe.invoices.retrieve).not.toHaveBeenCalled();
+    },
+  );
+
   test("string invoice retains paid first-year subtotal and actual tax-inclusive payment after coupon is consumed", async () => {
     const f = annualInvoiceFixture();
     await expect(

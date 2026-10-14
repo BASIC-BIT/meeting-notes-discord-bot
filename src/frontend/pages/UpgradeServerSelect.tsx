@@ -1,3 +1,7 @@
+import {
+  isTerminalStripeHistory,
+  requiresStripeManagement,
+} from "../utils/billingManagement";
 import RecordingPlanContext from "../components/RecordingPlanContext";
 import {
   Alert,
@@ -164,9 +168,10 @@ export default function UpgradeServerSelect({
   const isForced = billing?.billingSource === "forced";
   const basicTierEligible =
     currentTier !== "pro" && (currentTier !== "basic" || isComped);
+  const terminalHistory = Boolean(billing && isTerminalStripeHistory(billing));
   const managementOnly =
     isForced ||
-    billing?.hasStripeBilling ||
+    (billing && requiresStripeManagement(billing)) ||
     (currentTier === "pro" && !isComped);
   const busy = checkoutMutation.isPending || portalMutation.isPending;
   const purchaseReady =
@@ -415,6 +420,14 @@ export default function UpgradeServerSelect({
   const toggleServerPicker = () => setChangingServer(!changingServer);
   const refreshServers = () => void refresh();
   const retryBilling = () => void billingQuery.refetch();
+  const billingManagementMessage = terminalHistory
+    ? "Billing history and payment methods remain available."
+    : managementOnly
+      ? "Review this server’s existing plan in its billing settings."
+      : "Existing subscription changes remain subject to billing confirmation.";
+  const billingManagementAction = terminalHistory
+    ? "View billing history"
+    : "Manage billing";
   return (
     <Container
       size={1040}
@@ -549,11 +562,7 @@ export default function UpgradeServerSelect({
               )}
               {showBillingManagement && (
                 <Stack gap="sm">
-                  <Text size="sm">
-                    {managementOnly
-                      ? "Review this server’s existing plan in its billing settings."
-                      : "Existing subscription changes remain subject to billing confirmation."}
-                  </Text>
+                  <Text size="sm">{billingManagementMessage}</Text>
                   <Group>
                     {billing.canManageBillingPortal && (
                       <Button
@@ -562,7 +571,7 @@ export default function UpgradeServerSelect({
                         loading={portalMutation.isPending}
                         disabled={busy}
                       >
-                        Manage billing
+                        {billingManagementAction}
                       </Button>
                     )}
                     <Button
@@ -644,7 +653,7 @@ export default function UpgradeServerSelect({
                   ? "Current plan"
                   : "Free plan"
               }
-              billingLabel="No subscription needed"
+              billingLabel="Always free"
               tone="soft"
               testId="upgrade-plan-free"
             />

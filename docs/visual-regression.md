@@ -26,9 +26,11 @@ Their checks also assert key content, upgrade selection and no horizontal
 document overflow. These baselines record the current UI; passing a pixel
 comparison does not establish that its design is good.
 
-Billing also covers a Free server with a canceled paid subscription at desktop
-and mobile widths. The current-plan card must show Free and its usage, while
-the previous cancellation appears in a separate billing-history section.
+Billing covers Free servers with canceled or expired subscription history at
+desktop and mobile widths. The current-plan card shows Free and its usage;
+the previous subscription appears in a separate billing-history section.
+Direct acquisition covers both terminal statuses and keeps Basic and Pro
+purchase actions available.
 Viewport snapshots show the normal responsive layout; full snapshots use the
 expanded visual mode described above.
 

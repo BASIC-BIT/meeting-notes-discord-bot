@@ -243,7 +243,7 @@ export default function Home() {
                   highlighted={tier === "basic"}
                   billingLabel={
                     tier === "free"
-                      ? "No subscription needed"
+                      ? "Always free"
                       : billingInterval === "year"
                         ? "Billed yearly"
                         : "Billed monthly"

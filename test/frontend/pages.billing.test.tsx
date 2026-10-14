@@ -51,7 +51,7 @@ describe("Billing page", () => {
     );
     expect(
       screen.getByTestId("billing-subscription-history"),
-    ).toHaveTextContent("Previous paid subscription: Canceled");
+    ).toHaveTextContent("Previous subscription: Canceled");
     expect(
       screen.queryByText("No subscription needed"),
     ).not.toBeInTheDocument();
