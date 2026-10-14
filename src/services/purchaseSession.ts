@@ -20,6 +20,7 @@ export function assertSessionAssociation(
     throw new BillingActionError(
       "BAD_REQUEST",
       "Server purchase needs review. Contact support before purchasing again.",
+      "purchase_needs_review",
     );
 }
 

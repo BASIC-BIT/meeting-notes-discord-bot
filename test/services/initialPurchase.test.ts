@@ -517,7 +517,10 @@ test("a returned Checkout from another guild cannot be exposed as this purchase"
       guildId,
       priceId: "price_basic",
     }),
-  ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  ).rejects.toMatchObject({
+    code: "BAD_REQUEST",
+    reason: "purchase_needs_review",
+  });
 });
 
 test.each([false, true])(
