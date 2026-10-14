@@ -552,12 +552,6 @@ async function createExistingSubscriptionConfirmation(params: {
   const existing = await getSubscriptionRepository().get(guildId);
   assertExistingOfferQuote(params.expectedOffer, existing);
   if (existing?.stripeSubscriptionId) {
-    if (!config.stripe.subscriptionTransitionsEnabled) {
-      throw new BillingActionError(
-        "BAD_REQUEST",
-        "Plan changes are not available yet. Your current subscription is unchanged; contact support for help.",
-      );
-    }
     const subscription = await stripe.subscriptions.retrieve(
       existing.stripeSubscriptionId,
       { expand: SUBSCRIPTION_DISCOUNT_EXPANSIONS },
@@ -581,6 +575,12 @@ async function createExistingSubscriptionConfirmation(params: {
       subscription.status !== "canceled" &&
       subscription.status !== "incomplete_expired"
     ) {
+      if (!config.stripe.subscriptionTransitionsEnabled) {
+        throw new BillingActionError(
+          "BAD_REQUEST",
+          "Plan changes are not available yet. Your current subscription is unchanged; contact support for help.",
+        );
+      }
       await assertStripePayer(stripe, customerId, user.id);
       assertUpdatableSubscription(subscription);
       if (

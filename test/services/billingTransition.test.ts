@@ -99,7 +99,7 @@ beforeEach(() => {
 });
 
 describe("existing server subscription checkout", () => {
-  it("blocks an existing subscription before any provider call when activation is disabled", async () => {
+  it("blocks active plan changes after verifying the provider while activation is disabled", async () => {
     config.stripe.subscriptionTransitionsEnabled = false;
     const { stripe, client } = fixture();
     await expect(
@@ -114,7 +114,7 @@ describe("existing server subscription checkout", () => {
       message:
         "Plan changes are not available yet. Your current subscription is unchanged; contact support for help.",
     });
-    expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+    expect(stripe.subscriptions.retrieve).toHaveBeenCalledTimes(1);
     expect(stripe.customers.retrieve).not.toHaveBeenCalled();
     expect(stripe.customers.list).not.toHaveBeenCalled();
     expect(stripe.customers.create).not.toHaveBeenCalled();
@@ -379,6 +379,52 @@ describe("existing server subscription checkout", () => {
           priceId: "price_pro",
         }),
       ).resolves.toBe("https://checkout.stripe.com/new");
+      expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["canceled", "incomplete_expired"])(
+    "allows provider-confirmed %s repurchase while plan transitions are disabled",
+    async (status) => {
+      config.stripe.subscriptionTransitionsEnabled = false;
+      const { subscription, stripe, client } = fixture();
+      subscription.status = status;
+      await expect(
+        createCheckoutSession({
+          stripe: client,
+          user,
+          guildId,
+          priceId: "price_pro",
+        }),
+      ).resolves.toBe("https://checkout.stripe.com/new");
+      expect(stripe.subscriptions.retrieve).toHaveBeenCalled();
+      expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
+      expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["unavailable", "wrong_server", "wrong_customer"])(
+    "does not repurchase after %s provider evidence with transitions disabled",
+    async (evidence) => {
+      config.stripe.subscriptionTransitionsEnabled = false;
+      const { subscription, stripe, client } = fixture();
+      subscription.status = "canceled";
+      if (evidence === "unavailable")
+        stripe.subscriptions.retrieve.mockRejectedValue(
+          new Error("Stripe unavailable"),
+        );
+      else if (evidence === "wrong_server")
+        subscription.metadata.guild_id = "other-server";
+      else subscription.customer = "cus_other";
+      await expect(
+        createCheckoutSession({
+          stripe: client,
+          user,
+          guildId,
+          priceId: "price_pro",
+        }),
+      ).rejects.toThrow();
+      expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
       expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
     },
   );
