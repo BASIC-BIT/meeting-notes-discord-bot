@@ -129,6 +129,20 @@ Retry a submitted request only with its original body and idempotency key, for a
 
 Chronote cannot compare-and-swap an external Stripe edit with this update. Fresh preflight plus readback narrows that race but does not eliminate it. If post-write terms or ownership drift, show **Renewal needs review**, display only freshly verified facts and route to Stripe/support. Do not claim the approved renewal succeeded, silently create a purchase, change the price back or recancel another actor's decision. Native race proof is a release condition; an unbounded or charge-producing case blocks the direct route.
 
+## PostHog measurement
+
+This revision adds measurement to the scope. The three lifecycle funnels are onboarding, purchase, and cancellation/loss, with renewal restoration and win-back as recovery branches. Their canonical definitions and existing/proposed event coverage are in [Product lifecycle analytics](../../purchase-analytics.md#three-lifecycle-funnels). This feature fills the loss/recovery gap; it does not rebuild onboarding or purchase tracking.
+
+The loss journey follows confirmed renewal off to either renewal restored or the end of the paid relationship. A click is intent, a saved provider transition is an outcome, and a paid renewal is evidence of retained payment. Annual subscribers remain at risk until their actual paid boundary; they are not already churned. Payment-failure recovery is a separate branch, and downgrades are contraction rather than total paid loss.
+
+Add the proposed visibility, action and confirmed-outcome events defined in the canonical document. A settled-renewal event includes credit-covered renewal, preserving the old positive-payment event contract. Shared reconciliation publishes confirmed state changes; the renewal service publishes first accepted requests and persisted final results. Match failed and recovered invoices privately. Deduplicate replayed events and first-observation baselines. Do not infer a cancellation timestamp for a subscription already off at rollout.
+
+Measure business outcomes by guild, because the organizer, payer and cancellation actor may differ. Use a real acting user only when the app knows one. Retain the existing two-identifier limit, DNT and stored opt-out behavior. Use fixed categories plus the bounded maturity duration described below. New events must not include prices, amounts, provider/operation IDs, cancellation text or raw errors. A bounded remaining_seconds_to_scheduled_end duration and boundary_known flag make cohort maturity measurable without another identifier. Use the server observation as the standard event timestamp, update a changed scheduled end without counting another cancellation, and report unknown boundaries separately.
+
+Add meaningful analytics tests and Sandbox event-row acceptance to feature completion. Source events, received rows and saved funnel configuration are separate evidence. Inspect existing saved definitions before publishing anything, then integrate the verified views into existing Chronote reporting. No PostHog dashboard, capture implementation or production setting is changed by this planning revision.
+
+A separate default-false BILLING_LIFECYCLE_ANALYTICS_ENABLED gate controls new capture. Publish the privacy-policy detail/provider table/date and What's New notice before enabling it. Keep this independent of the renewal action's rollout so disabling that action does not hide already-approved losses or payment recovery.
+
 ## Proof and release conditions
 
 Implementation acceptance needs all of the following. This document does not claim these tests ran.
@@ -138,7 +152,7 @@ Implementation acceptance needs all of the following. This document does not cla
 3. Separately authorized Sandbox fixtures prove the exact API update for classic and flexible modes. Preserve the same subscription/item, paid-service boundary, anchor, rate, discount, customer balance and offer use, with no new invoice, payment intent, charge or proration caused by the undo. Advance a test clock to the legitimate renewal and verify normal billing.
 4. Include annual introductory history renewing at regular price, a valid remaining monthly discount, repeated requests, cancel-again after success, provider timeout, concurrent native edits, payment problems and custom/schedule exclusion. Record request and effective response API versions. Use new owned fake-money fixtures, never the already cleaned parent test subscription, and reconcile cleanup.
 5. Read-only native portal/configuration review must confirm the advertised fallback is actually available. An unsupported schedule may require support; the UI must not promise that Stripe can edit every schedule.
-6. Public docs, focused checks, screenshots and review must pass before merge readiness. Deployment and activation remain separate decisions. Disabling the new direct-action gate must not abandon in-flight recovery.
+6. Verify lifecycle-event semantics, replay handling, actor identity, DNT/opt-outs and environment filters with tests and actual Sandbox event rows. Public docs, focused checks, screenshots and review must pass before merge readiness. Deployment and activation remain separate decisions. Disabling the new direct-action gate must not abandon in-flight recovery.
 
 ## Decisions and review status
 
@@ -146,7 +160,7 @@ Approved: renewal-off hierarchy, direct primary action with authoritative terms,
 
 Recommended engineering choices: direct minimal update for simple active subscriptions; inline consent; five-minute signed quote; narrow durable operation; separate default-false gate; provider review for unsupported states. These keep the approved UX small while making uncertain outcomes visible. The builder may choose internal helper layout but may not relax these behavioral constraints.
 
-No additional pricing or eligibility decision is requested. The provider proof can invalidate the direct candidate. If it does, return with the observed mismatch rather than substituting a different billing flow or weakening consent.
+Requested in this revision: incorporate all three lifecycle funnels and loss/recovery measurement. Reporting windows remain proposed until reviewed; no saved views are authorized by this amendment. No additional pricing or eligibility decision is requested. The provider proof can invalidate the direct candidate. If it does, return with the observed mismatch rather than substituting a different billing flow or weakening consent.
 
 ## Evidence appendix
 

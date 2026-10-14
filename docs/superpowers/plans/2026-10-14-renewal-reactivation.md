@@ -21,7 +21,7 @@
 - Keep uncertain outcomes recoverable. No fallback Checkout for a nonterminal subscription, no customer-wide lock and no schedule release.
 - Preserve the centered Monthly/Annual selector, Upgrade comparison, existing complimentary access and current payment-failure entitlement policy.
 - Native proof uses new owned Sandbox fixtures only, with separate execution authorization and cleanup. Never mutate the already cleaned parent test subscription.
-- Do not add analytics events or properties, change production settings or infer deployment from source tests.
+- Implement only the approved analytics contract in [Product lifecycle analytics](../../purchase-analytics.md#three-lifecycle-funnels). Keep the two-identifier limit, fixed enums, bounded maturity duration and opt-outs. New capture is behind the separate default-false BILLING_LIFECYCLE_ANALYTICS_ENABLED gate; no production setting or saved PostHog view changes are authorized by this plan review.
 
 ## Review focus
 
@@ -41,7 +41,8 @@ These are review priorities, not omitted tests. Each is pinned to a task below.
 | 2    | Typed consent, durable operation storage and disabled-by-default configuration | Spec; can prepare locally while native proof is pending      |
 | 3    | Protected API with recovery of the same operation and authoritative readback   | Task 1 must accept the candidate before connecting its write |
 | 4    | Revised Billing card and payment history, with responsive proof                | Task 2 contract; fixtures can precede Task 3                 |
-| 5    | Integrated checks, docs and exact-head review packet                           | Tasks 1 through 4                                            |
+| 5    | Loss/recovery telemetry with privacy and event-row proof                       | Tasks 2/3; Task 4 for browser visibility and clicks          |
+| 6    | Integrated checks, docs and exact-head review packet                           | Tasks 1 through 5                                            |
 
 This is one narrow feature. It does not implement the separate plan-switching payment adapter or editable subscription schedules.
 
@@ -92,9 +93,9 @@ acceptedUndo:
 - `RenewalOperation`: immutable operation/quote nonce, server/payer/mode/source/terms/request/idempotency binding; a discriminated state of applying, verifying, succeeded, rejected or needs_review. Each state carries only its required result/reason fields.
 - `RenewalControl` is `{ guildId: string; operationId: string; revision: string }`. Its presence means that operation still owns the server's renewal control. Release deletes only that matching control.
 - Repository signatures: `getOperation({guildId, operationId}): Promise<RenewalOperation | undefined>`, `getControl({guildId}): Promise<RenewalControl | undefined>`, `claim({operation, expectedSubscription}): Promise<boolean>`, `compareAndWrite({next, expectedRevision}): Promise<boolean>`. The argument types are the named domain records plus strings for IDs/revisions. `expectedSubscription` is the existing `GuildSubscription` row.
-- Pin operation field names used across tasks: `operationId`, `quoteNonce`, `guildId`, `payerId`, `mode`, `subscriptionId`, `sourceFingerprint`, `invariantFingerprint`, `sourceRevision`, `approvedTerms`, `stripeRequest`, `idempotencyKey`, `firstAttemptAt`, `revision`, `state`. `stripeRequest` is the accepted minimal Stripe SubscriptionUpdateParams subset. The invariant fingerprint covers fields that must stay unchanged and excludes the cancellation fields being cleared. `firstAttemptAt` is recorded conservatively when the first write is claimed, so a crash cannot extend the 23-hour retry limit.
+- Pin operation field names used across tasks: `operationId`, `quoteNonce`, `guildId`, `payerId`, `mode`, `subscriptionId`, `sourceFingerprint`, `invariantFingerprint`, `sourceRevision`, `approvedTerms`, `stripeRequest`, `idempotencyKey`, `firstAttemptAt`, `analyticsOptOut`, `revision`, `state`. `stripeRequest` is the accepted minimal Stripe SubscriptionUpdateParams subset. The invariant fingerprint covers fields that must stay unchanged and excludes the cancellation fields being cleared. `firstAttemptAt` is recorded conservatively when the first write is claimed, so a crash cannot extend the 23-hour retry limit.
 - `signRenewalQuote(quote): string` and `readRenewalQuote(token, now): RenewalQuote | undefined` reuse `src/utils/consentToken.ts` with a strict Zod payload and a renewal-specific derived signing key.
-- `RenewalView` carries `{ state: RenewalState; canManageBilling: boolean }`. Its permission is verified from current payer metadata, including for an already-renewing or terminal subscription. Payment history must not infer it from `hasStripeBilling` or the old broad `canManageBillingPortal` field.
+- `RenewalView` carries `{ state: RenewalState; canManageBilling: boolean; lifecycleAnalyticsEnabled: boolean }`. Task 2 defaults the telemetry capability to false; Task 5 binds it to the separate capture gate and persisted subscription opt-out, with browser DNT still checked locally. Its permission is verified from current payer metadata, including for an already-renewing or terminal subscription. Payment history must not infer it from `hasStripeBilling` or the old broad `canManageBillingPortal` field.
 - Define the shared state shape in Task 2's `src/types/renewal.ts` before using it:
 
 ```ts
@@ -159,7 +160,7 @@ expect(mockStore.offerUsages).toEqual(beforeOffers);
 **Interfaces:**
 
 - `readRenewalState({stripe, guildId, payerId, now}): Promise<RenewalView>` owns native reads, preview and the ready quote. `now` defaults to Date.now inside the service.
-- `restoreRenewal({stripe, guildId, payerId, request, now}): Promise<RenewalResult>` consumes Task 2's request and durable operation contract.
+- `restoreRenewal({stripe, guildId, payerId, request, analyticsOptOut, now}): Promise<RenewalResult>` consumes Task 2's request and durable operation contract.
 - `readRenewalSource({stripe, guildId, subscriptionId}): Promise<RenewalSource>` validates native identity, independent paid boundary, payment state, tax basis and source fingerprint.
 - `clearPendingCancellation({stripe, operation}): Promise<void>` sends only Task 1's accepted exact body and immutable idempotency key.
 - `assertStripePayer({stripe, customerId, payerId}): Promise<void>` centralizes the existing metadata check; migrate both current billing-service callers without weakening their association checks.
@@ -220,7 +221,48 @@ await expect(
 - [ ] **Step 5: Prove responsive behavior and scrolling.** Use 1280x720, 768x900 and 390x844. Include off/on/processing/failure/history-open/terminal fixtures in visual coverage. Assert no horizontal overflow. For short-height overflow, identify the actual scroll container, assert `scrollHeight > clientHeight`, scroll it and assert scrollTop changes; do not merely check element visibility. The button and receipt action remain reachable. Capture Storybook screenshots with the repo runner and inspect them with a VLM. Inspect Playwright snapshots too. Update only intended baselines, then rerun without updates.
 - [ ] **Step 6: Run browser and component checks, then commit.** Run affected Billing Playwright tests, the renewal Storybook tag, root types, scoped lint/format and complexity checks. Review copy with unslop. Suggested message: `Clarify renewal status and payment history`.
 
-## Task 5: Integrate, document and prepare review
+## Task 5: Measure cancellation, loss and recovery
+
+**Files:**
+
+- Create: `src/types/billingAnalytics.ts`, `src/services/billingLifecycleAnalytics.ts`, `test/services/billingLifecycleAnalytics.test.ts`.
+- Modify: `src/services/subscriptionReconciliation.ts`, `src/services/renewalReactivationService.ts`, `src/api/billing.ts`, `src/types/db.ts`, `src/trpc/routers/billing.ts`, `src/services/configService.ts`, `_infra/main.tf`, `_infra/tfvars.example`, `src/frontend/pages/Billing.tsx` and `src/frontend/services/analytics.ts`, `src/services/analyticsService.ts`.
+- Test: `test/api/billing.test.ts`, `test/services/renewalReactivationService.test.ts`, `test/e2e/billing.spec.ts`, current analytics-service tests and `test/services/billingActivationConfig.test.ts`.
+- Docs: `docs/purchase-analytics.md`, `apps/docs-site/docs/legal/privacy.md`, `apps/docs-site/docs/whats-new/index.md`.
+
+**Interfaces:**
+
+- `BillingLifecycleState = 'renewal_on' | 'renewal_off' | 'ended'`; an optional private `billingAnalyticsState` in GuildSubscription records the last observed baseline. It is never a new product identifier or browser-controlled state.
+- `publishBillingLifecycleTransition({previous, current, provider, observedAt, analyticsOptOut}): void` receives the winning before/after GuildSubscription rows, validated StripeSubscription and server observation Date. It derives fixed categories, publishes once after a real accepted transition and never throws into billing. An initial observation establishes a baseline without inventing a historical cancellation. A changed cancellationAt while renewal remains off is terms_updated, not a new cancellation episode.
+- `captureRenewalOperationEvent({operation, phase}): void`, with phase requested or result, publishes only on the first persisted operation transition. A repeat response does not publish another event.
+- `captureBillingInvoiceOutcome({stripe, invoice, outcome}): Promise<void>`, with outcome failed, recovered or renewal_settled, validates native invoice/subscription ownership and private deduplication evidence. It exports no provider identity. Keep the existing positive-payment producer unchanged.
+- Use existing browser capture and visibility patterns for renewal-off viewed and eligible primary-action clicks. Pass server-observed Date as the optional standard timestamp argument in captureEvent; existing callers keep their current default. Emit boundary_known for state observations. Include remaining_seconds_to_scheduled_end only when the verified remaining interval is within 0..31,622,400 seconds; otherwise boundary_known is false. Query maturity using event timestamp plus that duration and latest terms updates. Unknown boundaries are counted separately. The canonical event/property contract is [Product lifecycle analytics](../../purchase-analytics.md#proposed-loss-and-recovery-events).
+
+- [ ] **Step 1: Write failing event semantics tests.** Pin one on-to-off state transition, off-to-on restoration and actual paid relationship ending. Repeat and out-of-order webhook requests must not produce duplicates. A canceled old subscription replaced by a current active one must not become a new server loss. A first observed off state is a baseline, not a newly timed cancellation. Keep complimentary product access distinct from the end of Stripe payment.
+
+```ts
+expect(stateChanges.map((event) => event.to_state)).toEqual([
+  "renewal_off",
+  "renewal_on",
+]);
+expect(replayedStateChanges).toHaveLength(0);
+expect(firstObservationEvents).toHaveLength(0);
+expect(outcomes).not.toContainEqual(
+  expect.objectContaining({ provider_invoice_id: expect.anything() }),
+);
+```
+
+Add exact maturity just before/at/after the known boundary, annual dates that differ from the entry month/day, updated cancellation dates, unknown/out-of-range boundaries and zero duration. Add verified failed-invoice recovery matched to that same invoice, nonmatching later payment, normal renewal, credit-covered renewal, downgrade contraction and no extra acquisition conversion.
+
+- [ ] **Step 2: Write the opt-out, actor and visibility tests.** A webhook outcome has guild identity, not the original purchaser presented as the cancellation actor. A direct accepted request uses its verified actor. Read DNT from the request header and the validated analyticsOptOut input, combining it with stored subscription opt-out. It never affects billing authorization or financial fingerprints. Persist the operation suppression bit so DNT suppresses browser and synchronous request events and the associated operation outcomes; retain stored subscription opt-out for later outcomes. Bind operation suppression privately without retroactively changing purchase attribution. An ambiguous association suppresses capture rather than guessing. Test no key and capture errors do not affect billing. Browser tests prove visible exposure once per server/terms state and distinguish a click from an accepted request.
+- [ ] **Step 3: Run focused tests and confirm the intended failures.** Use the new lifecycle suite plus billing API, renewal-service, existing analytics and focused browser tests. Fixtures stay local; they do not write to PostHog.
+- [ ] **Step 4: Implement the shared producers and private deduplication.** Publish state changes only after a successful conditional reconciliation write and actual semantic change. Reuse existing receipt/repository patterns for invoice failure/recovery/settlement deduplication, keeping keys internal. A recovered invoice must be the previously failed one. Wire authoritative settled-renewal handling for paid service even when cash due is zero, rather than widening billing_entitlement_saved. Emit operation events only at the first durable claim and final persisted result. No portal visit is labeled cancellation intent. No raw cancellation reason, price, amount, quote, provider ID or operation ID reaches PostHog.
+- [ ] **Step 5: Add the independent rollout switch and notices.** Add exact-true `config.analytics.billingLifecycleEnabled` from BILLING_LIFECYCLE_ANALYTICS_ENABLED, default false, with matching Terraform/example wiring and activation tests. Keep state baselines and financial reconciliation independent from capture. Return lifecycleAnalyticsEnabled in RenewalView so the new browser captures cannot run while their server-side rollout switch is off. The privacy-policy analytics detail, provider table, last-updated date and What's New notice must describe lifecycle/payment-recovery categories before enabling capture. Verify DNT wording for existing subscriptions and new operation outcomes; do not quietly broaden it.
+- [ ] **Step 6: Verify received Sandbox rows separately.** Under the implementation's execution authority, verify the Chronote PostHog project before querying. Read the actual events table because schema definitions can lag ingestion. Confirm environment, guild continuity, actual or absent actor, categories, duplicate suppression, opt-out absence and no forbidden payload fields. Do not query customer content or mix Sandbox into production metrics. Source code tests are not ingestion proof.
+- [ ] **Step 7: Validate the three funnel definitions before publishing saved views.** Inspect existing onboarding/purchase insights and private reporting owner notes. Keep the existing seven-day purchase definitions; review the proposed onboarding and win-back windows. Use same-server ordered cohorts without assuming native groups are configured. Report cancellation cohorts only after their paid boundary matures, and keep voluntary loss, payment-failure loss, save attempts and later settled renewal distinct. Show baseline counts, unknown cause, DNT/capture gaps and small samples. Prefer updating the existing reporting/daily health summary over creating duplicate dashboards. Saved insight/configuration changes need their own explicit execution scope.
+- [ ] **Step 8: Run the focused suites, docs checks, lint and formatting, then commit.** Suggested message: `Measure subscription loss and renewal recovery`. Analytics remains best effort, never a billing audit ledger. Reconcile bounded aggregate state counts; do not invent missing event timestamps. Both new action and telemetry gates stay false.
+
+## Task 6: Integrate, document and prepare review
 
 **Files:**
 
@@ -229,20 +271,20 @@ await expect(
 
 **Interfaces:**
 
-- Produces one coherent branch with the new direct action disabled by default, a readable test/acceptance packet, and no deployment or activation claim.
+- Produces one coherent branch with direct reactivation and new lifecycle capture both disabled by default, a readable test/acceptance packet, and no deployment or activation claim.
 - Existing initial Checkout, provider management, current-state webhooks and offer ledger remain unchanged outside the named integration.
 
 - [ ] **Step 1: Trace the complete same-subscription journey.** Run the UI through quote, click, native update, current-state reconciliation and confirmed card in signed-in Sandbox only after execution authorization. Verify receipts, return server context, nonpayer denial and terminal repurchase separately. Never restore the cleaned parent fixture.
 - [ ] **Step 2: Update public and operator docs.** Explain renewal off, who may restore renewal, the date/rate shown before consent, payment-history access and terminal repurchase. Document the separate flag and recovery behavior. Do not publish private fixture identities or claim that all schedules are editable in Stripe.
 - [ ] **Step 3: Run the appropriate full affected checks.** Jest for the new renewal, billing activation, consent/repository and existing billing/webhook suites; `PW_VISUAL=false` Billing browser tests; `PW_VISUAL=true` affected visuals; Storybook capture after Playwright finishes; root types, scoped lint/Prettier, docs build and full complexity check. Avoid racing the Storybook runner with Playwright report writes. New failures or changed code justify repeat checks; otherwise proceed to review.
-- [ ] **Step 4: Review the actual branch, not only helper tests.** Inspect authorization, source association, inclusive-tax copy, quote replay after cancel-again, external-race behavior, unresolved operations, same-subscription invariants and default-false gate. Separate mock proof, native provider proof, signed-in app proof, CI and runtime evidence.
+- [ ] **Step 4: Review the actual branch, not only helper tests.** Inspect authorization, source association, inclusive-tax copy, quote replay after cancel-again, external-race behavior, unresolved operations, same-subscription invariants and default-false gate. Separate mock proof, native provider proof, signed-in app proof, PostHog received rows, saved query configuration, CI and runtime evidence.
 - [ ] **Step 5: Prepare the PR under the active authorization.** If publishing is authorized, use a concise problem/behavior description with relevant validation, attach the PR, and follow the repository's exact-head 30-minute gate plus all mutable review/check surfaces before calling it merge-ready. Every new commit restarts the window. Do not merge, deploy, enable the flag or perform production billing writes under design/planning authority.
 
 ## Self-review and open gates
 
-The design's UX states map to Task 4, provider boundaries and source races to Tasks 1/3, consent/storage to Task 2, and release evidence to Task 5. Public signatures above are the only new cross-task contract; internal helpers remain the implementer's choice. Task 4 can use fixtures before the provider is accepted, but cannot certify Task 3 through those mocks.
+The design's UX states map to Task 4, provider boundaries and source races to Tasks 1/3, consent/storage to Task 2, and release evidence to Tasks 5 and 6. Public signatures above are the only new cross-task contract; internal helpers remain the implementer's choice. Task 4 can use fixtures before the provider is accepted, but cannot certify Task 3 through those mocks.
 
-Native proof may reject the candidate. That is a release gate, not permission to substitute Checkout or silently weaken the invariants. External Stripe edits remain an explicit limitation; a failed concurrency test requires a design revision.
+The analytics addition preserves the three-funnel map and makes loss/recovery coverage part of completion. Current onboarding/purchase source coverage is not proof of a saved live funnel. Native proof may reject the candidate. That is a release gate, not permission to substitute Checkout or silently weaken the invariants. External Stripe edits remain an explicit limitation; a failed concurrency test requires a design revision.
 
 No additional pricing decision remains. Before implementation, review the recommended direct route, inline consent and separate disabled-by-default gate. Native execution is the suggested implementation approach because these tasks share one source/operation contract and can be completed sequentially, with an independent whole-branch review afterward. The earlier planning request does not choose or authorize that execution method.
 
