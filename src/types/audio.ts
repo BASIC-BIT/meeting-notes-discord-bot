@@ -14,6 +14,7 @@ export interface AudioSnippet {
   fastRevision?: number;
   fastTranscribed?: boolean;
   lastFastTranscriptBytes?: number;
+  lastFastSpeechCoverage?: SpeechCoverage;
   interjectionTriggered?: boolean;
   interjectionForced?: boolean;
 }
@@ -62,6 +63,7 @@ export interface AudioFileData {
   coalescedTranscript?: string;
   coalesceMeta?: CoalesceMeta;
   transcriptionFailed?: boolean;
+  finalSpeechRejection?: SpeechCoverage;
   source?: AudioSegmentSource;
   messageId?: string;
   processing: boolean;

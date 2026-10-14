@@ -1,5 +1,12 @@
 /** @jest-environment node */
-import { mkdtempSync, readdirSync, rmdirSync, ReadStream } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  rmdirSync,
+  readFileSync,
+  unlinkSync,
+  ReadStream,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { MeetingData } from "../../src/types/meeting-data";
@@ -7,7 +14,10 @@ import type {
   SpeechAssessment,
   SpeechDetector,
 } from "../../src/services/speechDetectionTypes";
-import { DEFAULT_SPEECH_POLICY } from "../../src/services/speechDetectionPolicy";
+import {
+  createSpeechCoverage,
+  DEFAULT_SPEECH_POLICY,
+} from "../../src/services/speechDetectionPolicy";
 import { metricsRegistry } from "../../src/metrics";
 import { transcribeSnippet } from "../../src/services/transcriptionService";
 
@@ -33,6 +43,7 @@ const mockGetDetector = jest.fn(() => ({
 const mockCreate = jest.fn(providerSuccess);
 jest.mock("../../src/services/tempFileService", () => ({
   ensureMeetingTempDirSync: () => mockEnsureTemp(),
+  getMeetingTempDir: () => mockTempDir,
 }));
 jest.mock("../../src/services/speechDetectionService", () => ({
   getSpeechDetector: () => mockGetDetector(),
@@ -76,7 +87,7 @@ const buildMeeting = (mode: "off" | "shadow" | "enforce"): MeetingData =>
     meetingId: "test-meeting",
     creator: { id: "test-user" },
     guild: { id: "test-guild" },
-    voiceChannel: { id: "test-voice" },
+    voiceChannel: { id: "test-voice", members: new Map() },
     runtimeConfig: {
       transcription: {
         speechDetectionMode: mode,
@@ -115,7 +126,11 @@ test("enforcedNonSpeechMakesNoProviderRequest", async () => {
 });
 
 import { PassThrough } from "node:stream";
-import { subscribeToUserVoice, userStartTalking } from "../../src/audio";
+import {
+  subscribeToUserVoice,
+  userStartTalking,
+  startProcessingSnippet,
+} from "../../src/audio";
 import * as conversion from "../../src/services/transcriptionAudioService";
 
 jest.mock("../../src/liveVoice", () => ({ maybeRespondLive: jest.fn() }));
@@ -408,3 +423,157 @@ test("temporary directory failure records a terminal conversion outcome", async 
   expect(mockCreate).not.toHaveBeenCalled();
   await expectOutcome("off", "conversion_error");
 });
+
+// Exact proven coverage is the only enforcement shortcut; mismatches require full admission.
+test("reuses identical proven PCM and policy without conversion or a new assessment", async () => {
+  const convert = jest.spyOn(conversion, "convertTranscriptionPcmToWav");
+  const coverage = createSpeechCoverage(
+    pcm,
+    DEFAULT_SPEECH_POLICY.policyFingerprint,
+  );
+  try {
+    expect(
+      await transcribeSnippet(buildMeeting("enforce"), snippet, {
+        reuseTranscript: { text: "proven words", coverage },
+      }),
+    ).toEqual({
+      status: "succeeded",
+      text: "proven words",
+      admission: { kind: "reused", coverage },
+    });
+    expect(convert).not.toHaveBeenCalled();
+    expect(mockAssess).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+    await expectOutcome("enforce", "reused");
+    expect(await metricTotal("provider_submissions_total")).toBe(0);
+    expect(await metricTotal("assessments_total")).toBe(0);
+  } finally {
+    convert.mockRestore();
+  }
+});
+test.each([
+  "changed contents",
+  "appended bytes",
+  "changed policy",
+  "unavailable",
+  "forced",
+])(
+  "reuse candidate with %s shares one preparation and correct fallback",
+  async (change) => {
+    const coverage = createSpeechCoverage(
+      pcm,
+      change === "changed policy"
+        ? "old-policy"
+        : DEFAULT_SPEECH_POLICY.policyFingerprint,
+    );
+    const changedPcm =
+      change === "appended bytes"
+        ? Buffer.concat([pcm, Buffer.alloc(4)])
+        : Buffer.from(pcm);
+    if (change === "changed contents" || change === "unavailable")
+      changedPcm[0] = 1;
+    if (change === "unavailable")
+      mockAssess.mockResolvedValue({
+        kind: "unavailable",
+        reason: "timeout",
+        policyFingerprint: DEFAULT_SPEECH_POLICY.policyFingerprint,
+      });
+    const convert = jest.spyOn(conversion, "convertTranscriptionPcmToWav");
+    try {
+      const result = await transcribeSnippet(
+        buildMeeting("enforce"),
+        { ...snippet, chunks: [changedPcm] },
+        {
+          reuseTranscript: { text: "old guess", coverage },
+          speechDetectionBypass: change === "forced",
+        },
+      );
+      expect(result.status).toBe(
+        change === "unavailable" || change === "forced"
+          ? "succeeded"
+          : "skipped",
+      );
+      expect(convert).toHaveBeenCalledTimes(1);
+      expect(mockAssess).toHaveBeenCalledTimes(change === "forced" ? 0 : 1);
+      expect(mockCreate).toHaveBeenCalledTimes(
+        change === "unavailable" || change === "forced" ? 1 : 0,
+      );
+      expect(await metricTotal("snippet_outcomes_total")).toBe(1);
+    } finally {
+      convert.mockRestore();
+    }
+  },
+);
+
+test.each(["off", "shadow", "enforce"] as const)(
+  "%s owner-only fast finalization counts one reuse without a new SDK call or captured denominator",
+  async (mode) => {
+    const meeting = buildMeeting(mode);
+    const source = new PassThrough({ objectMode: true });
+    Object.assign(meeting, {
+      guildId: "test-guild",
+      channelId: "test-voice",
+      startTime: new Date(),
+      participants: new Map(),
+      audioData: { currentSnippets: new Map(), audioFiles: [] },
+      connection: {
+        state: { status: "ready" },
+        receiver: {
+          packetDiagnostics: new WeakMap(),
+          subscribe: () => source,
+          subscriptions: new Map(),
+        },
+      },
+    });
+    Object.assign(meeting.runtimeConfig!.transcription, {
+      fastFinalizationEnabled: true,
+      minSnippetSeconds: 0.3,
+      maxSnippetMs: 60000,
+    });
+    await subscribeToUserVoice(meeting, "test-user");
+    userStartTalking(meeting, "test-user");
+    source.write(pcm);
+    const received = meeting.audioData.currentSnippets.get("test-user")!;
+    received.timestamp = meeting.startTime.getTime();
+    received.lastFastTranscriptBytes = pcm.length;
+    received.lastFastSpeechCoverage = createSpeechCoverage(
+      pcm,
+      DEFAULT_SPEECH_POLICY.policyFingerprint,
+    );
+    const file = {
+      userId: "test-user",
+      timestamp: received.timestamp,
+      processing: true,
+      audioOnlyProcessing: false,
+      fastTranscripts: [
+        {
+          revision: 1,
+          text: "proven words",
+          createdAt: "2025-01-01T00:00:00Z",
+        },
+      ],
+      transcript: "proven words",
+    };
+    received.audioFileData = file;
+    meeting.audioData.audioFiles.push(file);
+    startProcessingSnippet(meeting, "test-user");
+    await received.audioFileData.processingPromise;
+    const track = meeting.audioData.speakerTracks!.get("test-user")!;
+    await track.writePromise;
+    try {
+      expect(file.transcript).toBe("proven words");
+      expect(readFileSync(track.filePath)).toEqual(pcm);
+      expect(await metricTotal("captured_audio_seconds_total", { mode })).toBe(
+        1,
+      );
+      expect(await metricTotal("provider_submissions_total")).toBe(0);
+      expect(await metricTotal("assessments_total")).toBe(0);
+      await expectOutcome(mode, "reused");
+    } finally {
+      unlinkSync(track.filePath);
+      rmdirSync(path.dirname(track.filePath));
+      meeting.finished = true;
+      source.end();
+    }
+  },
+);

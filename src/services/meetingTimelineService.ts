@@ -1,3 +1,4 @@
+import { isAudioFileSpeechRejected } from "../utils/audioTranscript";
 import type { AudioCueEvent, AudioFileData } from "../types/audio";
 import type { ChatEntry } from "../types/chat";
 import type { MeetingHistory } from "../types/db";
@@ -357,6 +358,7 @@ const buildTranscriptSegmentsFromMeeting = (meeting: MeetingData) => {
   };
 
   for (const file of meeting.audioData.audioFiles) {
+    if (isAudioFileSpeechRejected(file)) continue;
     addSegment(
       file,
       file.finalPassTranscript !== undefined

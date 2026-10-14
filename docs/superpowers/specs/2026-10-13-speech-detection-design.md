@@ -1,6 +1,6 @@
 # Speech detection before Discord transcription
 
-Status: approved by the user on October 13, 2026, including running detection on a side thread. Implementation planning is authorized; product execution and rollout are separate stages. No production speech-detector code, dependencies, configuration changes, or deployment have been added. The existing Python experiment is diagnostic code, not the production runtime.
+Status: the user approved the design and subagent-driven implementation on October 13, 2026. Runtime, dependency, configuration and admission checkpoints are implemented and reviewed locally. Final rejection authority is being validated; later packaging and evaluation acceptance work remains. Default mode is off. Nothing has been deployed or activated in production.
 
 ## Purpose and scope
 
@@ -8,13 +8,13 @@ Reduce hallucinated transcripts and provider requests by detecting obvious nonsp
 
 The first version is a whole-snippet admission gate for the existing fast and slow transcription paths. It does not trim audio, change snippet boundaries, identify who is speaking, filter languages, alter the dictionary prompt, or replace transcription guardrails. Personal uploads, desktop capture, and the finalized full-recording verification pass are separate paths and remain outside this first integration.
 
-The requested workflow is research, reviewed design, implementation plan, then implementation. This document contains the proposed architecture and acceptance criteria. Detailed coding tasks follow approval of this design.
+This document records the approved architecture and acceptance criteria. The implementation plan and task ledger track local execution and review; implementation progress does not replace evaluation or rollout approval.
 
 ## Research and evidence
 
 ### Local code findings
 
-The checkout is `codex/live-meeting-ui-quality`, based on `c46df7a`, with earlier UI and eval changes still uncommitted. This design depends on the local eval helpers but does not treat those changes as reviewed or deployed.
+At design time, `codex/live-meeting-ui-quality` was based on `c46df7a` with UI and eval changes uncommitted. The required eval and live-removal foundations have since been committed and reviewed. Separate dashboard presentation changes remain pending and are excluded from the detector implementation checkpoints.
 
 | Finding                                                                                                                   | Evidence                                                                    | Consequence                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -199,3 +199,9 @@ No table migration, new cloud service, Docker base-image replacement, UI redesig
 ## Approved direction and next stage
 
 The user approved the recommended WASM/worker architecture, default-off shadow-first rollout, shared whole-snippet boundary after existing conversion, and the proposed acceptance criteria. Use the Superpowers writing-plans skill to produce exact files, tests, commands, checkpoint order, and failure stop conditions. Review that plan and select its execution method before product implementation.
+
+### Task 6 implementation clarification, October 13, 2026
+
+Exact original-PCM and policy reuse returns a `SpeechAdmission` variant of `{ kind: "reused", coverage }`. This carries prior accepted speech proof without inventing a new model assessment or its metrics. Only the current fast revision with assessed speech and usable text records reusable coverage. Force bypass prevents reuse; changed bytes or policy use the shared preparation and assessment path. A direct finalization shortcut records one reused outcome, zero new SDK submissions and no additional captured-audio denominator.
+
+Task 6 strict-reuse ruling, October 13, 2026: this version reuses only exact original PCM plus policy proof. Missing, stale or changed proof goes through one full preparation and assessment, skips only completed nonspeech, and otherwise calls ASR. A new speech assessment does not introduce a second reuse path. Enforce can therefore add final SDK calls after uncertain or unavailable fast evidence or a policy change; the matched scorecard must measure this cost rather than assume savings. Off and shadow retain their existing shortcuts.

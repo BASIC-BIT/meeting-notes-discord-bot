@@ -34,3 +34,12 @@ export const createSpeechCoverage = (
   audioBytes: pcm.length,
   policyFingerprint,
 });
+
+export const speechCoverageMatches = (
+  pcm: Buffer,
+  coverage: SpeechCoverage,
+  policyFingerprint: string,
+): boolean =>
+  coverage.policyFingerprint === policyFingerprint &&
+  coverage.audioBytes === pcm.length &&
+  coverage.pcmSha256 === createSpeechCoverage(pcm, policyFingerprint).pcmSha256;

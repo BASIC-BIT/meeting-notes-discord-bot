@@ -42,6 +42,7 @@ export type SpeechCoverage = {
 };
 
 export type SpeechAdmission =
+  | { kind: "reused"; coverage: SpeechCoverage }
   | { kind: "not_enforced"; reason: "off" | "forced" | "shadow" }
   | {
       kind: "assessed";

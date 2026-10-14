@@ -75,3 +75,48 @@ it("replaces revised segments and removes later-suppressed segments", () => {
   );
   expect(result.current.events).toEqual([]);
 });
+
+it("retains untouched object identities while inserting late events by numeric offset", () => {
+  const { result } = renderHook(() =>
+    useLiveMeetingStream({
+      guildId: "guild",
+      meetingId: "meeting",
+      enabled: true,
+    }),
+  );
+  const source = TestEventSource.latest;
+  const voice = {
+    id: "voice-late",
+    type: "voice",
+    time: "1:40",
+    offsetSeconds: 100,
+    speaker: "Alice",
+    text: "late words",
+  };
+  act(() => source.emit("events", { events: [voice] }));
+  const retained = result.current.events[0];
+  act(() =>
+    source.emit("events", {
+      events: [
+        {
+          ...voice,
+          id: "voice-early",
+          time: "0:09",
+          offsetSeconds: 9,
+          text: "earlier words",
+        },
+      ],
+    }),
+  );
+  expect(result.current.events.map((event) => event.id)).toEqual([
+    "voice-early",
+    "voice-late",
+  ]);
+  expect(result.current.events[1]).toBe(retained);
+  const early = result.current.events[0];
+  act(() =>
+    source.emit("events", { events: [], removedEventIds: ["voice-late"] }),
+  );
+  expect(result.current.events).toEqual([early]);
+  expect(result.current.events[0]).toBe(early);
+});

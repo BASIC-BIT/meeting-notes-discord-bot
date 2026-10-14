@@ -3,10 +3,13 @@ import type { TranscriptionCreateParamsNonStreaming } from "openai/resources/aud
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { withPreparedTranscriptionInput } from "./transcriptionInputService";
-import { DEFAULT_SPEECH_POLICY } from "./speechDetectionPolicy";
+import {
+  DEFAULT_SPEECH_POLICY,
+  speechCoverageMatches,
+} from "./speechDetectionPolicy";
 import { getSpeechDetector } from "./speechDetectionService";
 import type { SpeechDetectionMode } from "../config/speechDetection";
-import type { SpeechPhase } from "./speechDetectionTypes";
+import type { SpeechPhase, SpeechCoverage } from "./speechDetectionTypes";
 import {
   recordSpeechAssessment,
   recordSpeechProviderSubmission,
@@ -534,6 +537,8 @@ export async function transcribeSnippet(
     noiseGateEnabledOverride?: boolean;
     suppressionEnabledOverride?: boolean;
     speechDetectionBypass?: boolean;
+    // Coverage must come from a prior accepted speech result with usable text.
+    reuseTranscript?: { text: string; coverage: SpeechCoverage };
   } = {},
 ): Promise<SnippetTranscriptionResult> {
   const startedAt = performance.now();
@@ -561,6 +566,24 @@ export async function transcribeSnippet(
 
   let stage: "conversion" | "transcription" = "conversion";
   try {
+    const reuse = options.reuseTranscript;
+    if (
+      !force &&
+      reuse &&
+      !getTranscriptionTextQuality(reuse.text).trivial &&
+      speechCoverageMatches(
+        buffer,
+        reuse.coverage,
+        DEFAULT_SPEECH_POLICY.policyFingerprint,
+      )
+    ) {
+      outcome = "reused";
+      return {
+        status: "succeeded",
+        text: reuse.text,
+        admission: { kind: "reused", coverage: reuse.coverage },
+      };
+    }
     const tempFiles = buildSnippetTempFiles(meeting, snippet, suffix);
     return await withPreparedTranscriptionInput<SnippetTranscriptionResult>(
       {

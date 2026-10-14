@@ -1,4 +1,12 @@
-import { recordSpeechCapturedAudio } from "./metrics";
+import {
+  DEFAULT_SPEECH_POLICY,
+  speechCoverageMatches,
+} from "./services/speechDetectionPolicy";
+import { isTrivialTranscriptionText } from "./utils/transcriptionText";
+import {
+  recordSpeechCapturedAudio,
+  recordSpeechSnippetOutcome,
+} from "./metrics";
 import {
   BYTES_PER_SAMPLE,
   CHANNELS,
@@ -499,11 +507,19 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
     noiseGateMode: "fast",
   })
     .then((result) => {
-      if (snippet.fastRevision !== revision) return;
-      if (result.status !== "succeeded") {
+      if (
+        snippet.fastRevision !== revision ||
+        meeting.audioData.currentSnippets.get(snippet.userId) !== snippet ||
+        audioFileData.finalSpeechRejection
+      )
+        return;
+      if (result.status === "skipped") {
+        snippet.lastFastSpeechCoverage = undefined;
         return;
       }
+      if (result.status === "failed") return;
       const transcription = result.text;
+      snippet.lastFastSpeechCoverage = undefined;
       if (!transcription.trim()) {
         return;
       }
@@ -519,6 +535,12 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
       audioFileData.transcript = transcription;
       snippet.fastTranscribed = true;
       snippet.lastFastTranscriptBytes = snapshotBytes;
+      snippet.lastFastSpeechCoverage =
+        result.admission.kind === "assessed" &&
+        result.admission.assessment.kind === "speech" &&
+        !isTrivialTranscriptionText(transcription)
+          ? result.admission.coverage
+          : undefined;
       void maybeRespondLive(meeting, {
         userId: snippet.userId,
         text: transcription,
@@ -567,6 +589,7 @@ export function startProcessingSnippet(
   const snippet = meeting.audioData.currentSnippets.get(userId);
   if (!snippet) return;
 
+  const finalizationStartedAt = performance.now();
   void persistSnippetSpeakerTrack(meeting, snippet);
   snippet.fastRevision = (snippet.fastRevision ?? 0) + 1;
 
@@ -585,13 +608,24 @@ export function startProcessingSnippet(
     latestFastTranscript && latestFastTranscript.text.trim().length > 0
       ? latestFastTranscript.text
       : undefined;
+  const mode =
+    meeting.runtimeConfig?.transcription.speechDetectionMode ?? "off";
   const fastCoversSnippet =
     fastFinalizationEnabled &&
     !options.forceTranscribe &&
     hasAudio &&
     Boolean(latestFastText) &&
     snippet.lastFastTranscriptBytes !== undefined &&
-    getAudioBytes(snippet) === snippet.lastFastTranscriptBytes;
+    getAudioBytes(snippet) === snippet.lastFastTranscriptBytes &&
+    !audioFileData.finalSpeechRejection &&
+    (mode !== "enforce" ||
+      (snippet.lastFastSpeechCoverage !== undefined &&
+        !isTrivialTranscriptionText(latestFastText ?? "") &&
+        speechCoverageMatches(
+          Buffer.concat(snippet.chunks),
+          snippet.lastFastSpeechCoverage,
+          DEFAULT_SPEECH_POLICY.policyFingerprint,
+        )));
   if (fastCoversSnippet && latestFastText) {
     const participant = meeting.participants?.get(snippet.userId);
     const speakerLabel = participant
@@ -605,6 +639,13 @@ export function startProcessingSnippet(
     );
     audioFileData.transcriptionFailed = false;
     audioFileData.transcript = latestFastText;
+    recordSpeechSnippetOutcome({
+      mode,
+      phase: "slow",
+      outcome: "reused",
+      audioSeconds: duration,
+      durationMs: performance.now() - finalizationStartedAt,
+    });
   } else if (
     hasAudio &&
     (duration > minSnippetSeconds || options.forceTranscribe)
@@ -616,6 +657,15 @@ export function startProcessingSnippet(
       promises.push(
         transcribeSnippet(meeting, snippet, {
           noiseGateMode: "slow",
+          reuseTranscript:
+            fastFinalizationEnabled &&
+            latestFastText &&
+            snippet.lastFastSpeechCoverage
+              ? {
+                  text: latestFastText,
+                  coverage: snippet.lastFastSpeechCoverage,
+                }
+              : undefined,
           speechDetectionBypass: options.forceTranscribe,
           noiseGateEnabledOverride: options.forceTranscribe ? false : undefined,
           suppressionEnabledOverride: options.forceTranscribe
@@ -629,6 +679,7 @@ export function startProcessingSnippet(
             }
             if (result.status === "skipped") {
               audioFileData.transcriptionFailed = false;
+              audioFileData.finalSpeechRejection = result.coverage;
               return;
             }
             const transcription = result.text;

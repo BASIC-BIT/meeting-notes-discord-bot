@@ -10,7 +10,7 @@
 
 **Spec:** [Approved speech-detection design](../specs/2026-10-13-speech-detection-design.md). Read both documents before execution.
 
-**Status:** Plan for review and execution-method selection. No product execution or production activation is authorized by this document alone.
+**Status:** The user approved subagent-driven execution on October 13, 2026. Prerequisites and Tasks 1-5 are implemented and reviewed locally; Task 6 is in validation, and later tasks and final review remain. Default mode is off. Local implementation does not authorize production deployment or activation.
 
 **Revision:** October 13 user clarification: the feature must be togglable and its improvement measurable. Tasks 4, 5 and 8 now require measurements for the off baseline as well as shadow/enforce, and one comparison report before promotion.
 
@@ -129,6 +129,7 @@ type SpeechCoverage = {
   policyFingerprint: string;
 };
 type SpeechAdmission =
+  | { kind: "reused"; coverage: SpeechCoverage }
   | { kind: "not_enforced"; reason: "off" | "forced" | "shadow" }
   | {
       kind: "assessed";
@@ -436,3 +437,5 @@ type PreparedTranscriptionInput = {
 ## Self-review record
 
 Spec sections map to Tasks 1–8: runtime/assets (1, 3, 7), signal policy (2), worker bounds/failure (3), mode/metrics (4), shared admission (5), final authority and all readers (6), UI/docs (7), quality/resource/rollout evidence (8 and final validation). The user clarification adds an explicit toggle/measurement contract, off-mode baseline tests, gate-independent recording denominators and a required comparison report (4, 5, 8). The five review-focus inputs each have a named test cycle. Shared type/function names are fixed above, and later tasks consume those interfaces. No model runtime or product source was changed while writing this plan.
+
+Task 6 strict-reuse ruling, October 13, 2026: this version reuses only exact original PCM plus policy proof. Missing, stale or changed proof goes through one full preparation and assessment, skips only completed nonspeech, and otherwise calls ASR. A new speech assessment does not introduce a second reuse path. Enforce can therefore add final SDK calls after uncertain or unavailable fast evidence or a policy change; the matched scorecard must measure this cost rather than assume savings. Off and shadow retain their existing shortcuts.

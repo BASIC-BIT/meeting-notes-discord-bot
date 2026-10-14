@@ -174,6 +174,30 @@ const buildMeeting = (overrides: Partial<MeetingData> = {}): MeetingData =>
   }) as MeetingData;
 
 describe("autoRecordCancellationService", () => {
+  test("excludes final-rejected text from cancellation input", async () => {
+    const { evaluateAutoRecordCancellation, completionCreate } =
+      await loadModule({ responseContent: '{"cancel":true}' });
+    const meeting = buildMeeting();
+    meeting.audioData.audioFiles.push({
+      userId: "u",
+      timestamp: 1,
+      processing: false,
+      audioOnlyProcessing: false,
+      transcript: "rejected guess",
+      finalSpeechRejection: {
+        pcmSha256: "synthetic",
+        audioBytes: 4,
+        policyFingerprint: "test",
+      },
+    });
+    await evaluateAutoRecordCancellation(meeting);
+    expect(JSON.stringify(completionCreate.mock.calls)).not.toContain(
+      "rejected guess",
+    );
+    expect(JSON.stringify(completionCreate.mock.calls)).toContain(
+      "No transcript.",
+    );
+  });
   test("returns false when meeting is not auto-recorded", async () => {
     const {
       evaluateAutoRecordCancellation,
