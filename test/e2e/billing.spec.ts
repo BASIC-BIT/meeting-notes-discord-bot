@@ -1002,3 +1002,76 @@ for (const width of [320, 768, 993, 1199, 1201, 1280]) {
     expect(scroll.top).toBeGreaterThan(0);
   });
 }
+
+for (const terminalStatus of ["canceled", "incomplete_expired"] as const) {
+  for (const entry of historyEntries) {
+    for (const grantTier of ["basic", "pro"] as const) {
+      test(`${terminalStatus} ${entry.name} complimentary ${grantTier} starts a paid subscription`, async ({
+        page,
+      }) => {
+        await useFreeBilling(page, { terminalStatus, grantTier });
+        const requests: unknown[] = [];
+        await page.route("**/trpc/billing.checkout*", (route) => {
+          requests.push(route.request().postDataJSON());
+          return route.fulfill({
+            status: 400,
+            json: [
+              {
+                error: {
+                  message: "Controlled provider rejection",
+                  code: -32600,
+                  data: { code: "BAD_REQUEST", httpStatus: 400 },
+                },
+              },
+            ],
+          });
+        });
+        await page.goto(entry.path(mockGuilds.ddm.id));
+        const title = grantTier === "basic" ? "Basic" : "Pro";
+        const name =
+          entry.name === "billing"
+            ? `Start paying for ${title}`
+            : `Continue with ${title}`;
+        const action = page.getByRole("button", { name, exact: true });
+        await expect(action).toBeEnabled();
+        if (entry.name === "billing")
+          await expect(page.getByTestId("billing-current-plan")).toContainText(
+            title,
+          );
+        await action.click();
+        await expect.poll(() => requests.length).toBe(1);
+        expect(requests[0]).toMatchObject({
+          "0": {
+            serverId: mockGuilds.ddm.id,
+            tier: grantTier,
+            interval: "month",
+            expectedOffer: "none",
+          },
+        });
+      });
+    }
+  }
+}
+
+for (const width of [390, 1280]) {
+  test(`Home retries unavailable offer pricing at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const options: { status: "unavailable" | "inactive" } = {
+      status: "unavailable",
+    };
+    await useIntroBilling(page, options);
+    await page.goto("/");
+    await expect(page.getByTestId("home-cta-pro")).toBeEnabled();
+    await expect(page.getByTestId("home-cta-basic")).toBeDisabled();
+    options.status = "inactive";
+    await page
+      .getByRole("button", { name: "Retry Basic offer", exact: true })
+      .click();
+    await expect(page.getByTestId("home-cta-basic")).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Retry Basic offer", exact: true }),
+    ).toHaveCount(0);
+  });
+}

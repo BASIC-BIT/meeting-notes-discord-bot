@@ -31,6 +31,9 @@ desktop and mobile widths. The current-plan card shows Free and its usage;
 the previous subscription appears in a separate billing-history section.
 Direct acquisition covers both terminal statuses and keeps Basic and Pro
 purchase actions available.
+Complimentary plans with terminal Stripe history keep their effective Basic
+or Pro plan and may start paying. Home offer failures disable Basic and
+provide a retry action while keeping Pro available.
 Viewport snapshots show the normal responsive layout; full snapshots use the
 expanded visual mode described above.
 

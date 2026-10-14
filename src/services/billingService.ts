@@ -46,6 +46,7 @@ export type BillingSnapshot = {
   stripeMode: string;
   tier: "free" | "basic" | "pro";
   status: string;
+  stripeStatus: string | null;
   billingSource: "free" | "stripe" | "manual_comp" | "forced";
   stripeTier: "free" | "basic" | "pro" | null;
   grantTier: "basic" | "pro" | null;
@@ -78,6 +79,7 @@ export function buildBillingDisabledSnapshot(): BillingSnapshot {
     subscriptionDetails: null,
     tier: "free",
     status: "free",
+    stripeStatus: null,
     billingSource: "free",
     stripeTier: null,
     grantTier: null,
@@ -136,6 +138,9 @@ export async function getBillingSnapshot(params: {
     subscriptionDetails,
     tier: resolvedSubscription.tier,
     status: resolvedSubscription.status,
+    stripeStatus: subscription?.stripeSubscriptionId
+      ? subscription.status
+      : null,
     billingSource: resolvedSubscription.billingSource,
     stripeTier: resolvedSubscription.stripeTier,
     grantTier: resolvedSubscription.grantTier,
@@ -182,6 +187,9 @@ export async function getMockBillingSnapshot(
     subscriptionDetails: null,
     tier: resolvedSubscription.tier,
     status: resolvedSubscription.status,
+    stripeStatus: subscription?.stripeSubscriptionId
+      ? subscription.status
+      : null,
     billingSource: resolvedSubscription.billingSource,
     stripeTier: resolvedSubscription.stripeTier,
     grantTier: resolvedSubscription.grantTier,

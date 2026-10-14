@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useIntroOfferExposure } from "../hooks/useIntroOfferExposure";
 import {
+  Alert,
   Badge,
   Button,
   Container,
@@ -124,6 +125,7 @@ export default function Home() {
     basicPlan,
   );
 
+  const basicDisabled = !basicPlan || offer.status === "unavailable";
   const startUpgrade = (plan: PaidTier) => {
     track("pricing_cta_clicked", { plan, interval: billingInterval });
     navigate({
@@ -217,6 +219,24 @@ export default function Home() {
           <Text size="sm" c="dimmed">
             Per server, not per member.
           </Text>
+          {offer.status === "unavailable" && (
+            <Alert title="Basic offer unavailable" color="yellow">
+              <Stack gap="sm">
+                <Text size="sm">
+                  We couldn't check the current offer. Retry to continue with
+                  Basic.
+                </Text>
+                <Button
+                  size="sm"
+                  variant="light"
+                  loading={pricingQuery.isFetching}
+                  onClick={() => void pricingQuery.refetch()}
+                >
+                  Retry Basic offer
+                </Button>
+              </Stack>
+            </Alert>
+          )}
           {showCards ? (
             <Stack gap="md" data-testid="home-pricing-cards">
               {(["free", "basic", "pro"] as const).map((tier) => (
@@ -259,7 +279,7 @@ export default function Home() {
                       ? undefined
                       : `Upgrade to ${tier === "basic" ? "Basic" : "Pro"}`
                   }
-                  ctaDisabled={tier === "basic" ? !basicPlan : !proPlan}
+                  ctaDisabled={tier === "basic" ? basicDisabled : !proPlan}
                   ctaProps={
                     tier === "free"
                       ? undefined
@@ -328,7 +348,7 @@ export default function Home() {
                           fw={600}
                           aria-label="Upgrade to Basic"
                           data-testid="home-cta-basic"
-                          disabled={!basicPlan}
+                          disabled={basicDisabled}
                           onClick={() => startUpgrade("basic")}
                         >
                           Upgrade

@@ -739,6 +739,65 @@ test.describe("visual regression", () => {
     }
   }
 
+  for (const viewport of marketingViewports.filter(
+    (item) => item.name === "desktop" || item.name === "mobile",
+  )) {
+    for (const entry of ["billing", "acquisition"] as const) {
+      test(`complimentary terminal ${entry} ${viewport.name} @visual`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(viewport);
+        await useFreeBilling(page, {
+          terminalStatus: "canceled",
+          grantTier: "basic",
+        });
+        for (const mode of visualModes) {
+          const path =
+            entry === "billing"
+              ? `/portal/server/${mockGuilds.ddm.id}/billing`
+              : `/upgrade/select-server?serverId=${mockGuilds.ddm.id}`;
+          await page.goto(withVisualMode(path, mode));
+          const action =
+            entry === "billing"
+              ? "Start paying for Basic"
+              : "Continue with Basic";
+          await expect(
+            page.getByRole("button", { name: action, exact: true }),
+          ).toBeEnabled();
+          if (entry === "billing") {
+            await expect(
+              page.getByTestId("billing-current-plan"),
+            ).toContainText("Basic");
+            await expect(
+              page.getByTestId("billing-current-plan"),
+            ).toContainText("45m / 20h");
+          }
+          await expectVisualScreenshot(
+            page,
+            `comped-terminal-${entry}-${viewport.name}`,
+            mode,
+          );
+        }
+      });
+    }
+    test(`Home unavailable offer ${viewport.name} @visual`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await useIntroBilling(page, { status: "unavailable" });
+      for (const mode of visualModes) {
+        await page.goto(withVisualMode("/", mode));
+        await expect(page.getByTestId("home-cta-pro")).toBeEnabled();
+        await expect(page.getByTestId("home-cta-basic")).toBeDisabled();
+        await expectVisualScreenshot(
+          page,
+          `home-offer-unavailable-${viewport.name}`,
+          mode,
+        );
+      }
+    });
+  }
+
   test("upgrade flow pages @visual", async ({ page }) => {
     for (const mode of visualModes) {
       await page.goto(

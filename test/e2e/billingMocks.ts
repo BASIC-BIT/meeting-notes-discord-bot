@@ -47,8 +47,8 @@ export async function useIntroBilling(
   page: Page,
   options: IntroBillingOptions = {},
 ) {
-  const status = options.status ?? "available";
   await page.route("**/trpc/**", async (route) => {
+    const status = options.status ?? "available";
     const paths = decodeURIComponent(
       new URL(route.request().url()).pathname.split("/trpc/")[1],
     ).split(",");
@@ -89,8 +89,21 @@ export async function useFreeBilling(
   page: Page,
   {
     terminalStatus,
-  }: { terminalStatus?: "canceled" | "incomplete_expired" } = {},
+    grantTier,
+  }: {
+    terminalStatus?: "canceled" | "incomplete_expired";
+    grantTier?: "basic" | "pro";
+  } = {},
 ) {
+  const limitMinutes =
+    grantTier === "pro" ? null : grantTier === "basic" ? 1200 : 240;
+  const usage = terminalStatus
+    ? {
+        usedMinutes: 45,
+        limitMinutes,
+        remainingMinutes: limitMinutes === null ? null : limitMinutes - 45,
+      }
+    : null;
   await page.route("**/trpc/**", async (route) => {
     const paths = decodeURIComponent(
       new URL(route.request().url()).pathname.split("/trpc/")[1],
@@ -104,19 +117,15 @@ export async function useFreeBilling(
         ? {
             result: {
               data: {
-                tier: "free",
-                billingSource: "free",
-                status: terminalStatus ?? "free",
+                tier: grantTier ?? "free",
+                billingSource: grantTier ? "manual_comp" : "free",
+                grantTier: grantTier ?? null,
+                status: grantTier ? "comped" : (terminalStatus ?? "free"),
+                stripeStatus: terminalStatus ?? null,
                 billingEnabled: true,
                 hasStripeBilling: Boolean(terminalStatus),
                 canManageBillingPortal: Boolean(terminalStatus),
-                usage: terminalStatus
-                  ? {
-                      usedMinutes: 45,
-                      limitMinutes: 240,
-                      remainingMinutes: 195,
-                    }
-                  : null,
+                usage,
               },
             },
           }

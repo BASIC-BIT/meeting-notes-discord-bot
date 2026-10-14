@@ -121,3 +121,76 @@ describe("Expired subscription history copy", () => {
     ).not.toHaveTextContent("paid");
   });
 });
+
+describe.each([
+  { name: "Billing", Page: Billing, actionName: "Start paying for Basic" },
+  {
+    name: "Direct upgrade",
+    Page: UpgradeServerSelect,
+    actionName: "Continue with Basic",
+  },
+])("$name complimentary terminal history", ({ Page, actionName }) => {
+  beforeEach(resetFrontendMocks);
+  test.each(["canceled", "incomplete_expired"])(
+    "%s history permits paying without replacing the complimentary current plan",
+    async (stripeStatus) => {
+      prepare(stripeStatus);
+      setBillingQuery({
+        data: {
+          billingEnabled: true,
+          tier: "basic",
+          status: "comped",
+          stripeStatus,
+          billingSource: "manual_comp",
+          hasStripeBilling: true,
+          canManageBillingPortal: true,
+          grantTier: "basic",
+          usage: null,
+        },
+      });
+      renderWithMantine(<Page />);
+      const action = screen.getByRole("button", { name: actionName });
+      expect(action).toBeEnabled();
+      await userEvent.click(action);
+      expect(billingCheckoutMutation.mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ serverId: "g1", tier: "basic" }),
+      );
+      if (Page === Billing)
+        expect(screen.getByTestId("billing-current-plan")).toHaveTextContent(
+          "Basic",
+        );
+    },
+  );
+});
+
+describe.each([
+  { name: "Billing", Page: Billing, actionName: "Start paying for Basic" },
+  {
+    name: "Direct upgrade",
+    Page: UpgradeServerSelect,
+    actionName: "Continue with Basic",
+  },
+])("$name complimentary active billing", ({ Page, actionName }) => {
+  beforeEach(resetFrontendMocks);
+  test.each(["active", "past_due", null])(
+    "does not bypass management for raw Stripe state %s",
+    (stripeStatus) => {
+      prepare("comped");
+      setBillingQuery({
+        data: {
+          billingEnabled: true,
+          tier: "basic",
+          status: "comped",
+          stripeStatus,
+          billingSource: "manual_comp",
+          hasStripeBilling: true,
+          canManageBillingPortal: true,
+          usage: null,
+        },
+      });
+      renderWithMantine(<Page />);
+      expect(screen.getByRole("button", { name: actionName })).toBeDisabled();
+      expect(billingCheckoutMutation.mutateAsync).not.toHaveBeenCalled();
+    },
+  );
+});

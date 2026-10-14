@@ -40,9 +40,15 @@ function previewSubscriptionStatus(
   source: "free" | "stripe" | "manual_comp" | "forced",
   terminalStatus?: TerminalSubscriptionStatus,
 ) {
-  if (terminalStatus) return terminalStatus;
   if (source === "manual_comp") return "comped";
+  if (terminalStatus) return terminalStatus;
   return tier === "free" ? "free" : "active";
+}
+function previewStripeStatus(
+  source: "free" | "stripe" | "manual_comp" | "forced",
+  terminalStatus?: TerminalSubscriptionStatus,
+) {
+  return terminalStatus ?? (source === "stripe" ? "active" : null);
 }
 function previewBilling(
   tier: "free" | "basic" | "pro",
@@ -53,6 +59,7 @@ function previewBilling(
   return {
     tier,
     status: previewSubscriptionStatus(tier, source, terminalStatus),
+    stripeStatus: previewStripeStatus(source, terminalStatus),
     billingSource: source,
     stripeTier: source === "stripe" && tier !== "free" ? tier : null,
     grantTier: source === "manual_comp" ? tier : null,
@@ -879,4 +886,60 @@ export const DirectExpiredHistory: Story = {
   ...DirectCanceledHistory,
   tags: ["integration-terminal-history"],
   args: { ...DirectCanceledHistory.args, terminalStatus: "incomplete_expired" },
+};
+
+export const BillingCompedTerminalHistory: Story = {
+  tags: ["integration-comp-history"],
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "basic",
+    billingSource: "manual_comp",
+    terminalStatus: "canceled",
+    introStatus: "inactive",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Start paying for Basic" }),
+      ).toBeEnabled(),
+    );
+    await expect(canvas.getByTestId("billing-current-plan")).toHaveTextContent(
+      "Basic",
+    );
+    await expect(
+      canvas.getByTestId("billing-subscription-history"),
+    ).toHaveTextContent("Previous subscription: Canceled");
+  },
+};
+export const DirectCompedTerminalHistory: Story = {
+  tags: ["integration-comp-history"],
+  args: {
+    tier: "basic",
+    billingSource: "manual_comp",
+    terminalStatus: "incomplete_expired",
+    introStatus: "inactive",
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Continue with Basic" }),
+      ).toBeEnabled(),
+    );
+    await expect(
+      canvas.getByText("Current plan: Basic (complimentary)"),
+    ).toBeVisible();
+  },
+};
+export const HomeOfferUnavailable: Story = {
+  tags: ["integration-offer-guards"],
+  args: { path: "/", introStatus: "unavailable" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByTestId("home-cta-pro")).toBeEnabled(),
+    );
+    await expect(canvas.getByTestId("home-cta-basic")).toBeDisabled();
+  },
 };

@@ -48,6 +48,7 @@ export type BillingData = {
   billingEnabled: boolean;
   tier: "free" | "basic" | "pro";
   status: string;
+  stripeStatus?: string | null;
   billingSource?: "free" | "stripe" | "manual_comp" | "forced";
   stripeTier?: "free" | "basic" | "pro" | null;
   grantTier?: "basic" | "pro" | null;

@@ -4,6 +4,9 @@ import { introOfferTerms } from "../utils/pricing";
 
 export default function BasicIntroTerms({ offer }: { offer: BasicIntroOffer }) {
   if (offer.status !== "available") return null;
+  const deadline = offer.enrollmentEndsAt
+    ? new Date(offer.enrollmentEndsAt)
+    : null;
   return (
     <Stack gap={4} mt="sm" data-testid="basic-intro-terms">
       <Text size="sm" fw={600} c="var(--mantine-color-text)">
@@ -19,9 +22,20 @@ export default function BasicIntroTerms({ offer }: { offer: BasicIntroOffer }) {
           : "This discount pauses account-wide plan changes for 3 months."}{" "}
         Payment methods and cancellation stay available.
       </Text>
-      {offer.enrollmentEndsAt ? (
+      {deadline ? (
         <Text size="xs" c="var(--mantine-color-text)">
-          Enroll by {new Date(offer.enrollmentEndsAt).toLocaleDateString()}.
+          Enroll by{" "}
+          {deadline.toLocaleString(undefined, {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit",
+            fractionalSecondDigits: deadline.getMilliseconds() ? 3 : undefined,
+            timeZoneName: "short",
+          })}
+          .
         </Text>
       ) : null}
     </Stack>

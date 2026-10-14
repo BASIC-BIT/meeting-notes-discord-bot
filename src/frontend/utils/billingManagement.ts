@@ -3,15 +3,15 @@ import type { AppRouter } from "../../trpc/router";
 
 type BillingHistory = Pick<
   inferRouterOutputs<AppRouter>["billing"]["me"],
-  "tier" | "status" | "hasStripeBilling"
+  "status" | "stripeStatus" | "hasStripeBilling"
 >;
 export type TerminalSubscriptionStatus = "canceled" | "incomplete_expired";
 
 export function isTerminalStripeHistory(data: BillingHistory): boolean {
+  const status = data.stripeStatus ?? data.status;
   return (
-    data.tier === "free" &&
     data.hasStripeBilling &&
-    (data.status === "canceled" || data.status === "incomplete_expired")
+    (status === "canceled" || status === "incomplete_expired")
   );
 }
 export function requiresStripeManagement(data: BillingHistory): boolean {

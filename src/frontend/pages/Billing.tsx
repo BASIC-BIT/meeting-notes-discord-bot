@@ -815,7 +815,7 @@ function BillingCurrentPlan({
   const statusLine = formatStatusLine(statusLabel, data.nextBillingDate);
   return (
     <>
-      {(isFreeTier && !data.hasStripeBilling) || hasTerminalSubscription ? (
+      {isFreeTier && (!data.hasStripeBilling || hasTerminalSubscription) ? (
         <BillingFreePanel serverName={serverName} usage={data.usage} />
       ) : (
         <BillingPaidPanel
@@ -838,7 +838,10 @@ function BillingCurrentPlan({
             <Title order={4}>Billing history</Title>
             <Text size="sm" c="dimmed">
               Previous subscription:{" "}
-              {data.status === "canceled" ? "Canceled" : "Expired"}.
+              {(data.stripeStatus ?? data.status) === "canceled"
+                ? "Canceled"
+                : "Expired"}
+              .
             </Text>
             {data.canManageBillingPortal ? (
               <Group>
