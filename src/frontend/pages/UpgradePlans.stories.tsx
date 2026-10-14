@@ -36,20 +36,26 @@ import {
 function previewBilling(
   tier: "free" | "basic" | "pro",
   billingSource?: "free" | "stripe" | "manual_comp" | "forced",
+  canceledSubscription = false,
 ) {
   const source = billingSource ?? (tier === "free" ? "free" : "stripe");
   return {
     tier,
-    status:
-      source === "manual_comp" ? "comped" : tier === "free" ? "free" : "active",
+    status: canceledSubscription
+      ? "canceled"
+      : source === "manual_comp"
+        ? "comped"
+        : tier === "free"
+          ? "free"
+          : "active",
     billingSource: source,
     stripeTier: source === "stripe" && tier !== "free" ? tier : null,
     grantTier: source === "manual_comp" ? tier : null,
     activeGrant: null,
     nextBillingDate: null,
     stripeCustomerId: null,
-    hasStripeBilling: source === "stripe",
-    canManageBillingPortal: source === "stripe",
+    hasStripeBilling: canceledSubscription || source === "stripe",
+    canManageBillingPortal: canceledSubscription || source === "stripe",
     upgradeUrl: null,
     portalUrl: null,
     billingEnabled: true,
@@ -75,6 +81,7 @@ export function UpgradePreview({
   staleQuote = false,
   pendingCheckout = false,
   missingPrices = false,
+  canceledSubscription = false,
 }: {
   path?: string;
   tier?: "free" | "basic" | "pro";
@@ -88,6 +95,7 @@ export function UpgradePreview({
   staleQuote?: boolean;
   pendingCheckout?: boolean;
   missingPrices?: boolean;
+  canceledSubscription?: boolean;
 }) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => setColorScheme(colorScheme), [colorScheme, setColorScheme]);
@@ -152,7 +160,7 @@ export function UpgradePreview({
                 ],
               },
               "billing.me": {
-                ...previewBilling(tier, billingSource),
+                ...previewBilling(tier, billingSource, canceledSubscription),
                 subscriptionDetails,
                 introOffer:
                   introStatus === "available"
@@ -178,7 +186,7 @@ export function UpgradePreview({
               };
             if (staleQuote)
               data["billing.me"] = {
-                ...previewBilling(tier, billingSource),
+                ...previewBilling(tier, billingSource, canceledSubscription),
                 introOffer: { ...monthlyIntroOffer, priceId: "stale-price" },
                 annualIntroOffer: {
                   ...annualIntroOffer,
@@ -418,6 +426,78 @@ export const Landing: Story = { args: { path: "/upgrade" } };
 export const BillingFree: Story = {
   args: { path: "/portal/server/example/billing" },
 };
+export const BillingCanceledSubscription: Story = {
+  tags: ["integration-canceled-history"],
+  args: { path: "/portal/server/example/billing", canceledSubscription: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const currentPlan = await canvas.findByTestId("billing-current-plan");
+    await expect(currentPlan).toHaveTextContent("Free");
+    await expect(currentPlan).not.toHaveTextContent("Canceled");
+    await expect(currentPlan).not.toHaveTextContent("No subscription needed");
+    await expect(
+      canvas.getByRole("button", { name: "Upgrade to Basic" }),
+    ).toBeEnabled();
+    await expect(
+      canvas.getByRole("button", { name: "Upgrade to Pro" }),
+    ).toBeEnabled();
+    const history = canvas.getByTestId("billing-subscription-history");
+    await expect(history).toHaveTextContent(
+      "Previous paid subscription: Canceled",
+    );
+    await expect(
+      within(history).getByRole("button", { name: "View billing history" }),
+    ).toBeEnabled();
+  },
+};
+
+export const BillingCanceledWithIntro: Story = {
+  ...BillingCanceledSubscription,
+  tags: ["integration-canceled-history"],
+  args: { ...BillingCanceledSubscription.args, introStatus: "available" },
+  play: async (context) => {
+    await BillingCanceledSubscription.play?.(context);
+    const canvas = within(context.canvasElement);
+    await expect(canvas.getByTestId("basic-intro-terms")).toHaveTextContent(
+      "$6/month",
+    );
+    await userEvent.click(
+      within(canvas.getByTestId("billing-interval")).getByText("Annual", {
+        exact: true,
+      }),
+    );
+    await expect(canvas.getByTestId("basic-intro-terms")).toHaveTextContent(
+      "$60",
+    );
+  },
+};
+export const BillingCanceledOfferUnavailable: Story = {
+  ...BillingCanceledSubscription,
+  tags: ["integration-canceled-history"],
+  args: { ...BillingCanceledSubscription.args, introStatus: "unavailable" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByTestId("billing-current-plan"),
+    ).toHaveTextContent("Free");
+    await expect(
+      canvas.getByTestId("billing-current-plan"),
+    ).not.toHaveTextContent("Canceled");
+    await expect(
+      canvas.getByTestId("billing-subscription-history"),
+    ).toHaveTextContent("Previous paid subscription: Canceled");
+    await expect(
+      canvas.getByRole("button", { name: "Upgrade to Basic" }),
+    ).toBeDisabled();
+    await expect(
+      canvas.getByRole("button", { name: "Upgrade to Pro" }),
+    ).toBeEnabled();
+    await expect(
+      canvas.getByRole("button", { name: "View billing history" }),
+    ).toBeEnabled();
+  },
+};
+
 export const BillingPaid: Story = {
   args: { path: "/portal/server/example/billing", tier: "basic" },
 };

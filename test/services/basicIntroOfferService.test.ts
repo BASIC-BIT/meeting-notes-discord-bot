@@ -1720,6 +1720,10 @@ import {
   getBasicIntroCustomerRestriction,
 } from "../../src/services/basicIntroOfferService";
 describe("consumed annual once invoice evidence", () => {
+  beforeEach(() =>
+    jest.useFakeTimers({ now: Date.parse("2026-10-12T12:00:00Z") }),
+  );
+  afterEach(() => jest.useRealTimers());
   function annualInvoiceFixture() {
     const price = {
       ...fixture().price,

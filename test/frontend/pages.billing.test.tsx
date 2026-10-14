@@ -7,7 +7,12 @@ import {
   setRouteParams,
 } from "./testUtils";
 import { guildState } from "./testUtils";
-import { setBillingQuery, setPricingQuery } from "./mocks/trpc";
+import {
+  setBillingQuery,
+  setPricingQuery,
+  billingCheckoutMutation,
+} from "./mocks/trpc";
+import userEvent from "@testing-library/user-event";
 import Billing from "../../src/frontend/pages/Billing";
 
 describe("Billing page", () => {
@@ -41,12 +46,74 @@ describe("Billing page", () => {
     });
     renderWithMantine(<Billing />);
     expect(screen.getByTestId("billing-manage")).toBeVisible();
+    expect(screen.getByTestId("billing-current-plan")).not.toHaveTextContent(
+      "Canceled",
+    );
+    expect(
+      screen.getByTestId("billing-subscription-history"),
+    ).toHaveTextContent("Previous paid subscription: Canceled");
+    expect(
+      screen.queryByText("No subscription needed"),
+    ).not.toBeInTheDocument();
     expect(
       within(screen.getByTestId("billing-current-plan")).getByText("Free", {
         exact: true,
       }),
     ).toBeVisible();
   });
+
+  test.each(["basic", "pro"] as const)(
+    "canceled paid history keeps the %s purchase request available",
+    async (tier) => {
+      guildState.selectedGuildId = "g1";
+      guildState.guilds = [{ id: "g1", name: "Guild One", canManage: true }];
+      setBillingQuery({
+        data: {
+          billingEnabled: true,
+          tier: "free",
+          status: "canceled",
+          hasStripeBilling: true,
+          canManageBillingPortal: true,
+          usage: null,
+        },
+      });
+      setPricingQuery({
+        data: {
+          plans: [
+            {
+              tier: "basic",
+              interval: "month",
+              priceId: "basic",
+              unitAmount: 1000,
+              currency: "usd",
+            },
+            {
+              tier: "pro",
+              interval: "month",
+              priceId: "pro",
+              unitAmount: 2400,
+              currency: "usd",
+            },
+          ],
+        },
+      });
+      billingCheckoutMutation.mutateAsync.mockRejectedValue(
+        new Error("Controlled provider rejection"),
+      );
+      renderWithMantine(<Billing />);
+      const button = screen.getByRole("button", {
+        name: tier === "basic" ? "Upgrade to Basic" : "Upgrade to Pro",
+      });
+      expect(button).toBeEnabled();
+      await userEvent.click(button);
+      expect(billingCheckoutMutation.mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ serverId: "g1", tier, interval: "month" }),
+      );
+      expect(
+        screen.getByTestId("billing-subscription-history"),
+      ).toHaveTextContent("Canceled");
+    },
+  );
 
   test("renders disabled billing state", () => {
     guildState.selectedGuildId = "g1";

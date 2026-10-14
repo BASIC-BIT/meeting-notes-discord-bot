@@ -67,6 +67,11 @@ type BillingData = RouterOutput["billing"]["me"];
 
 type BillingUsage = NonNullable<BillingData["usage"]>;
 
+const isCanceledStripeHistory = (data: BillingData) =>
+  data.tier === "free" && data.hasStripeBilling && data.status === "canceled";
+const requiresStripeManagement = (data: BillingData) =>
+  data.hasStripeBilling && !isCanceledStripeHistory(data);
+
 type BillingShellProps = {
   children: ReactNode;
   description?: string;
@@ -240,11 +245,10 @@ const BillingFreePanel = ({ serverName, usage }: BillingBaseProps) => (
         <ThemeIcon color="brand" variant="light">
           <IconCreditCard size={18} />
         </ThemeIcon>
-        <Text fw={600}>You&apos;re on the Free plan</Text>
+        <Text fw={600}>Current plan</Text>
       </Group>
-      <Text c="dimmed" size="sm">
-        Get more recording time and ask questions across more meetings by
-        upgrading below.
+      <Text size="lg" fw={700}>
+        Free
       </Text>
       <Text size="sm" c="dimmed">
         Server: {serverName}
@@ -394,7 +398,7 @@ const BillingPlansSection = ({
   const plansExpanded = isFreePlan || isComped ? true : showPlans;
   const hasPromo = promoCode.trim().length > 0;
   const managementOnly =
-    data.hasStripeBilling || data.billingSource === "forced";
+    requiresStripeManagement(data) || data.billingSource === "forced";
   const shownOffer =
     offerChoice === "promotion" && hasPromo
       ? { status: "inactive" as const }
@@ -415,7 +419,7 @@ const BillingPlansSection = ({
       : "Upgrade to Pro";
   const basicDisabled =
     !basicPlan ||
-    data.hasStripeBilling ||
+    requiresStripeManagement(data) ||
     data.billingSource === "forced" ||
     busy ||
     checkoutBlocked ||
@@ -424,7 +428,7 @@ const BillingPlansSection = ({
     (data.tier === "basic" && !isComped);
   const proDisabled =
     !proPlan ||
-    data.hasStripeBilling ||
+    requiresStripeManagement(data) ||
     data.billingSource === "forced" ||
     busy ||
     checkoutBlocked ||
@@ -744,7 +748,7 @@ export function Billing() {
         billingQuery.isFetching ||
         pricingQuery.isFetching ||
         pricingQuery.isError ||
-        data?.hasStripeBilling ||
+        (data && requiresStripeManagement(data)) ||
         data?.billingSource === "forced" ||
         (tier === "basic" && offer.status === "unavailable")
       )
@@ -834,11 +838,12 @@ export function Billing() {
 
   const statusLabel = formatStatusLabel(data.status);
   const statusLine = formatStatusLine(statusLabel, data.nextBillingDate);
+  const hasCanceledPaidSubscription = isCanceledStripeHistory(data);
 
   return (
     <BillingShell>
       <RecordingPlanContext context={limitContext} />
-      {isFreeTier && !data.hasStripeBilling ? (
+      {(isFreeTier && !data.hasStripeBilling) || hasCanceledPaidSubscription ? (
         <BillingFreePanel serverName={serverName} usage={data.usage} />
       ) : (
         <BillingPaidPanel
@@ -855,6 +860,29 @@ export function Billing() {
           normalPrice={normalPlan ? formatPlanPrice(normalPlan, "month") : null}
         />
       )}
+      {hasCanceledPaidSubscription ? (
+        <Surface p="xl" data-testid="billing-subscription-history">
+          <Stack gap="sm">
+            <Title order={4}>Billing history</Title>
+            <Text size="sm" c="dimmed">
+              Previous paid subscription: Canceled.
+            </Text>
+            {data.canManageBillingPortal ? (
+              <Group>
+                <Button
+                  variant="light"
+                  disabled={!selectedGuildId || busy}
+                  loading={isPortalPending}
+                  onClick={handlePortal}
+                  data-testid="billing-manage"
+                >
+                  View billing history
+                </Button>
+              </Group>
+            ) : null}
+          </Stack>
+        </Surface>
+      ) : null}
       <BillingPlansSection
         data={data}
         interval={interval}

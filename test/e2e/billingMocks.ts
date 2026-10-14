@@ -15,6 +15,7 @@ export async function useIntroBilling(
     status?: BasicIntroOffer["status"];
     details?: ProviderSubscriptionDetails;
     legacy?: boolean;
+    canceledSubscription?: boolean;
   } = {},
 ) {
   const status = options.status ?? "available";
@@ -43,13 +44,23 @@ export async function useIntroBilling(
                   tier: options.details ? "basic" : "free",
                   billingSource:
                     options.details || options.legacy ? "stripe" : "free",
-                  status: options.details ? "active" : "free",
+                  status: options.canceledSubscription
+                    ? "canceled"
+                    : options.details
+                      ? "active"
+                      : "free",
                   billingEnabled: true,
                   hasStripeBilling: Boolean(options.details || options.legacy),
                   canManageBillingPortal: Boolean(
                     options.details || options.legacy,
                   ),
-                  usage: null,
+                  usage: options.canceledSubscription
+                    ? {
+                        usedMinutes: 45,
+                        limitMinutes: 240,
+                        remainingMinutes: 195,
+                      }
+                    : null,
                   subscriptionDetails: options.details,
                   ...offers,
                 },
@@ -65,7 +76,10 @@ export async function useIntroBilling(
 }
 
 // Keep provider state out of UI purchase tests; the real mock runtime forces Pro.
-export async function useFreeBilling(page: Page) {
+export async function useFreeBilling(
+  page: Page,
+  { canceledSubscription = false } = {},
+) {
   await page.route("**/trpc/**", async (route) => {
     const paths = decodeURIComponent(
       new URL(route.request().url()).pathname.split("/trpc/")[1],
@@ -81,11 +95,17 @@ export async function useFreeBilling(page: Page) {
               data: {
                 tier: "free",
                 billingSource: "free",
-                status: "free",
+                status: canceledSubscription ? "canceled" : "free",
                 billingEnabled: true,
-                hasStripeBilling: false,
-                canManageBillingPortal: false,
-                usage: null,
+                hasStripeBilling: canceledSubscription,
+                canManageBillingPortal: canceledSubscription,
+                usage: canceledSubscription
+                  ? {
+                      usedMinutes: 45,
+                      limitMinutes: 240,
+                      remainingMinutes: 195,
+                    }
+                  : null,
               },
             },
           }

@@ -8,6 +8,74 @@ import { expect, test } from "./fixtures";
 import { mockBilling, mockGuilds } from "./mockData";
 import type { Locator } from "@playwright/test";
 
+test("Free access is separate from a canceled paid subscription", async ({
+  page,
+}) => {
+  await useFreeBilling(page, { canceledSubscription: true });
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+  const currentPlan = page.getByTestId("billing-current-plan");
+  await expect(currentPlan).toContainText("Free");
+  await expect(currentPlan).not.toContainText("Canceled");
+  await expect(currentPlan).not.toContainText("No subscription needed");
+  await expect(currentPlan).toContainText("45m / 4h");
+  await expect(
+    page.getByRole("button", { name: "Upgrade to Basic" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Upgrade to Pro" }),
+  ).toBeEnabled();
+  const history = page.getByTestId("billing-subscription-history");
+  await expect(history).toContainText("Previous paid subscription: Canceled");
+  await expect(
+    history.getByRole("button", { name: "View billing history" }),
+  ).toBeEnabled();
+});
+
+for (const tier of ["basic", "pro"] as const) {
+  test(`canceled paid history submits a ${tier} repurchase request`, async ({
+    page,
+  }) => {
+    await useFreeBilling(page, { canceledSubscription: true });
+    const requests: unknown[] = [];
+    await page.route("**/trpc/billing.checkout*", (route) => {
+      requests.push(route.request().postDataJSON());
+      return route.fulfill({
+        status: 400,
+        json: [
+          {
+            error: {
+              message: "Controlled transition guard",
+              code: -32600,
+              data: { code: "BAD_REQUEST", httpStatus: 400 },
+            },
+          },
+        ],
+      });
+    });
+    await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+    await page
+      .getByRole("button", {
+        name: tier === "basic" ? "Upgrade to Basic" : "Upgrade to Pro",
+      })
+      .click();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0]).toMatchObject({
+      "0": {
+        serverId: mockGuilds.ddm.id,
+        tier,
+        interval: "month",
+        expectedOffer: "none",
+      },
+    });
+    await expect(
+      page.getByTestId("billing-subscription-history"),
+    ).toContainText("Canceled");
+    await expect(
+      page.getByRole("button", { name: "Retry checkout" }),
+    ).toBeVisible();
+  });
+}
+
 test("mobile Home stacks complete plans and keeps direct purchase actions", async ({
   page,
 }) => {

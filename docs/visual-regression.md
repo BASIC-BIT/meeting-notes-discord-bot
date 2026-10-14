@@ -26,6 +26,12 @@ Their checks also assert key content, upgrade selection and no horizontal
 document overflow. These baselines record the current UI; passing a pixel
 comparison does not establish that its design is good.
 
+Billing also covers a Free server with a canceled paid subscription at desktop
+and mobile widths. The current-plan card must show Free and its usage, while
+the previous cancellation appears in a separate billing-history section.
+Viewport snapshots show the normal responsive layout; full snapshots use the
+expanded visual mode described above.
+
 ## Handling nondeterministic UI
 
 - Prefer deterministic mock data first. Keep timestamps, random IDs, and seeded

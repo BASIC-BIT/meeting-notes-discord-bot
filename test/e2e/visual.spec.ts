@@ -322,6 +322,15 @@ test.describe("visual regression", () => {
               await expect(page.getByTestId("basic-intro-terms")).toContainText(
                 interval === "month" ? "$6/month" : "$60 for your first year",
               );
+              if (surface === "home") {
+                await waitForVisualReady(page);
+                await page.evaluate(() =>
+                  window.scrollTo({ top: 0, left: 0, behavior: "instant" }),
+                );
+                await expect
+                  .poll(() => page.evaluate(() => window.scrollY))
+                  .toBe(0);
+              }
               await expectVisualScreenshot(
                 page,
                 `basic-intro-${surface}-${viewport.name}-${colorScheme}-${interval}`,
@@ -608,6 +617,60 @@ test.describe("visual regression", () => {
       await expectVisualScreenshot(page, "billing-free", mode);
     }
   });
+
+  for (const viewport of marketingViewports.filter(
+    (item) => item.name === "desktop" || item.name === "mobile",
+  )) {
+    test(`billing canceled subscription ${viewport.name} @visual`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await useFreeBilling(page, { canceledSubscription: true });
+      for (const mode of visualModes) {
+        await page.goto(
+          withVisualMode(`/portal/server/${mockGuilds.ddm.id}/billing`, mode),
+        );
+        const currentPlan = page.getByTestId("billing-current-plan");
+        await expect(currentPlan).toContainText("Free");
+        await expect(currentPlan).not.toContainText("Canceled");
+        await expect(
+          page.getByTestId("billing-subscription-history"),
+        ).toContainText("Previous paid subscription: Canceled");
+        await expectVisualScreenshot(
+          page,
+          `billing-canceled-subscription-${viewport.name}`,
+          mode,
+        );
+      }
+    });
+  }
+
+  for (const viewport of marketingViewports.filter(
+    (item) => item.name === "desktop" || item.name === "mobile",
+  )) {
+    test(`billing canceled subscription intro ${viewport.name} @visual`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await useIntroBilling(page, { legacy: true, canceledSubscription: true });
+      for (const mode of visualModes) {
+        await page.goto(
+          withVisualMode(`/portal/server/${mockGuilds.ddm.id}/billing`, mode),
+        );
+        const currentPlan = page.getByTestId("billing-current-plan");
+        await expect(currentPlan).toContainText("Free");
+        await expect(currentPlan).not.toContainText("Canceled");
+        await expect(
+          page.getByTestId("billing-subscription-history"),
+        ).toContainText("Previous paid subscription: Canceled");
+        await expectVisualScreenshot(
+          page,
+          `billing-canceled-subscription-intro-${viewport.name}`,
+          mode,
+        );
+      }
+    });
+  }
 
   test("upgrade flow pages @visual", async ({ page }) => {
     for (const mode of visualModes) {
