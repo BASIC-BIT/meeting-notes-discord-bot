@@ -4,23 +4,18 @@ import { introOfferTerms } from "../utils/pricing";
 
 export default function BasicIntroTerms({ offer }: { offer: BasicIntroOffer }) {
   if (offer.status !== "available") return null;
-  const deadline = offer.enrollmentEndsAt
-    ? new Date(offer.enrollmentEndsAt)
-    : null;
+  const deadline =
+    offer.enrollmentEndsAt && !offer.reservedForCheckout
+      ? new Date(offer.enrollmentEndsAt)
+      : null;
   return (
     <Stack gap={4} mt="sm" data-testid="basic-intro-terms">
       <Text size="sm" fw={600} c="var(--mantine-color-text)">
         {introOfferTerms(offer)}
       </Text>
       <Text size="xs" c="var(--mantine-color-text)">
-        First paid subscription per server. Cannot combine with other offers.
-        Auto-renews. Tax may apply.
-      </Text>
-      <Text size="xs" c="var(--mantine-color-text)">
-        {offer.id === "basic_annual_intro_v1"
-          ? "This offer pauses account-wide plan changes until the first invoice is finalized."
-          : "This discount pauses account-wide plan changes for 3 months."}{" "}
-        Payment methods and cancellation stay available.
+        Each offer is available once per server. Cannot combine with other
+        offers. Auto-renews. Tax may apply.
       </Text>
       {deadline ? (
         <Text size="xs" c="var(--mantine-color-text)">

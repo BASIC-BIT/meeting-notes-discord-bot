@@ -732,17 +732,6 @@ for (const interval of ["month", "year"] as const) {
         ? "$6/month for your first 3 months, then $10/month"
         : "$60 for your first year, then $100/year",
     );
-    await expect(page.getByTestId("basic-intro-terms")).toContainText(
-      "account-wide plan changes",
-    );
-    await expect(page.getByTestId("basic-intro-terms")).toContainText(
-      "Payment methods and cancellation stay available.",
-    );
-    await expect(page.getByTestId("basic-intro-terms")).toContainText(
-      interval === "month"
-        ? "for 3 months"
-        : "until the first invoice is finalized",
-    );
     await page.getByRole("button", { name: "Continue with Basic" }).click();
     await expect(
       page.getByRole("button", { name: "Retry checkout" }),
@@ -782,7 +771,7 @@ for (const interval of ["month", "year"] as const) {
     });
   });
 }
-test("basic intro Billing uses actual taxed annual invoice and shared account restriction", async ({
+test("basic intro Billing uses actual taxed annual invoice without account-wide warning", async ({
   page,
 }) => {
   await useIntroBilling(page, {
@@ -802,7 +791,7 @@ test("basic intro Billing uses actual taxed annual invoice and shared account re
   );
   await expect(
     page.getByText("Account-wide plan changes are temporarily restricted"),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Manage billing" }),
   ).toBeEnabled();

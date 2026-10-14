@@ -1,4 +1,4 @@
-import { Alert, Stack, Text } from "@mantine/core";
+import { Stack, Text } from "@mantine/core";
 import type { ProviderSubscriptionDetails } from "../../types/pricing";
 import { formatCurrency } from "../utils/pricing";
 
@@ -84,6 +84,27 @@ export default function SubscriptionDetails({
 }: {
   details: ProviderSubscriptionDetails | null | undefined;
 }) {
+  const progress =
+    details?.status === "available" ? details.paymentProgress : undefined;
+  if (progress === "processing")
+    return (
+      <Text size="sm" c="dimmed" data-testid="payment-settling">
+        Your previous payment is still being settled. Please come back later.
+      </Text>
+    );
+  if (progress === "unavailable")
+    return (
+      <Text size="sm" c="dimmed" data-testid="payment-status-unavailable">
+        Payment details aren't available right now. Open Manage billing to check
+        the status.
+      </Text>
+    );
+  if (progress === "action_required")
+    return (
+      <Text size="sm" c="dimmed" data-testid="payment-needs-attention">
+        Your previous payment isn't complete. Open Manage billing to check it.
+      </Text>
+    );
   if (!details || details.status === "unavailable")
     return (
       <Text size="sm" c="var(--mantine-color-text)">
@@ -112,21 +133,6 @@ export default function SubscriptionDetails({
       <Text size="sm" c="var(--mantine-color-text)">
         {renewalLine(details, period, renewalPrice)}
       </Text>
-      {details.planChangesRestricted ? (
-        <Alert
-          color="yellow"
-          title="Account-wide plan changes are temporarily restricted"
-        >
-          An introductory discount on your billing account temporarily limits
-          plan changes across its subscriptions. Payment methods and
-          cancellation remain available.
-          <Text size="sm" mt="xs" c="var(--mantine-color-text)">
-            {details.planChangeRestrictionEndsAt
-              ? `Restriction ends ${date(details.planChangeRestrictionEndsAt)}.`
-              : "The provider has not supplied the restriction end."}
-          </Text>
-        </Alert>
-      ) : null}
     </Stack>
   );
 }

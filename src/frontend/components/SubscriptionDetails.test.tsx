@@ -44,7 +44,7 @@ it("does not invent paid first-year price when invoice evidence is unavailable",
   ).toBeVisible();
   expect(screen.queryByText(/\$60/)).not.toBeInTheDocument();
 });
-it("shows actual monthly discount and account restriction without inventing an end", () => {
+it("shows the monthly discount without treating an active offer as a warning", () => {
   show({
     ...annual,
     interval: "month",
@@ -62,12 +62,8 @@ it("shows actual monthly discount and account restriction without inventing an e
     },
   });
   expect(screen.getByText(/Current price: \$6\/month/)).toBeVisible();
-  expect(
-    screen.getByText(/Account-wide plan changes are temporarily restricted/),
-  ).toBeVisible();
-  expect(
-    screen.getByText(/The provider has not supplied the restriction end/),
-  ).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("payment-settling")).not.toBeInTheDocument();
 });
 it("keeps cancellation honest and does not call it a renewal", () => {
   show({ ...annual, cancelAtPeriodEnd: true });
@@ -77,4 +73,36 @@ it("keeps cancellation honest and does not call it a renewal", () => {
     ),
   ).toBeVisible();
   expect(screen.queryByText(/Next renewal/)).not.toBeInTheDocument();
+});
+
+it("shows a neutral message while a payment is pending", () => {
+  render(
+    <MantineProvider>
+      <SubscriptionDetails
+        details={{ ...annual, paymentProgress: "processing" }}
+      />
+    </MantineProvider>,
+  );
+  expect(screen.getByTestId("payment-settling")).toHaveTextContent(
+    "Your previous payment is still being settled. Please come back later.",
+  );
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("unknown payment status does not claim unpaid or processing", () => {
+  show({ ...annual, paymentProgress: "unavailable" });
+  expect(screen.getByTestId("payment-status-unavailable")).toHaveTextContent(
+    "check the status",
+  );
+  expect(screen.queryByTestId("payment-settling")).not.toBeInTheDocument();
+  expect(
+    screen.queryByTestId("payment-needs-attention"),
+  ).not.toBeInTheDocument();
+});
+it("action-required payment points at a check instead of telling the user to wait", () => {
+  show({ ...annual, paymentProgress: "action_required" });
+  expect(screen.getByTestId("payment-needs-attention")).toHaveTextContent(
+    "Open Manage billing",
+  );
+  expect(screen.queryByTestId("payment-settling")).not.toBeInTheDocument();
 });

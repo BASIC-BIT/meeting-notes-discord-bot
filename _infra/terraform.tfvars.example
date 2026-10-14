@@ -142,6 +142,7 @@ ANALYTICS_PROXY_CNAME_TARGET=""              # CNAME target PostHog issues for t
 # - ${project_name}-${environment}/langfuse-secret-key
 
 # Inert until existing native Stripe objects and an enrollment start are approved.
+STRIPE_INTRO_OFFER_LEDGER_ENABLED=false # Separate rollout gate; reviewed coverage is required.
 STRIPE_BASIC_INTRO_COUPON_ID=""
 STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID="" # Separate 40 percent once coupon; annual disabled when empty.
 STRIPE_BASIC_INTRO_STARTS_AT=""

@@ -92,6 +92,7 @@ type UpgradePreviewProps = {
   loadingBilling?: boolean;
   staleQuote?: boolean;
   pendingCheckout?: boolean;
+  paymentSettling?: boolean;
   missingPrices?: boolean;
   terminalStatus?: TerminalSubscriptionStatus;
 };
@@ -102,6 +103,7 @@ function previewResponses({
   billingSource,
   terminalStatus,
   subscriptionDetails,
+  paymentSettling,
   introStatus,
   staleQuote,
   missingPrices,
@@ -151,6 +153,9 @@ function previewResponses({
     },
     "billing.me": {
       ...previewBilling(tier, billingSource, terminalStatus),
+      ...(paymentSettling
+        ? { status: "incomplete", stripeStatus: "incomplete" }
+        : {}),
       subscriptionDetails,
       introOffer:
         introStatus === "available"
@@ -177,6 +182,9 @@ function previewResponses({
   if (staleQuote)
     data["billing.me"] = {
       ...previewBilling(tier, billingSource, terminalStatus),
+      ...(paymentSettling
+        ? { status: "incomplete", stripeStatus: "incomplete" }
+        : {}),
       introOffer: { ...monthlyIntroOffer, priceId: "stale-price" },
       annualIntroOffer: {
         ...annualIntroOffer,
@@ -199,6 +207,7 @@ export function UpgradePreview({
   loadingBilling = false,
   staleQuote = false,
   pendingCheckout = false,
+  paymentSettling = false,
   missingPrices = false,
   terminalStatus,
 }: UpgradePreviewProps) {
@@ -226,6 +235,7 @@ export function UpgradePreview({
               billingSource,
               terminalStatus,
               subscriptionDetails,
+              paymentSettling,
               introStatus,
               staleQuote,
               missingPrices,
@@ -610,17 +620,17 @@ async function expectAccountTerms(
   const canvas = within(canvasElement);
   const terms = await canvas.findByTestId("basic-intro-terms");
   await expect(terms).toHaveTextContent(
-    "First paid subscription per server. Cannot combine with other offers. Auto-renews. Tax may apply.",
+    "Each offer is available once per server. Cannot combine with other offers. Auto-renews. Tax may apply.",
   );
-  await expect(terms).toHaveTextContent("account-wide plan changes");
-  await expect(terms).toHaveTextContent(
-    "Payment methods and cancellation stay available.",
-  );
+  await expect(terms).not.toHaveTextContent("account-wide plan changes");
   await expect(terms).toHaveTextContent(
     interval === "month"
-      ? "for 3 months"
-      : "until the first invoice is finalized",
+      ? "$6/month for your first 3 months"
+      : "$60 for your first year",
   );
+  await expect(canvas.getByLabelText("Regular price")).toHaveStyle({
+    "text-decoration-line": "line-through",
+  });
 }
 
 const saleTags = ["basic-intro"];
@@ -788,6 +798,52 @@ export const IntroAnnualNormalRenewal: Story = {
   args: {
     ...IntroAnnualSubscriber.args,
     subscriptionDetails: { ...annualSubscriber, firstYearPayment: null },
+  },
+};
+export const PaymentSettling: Story = {
+  ...IntroAnnualSubscriber,
+  tags: ["basic-intro", "payment-progress"],
+  play: async ({ canvasElement }) => {
+    const current = within(
+      await within(canvasElement).findByTestId("billing-current-plan"),
+    );
+    await expect(current.getByText("Free", { exact: true })).toBeVisible();
+    await expect(current.queryAllByText(/incomplete/i)).toHaveLength(0);
+  },
+  args: {
+    ...IntroAnnualSubscriber.args,
+    paymentSettling: true,
+    tier: "free",
+    billingSource: "stripe",
+    subscriptionDetails: {
+      ...annualSubscriber,
+      paymentProgress: "processing",
+      firstYearPayment: { status: "unavailable" },
+    },
+  },
+};
+export const PaymentNeedsAttention: Story = {
+  ...PaymentSettling,
+  tags: ["basic-intro", "payment-progress"],
+  args: {
+    ...PaymentSettling.args,
+    subscriptionDetails: {
+      ...annualSubscriber,
+      paymentProgress: "action_required",
+      firstYearPayment: { status: "unavailable" },
+    },
+  },
+};
+export const PaymentStatusUnavailable: Story = {
+  ...PaymentSettling,
+  tags: ["basic-intro", "payment-progress"],
+  args: {
+    ...PaymentSettling.args,
+    subscriptionDetails: {
+      ...annualSubscriber,
+      paymentProgress: "unavailable",
+      firstYearPayment: { status: "unavailable" },
+    },
   },
 };
 export const IntroAnnualSharedRestriction: Story = {

@@ -123,9 +123,13 @@ Inclusive-tax line subtotals are not treated as gross plan amounts.
 Replays leave a used record
 unchanged. Replacing the subscription, payer or purchase record cannot clear it.
 
-This slice is still inactive and incomplete. Public/server eligibility still
-uses the old first-paid rule until historical evidence import and the new
-per-offer eligibility path are integrated. Active plan changes, their owned
+Fresh offers remain inactive unless `STRIPE_INTRO_OFFER_LEDGER_ENABLED=true`.
+Historical import and per-offer eligibility now use separate verified coverage.
+Regular paid history consumes neither offer. Each cadence can be accepted once
+per server, in either order, including after changing payer. Missing history
+remains unavailable. See [historical offer import](billing-offer-history.md).
+
+Active plan changes, their owned
 provider retirement, deferred schedules and the full exact-consent application
 journey are separate unfinished work. Do not activate or merge this checkpoint
 as the approved switching policy.

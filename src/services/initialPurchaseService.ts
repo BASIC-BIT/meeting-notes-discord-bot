@@ -19,7 +19,7 @@ import { getSubscriptionRepository } from "../repositories/subscriptionRepositor
 import type { GuildSubscription } from "../types/db";
 import type { PurchaseAttempt } from "../types/purchase";
 import type { ExpectedIntroOffer, IntroOfferChoice } from "../types/pricing";
-import { prepareBasicIntroCheckout } from "./basicIntroOfferService";
+import { prepareBasicIntroCheckoutWithAuthority } from "./basicIntroOfferService";
 import type { StripeClient } from "../types/stripe";
 import { BillingActionError } from "./billingActionError";
 import { captureEvent } from "./analyticsService";
@@ -180,10 +180,11 @@ async function reserve(input: PurchaseInput) {
     const preparation = await preparePurchaseAttempt(input);
     const previous =
       preparation.kind === "reuse" ? preparation.current : preparation.previous;
-    const checkout = await prepareBasicIntroCheckout({
+    const preparedCheckout = await prepareBasicIntroCheckoutWithAuthority({
       ...input,
       current: preparation.kind === "reuse" ? preparation.current : undefined,
     });
+    const { checkout, authority } = preparedCheckout;
     const fingerprint = checkoutFingerprint(checkout);
     if (preparation.kind === "reuse") {
       const current = preparation.current;
@@ -228,7 +229,7 @@ async function reserve(input: PurchaseInput) {
         },
       },
     };
-    const usage = await prepareInitialOfferReservation(next);
+    const usage = await prepareInitialOfferReservation(next, authority);
     if (
       await repo.compareAndWrite(
         next,

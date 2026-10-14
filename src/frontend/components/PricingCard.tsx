@@ -141,7 +141,11 @@ export function PricingCard({
         </Stack>
         <Stack gap={4}>
           {introOffer ? <IntroPriceComparison offer={introOffer} /> : null}
-          <Text fw={700} size="xl">
+          <Text
+            fw={700}
+            fz={introOffer?.status === "available" ? 32 : "xl"}
+            lh={introOffer?.status === "available" ? 1.2 : undefined}
+          >
             {price}
           </Text>
           <Text size="sm" c="dimmed">

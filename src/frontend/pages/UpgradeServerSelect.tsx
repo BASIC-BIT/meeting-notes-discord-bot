@@ -1,3 +1,4 @@
+import { useIntroOfferExpiry } from "../hooks/useIntroOfferExpiry";
 import {
   isTerminalStripeHistory,
   requiresStripeManagement,
@@ -126,6 +127,9 @@ export default function UpgradeServerSelect({
   const proPlan = resolvePaidPlan(planLookup, "pro", interval);
   const billing =
     serverReady && !billingQuery.isError ? billingQuery.data : undefined;
+  const liveOffers = useIntroOfferExpiry(billing, () =>
+    Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
+  );
   const offerChoice = promoCode.trim()
     ? (search.offerChoice ?? "automatic")
     : "automatic";
@@ -146,7 +150,7 @@ export default function UpgradeServerSelect({
   const offer =
     frozenOffer ??
     resolveIntroOffer(
-      interval === "year" ? billing?.annualIntroOffer : billing?.introOffer,
+      interval === "year" ? liveOffers.annualIntroOffer : liveOffers.introOffer,
       basicPlan,
     );
   const shownOffer =
@@ -442,7 +446,7 @@ export default function UpgradeServerSelect({
           lh={1.15}
           style={{ letterSpacing: "-0.025em", textWrap: "balance" }}
         >
-          Record longer meetings.
+          Upgrade your plan
         </Title>
         <Text c="dimmed">Your subscription helps keep Chronote running.</Text>
         <RecordingPlanContext context={limitContext} />

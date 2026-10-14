@@ -1,3 +1,6 @@
+import type { IntroOfferAuthority } from "../types/introOfferAuthority";
+import { config } from "./configService";
+import { HISTORY_WRITER_VERSION } from "../types/historyWriterBoundary";
 import { BASIC_INTRO_OFFERS } from "../types/basicIntroOffers";
 import type { StripeCheckoutSession } from "../types/stripe";
 import { assertSessionAssociation } from "./purchaseSession";
@@ -13,11 +16,14 @@ import { BillingActionError } from "./billingActionError";
 
 export async function prepareInitialOfferReservation(
   attempt: PurchaseAttempt,
+  authority?: IntroOfferAuthority,
 ): Promise<OfferUsageMutation | undefined> {
   const parsed = introOfferIdSchema.safeParse(
     attempt.checkout.metadata?.intro_offer_id,
   );
   if (!parsed.success) return undefined;
+  if (config.stripe.introOfferLedgerEnabled && !authority)
+    throw new Error("Fresh offer requires verified history authority");
   const offerId = parsed.data;
   const priceId = attempt.checkout.line_items?.[0]?.price;
   const couponId = attempt.checkout.metadata?.intro_offer_coupon_id;
@@ -42,12 +48,14 @@ export async function prepareInitialOfferReservation(
   const { interval, terms } = BASIC_INTRO_OFFERS[offerId];
   return {
     expected,
+    authority,
     next: offerUsageSchema.parse({
       guildId: attempt.guildId,
       mode: attempt.mode,
       offerId,
       revision: randomUUID(),
       state: "reserved",
+      writerVersion: HISTORY_WRITER_VERSION,
       operationId: attempt.attemptId,
       reservedAt: attempt.createdAt,
       terms: {

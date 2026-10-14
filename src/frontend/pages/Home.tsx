@@ -1,3 +1,4 @@
+import { useIntroOfferExpiry } from "../hooks/useIntroOfferExpiry";
 import { useMemo, useState } from "react";
 import { useIntroOfferExposure } from "../hooks/useIntroOfferExposure";
 import {
@@ -107,6 +108,9 @@ export default function Home() {
   const pricingQuery = trpc.pricing.plans.useQuery(undefined, {
     staleTime: 1000 * 60 * 5,
   });
+  const liveOffers = useIntroOfferExpiry(pricingQuery.data, () =>
+    pricingQuery.refetch(),
+  );
   const paidPlans = useMemo(
     () => pricingQuery.data?.plans ?? [],
     [pricingQuery.data],
@@ -120,8 +124,8 @@ export default function Home() {
   const proPlan = resolvePaidPlan(planLookup, "pro", billingInterval);
   const offer = resolveIntroOffer(
     billingInterval === "year"
-      ? pricingQuery.data?.annualIntroOffer
-      : pricingQuery.data?.introOffer,
+      ? liveOffers.annualIntroOffer
+      : liveOffers.introOffer,
     basicPlan,
   );
 

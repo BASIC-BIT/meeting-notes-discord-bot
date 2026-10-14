@@ -14,6 +14,10 @@ export default function IntroPriceComparison({
         component="del"
         size="sm"
         c="var(--mantine-color-text)"
+        style={{
+          textDecoration: "line-through",
+          textDecorationThickness: "1.5px",
+        }}
         aria-label="Regular price"
       >
         {formatCurrency(offer.regularUnitAmount, offer.currency)} /{" "}
@@ -21,9 +25,10 @@ export default function IntroPriceComparison({
       </Text>
       <Badge
         variant="light"
-        color="green"
-        c="var(--mantine-color-text)"
+        color="brand"
+        radius="sm"
         tt="none"
+        style={{ color: "var(--mantine-color-text)" }}
       >
         {offer.percentOff}% off
       </Badge>

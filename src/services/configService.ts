@@ -359,6 +359,8 @@ class ConfigService {
   };
 
   readonly stripe = {
+    introOfferLedgerEnabled:
+      process.env.STRIPE_INTRO_OFFER_LEDGER_ENABLED === "true",
     basicIntroOffer: {
       couponId: process.env.STRIPE_BASIC_INTRO_COUPON_ID || "",
       annualCouponId: process.env.STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID || "",

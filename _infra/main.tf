@@ -394,6 +394,12 @@ variable "STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED" {
   default     = false
 }
 
+variable "STRIPE_INTRO_OFFER_LEDGER_ENABLED" {
+  description = "Enable fresh introductory offers only after reviewed writer registration and history coverage"
+  type        = bool
+  default     = false
+}
+
 variable "STRIPE_BASIC_INTRO_COUPON_ID" {
   description = "Existing native 40-percent three-month Basic monthly intro coupon ID; empty disables monthly enrollment"
   type        = string
@@ -1920,6 +1926,10 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "STRIPE_CANCEL_URL"
           value = var.STRIPE_CANCEL_URL
+        },
+        {
+          name  = "STRIPE_INTRO_OFFER_LEDGER_ENABLED"
+          value = tostring(var.STRIPE_INTRO_OFFER_LEDGER_ENABLED)
         },
         {
           name  = "STRIPE_BASIC_INTRO_COUPON_ID"

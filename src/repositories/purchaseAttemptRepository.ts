@@ -1,3 +1,4 @@
+import { matchesMockOfferAuthority } from "./offerUsageRepository";
 import { assertPurchaseInvoiceBinding } from "../types/purchase";
 import {
   parseOfferUsageChange,
@@ -60,6 +61,8 @@ export const getPurchaseRepository = () => ({
       subscription?.stripeSubscriptionId !== pointer?.stripeSubscriptionId ||
       subscription?.stripeSyncRevision !== pointer?.stripeSyncRevision
     )
+      return false;
+    if (usage?.authority && !matchesMockOfferAuthority(usage.authority))
       return false;
     if (usage && !writeMockUsage(usage)) return false;
     store.purchaseAttempts.set(next.guildId, structuredClone(next));

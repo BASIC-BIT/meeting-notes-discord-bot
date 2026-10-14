@@ -1,3 +1,6 @@
+import { readLedgerWriterRuntime } from "./ledgerWriterRuntime";
+import { HISTORY_WRITER_VERSION } from "../types/historyWriterBoundary";
+import { assertFirstOfferInvoice } from "./firstOfferInvoiceEvidence";
 import { assertSessionAssociation } from "./purchaseSession";
 import { randomUUID } from "node:crypto";
 import type {
@@ -61,7 +64,7 @@ export async function prepareInitialOfferSettlement(
     return prepareVoidedOfferRelease(invoice, subscription, expected);
   if (!hasSettledPaymentStatus(invoice, subscription))
     return { kind: "pending", invoiceId: invoice.id };
-  assertFirstOfferInvoice(invoice, subscription, expected);
+  assertFirstOfferInvoice(invoice, subscription.id, expected.terms);
   const paidAt = invoice.status_transitions.paid_at;
   if (
     paidAt === null ||
@@ -71,6 +74,9 @@ export async function prepareInitialOfferSettlement(
     invoice.amount_remaining !== 0
   )
     throw invalid();
+  const writerRuntime = await readLedgerWriterRuntime(
+    process.env.ECS_CONTAINER_METADATA_URI_V4,
+  );
   return {
     kind: "settled",
     invoiceId: invoice.id,
@@ -80,6 +86,8 @@ export async function prepareInitialOfferSettlement(
         ...expected,
         revision: randomUUID(),
         state: "used",
+        writerVersion: HISTORY_WRITER_VERSION,
+        ...(writerRuntime ? { writerRuntime } : {}),
         usedAt: Date.now(),
         settlement: {
           customerId: attempt.customerId,
@@ -178,93 +186,12 @@ function assertInvoiceScope(
   )
     throw invalid();
 }
-function assertFirstOfferInvoice(
-  invoice: StripeInvoice,
-  subscription: StripeSubscription,
-  offer: ReservedOffer,
-) {
-  if (
-    invoice.billing_reason !== "subscription_create" ||
-    invoice.lines.has_more ||
-    invoice.lines.data.length !== 1 ||
-    invoice.discounts.length !== 1 ||
-    invoice.total_discount_amounts?.length !== 1 ||
-    invoice.subtotal !== offer.terms.regularUnitAmount
-  )
-    throw invalid();
-  const discount = invoice.discounts[0];
-  if (
-    typeof discount === "string" ||
-    discount.source.type !== "coupon" ||
-    referenceId(discount.source.coupon) !== offer.terms.couponId
-  )
-    throw invalid();
-  const expectedDiscount =
-    offer.terms.regularUnitAmount - offer.terms.discountedUnitAmount;
-  const totalDiscount = invoice.total_discount_amounts[0];
-  if (
-    totalDiscount.amount !== expectedDiscount ||
-    referenceId(totalDiscount.discount) !== discount.id
-  )
-    throw invalid();
-  assertInvoiceLine(
-    invoice,
-    subscription,
-    offer,
-    discount.id,
-    expectedDiscount,
-  );
-}
-function assertInvoiceLine(
-  invoice: StripeInvoice,
-  subscription: StripeSubscription,
-  offer: ReservedOffer,
-  discountId: string,
-  expectedDiscount: number,
-) {
-  const line = invoice.lines.data[0];
-  const parent = line.parent?.subscription_item_details;
-  if (
-    line.invoice !== invoice.id ||
-    line.livemode !== invoice.livemode ||
-    line.currency !== offer.terms.currency ||
-    line.quantity !== 1 ||
-    line.amount !== offer.terms.regularUnitAmount ||
-    referenceId(line.pricing?.price_details?.price) !== offer.terms.priceId
-  )
-    throw invalid();
-  if (
-    !parent ||
-    parent.subscription !== subscription.id ||
-    !parent.subscription_item ||
-    parent.proration ||
-    !Number.isInteger(line.period.start) ||
-    !Number.isInteger(line.period.end) ||
-    line.period.end <= line.period.start
-  )
-    throw invalid();
-  assertLineDiscount(line, discountId, expectedDiscount);
-}
-
-function assertLineDiscount(
-  line: StripeInvoice["lines"]["data"][number],
-  discountId: string,
-  expectedDiscount: number,
-) {
-  if (
-    line.discount_amounts?.length !== 1 ||
-    line.discount_amounts[0].amount !== expectedDiscount ||
-    referenceId(line.discount_amounts[0].discount) !== discountId
-  )
-    throw invalid();
-}
-
 function prepareVoidedOfferRelease(
   invoice: StripeInvoice,
   subscription: StripeSubscription,
   expected: ReservedOffer,
 ): Extract<InitialOfferSettlement, { kind: "voided" }> {
-  assertFirstOfferInvoice(invoice, subscription, expected);
+  assertFirstOfferInvoice(invoice, subscription.id, expected.terms);
   const voidedAt = invoice.status_transitions.voided_at;
   if (
     invoice.amount_paid !== 0 ||

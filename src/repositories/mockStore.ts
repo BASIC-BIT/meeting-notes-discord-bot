@@ -1,3 +1,5 @@
+import type { HistoryWriterBoundary } from "../types/historyWriterBoundary";
+import type { HistoricalOfferImport } from "../types/historicalOfferImport";
 import type { OfferUsage } from "../types/offerUsage";
 import type { PurchaseAttempt, PurchaseIncident } from "../types/purchase";
 import type { AuthedProfile } from "../trpc/context";
@@ -41,6 +43,8 @@ import type {
 type MockStore = {
   purchaseAttempts: Map<string, PurchaseAttempt>;
   offerUsages: Map<string, OfferUsage>;
+  historicalOfferImports: Map<string, HistoricalOfferImport>;
+  historyWriterBoundaries: Map<string, HistoryWriterBoundary>;
   purchaseIncidents: Map<string, PurchaseIncident>;
   user: AuthedProfile;
   userGuilds: DiscordGuild[];
@@ -926,6 +930,8 @@ function buildDefaultStore(): MockStore {
     stripeWebhookEvents,
     purchaseAttempts: new Map(),
     offerUsages: new Map(),
+    historicalOfferImports: new Map(),
+    historyWriterBoundaries: new Map(),
     purchaseIncidents: new Map(),
     onboardingStates,
     meetingHistoryByGuild,

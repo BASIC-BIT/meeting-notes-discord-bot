@@ -1,3 +1,4 @@
+import { prepareNormalPurchaseWriterWitness } from "./normalPurchaseWriterWitness";
 import type { SettlementInvoice } from "./offerUsageSettlement";
 import { prepareInitialOfferSettlement } from "./offerUsageSettlement";
 import { prepareExpiredOfferRelease } from "./offerUsageService";
@@ -98,9 +99,19 @@ export async function acceptPurchaseSubscription(
       subscription,
       settlement,
     );
+    const writerWitness =
+      prepared.kind === "voided"
+        ? undefined
+        : await prepareNormalPurchaseWriterWitness(
+            stripe,
+            current,
+            subscription,
+            settlement,
+          );
     if (
       await repo.compareAndWrite(
         advanceAttempt(current, {
+          ...(writerWitness ? { writerWitness } : {}),
           state: preparedPurchaseState(prepared),
           subscriptionId: subscription.id,
           initialInvoiceId: preparedInvoiceId(

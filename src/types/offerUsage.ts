@@ -1,3 +1,9 @@
+import {
+  introOfferAuthoritySchema,
+  type IntroOfferAuthority,
+} from "./introOfferAuthority";
+import { ledgerWriterRuntimeSchema } from "./ledgerWriterRuntime";
+import { HISTORY_WRITER_VERSION } from "./historyWriterBoundary";
 import type { IntroOfferId } from "./basicIntroOffers";
 import {
   BASIC_INTRO_OFFER_ID,
@@ -20,7 +26,7 @@ const termsBase = z.object({
   couponId: nonempty,
   currency: z.literal(BASIC_INTRO_TERMS.currency),
 });
-const offerTermsSchema = z.discriminatedUnion("interval", [
+export const offerTermsSchema = z.discriminatedUnion("interval", [
   termsBase
     .extend({
       interval: z.literal("month"),
@@ -50,6 +56,8 @@ const reserved = base.extend({
   state: z.literal("reserved"),
   operationId: nonempty,
   reservedAt: timestamp,
+  writerVersion: z.literal(HISTORY_WRITER_VERSION).optional(),
+  writerRuntime: ledgerWriterRuntimeSchema.optional(),
   terms: offerTermsSchema,
 });
 export const offerUsageSchema = z.discriminatedUnion("state", [
@@ -98,6 +106,7 @@ export type OfferUsageWrite = {
   expected: unknown;
   pointer: GuildSubscription | undefined;
   operation: PurchaseAttempt;
+  authority?: IntroOfferAuthority;
 };
 export function offerUsageKey(
   guildId: string,
@@ -109,7 +118,10 @@ export function offerUsageKey(
     .parse({ guildId, offerId, mode });
   return `OFFER#${scope.mode}#${scope.guildId}#${scope.offerId}`;
 }
-export type OfferUsageMutation = Pick<OfferUsageWrite, "next" | "expected">;
+export type OfferUsageMutation = Pick<
+  OfferUsageWrite,
+  "next" | "expected" | "authority"
+>;
 export function parseOfferUsageChange(input: OfferUsageWrite) {
   const next = offerUsageSchema.parse(input.next);
   const expected =
@@ -119,7 +131,17 @@ export function parseOfferUsageChange(input: OfferUsageWrite) {
   assertOperationScope(next, input);
   assertUsageTransition(next, expected);
   assertSettlement(next, expected);
-  return { next, expected };
+  const authority =
+    input.authority && introOfferAuthoritySchema.parse(input.authority);
+  if (
+    authority &&
+    (next.state !== "reserved" ||
+      authority.guildId !== next.guildId ||
+      authority.mode !== next.mode ||
+      authority.offerId !== next.offerId)
+  )
+    throw new Error("Offer authority scope mismatch");
+  return { next, expected, authority };
 }
 function owner(next: OfferUsage): string {
   return next.state === "unused" ? next.released.operationId : next.operationId;

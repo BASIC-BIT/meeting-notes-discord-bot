@@ -253,17 +253,6 @@ test.describe("visual regression", () => {
                 ? "$6/month for your first 3 months, then $10/month"
                 : "$60 for your first year, then $100/year",
             );
-            await expect(page.getByTestId("basic-intro-terms")).toContainText(
-              "account-wide plan changes",
-            );
-            await expect(page.getByTestId("basic-intro-terms")).toContainText(
-              "Payment methods and cancellation stay available.",
-            );
-            await expect(page.getByTestId("basic-intro-terms")).toContainText(
-              interval === "month"
-                ? "for 3 months"
-                : "until the first invoice is finalized",
-            );
             const heights = await selector
               .locator("label")
               .evaluateAll((labels) =>
@@ -323,15 +312,13 @@ test.describe("visual regression", () => {
               await expect(page.getByTestId("basic-intro-terms")).toContainText(
                 interval === "month" ? "$6/month" : "$60 for your first year",
               );
-              if (surface === "home") {
-                await waitForVisualReady(page);
-                await page.evaluate(() =>
-                  window.scrollTo({ top: 0, left: 0, behavior: "instant" }),
-                );
-                await expect
-                  .poll(() => page.evaluate(() => window.scrollY))
-                  .toBe(0);
-              }
+              await waitForVisualReady(page);
+              await page.evaluate(() =>
+                window.scrollTo({ top: 0, left: 0, behavior: "instant" }),
+              );
+              await expect
+                .poll(() => page.evaluate(() => window.scrollY))
+                .toBe(0);
               await expectVisualScreenshot(
                 page,
                 `basic-intro-${surface}-${viewport.name}-${colorScheme}-${interval}`,

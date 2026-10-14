@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { classifyHistoricalOfferInvoice } from "../../src/services/historicalOfferEvidence";
 import { acceptPurchaseSubscription } from "../../src/services/purchaseReconciliation";
 import { getMockStore, resetMockStore } from "../../src/repositories/mockStore";
 import { getPurchaseRepository } from "../../src/repositories/purchaseAttemptRepository";
@@ -8,6 +9,7 @@ import type {
   StripeClient,
   StripeSubscription,
   StripeInvoice,
+  StripePrice,
 } from "../../src/types/stripe";
 
 const guildId = "111111111111111111";
@@ -641,3 +643,259 @@ test.each([false, true])(
     ).toEqual(released);
   },
 );
+
+async function historicalFixture(annual = false) {
+  const f = await fixture(annual);
+  const metadata = { ...f.subscription.metadata };
+  const coupon = {
+    id: "coupon",
+    livemode: false,
+    percent_off: 40,
+    amount_off: null,
+    currency: null,
+    duration: annual ? "once" : "repeating",
+    duration_in_months: annual ? null : 3,
+    valid: false,
+    applies_to: { products: ["prod-historical-basic"] },
+  };
+  const invoice = {
+    ...f.invoice,
+    created: createdAt / 1000,
+    discounts: [
+      { ...f.invoice.discounts[0], source: { type: "coupon", coupon } },
+    ],
+    parent: { subscription_details: { subscription: "sub", metadata } },
+  };
+  const scope = {
+    guildId,
+    mode: "test" as const,
+    createdBefore: createdAt / 1000 + 10,
+    accountId: "acct-owned",
+  };
+  return {
+    ...f,
+    invoice,
+    metadata,
+    coupon,
+    scope,
+    nativeInvoice: invoice as unknown as StripeInvoice,
+    nativePrice: {
+      ...f.subscription.items.data[0].price,
+      product: "prod-historical-basic",
+      livemode: false,
+      type: "recurring",
+      billing_scheme: "per_unit",
+      transform_quantity: null,
+      recurring: {
+        ...f.subscription.items.data[0].price.recurring,
+        usage_type: "licensed",
+      },
+    } as unknown as StripePrice,
+  };
+}
+
+test.each([false, true])(
+  "historical %s offer uses immutable invoice metadata after current plan changes",
+  async (annual) => {
+    const f = await historicalFixture(annual);
+    f.subscription.metadata.intro_offer_id = "";
+    const result = classifyHistoricalOfferInvoice(
+      f.nativeInvoice,
+      f.nativePrice,
+      f.scope,
+    );
+    expect(result).toMatchObject({
+      kind: "settled",
+      offerId: f.offerId,
+      originalOperationId: "op",
+      settlement: { invoiceId: "in", amountPaid: annual ? 6000 : 600 },
+    });
+    expect(getMockStore().purchaseAttempts.get(guildId)?.state).toBe("open");
+  },
+);
+
+test("credit-covered historical payment is use even when no cash was collected", async () => {
+  const f = await historicalFixture();
+  f.invoice.amount_paid = 0;
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "settled", settlement: { amountPaid: 0 } });
+});
+
+test("ordinary historical payments consume no offer", async () => {
+  const f = await historicalFixture();
+  f.metadata.intro_offer_id = "";
+  f.metadata.intro_offer_coupon_id = "";
+  f.invoice.discounts = [];
+  f.invoice.total_discount_amounts = [];
+  f.invoice.lines.data[0].discount_amounts = [];
+  f.invoice.amount_paid = 1000;
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toEqual({ kind: "ordinary" });
+});
+
+test("a discounted historical invoice without original offer identity stays unresolved", async () => {
+  const f = await historicalFixture();
+  f.metadata.intro_offer_id = "";
+  f.metadata.intro_offer_coupon_id = "";
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "unresolved" });
+});
+
+test("historical invoice currency must match its offer even when its line currency matches", async () => {
+  const f = await historicalFixture();
+  f.invoice.currency = "eur";
+  expect(() =>
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toThrow();
+});
+test.each(["open", "uncollectible"])(
+  "historical %s invoice remains unresolved",
+  async (status) => {
+    const f = await historicalFixture();
+    f.invoice.status = status;
+    f.invoice.amount_paid = 0;
+    f.invoice.amount_remaining = 600;
+    f.invoice.status_transitions.paid_at = null;
+    expect(
+      classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+    ).toMatchObject({
+      kind: "unresolved",
+      offerId: f.offerId,
+      invoiceId: "in",
+    });
+  },
+);
+
+test("historical terminal void proves only an unpaid attempt, not server-wide unused history", async () => {
+  const f = await historicalFixture();
+  f.invoice.status = "void";
+  f.invoice.amount_paid = 0;
+  f.invoice.amount_remaining = 600;
+  f.invoice.status_transitions.paid_at = null;
+  f.invoice.status_transitions.voided_at = createdAt / 1000 + 5;
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "unpaid_void", offerId: f.offerId, invoiceId: "in" });
+});
+
+test.each(["guild", "mode", "cutoff", "price", "coupon"])(
+  "historical %s mismatch cannot become imported use",
+  async (mismatch) => {
+    const f = await historicalFixture();
+    if (mismatch === "guild") f.metadata.guild_id = "222222222222222222";
+    if (mismatch === "mode") f.invoice.livemode = true;
+    if (mismatch === "cutoff") f.scope.createdBefore = createdAt / 1000 - 1;
+    if (mismatch === "price") f.invoice.lines.data[0].amount = 999;
+    if (mismatch === "coupon") f.metadata.intro_offer_coupon_id = "different";
+    expect(() =>
+      classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+    ).toThrow();
+  },
+);
+
+test("partial historical introductory identity is unresolved, not an ordinary payment", async () => {
+  const f = await historicalFixture();
+  f.metadata.intro_offer_id = "";
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "unresolved", reason: "unsupported_identity" });
+});
+test("historical use rejects a mismatched original price cadence", async () => {
+  const f = await historicalFixture();
+  f.nativePrice.recurring!.interval = "year";
+  expect(() =>
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toThrow();
+});
+test("an archived historical price remains valid evidence for paid offer use", async () => {
+  const f = await historicalFixture();
+  f.nativePrice.active = false;
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "settled" });
+});
+
+test.each(["duration", "percentage", "currency", "mode", "product"])(
+  "historical %s campaign mismatch cannot become use",
+  async (mismatch) => {
+    const f = await historicalFixture();
+    if (mismatch === "duration") {
+      f.coupon.duration = "once";
+      f.coupon.duration_in_months = null;
+    }
+    if (mismatch === "percentage") f.coupon.percent_off = 20;
+    if (mismatch === "currency")
+      Object.assign(f.coupon, { currency: "eur", amount_off: 400 });
+    if (mismatch === "mode") f.coupon.livemode = true;
+    if (mismatch === "product") f.coupon.applies_to.products = ["prod-other"];
+    expect(() =>
+      classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+    ).toThrow();
+  },
+);
+test("missing expanded historical campaign remains unresolved", async () => {
+  const f = await historicalFixture();
+  Object.assign(f.invoice.discounts[0].source, { coupon: "coupon" });
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "unresolved", reason: "missing_campaign" });
+});
+
+test.each([false, true])(
+  "historical %s inclusive tax uses gross evidence rather than net subtotal",
+  async (annual) => {
+    const f = await historicalFixture(annual);
+    f.invoice.lines.data[0].subtotal = annual ? 9607 : 961;
+    f.invoice.total_excluding_tax = annual ? 5607 : 561;
+    expect(
+      classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+    ).toMatchObject({
+      kind: "settled",
+      settlement: { amountPaid: annual ? 6000 : 600 },
+    });
+  },
+);
+test("deleted historical campaign evidence remains unresolved", async () => {
+  const f = await historicalFixture();
+  Object.assign(f.invoice.discounts[0].source, {
+    coupon: { id: "coupon", deleted: true },
+  });
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "unresolved", reason: "missing_campaign" });
+});
+test("draft metadata without discounts does not prove ordinary finalized history", async () => {
+  const f = await historicalFixture();
+  f.invoice.status = "draft";
+  f.metadata.intro_offer_id = "";
+  f.metadata.intro_offer_coupon_id = "";
+  f.invoice.discounts = [];
+  f.invoice.total_discount_amounts = [];
+  f.invoice.lines.data[0].discount_amounts = [];
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "unresolved" });
+});
+
+test("truncated historical lines cannot prove an ordinary undiscounted payment", async () => {
+  const f = await historicalFixture();
+  f.metadata.intro_offer_id = "";
+  f.metadata.intro_offer_coupon_id = "";
+  f.invoice.discounts = [];
+  f.invoice.total_discount_amounts = [];
+  f.invoice.lines.data[0].discount_amounts = [];
+  f.invoice.lines.has_more = true;
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "unresolved" });
+});
+test("null historical campaign returns unresolved evidence", async () => {
+  const f = await historicalFixture();
+  Object.assign(f.invoice.discounts[0].source, { coupon: null });
+  expect(
+    classifyHistoricalOfferInvoice(f.nativeInvoice, f.nativePrice, f.scope),
+  ).toMatchObject({ kind: "unresolved", reason: "missing_campaign" });
+});

@@ -21,6 +21,7 @@ export type BasicIntroOffer =
       status: "available";
       priceId: string;
       enrollmentEndsAt: string | null;
+      reservedForCheckout?: true;
     } & BasicIntroTerms);
 export type ExpectedIntroOffer = "none" | IntroOfferId;
 export type FirstYearPayment =
@@ -34,6 +35,8 @@ export type FirstYearPayment =
       periodEndsAt: string;
     };
 export type IntroOfferChoice = "automatic" | "promotion";
+export type SubscriptionPaymentProgress =
+  "not_pending" | "processing" | "action_required" | "unavailable";
 export type ProviderSubscriptionDetails =
   | { status: "unavailable" }
   | {
@@ -46,6 +49,7 @@ export type ProviderSubscriptionDetails =
       renewalAt: string | null;
       cancelAtPeriodEnd: boolean;
       firstYearPayment: FirstYearPayment | null;
+      paymentProgress?: SubscriptionPaymentProgress;
       discount: {
         percentOff: number | null;
         amountOff: number | null;

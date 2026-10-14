@@ -1,8 +1,20 @@
 /** @jest-environment node */
+import {
+  seedUnusedOfferCoverage,
+  testWriterImageDigest,
+} from "../fixtures/historyWriterBoundary";
+jest.mock("../../src/services/ledgerWriterRuntime", () => ({
+  readLedgerWriterRuntime: jest.fn(async () => ({
+    taskArn: "arn:aws:ecs:us-east-1:123456789012:task/test/task-one",
+    imageDigest: testWriterImageDigest,
+  })),
+}));
+beforeEach(() => {
+  config.stripe.introOfferLedgerEnabled = true;
+});
 import { getOfferUsageRepository } from "../../src/repositories/offerUsageRepository";
 import { getPublicPricingSnapshot } from "../../src/services/publicPricingService";
 import { config } from "../../src/services/configService";
-import * as entitlementService from "../../src/services/entitlementService";
 import { captureEvent } from "../../src/services/analyticsService";
 jest.mock("../../src/services/analyticsService", () => ({
   captureEvent: jest.fn(),
@@ -54,6 +66,7 @@ const empty = {
   portalConfigurationId: "",
 };
 function fixture() {
+  seedUnusedOfferCoverage();
   const price = {
     id: "price_basic",
     active: true,
@@ -91,6 +104,8 @@ function fixture() {
     },
   };
   const stripe = {
+    accounts: { retrieve: jest.fn(async () => ({ id: "acct-owned" })) },
+    balance: { retrieve: jest.fn(async () => ({ livemode: false })) },
     prices: { retrieve: jest.fn(async () => price) },
     coupons: { retrieve: jest.fn(async () => coupon) },
     billingPortal: {
@@ -107,6 +122,7 @@ function fixture() {
 }
 afterEach(() => {
   Object.assign(config.stripe.basicIntroOffer, empty);
+  config.stripe.introOfferLedgerEnabled = false;
 });
 
 test("verifies native terms before exposing the exact public offer", async () => {
@@ -500,7 +516,7 @@ describe("authoritative initial-purchase offer", () => {
         guildId: request.guildId,
         payerId: "other",
       }),
-    ).toEqual({ status: "ineligible" });
+    ).toEqual({ status: "unavailable" });
     expect(
       await getGuildBasicIntroOffer({
         stripe: request.stripe,
@@ -508,7 +524,7 @@ describe("authoritative initial-purchase offer", () => {
         payerId: "payer",
         interval: "year",
       }),
-    ).toEqual({ status: "ineligible" });
+    ).toEqual({ status: "unavailable" });
   });
   test("Checkout revalidates provider terms even while public pricing stays cached", async () => {
     const { request, coupon, stripe } = purchaseFixture();
@@ -543,7 +559,7 @@ describe("authoritative initial-purchase offer", () => {
           guildId: request.guildId,
           payerId: "payer",
         }),
-      ).toEqual({ status: "ineligible" });
+      ).toEqual({ status: "unavailable" });
       await expect(
         createCheckoutSession({ ...request, expectedOffer: "none" }),
       ).rejects.toMatchObject({
@@ -637,29 +653,48 @@ describe("authoritative initial-purchase offer", () => {
     "legacy",
     "canceled",
     "customer_pointer",
-  ])("%s server does not receive an introductory coupon", async (kind) => {
-    const { request } = purchaseFixture();
-    if (kind === "manual_comp")
-      await createManualEntitlementGrant({
-        guildId: request.guildId,
-        tier: "basic",
-        createdBy: "admin",
-      });
-    else if (kind === "forced") config.subscription.forceTier = "basic";
-    else
-      getMockStore().subscriptions.set(request.guildId, {
-        guildId: request.guildId,
-        subscriptionType: "legacy",
-        tier: "free",
-        status: kind === "canceled" ? "canceled" : "free",
-        startDate: "2026-01-01",
-        ...(kind === "customer_pointer" ? { stripeCustomerId: "cus_old" } : {}),
-      });
-    await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
-    ).rejects.toThrow();
-    expect(getMockStore().purchaseAttempts.size).toBe(0);
-  });
+  ])(
+    "%s preserves offer eligibility while purchase ownership remains enforced",
+    async (kind) => {
+      const { request } = purchaseFixture();
+      if (kind === "manual_comp")
+        await createManualEntitlementGrant({
+          guildId: request.guildId,
+          tier: "basic",
+          createdBy: "admin",
+        });
+      else if (kind === "forced") config.subscription.forceTier = "basic";
+      else
+        getMockStore().subscriptions.set(request.guildId, {
+          guildId: request.guildId,
+          subscriptionType: "legacy",
+          tier: "free",
+          status: kind === "canceled" ? "canceled" : "free",
+          startDate: "2026-01-01",
+          ...(kind === "customer_pointer"
+            ? { stripeCustomerId: "cus_old" }
+            : {}),
+        });
+      if (kind === "forced" || kind === "customer_pointer") {
+        await expect(
+          createCheckoutSession({
+            ...request,
+            expectedOffer: "basic_intro_v1",
+          }),
+        ).rejects.toThrow();
+        expect(getMockStore().purchaseAttempts.size).toBe(0);
+      } else {
+        await createCheckoutSession({
+          ...request,
+          expectedOffer: "basic_intro_v1",
+        });
+        expect(
+          getMockStore().purchaseAttempts.get(request.guildId)?.checkout
+            .discounts,
+        ).toEqual([{ coupon: "coupon_intro" }]);
+      }
+    },
+  );
 
   test.each(["price_annual", "price_pro"])(
     "%s remains a regular purchase",
@@ -900,7 +935,7 @@ describe("existing native introductory discount", () => {
       guildId: request.guildId,
       payerId: "payer",
     });
-    expect(result.introOffer).toEqual({ status: "ineligible" });
+    expect(result.introOffer).toMatchObject({ status: "available" });
     expect(result.subscriptionDetails).toMatchObject({
       status: "available",
       priceId: "price_basic",
@@ -1366,29 +1401,26 @@ describe("remaining offer boundary cases", () => {
         guildId: request.guildId,
         payerId: "other",
       }),
-    ).resolves.toEqual({ status: "ineligible" });
+    ).resolves.toEqual({ status: "unavailable" });
   });
 });
 
-test("an entitlement read crossing cutoff cannot create a new introductory reservation", async () => {
+test("a native account read crossing cutoff cannot create a new introductory reservation", async () => {
   resetMockStore();
   clearGuildSubscriptionCache();
   jest.useFakeTimers({ now });
   Object.assign(config.stripe.basicIntroOffer, settings);
-  const eligible = jest
-    .spyOn(entitlementService, "getBestActiveEntitlementGrantForGuild")
-    .mockImplementationOnce(async () => {
-      jest.setSystemTime(Date.parse(settings.enrollmentEndsAt));
-      return null;
-    });
+  const { request, stripe } = purchaseFixture();
+  stripe.accounts.retrieve.mockImplementationOnce(async () => {
+    jest.setSystemTime(Date.parse(settings.enrollmentEndsAt));
+    return { id: "acct-owned" };
+  });
   try {
-    const { request } = purchaseFixture();
     await expect(
       createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
     ).rejects.toThrow("changed");
     expect(getMockStore().purchaseAttempts.size).toBe(0);
   } finally {
-    eligible.mockRestore();
     jest.useRealTimers();
   }
 });
@@ -1586,7 +1618,7 @@ describe("open-ended introductory enrollment", () => {
           guildId: "222222222222222222",
           expectedOffer: "basic_intro_v1",
         }),
-      ).rejects.toThrow("changed");
+      ).rejects.toThrow(decision === "disabled" ? "changed" : "unavailable");
       expect(getMockStore().purchaseAttempts.has("222222222222222222")).toBe(
         false,
       );
@@ -2272,4 +2304,121 @@ describe("consumed annual once invoice evidence", () => {
       });
     },
   );
+});
+
+describe("per-offer history authorization", () => {
+  beforeEach(() => {
+    resetMockStore();
+    clearGuildSubscriptionCache();
+    jest.useFakeTimers({ now });
+    Object.assign(config.stripe.basicIntroOffer, settings);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+  test("rollout off keeps configured offers inactive", async () => {
+    const f = purchaseFixture();
+    config.stripe.introOfferLedgerEnabled = false;
+    expect(
+      await getBasicIntroOffer({ stripe: f.request.stripe, plans, now }),
+    ).toEqual({ status: "inactive" });
+    expect(
+      await getGuildBasicIntroOffer({
+        stripe: f.request.stripe,
+        guildId: f.request.guildId,
+      }),
+    ).toEqual({ status: "inactive" });
+    await expect(
+      createCheckoutSession({ ...f.request, expectedOffer: "basic_intro_v1" }),
+    ).rejects.toMatchObject({ reason: "offer_changed_terms" });
+    expect(f.stripe.customers.create).not.toHaveBeenCalled();
+  });
+  test("missing history cannot silently charge regular price for automatic Basic", async () => {
+    const f = purchaseFixture();
+    getMockStore().historicalOfferImports.clear();
+    expect(
+      await getGuildBasicIntroOffer({
+        stripe: f.request.stripe,
+        guildId: f.request.guildId,
+      }),
+    ).toEqual({ status: "unavailable" });
+    await expect(createCheckoutSession(f.request)).rejects.toMatchObject({
+      reason: "offer_unavailable",
+    });
+    expect(f.stripe.customers.create).not.toHaveBeenCalled();
+    expect(f.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+  test.each(["coverage", "boundary"])(
+    "changing %s before reservation prevents all provider writes",
+    async (which) => {
+      const f = purchaseFixture();
+      const repository =
+        await import("../../src/repositories/purchaseAttemptRepository");
+      const real = repository.getPurchaseRepository();
+      const spy = jest
+        .spyOn(repository, "getPurchaseRepository")
+        .mockReturnValue({
+          ...real,
+          compareAndWrite: async (...args) => {
+            if (which === "coverage")
+              getMockStore().historicalOfferImports.clear();
+            else getMockStore().historyWriterBoundaries.clear();
+            return real.compareAndWrite(...args);
+          },
+        });
+      try {
+        await expect(createCheckoutSession(f.request)).rejects.toMatchObject({
+          reason: "offer_unavailable",
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(getMockStore().purchaseAttempts.size).toBe(0);
+      expect(getMockStore().offerUsages.size).toBe(0);
+      expect(f.stripe.customers.create).not.toHaveBeenCalled();
+      expect(f.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+    },
+  );
+  test("a completed regular purchase and changed payer preserve unused offer", async () => {
+    const f = purchaseFixture();
+    getMockStore().purchaseAttempts.set(f.request.guildId, {
+      guildId: f.request.guildId,
+      attemptId: "old-regular",
+      revision: "r",
+      payerId: "other",
+      mode: "test",
+      fingerprint: "f",
+      createdAt: 100,
+      state: "completed",
+      checkout: {},
+      customerId: "old",
+      subscriptionId: "old",
+    });
+    expect(
+      await getGuildBasicIntroOffer({
+        stripe: f.request.stripe,
+        guildId: f.request.guildId,
+        payerId: "payer",
+        plans,
+      }),
+    ).toMatchObject({ status: "available", id: "basic_intro_v1" });
+  });
+});
+
+test("frozen introductory checkout without its reservation cannot resume provider work", async () => {
+  resetMockStore();
+  clearGuildSubscriptionCache();
+  jest.useFakeTimers({ now });
+  Object.assign(config.stripe.basicIntroOffer, settings);
+  const f = purchaseFixture();
+  try {
+    await createCheckoutSession(f.request);
+    getMockStore().offerUsages.clear();
+    await expect(createCheckoutSession(f.request)).rejects.toMatchObject({
+      reason: "offer_unavailable",
+    });
+    expect(f.stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
+  } finally {
+    jest.useRealTimers();
+  }
 });

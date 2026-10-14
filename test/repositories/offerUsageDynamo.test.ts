@@ -247,3 +247,47 @@ test("a same-attempt original invoice cannot change through the real database wr
   ).rejects.toThrow("Initial invoice binding");
   expect(send).not.toHaveBeenCalled();
 });
+
+test("purchase reservation atomically checks unused coverage and the verified writer image", async () => {
+  await compareAndWritePurchaseAttempt(
+    operation,
+    undefined,
+    undefined,
+    undefined,
+    {
+      next,
+      expected: undefined,
+      authority: {
+        guildId,
+        offerId: "basic_intro_v1",
+        mode: "test",
+        accountId: "acct-owned",
+        coverageRevision: "coverage-r1",
+        boundaryRevision: "boundary-r1",
+        writerImageDigest: "sha256:" + "a".repeat(64),
+      },
+    },
+  );
+  const command = send.mock.calls[0][0];
+  if (!(command instanceof TransactWriteItemsCommand))
+    throw new Error("Wrong command");
+  const items = command.input.TransactItems!;
+  expect(items).toHaveLength(5);
+  expect(unmarshall(items[3].ConditionCheck!.Key!)).toEqual({
+    guildId: "OFFER_HISTORY#test#acct-owned#" + guildId + "#basic_intro_v1",
+  });
+  expect(
+    unmarshall(items[3].ConditionCheck!.ExpressionAttributeValues!),
+  ).toEqual({
+    ":revision": "coverage-r1",
+    ":state": "unused",
+    ":boundary": "boundary-r1",
+  });
+  expect(
+    unmarshall(items[4].ConditionCheck!.ExpressionAttributeValues!),
+  ).toEqual({
+    ":revision": "boundary-r1",
+    ":state": "verified",
+    ":image": "sha256:" + "a".repeat(64),
+  });
+});

@@ -1,3 +1,6 @@
+import { historicalOfferImportKey } from "../types/historicalOfferImport";
+import { historyWriterBoundaryKey } from "../types/historyWriterBoundary";
+import type { IntroOfferAuthority } from "../types/introOfferAuthority";
 import { config } from "../services/configService";
 import { getMockStore } from "./mockStore";
 import { readOfferUsage, compareAndWriteOfferUsage } from "../db";
@@ -22,7 +25,7 @@ export const getOfferUsageRepository = () => ({
       : readOfferUsage(guildId, offerId, mode);
   },
   async compareAndWrite(input: OfferUsageWrite): Promise<boolean> {
-    const { next, expected } = parseOfferUsageChange(input);
+    const { next, expected, authority } = parseOfferUsageChange(input);
     if (!config.mock.enabled) return compareAndWriteOfferUsage(input);
     const store = getMockStore();
     const key = offerUsageKey(next.guildId, next.offerId, next.mode);
@@ -39,7 +42,33 @@ export const getOfferUsageRepository = () => ({
       pointer?.stripeSyncRevision !== input.pointer?.stripeSyncRevision
     )
       return false;
+    if (authority && !matchesMockOfferAuthority(authority)) return false;
     store.offerUsages.set(key, structuredClone(next));
     return true;
   },
 });
+
+export function matchesMockOfferAuthority(
+  authority: IntroOfferAuthority,
+): boolean {
+  const store = getMockStore();
+  const coverage = store.historicalOfferImports.get(
+    historicalOfferImportKey(
+      authority.guildId,
+      authority.offerId,
+      authority.mode,
+      authority.accountId,
+    ),
+  );
+  const boundary = store.historyWriterBoundaries.get(
+    historyWriterBoundaryKey(authority.accountId, authority.mode),
+  );
+  return (
+    coverage?.state === "unused" &&
+    coverage.revision === authority.coverageRevision &&
+    coverage.writerBoundaryRevision === authority.boundaryRevision &&
+    boundary?.state === "verified" &&
+    boundary.revision === authority.boundaryRevision &&
+    boundary.deployment.imageDigest === authority.writerImageDigest
+  );
+}

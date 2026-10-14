@@ -24,6 +24,7 @@ function configurationKey(): string {
     mode: config.subscription.stripeMode,
     lookup: config.stripe.lookupKeys,
     offer: config.stripe.basicIntroOffer,
+    ledgerEnabled: config.stripe.introOfferLedgerEnabled,
   });
 }
 function expiresAt(snapshot: PublicPricing): number {

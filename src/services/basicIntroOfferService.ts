@@ -1,3 +1,9 @@
+import { providerModeSchema } from "../types/offerUsage";
+import { readIntroOfferDecision } from "./introOfferEligibility";
+import { readLedgerWriterRuntime } from "./ledgerWriterRuntime";
+import { getOfferUsageRepository } from "../repositories/offerUsageRepository";
+import type { IntroOfferAuthority } from "../types/introOfferAuthority";
+import { readSubscriptionPaymentProgress } from "./subscriptionPaymentProgress";
 import {
   BASIC_INTRO_OFFER_ID,
   BASIC_ANNUAL_INTRO_OFFER_ID,
@@ -11,8 +17,6 @@ export {
 import type Stripe from "stripe";
 import type { GuildSubscription } from "../types/db";
 import type { PurchaseAttempt } from "../types/purchase";
-import { getBestActiveEntitlementGrantForGuild } from "./entitlementService";
-import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
 import { getPurchaseRepository } from "../repositories/purchaseAttemptRepository";
 import { getPaidPlans } from "./pricingService";
 import { BillingActionError } from "./billingActionError";
@@ -193,6 +197,7 @@ export async function getBasicIntroOffer(params: {
   now?: number;
   interval?: BillingInterval;
 }): Promise<BasicIntroOffer> {
+  if (!config.stripe.introOfferLedgerEnabled) return { status: "inactive" };
   const campaign = introCampaign(params);
   if (campaign.status !== "configured") return campaign;
   const { settings, interval, terms, couponId, enrollmentEndsAt, end } =
@@ -267,19 +272,49 @@ const choiceRequired = () =>
     "discount_choice_required",
   );
 
-async function serverIsEligible(
+async function selectedOfferDecision(
+  stripe: StripeClient,
   guildId: string,
-  subscription: GuildSubscription | undefined,
+  interval: BillingInterval,
 ) {
+  const offerId =
+    interval === "year" ? BASIC_ANNUAL_INTRO_OFFER_ID : BASIC_INTRO_OFFER_ID;
+  const [account, balance, runtime] = await Promise.all([
+    stripe.accounts.retrieve(null),
+    stripe.balance.retrieve(),
+    readLedgerWriterRuntime(process.env.ECS_CONTAINER_METADATA_URI_V4),
+  ]);
+  const mode = providerModeSchema.parse(config.subscription.stripeMode);
+  if (balance.livemode !== (mode === "live")) throw unavailableOffer();
+  return readIntroOfferDecision({
+    guildId,
+    offerId,
+    accountId: account.id,
+    mode,
+    writerImageDigest: runtime?.imageDigest,
+  });
+}
+async function ownsFrozenReservation(
+  current: PurchaseAttempt,
+  frozen: Extract<BasicIntroOffer, { status: "available" }>,
+) {
+  if (current.mode !== config.subscription.stripeMode) return false;
+  const usage = await getOfferUsageRepository().get(
+    current.guildId,
+    frozen.id,
+    current.mode,
+  );
+  if (usage?.state !== "reserved" || usage.operationId !== current.attemptId)
+    return false;
   return (
-    !config.subscription.forceTier &&
-    !subscription?.stripeSubscriptionId &&
-    !subscription?.stripeCustomerId &&
-    (!subscription ||
-      (subscription.tier === "free" &&
-        subscription.status === "free" &&
-        subscription.subscriptionType === "free")) &&
-    !(await getBestActiveEntitlementGrantForGuild(guildId))
+    usage.terms.priceId === frozen.priceId &&
+    usage.terms.couponId === current.checkout.metadata?.intro_offer_coupon_id &&
+    usage.terms.interval ===
+      (frozen.id === BASIC_ANNUAL_INTRO_OFFER_ID ? "year" : "month") &&
+    usage.terms.currency === frozen.currency &&
+    usage.terms.regularUnitAmount === frozen.regularUnitAmount &&
+    usage.terms.discountedUnitAmount === frozen.discountedUnitAmount &&
+    usage.terms.durationMonths === frozen.durationMonths
   );
 }
 
@@ -298,6 +333,7 @@ function frozenIntroOffer(
   if (!priceId) return null;
   return {
     status: "available",
+    reservedForCheckout: true,
     ...(id === BASIC_ANNUAL_INTRO_OFFER_ID
       ? BASIC_ANNUAL_INTRO_TERMS
       : BASIC_INTRO_TERMS),
@@ -346,29 +382,23 @@ export async function getGuildBasicIntroOffer(params: {
   plans?: PaidPlan[];
   interval?: BillingInterval;
 }): Promise<BasicIntroOffer> {
-  const [subscription, current] = await Promise.all([
-    getSubscriptionRepository().get(params.guildId),
-    getPurchaseRepository().get(params.guildId),
-  ]);
+  const current = await getPurchaseRepository().get(params.guildId);
+  if (current && ["open", "preparing", "needs_review"].includes(current.state))
+    return pendingIntroOffer(params, current);
   if (config.subscription.forceTier) return { status: "ineligible" };
-  if (current && current.state !== "expired") {
-    const frozen = frozenIntroOffer(current);
-    if (
-      canReuseFrozenIntroOffer(
-        frozen,
-        current,
-        params.interval ?? "month",
-        params.payerId,
-      )
-    )
-      return frozen;
-    return { status: "ineligible" };
-  }
-  if (!(await serverIsEligible(params.guildId, subscription)))
-    return { status: "ineligible" };
-  if (introIntervalIsUnconfigured(params.interval))
+  if (
+    !config.stripe.introOfferLedgerEnabled ||
+    introIntervalIsUnconfigured(params.interval)
+  )
     return { status: "inactive" };
   try {
+    const decision = await selectedOfferDecision(
+      params.stripe,
+      params.guildId,
+      params.interval ?? "month",
+    );
+    if (decision.state === "used") return { status: "ineligible" };
+    if (decision.state !== "unused") return { status: "unavailable" };
     return await getBasicIntroOffer({
       stripe: params.stripe,
       interval: params.interval,
@@ -377,6 +407,24 @@ export async function getGuildBasicIntroOffer(params: {
   } catch {
     return { status: "unavailable" };
   }
+}
+
+async function pendingIntroOffer(
+  params: Parameters<typeof getGuildBasicIntroOffer>[0],
+  current: PurchaseAttempt,
+): Promise<BasicIntroOffer> {
+  const frozen = frozenIntroOffer(current);
+  if (
+    canReuseFrozenIntroOffer(
+      frozen,
+      current,
+      params.interval ?? "month",
+      params.payerId,
+    ) &&
+    (await ownsFrozenReservation(current, frozen))
+  )
+    return frozen;
+  return { status: "unavailable" };
 }
 
 async function selectedPriceInterval(
@@ -434,38 +482,6 @@ function reuseIntroCheckout(
     };
   }
   return checkout;
-}
-
-async function verifySelectedIntroOffer(
-  stripe: StripeClient,
-  selectedPrice: string | undefined,
-  eligible: boolean,
-): Promise<BasicIntroOffer> {
-  let offer: BasicIntroOffer = { status: "inactive" };
-  if (eligible && Object.values(config.stripe.basicIntroOffer).some(Boolean)) {
-    const interval = await selectedPriceInterval(stripe, selectedPrice);
-    if (
-      interval &&
-      (interval === "year"
-        ? config.stripe.basicIntroOffer.annualCouponId
-        : config.stripe.basicIntroOffer.couponId ||
-          !config.stripe.basicIntroOffer.annualCouponId)
-    ) {
-      try {
-        offer = await getBasicIntroOffer({
-          stripe: stripe,
-          plans: await getPaidPlans(stripe),
-          interval,
-        });
-      } catch {
-        offer = { status: "unavailable" };
-      }
-      if (offer.status === "unavailable") throw unavailableOffer();
-      if (offer.status === "available" && offer.priceId !== selectedPrice)
-        throw changedTerms();
-    }
-  }
-  return offer;
 }
 
 function applyIntroCheckout(
@@ -541,7 +557,7 @@ function acceptIntroQuote(
   return applies;
 }
 
-export async function prepareBasicIntroCheckout(params: {
+export async function prepareBasicIntroCheckoutWithAuthority(params: {
   stripe: StripeClient;
   guildId: string;
   expected: GuildSubscription | undefined;
@@ -549,37 +565,49 @@ export async function prepareBasicIntroCheckout(params: {
   expectedOffer?: ExpectedIntroOffer;
   offerChoice?: IntroOfferChoice;
   current?: PurchaseAttempt;
-}): Promise<Stripe.Checkout.SessionCreateParams> {
+}): Promise<{
+  checkout: Stripe.Checkout.SessionCreateParams;
+  authority?: IntroOfferAuthority;
+}> {
   const choice = params.offerChoice ?? "automatic";
   const manualPromotion = Boolean(
     params.checkout.discounts?.some((discount) => discount.promotion_code) ||
     params.checkout.metadata?.promo_code,
   );
   const current = params.current;
-  if (current)
-    return reuseIntroCheckout(
-      current,
-      params.checkout,
-      choice,
-      params.expectedOffer,
-      manualPromotion,
-    );
+  if (current) {
+    const frozen = frozenIntroOffer(current);
+    if (
+      frozen?.status === "available" &&
+      !(await ownsFrozenReservation(current, frozen))
+    )
+      throw unavailableOffer();
+    return {
+      checkout: reuseIntroCheckout(
+        current,
+        params.checkout,
+        choice,
+        params.expectedOffer,
+        manualPromotion,
+      ),
+    };
+  }
   if (choice === "promotion" && !manualPromotion)
     throw new BillingActionError(
       "BAD_REQUEST",
       "Enter a promotion code before choosing a promotion.",
       "discount_choice_required",
     );
-  const settingsBeforeVerification = JSON.stringify(
-    config.stripe.basicIntroOffer,
-  );
+  const settingsBeforeVerification = JSON.stringify({
+    settings: config.stripe.basicIntroOffer,
+    enabled: config.stripe.introOfferLedgerEnabled,
+    mode: config.subscription.stripeMode,
+    forceTier: config.subscription.forceTier,
+  });
   const selectedPrice = params.checkout.line_items?.[0]?.price;
-  const eligible = await serverIsEligible(params.guildId, params.expected);
-  let offer = await verifySelectedIntroOffer(
-    params.stripe,
-    selectedPrice,
-    eligible,
-  );
+  const quoted = await freshIntroQuote(params, choice, selectedPrice);
+  const { eligible, authority } = quoted;
+  let { offer } = quoted;
   if (
     offer.status === "available" &&
     offer.enrollmentEndsAt !== null &&
@@ -587,7 +615,12 @@ export async function prepareBasicIntroCheckout(params: {
   )
     offer = { status: "expired" };
   if (
-    JSON.stringify(config.stripe.basicIntroOffer) !== settingsBeforeVerification
+    JSON.stringify({
+      settings: config.stripe.basicIntroOffer,
+      enabled: config.stripe.introOfferLedgerEnabled,
+      mode: config.subscription.stripeMode,
+      forceTier: config.subscription.forceTier,
+    }) !== settingsBeforeVerification
   )
     throw unavailableOffer();
   const applies = acceptIntroQuote(
@@ -598,7 +631,65 @@ export async function prepareBasicIntroCheckout(params: {
     manualPromotion,
     params.expectedOffer,
   );
-  return applyIntroCheckout(params.checkout, offer, choice, applies);
+  return {
+    checkout: applyIntroCheckout(params.checkout, offer, choice, applies),
+    ...(applies ? { authority } : {}),
+  };
+}
+
+async function freshIntroQuote(
+  params: Parameters<typeof prepareBasicIntroCheckoutWithAuthority>[0],
+  choice: IntroOfferChoice,
+  selectedPrice: string | undefined,
+) {
+  let eligible = false;
+  let authority: IntroOfferAuthority | undefined;
+  let offer: BasicIntroOffer = { status: "inactive" };
+  if (
+    choice === "automatic" &&
+    config.stripe.introOfferLedgerEnabled &&
+    !config.subscription.forceTier &&
+    Object.values(config.stripe.basicIntroOffer).some(Boolean)
+  ) {
+    const interval = await selectedPriceInterval(params.stripe, selectedPrice);
+    if (interval && !introIntervalIsUnconfigured(interval)) {
+      let decision;
+      try {
+        decision = await selectedOfferDecision(
+          params.stripe,
+          params.guildId,
+          interval,
+        );
+      } catch {
+        throw unavailableOffer();
+      }
+      if (decision.state === "reserved" || decision.state === "unresolved")
+        throw unavailableOffer();
+      if (decision.state === "unused") {
+        eligible = true;
+        authority = decision.authority;
+        try {
+          offer = await getBasicIntroOffer({
+            stripe: params.stripe,
+            plans: await getPaidPlans(params.stripe),
+            interval,
+          });
+        } catch {
+          throw unavailableOffer();
+        }
+        if (offer.status === "unavailable") throw unavailableOffer();
+        if (offer.status === "available" && offer.priceId !== selectedPrice)
+          throw changedTerms();
+      }
+    }
+  }
+  return { eligible, authority, offer };
+}
+
+export async function prepareBasicIntroCheckout(
+  params: Parameters<typeof prepareBasicIntroCheckoutWithAuthority>[0],
+) {
+  return (await prepareBasicIntroCheckoutWithAuthority(params)).checkout;
 }
 
 export const BASIC_INTRO_PLAN_CHANGE_MESSAGE =
@@ -1034,6 +1125,10 @@ export async function getProviderSubscriptionDetails(
     cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
     discount: discountDetails,
     firstYearPayment: await getAnnualIntroFirstYearPayment(
+      stripe,
+      subscription,
+    ),
+    paymentProgress: await readSubscriptionPaymentProgress(
       stripe,
       subscription,
     ),

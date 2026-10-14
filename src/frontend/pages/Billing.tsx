@@ -1,3 +1,4 @@
+import { useIntroOfferExpiry } from "../hooks/useIntroOfferExpiry";
 import {
   isTerminalStripeHistory,
   requiresStripeManagement,
@@ -298,9 +299,11 @@ const BillingPaidPanel = ({
                 <Text size="lg" fw={700}>
                   {planName}
                 </Text>
-                <Badge color={isComped ? "teal" : "brand"}>
-                  {isComped ? "Comped by Chronote" : statusLabel}
-                </Badge>
+                {(isComped || data.tier !== "free") && (
+                  <Badge color={isComped ? "teal" : "brand"}>
+                    {isComped ? "Comped by Chronote" : statusLabel}
+                  </Badge>
+                )}
               </Group>
               {isComped ? (
                 <Stack gap={4}>
@@ -317,11 +320,11 @@ const BillingPaidPanel = ({
                     <Text size="sm">{data.activeGrant.publicNote}</Text>
                   ) : null}
                 </Stack>
-              ) : (
+              ) : data.tier !== "free" ? (
                 <Text c="dimmed" size="sm">
                   {statusLine}
                 </Text>
-              )}
+              ) : null}
               <Text size="sm" c="dimmed">
                 Server: {serverName}
               </Text>
@@ -901,7 +904,9 @@ function useBillingPricing(
   data: BillingData | null,
   frozenOffer: BasicIntroOffer | null,
   interval: BillingInterval,
+  refetchOffers: () => Promise<unknown>,
 ) {
+  const liveOffers = useIntroOfferExpiry(data, refetchOffers);
   const paidPlans = pricingData?.plans ?? [];
   const planLookup = useMemo(() => buildPaidPlanLookup(paidPlans), [paidPlans]);
   const basicPlan = resolvePaidPlan(planLookup, "basic", interval);
@@ -914,7 +919,7 @@ function useBillingPricing(
   const offer =
     frozenOffer ??
     resolveIntroOffer(
-      interval === "year" ? data?.annualIntroOffer : data?.introOffer,
+      interval === "year" ? liveOffers.annualIntroOffer : liveOffers.introOffer,
       basicPlan,
     );
   const hasAnnualPlans = paidPlans.some((plan) => plan.interval === "year");
@@ -1116,7 +1121,9 @@ export function Billing() {
   const { failedCheckout, frozenOffer } = savedCheckoutQuote(checkoutAttempt);
 
   const { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans } =
-    useBillingPricing(pricingQuery.data, data, frozenOffer, interval);
+    useBillingPricing(pricingQuery.data, data, frozenOffer, interval, () =>
+      Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
+    );
   const busy = checkoutMutation.isPending || portalMutation.isPending;
   const isPortalPending = portalMutation.isPending;
   const displayedOffer = useBillingOfferExposure({

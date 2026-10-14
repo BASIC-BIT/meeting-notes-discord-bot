@@ -9,10 +9,14 @@ import type { TrpcContext } from "../../src/trpc/context";
 jest.mock("../../src/services/stripeClient", () => ({
   getStripeClient: jest.fn(),
 }));
+beforeEach(() => {
+  config.stripe.introOfferLedgerEnabled = true;
+});
 const originalMock = config.mock.enabled;
 const originalMode = config.subscription.stripeMode;
 const originalSettings = { ...config.stripe.basicIntroOffer };
 afterEach(() => {
+  config.stripe.introOfferLedgerEnabled = false;
   config.mock.enabled = originalMock;
   config.subscription.stripeMode = originalMode;
   Object.assign(config.stripe.basicIntroOffer, originalSettings);
