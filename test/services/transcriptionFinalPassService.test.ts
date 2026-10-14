@@ -285,3 +285,42 @@ describe("transcriptionFinalPassService", () => {
     expect(hasBoundarySegmentInSecondChunk).toBe(true);
   });
 });
+
+test("interruption waits the actual final-pass provider and prevents reconciliation dispatch", async () => {
+  const { stopMeetingProcessing } =
+    await import("../../src/services/meetingProcessingLifetime");
+  const meeting = buildMeeting();
+  const dependencies = buildDependencies();
+  let entered!: () => void;
+  const submitted = new Promise<void>((done) => {
+    entered = done;
+  });
+  let release!: (value: { text: string }) => void;
+  dependencies.transcribeChunk.mockImplementationOnce(async () => {
+    entered();
+    return new Promise((done) => {
+      release = done;
+    });
+  });
+  const actual = runTranscriptionFinalPass(
+    meeting,
+    { audioFilePath: "synthetic.mp3" },
+    dependencies,
+  );
+  const outcome = actual.then(
+    () => "success",
+    () => "cancelled",
+  );
+  await submitted;
+  let drained = false;
+  const drain = stopMeetingProcessing(meeting).then(() => {
+    drained = true;
+  });
+  await Promise.resolve();
+  const heldBeforeRelease = !drained;
+  release({ text: "late result" });
+  await drain;
+  expect(await outcome).toBe("cancelled");
+  expect(heldBeforeRelease).toBe(true);
+  expect(dependencies.reconcileBatch).not.toHaveBeenCalled();
+});

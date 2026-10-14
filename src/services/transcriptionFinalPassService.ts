@@ -1,4 +1,9 @@
-import { createReadStream, promises as fs } from "node:fs";
+import {
+  getMeetingProcessingSignal,
+  runMeetingProcessingEffect,
+} from "./meetingProcessingLifetime";
+import { withTranscriptionInput } from "./transcriptionInput";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import ffmpeg from "fluent-ffmpeg";
 import type { TranscriptionCreateParamsNonStreaming } from "openai/resources/audio";
@@ -92,6 +97,7 @@ type FinalPassDependencies = {
     outputPath: string;
     startSeconds: number;
     durationSeconds: number;
+    signal?: AbortSignal;
   }) => Promise<void>;
   transcribeChunk: (input: {
     meeting: MeetingData;
@@ -237,9 +243,17 @@ const renderAudioChunk = async (input: {
   outputPath: string;
   startSeconds: number;
   durationSeconds: number;
+  signal?: AbortSignal;
 }) =>
   await new Promise<void>((resolve, reject) => {
-    ffmpeg(input.inputPath)
+    input.signal?.throwIfAborted();
+    const command = ffmpeg(input.inputPath);
+    const cancel = () => command.kill("SIGTERM");
+    input.signal?.addEventListener("abort", cancel, { once: true });
+    command
+      .on("start", () => {
+        if (input.signal?.aborted) cancel();
+      })
       .setStartTime(input.startSeconds)
       .setDuration(input.durationSeconds)
       .audioCodec("libmp3lame")
@@ -248,9 +262,11 @@ const renderAudioChunk = async (input: {
       .audioFrequency(48000)
       .toFormat("mp3")
       .on("end", () => {
+        input.signal?.removeEventListener("abort", cancel);
         resolve();
       })
       .on("error", (error) => {
+        input.signal?.removeEventListener("abort", cancel);
         reject(error);
       })
       .save(input.outputPath);
@@ -481,6 +497,7 @@ const reconcileChunkBatches = async (input: {
   let rejectedTrivialEdits = 0;
   const batches = batchSegments(input.chunkSegments);
   for (const batch of batches) {
+    getMeetingProcessingSignal(input.meeting).throwIfAborted();
     const edits = await input.dependencies.reconcileBatch({
       meeting: input.meeting,
       chunkTranscript: input.chunkTranscript,
@@ -490,6 +507,7 @@ const reconcileChunkBatches = async (input: {
       chunkCount: input.chunkCount,
       baselineSegments: batch,
     });
+    getMeetingProcessingSignal(input.meeting).throwIfAborted();
     const batchResult = applyBatchEdits(batch, edits, input.acceptedEdits);
     candidateEdits += batchResult.candidateEdits;
     rejectedTrivialEdits += batchResult.rejectedTrivialEdits;
@@ -513,14 +531,18 @@ const processChunk = async (input: {
     `transcription_final_pass_chunk_${input.chunk.index + 1}.mp3`,
   );
 
+  const signal = getMeetingProcessingSignal(input.meeting);
   try {
+    signal.throwIfAborted();
     await input.dependencies.renderAudioChunk({
       inputPath: input.options.audioFilePath,
       outputPath: chunkFilePath,
       startSeconds: input.chunk.startSeconds,
       durationSeconds: input.chunk.endSeconds - input.chunk.startSeconds,
+      signal,
     });
 
+    signal.throwIfAborted();
     const chunkTranscription = await input.dependencies.transcribeChunk({
       meeting: input.meeting,
       chunkFilePath,
@@ -529,6 +551,7 @@ const processChunk = async (input: {
       chunkCount: input.chunkCount,
     });
 
+    signal.throwIfAborted();
     const chunkTranscript = chunkTranscription.text.trim();
     const nextTail = takeTail(
       chunkTranscript,
@@ -565,6 +588,7 @@ const processChunk = async (input: {
       nextTail,
     };
   } catch (error) {
+    signal.throwIfAborted();
     console.error("Final transcription pass chunk failed.", {
       meetingId: input.meeting.meetingId,
       chunkIndex: input.chunk.index + 1,
@@ -750,8 +774,12 @@ const defaultDependencies: FinalPassDependencies = {
       parentSpanContext: input.meeting.langfuseParentSpanContext,
     });
 
-    const request: TranscriptionCreateParamsNonStreaming<"json"> = {
-      file: createReadStream(input.chunkFilePath),
+    const signal = getMeetingProcessingSignal(input.meeting);
+    signal.throwIfAborted();
+    const request: Omit<
+      TranscriptionCreateParamsNonStreaming<"json">,
+      "file"
+    > = {
       model: modelChoice.model,
       language: "en",
       temperature: 0,
@@ -760,7 +788,13 @@ const defaultDependencies: FinalPassDependencies = {
       ...(combinedPrompt ? { prompt: combinedPrompt } : {}),
     };
 
-    const result = await openAIClient.audio.transcriptions.create(request);
+    const result = await withTranscriptionInput(input.chunkFilePath, (file) =>
+      openAIClient.audio.transcriptions.create(
+        { ...request, file },
+        { signal },
+      ),
+    );
+    signal.throwIfAborted();
     return {
       text: result.text ?? "",
       logprobs: result.logprobs ?? [],
@@ -821,13 +855,24 @@ const defaultDependencies: FinalPassDependencies = {
   },
 };
 
-export async function runTranscriptionFinalPass(
+export function runTranscriptionFinalPass(
+  meeting: MeetingData,
+  options: { audioFilePath: string },
+  dependencyOverrides: Partial<FinalPassDependencies> = {},
+) {
+  return runMeetingProcessingEffect(meeting, () =>
+    runOwnedTranscriptionFinalPass(meeting, options, dependencyOverrides),
+  );
+}
+async function runOwnedTranscriptionFinalPass(
   meeting: MeetingData,
   options: {
     audioFilePath: string;
   },
   dependencyOverrides: Partial<FinalPassDependencies> = {},
 ): Promise<TranscriptionFinalPassResult> {
+  const signal = getMeetingProcessingSignal(meeting);
+  signal.throwIfAborted();
   const enabled = meeting.runtimeConfig?.transcription.finalPassEnabled ?? true;
   if (!enabled) {
     return createResult({ enabled: false });
@@ -856,6 +901,7 @@ export async function runTranscriptionFinalPass(
     const detectedDurationSeconds =
       (await dependencies.getAudioDurationSeconds(options.audioFilePath)) ??
       fallbackDurationSeconds;
+    signal.throwIfAborted();
     const chunkWindows = buildChunkWindows(
       detectedDurationSeconds,
       chunkSeconds,
@@ -869,6 +915,7 @@ export async function runTranscriptionFinalPass(
     }
 
     const tempDir = await dependencies.ensureTempDir(meeting);
+    signal.throwIfAborted();
     const acceptedEdits = new Map<string, FinalPassEdit>();
     const counters = await processAllChunks({
       meeting,
@@ -880,6 +927,7 @@ export async function runTranscriptionFinalPass(
       acceptedEdits,
     });
 
+    signal.throwIfAborted();
     if (acceptedEdits.size === 0) {
       const repetitionFilteredSegments =
         applyRepeatedLowInformationFilter(baselineSegments);
@@ -940,6 +988,7 @@ export async function runTranscriptionFinalPass(
       repetitionFilteredSegments,
     });
   } catch (error) {
+    signal.throwIfAborted();
     console.error("Final transcription pass failed.", {
       meetingId: meeting.meetingId,
       error,

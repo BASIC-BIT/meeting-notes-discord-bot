@@ -472,7 +472,27 @@ export type CheckpointPublication = {
   ownership: SessionOwnership & { sessionMode: "meeting" };
   now: number;
 };
+export type InitialTerminalCheckpointDisposition = {
+  kind: "initial_terminal_disposition";
+  ownership: TerminalCheckpointPreservation["ownership"];
+  now: number;
+};
+export const RECORDING_DELIVERY_FIELDS = [
+  "recovery",
+  "summaryMessageId",
+  "notesMessageIds",
+  "notesChannelId",
+] as const;
+export type RecordingDeliveryProof = {
+  kind: "recording_delivery";
+  phase: "intent" | "acknowledgment";
+  ownership: TerminalCheckpointPreservation["ownership"];
+  now: number;
+  previous: Pick<MeetingHistory, (typeof RECORDING_DELIVERY_FIELDS)[number]>;
+};
 export type HistoryTransition = {
+  recordingDelivery?: RecordingDeliveryProof;
+  initialTerminalDisposition?: InitialTerminalCheckpointDisposition;
   checkpointPublication?: CheckpointPublication;
   terminalPreservation?: TerminalCheckpointPreservation;
   signal?: AbortSignal;
@@ -513,6 +533,9 @@ export function validateHistoryTransition(input: HistoryTransition): void {
     recordingCaptureStateSchema.parse(input.patch.capture);
   if (input.patch.recovery)
     recoveryDispositionSchema.parse(input.patch.recovery);
+  if (input.recordingDelivery) validateRecordingDelivery(input);
+  if (input.initialTerminalDisposition)
+    validateInitialTerminalDisposition(input);
   if (input.terminalPreservation) validateTerminalCheckpointPreservation(input);
   if (input.checkpointPublication) validateCheckpointPublication(input);
   const target = input.patch.status;
@@ -520,6 +543,118 @@ export function validateHistoryTransition(input: HistoryTransition): void {
     throw new Error("Illegal history status transition");
 }
 
+function validateRecordingDelivery(input: HistoryTransition) {
+  const proof = input.recordingDelivery!;
+  z.enum(["intent", "acknowledgment"]).parse(proof.phase);
+  const owner = proof.ownership;
+  id.parse(owner.voiceOperationAttemptId);
+  epochSecond.parse(proof.now);
+  z.number().int().nonnegative().parse(input.expectedCheckpointRevision);
+  if (
+    input.initialTerminalDisposition ||
+    input.terminalPreservation ||
+    input.checkpointPublication ||
+    !input.signal ||
+    proof.kind !== "recording_delivery" ||
+    owner.sessionMode !== "meeting" ||
+    owner.guildId !== input.key.guildId ||
+    owner.meetingId !== input.expectedMeetingId ||
+    owner.ownerInstanceId !== input.expectedOwnerInstanceId ||
+    owner.executionVersion !== input.expectedExecutionVersion
+  )
+    throw new Error("Recording delivery requires exact original authority");
+  validateDeliveryPatch(input, proof);
+}
+function validateDeliveryPatch(
+  input: HistoryTransition,
+  proof: RecordingDeliveryProof,
+) {
+  const allowed =
+    proof.phase === "intent"
+      ? ["recovery", "updatedAt"]
+      : [...RECORDING_DELIVERY_FIELDS, "updatedAt"];
+  if (
+    Object.keys(input.patch).some((field) => !allowed.includes(field)) ||
+    !["processing", "complete"].includes(input.expectedStatus)
+  )
+    throw new Error("Recording delivery is metadata only");
+  const recovery = validateDeliveryRecovery(input, proof);
+  if (proof.phase === "intent" && proof.previous.recovery?.stage === "delivery")
+    throw new Error("Existing delivery cannot be replayed");
+  if (proof.phase === "acknowledgment")
+    validatePriorDeliveryMarker(proof, recovery.disposition);
+  validateAcknowledgedDeliveryIds(input, proof);
+}
+function validateDeliveryRecovery(
+  input: HistoryTransition,
+  proof: RecordingDeliveryProof,
+) {
+  const recovery = input.patch.recovery;
+  if (
+    !recovery ||
+    recovery.stage !== "delivery" ||
+    recovery.executionVersion !== input.expectedExecutionVersion
+  )
+    throw new Error("Recording delivery stage mismatch");
+  if (recovery.disposition === "done") {
+    if (
+      proof.phase !== "acknowledgment" ||
+      input.expectedStatus !== "complete" ||
+      recovery.outcome !== "completed"
+    )
+      throw new Error("Delivery completion requires terminal history");
+  } else if (
+    recovery.disposition !== "needs_reconciliation" ||
+    recovery.reason !== "delivery_uncertain" ||
+    input.expectedStatus !== "processing"
+  )
+    throw new Error("Delivery uncertainty must remain retained");
+  return recovery;
+}
+function validatePriorDeliveryMarker(
+  proof: RecordingDeliveryProof,
+  disposition: string,
+) {
+  const previous = proof.previous.recovery;
+  if (
+    !previous ||
+    previous.stage !== "delivery" ||
+    previous.executionVersion !== proof.ownership.executionVersion ||
+    !["needs_reconciliation", "done"].includes(previous.disposition)
+  )
+    throw new Error(
+      "Delivery acknowledgment requires its original durable intent",
+    );
+  if (previous.disposition === "done" && disposition !== "done")
+    throw new Error("Completed delivery cannot become replayable");
+}
+function validateAcknowledgedDeliveryIds(
+  input: HistoryTransition,
+  proof: RecordingDeliveryProof,
+) {
+  if (input.patch.summaryMessageId !== undefined)
+    id.parse(input.patch.summaryMessageId);
+  if (input.patch.notesChannelId !== undefined)
+    id.parse(input.patch.notesChannelId);
+  if (input.patch.notesMessageIds)
+    z.array(id).min(1).parse(input.patch.notesMessageIds);
+  for (const field of ["summaryMessageId", "notesChannelId"] as const) {
+    if (
+      proof.previous[field] &&
+      input.patch[field] !== undefined &&
+      proof.previous[field] !== input.patch[field]
+    )
+      throw new Error("Acknowledged delivery identity cannot be replaced");
+  }
+  if (
+    input.patch.notesMessageIds &&
+    !proof.previous.notesMessageIds?.every((id) =>
+      input.patch.notesMessageIds!.includes(id),
+    ) &&
+    proof.previous.notesMessageIds?.length
+  )
+    throw new Error("Acknowledged delivery IDs cannot be discarded");
+}
 function validateCheckpointPublication(input: HistoryTransition) {
   const proof = input.checkpointPublication!;
   const owner = proof.ownership;
@@ -529,6 +664,8 @@ function validateCheckpointPublication(input: HistoryTransition) {
   if (
     proof.kind !== "checkpoint_publication" ||
     input.terminalPreservation ||
+    input.initialTerminalDisposition ||
+    input.recordingDelivery ||
     !input.signal ||
     Object.keys(input.patch).some(
       (field) => !["checkpoint", "updatedAt"].includes(field),
@@ -542,6 +679,30 @@ function validateCheckpointPublication(input: HistoryTransition) {
     throw new Error(
       "Checkpoint publication requires original session authority and metadata only",
     );
+}
+
+function validateInitialTerminalDisposition(input: HistoryTransition) {
+  const proof = input.initialTerminalDisposition!;
+  if (
+    proof.kind !== "initial_terminal_disposition" ||
+    input.terminalPreservation ||
+    input.checkpointPublication ||
+    input.recordingDelivery ||
+    !["starting", "in_progress", "processing"].includes(input.expectedStatus) ||
+    !["failed", "interrupted"].includes(input.patch.status ?? "") ||
+    !input.patch.capture ||
+    !input.patch.recovery
+  )
+    throw new Error(
+      "Initial terminal disposition requires original active history and recovery metadata",
+    );
+  const { status, ...patch } = input.patch;
+  validateTerminalCheckpointPreservation({
+    ...input,
+    expectedStatus: status!,
+    patch,
+    terminalPreservation: { ...proof, kind: "terminal_preservation" },
+  });
 }
 
 function validateTerminalCheckpointPreservation(input: HistoryTransition) {

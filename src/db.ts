@@ -695,8 +695,14 @@ export async function releaseActiveMeetingLease(
   guildId: string,
   meetingId: string,
   ownerInstanceId: string,
-  ownership?: { executionVersion: number; sessionMode: "meeting" | "tts_only" },
+  ownership?: {
+    executionVersion: number;
+    sessionMode: "meeting" | "tts_only";
+    voiceOperationAttemptId?: string;
+  },
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  signal?.throwIfAborted();
   if (config.mock.enabled) {
     const lease = getMockStore().activeMeetingLeases.get(guildId);
     if (
@@ -704,7 +710,9 @@ export async function releaseActiveMeetingLease(
       lease.meetingId !== meetingId ||
       lease.ownerInstanceId !== ownerInstanceId ||
       lease.executionVersion !== ownership?.executionVersion ||
-      lease.sessionMode !== ownership?.sessionMode
+      lease.sessionMode !== ownership?.sessionMode ||
+      (ownership?.voiceOperationAttemptId !== undefined &&
+        lease.voiceOperationAttemptId !== ownership.voiceOperationAttemptId)
     )
       return false;
     return getMockStore().activeMeetingLeases.delete(guildId);
@@ -716,7 +724,10 @@ export async function releaseActiveMeetingLease(
       "#meetingId = :meetingId AND #ownerInstanceId = :ownerInstanceId AND " +
       (ownership
         ? "#executionVersion = :executionVersion AND sessionMode = :sessionMode"
-        : "attribute_not_exists(#executionVersion)"),
+        : "attribute_not_exists(#executionVersion)") +
+      (ownership?.voiceOperationAttemptId
+        ? " AND voiceOperationAttemptId = :voiceAttempt"
+        : ""),
     ExpressionAttributeNames: {
       "#meetingId": "meetingId",
       "#ownerInstanceId": "ownerInstanceId",
@@ -725,6 +736,9 @@ export async function releaseActiveMeetingLease(
     ExpressionAttributeValues: marshall({
       ":meetingId": meetingId,
       ":ownerInstanceId": ownerInstanceId,
+      ...(ownership?.voiceOperationAttemptId
+        ? { ":voiceAttempt": ownership.voiceOperationAttemptId }
+        : {}),
       ...(ownership
         ? {
             ":executionVersion": ownership.executionVersion,
@@ -735,7 +749,7 @@ export async function releaseActiveMeetingLease(
   };
   const command = new DeleteItemCommand(params);
   try {
-    await dynamoDbClient.send(command);
+    await dynamoDbClient.send(command, { abortSignal: signal });
     return true;
   } catch (error) {
     if (
@@ -749,7 +763,9 @@ export async function releaseActiveMeetingLease(
 
 export async function getActiveMeetingLease(
   guildId: string,
+  signal?: AbortSignal,
 ): Promise<ActiveMeetingLease | undefined> {
+  signal?.throwIfAborted();
   if (config.mock.enabled)
     return getMockStore().activeMeetingLeases.get(guildId);
   const params: GetItemCommand["input"] = {
@@ -758,7 +774,7 @@ export async function getActiveMeetingLease(
     ConsistentRead: true,
   };
   const command = new GetItemCommand(params);
-  const result = await dynamoDbClient.send(command);
+  const result = await dynamoDbClient.send(command, { abortSignal: signal });
   if (result.Item) {
     return unmarshall(result.Item) as ActiveMeetingLease;
   }

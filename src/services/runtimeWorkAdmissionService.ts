@@ -2,6 +2,7 @@ import type {
   RuntimeWorkHandle,
   WorkAdmissionAuthority,
   SessionOwnership,
+  SessionReservation,
 } from "../types/deploymentControl";
 import {
   beginRuntimeWork,
@@ -30,10 +31,12 @@ type Checkpoint = {
   session?: SessionOwnership;
   localSettled: boolean;
   ownedPromise?: Promise<unknown>;
+  ownedSettled?: boolean;
   effects: Set<Promise<unknown>>;
   terminalAcknowledged?: ClaimCheckpoint;
 };
 const work = new Map<string, Checkpoint>();
+const closingSessions = new WeakSet<SessionReservation>();
 
 function resolveParentSession(
   domain: Domain,
@@ -50,7 +53,10 @@ function resolveParentSession(
     throw new Error("Session control is not locally owned");
   if (owned) getReservationSignal(owned.reservation).throwIfAborted();
   const parent = owned?.reservation;
-  if (parent && !isReservationControlEligible(parent))
+  if (
+    parent &&
+    (closingSessions.has(parent) || !isReservationControlEligible(parent))
+  )
     throw new Error("Session control ownership is closing");
   return parent;
 }
@@ -73,7 +79,15 @@ export function beginRuntimeWorkClaim(
     stage: "pending",
     controller: new AbortController(),
     handle,
-    session: parent,
+    session: parent
+      ? {
+          guildId: parent.guildId,
+          meetingId: parent.meetingId,
+          ownerInstanceId: parent.ownerInstanceId,
+          executionVersion: parent.executionVersion,
+          voiceOperationAttemptId: parent.voiceOperationAttemptId,
+        }
+      : undefined,
     localSettled: false,
     effects: new Set(),
   };
@@ -95,6 +109,15 @@ export function beginRuntimeWorkClaim(
         reject = failed;
       });
       checkpoint.ownedPromise = promise;
+      checkpoint.ownedSettled = false;
+      void promise.then(
+        () => {
+          checkpoint.ownedSettled = true;
+        },
+        () => {
+          checkpoint.ownedSettled = true;
+        },
+      );
       try {
         resolve(run());
       } catch (error) {
@@ -220,4 +243,59 @@ export function fenceRuntimeWorkAdmission(id: string): void {
   if (!entry) return;
   entry.stage = "unresolved";
   entry.controller.abort();
+}
+
+/** A terminal acknowledgment permits release only after its exact owner's complete local lifetime. */
+export function releaseAcknowledgedRuntimeWork(id: string): boolean {
+  const entry = work.get(id);
+  if (!entry) return true;
+  const acknowledged = entry.terminalAcknowledged;
+  const claim = entry.claim;
+  if (
+    !entry.localSettled ||
+    !entry.ownedSettled ||
+    entry.effects.size ||
+    !acknowledged ||
+    !claim ||
+    acknowledged.claimId !== claim.claimId ||
+    acknowledged.instanceId !== claim.instanceId ||
+    acknowledged.attempt !== claim.attempt ||
+    acknowledged.expiresAt !== claim.expiresAt
+  )
+    return false;
+  entry.handle.settle();
+  work.delete(id);
+  return true;
+}
+function sameSession(
+  left: SessionOwnership | undefined,
+  right: SessionOwnership,
+) {
+  return (
+    left?.guildId === right.guildId &&
+    left.meetingId === right.meetingId &&
+    left.ownerInstanceId === right.ownerInstanceId &&
+    left.executionVersion === right.executionVersion &&
+    left.voiceOperationAttemptId === right.voiceOperationAttemptId
+  );
+}
+export async function fenceAndSettleSessionWork(
+  session: SessionOwnership,
+): Promise<boolean> {
+  for (const { reservation } of getOwnedSessionReservations()) {
+    if (sameSession(reservation, session)) closingSessions.add(reservation);
+  }
+  const children = [...work.values()].filter((entry) =>
+    sameSession(entry.session, session),
+  );
+  for (const child of children) {
+    child.stage = "unresolved";
+    child.controller.abort();
+  }
+  await Promise.allSettled(children.map((child) => child.ownedPromise));
+  for (const child of children)
+    while (child.effects.size) await Promise.allSettled([...child.effects]);
+  return children
+    .map((child) => releaseAcknowledgedRuntimeWork(child.id))
+    .every(Boolean);
 }

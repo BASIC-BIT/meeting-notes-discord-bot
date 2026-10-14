@@ -1,4 +1,8 @@
 /** @jest-environment node */
+jest.mock("../../src/services/ownedMeetingInterruption", () => ({
+  interruptOwnedMeeting: jest.fn(async () => ({ kind: "unresolved" })),
+}));
+import { interruptOwnedMeeting } from "../../src/services/ownedMeetingInterruption";
 jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +21,8 @@ import { PassThrough, TransformCallback } from "node:stream";
 import { VoiceConnectionStatus } from "@discordjs/voice";
 import {
   subscribeToUserVoice,
+  stopRecordingCapture,
+  waitForCaptureStreamSettlement,
   userStartTalking,
   userStopTalking,
 } from "../../src/audio";
@@ -394,6 +400,10 @@ describe("actual capture preservation cutoff handoff", () => {
         streams[0].write(Buffer.alloc(3840));
         await jest.advanceTimersByTimeAsync(60000);
         await meeting.recordingPreservationTask;
+        expect(interruptOwnedMeeting).toHaveBeenCalledWith(
+          meeting,
+          expect.objectContaining({ reason: "capture_failure" }),
+        );
         expect(receiver.subscriptions.size).toBe(0);
         const subscriptionsBefore = receiver.subscribe.mock.calls.length;
         await subscribeToUserVoice(meeting, "user-1");
@@ -482,6 +492,48 @@ test("receiver PCM commit serializes its synchronous context checkpoint", async 
     temp.mockRestore();
     append.mockRestore();
     rmSync(directory, { recursive: true, force: true });
+    jest.useRealTimers();
+  }
+});
+
+test("capture teardown waits for actual receiver and decoder close after synchronous detachment", async () => {
+  jest.useRealTimers();
+  const streams: PassThrough[] = [];
+  const { meeting, receiver } = createMeeting(streams);
+  await subscribeToUserVoice(meeting, "user-1");
+  let release!: () => void;
+  jest.spyOn(streams[0], "_destroy").mockImplementation((_error, done) => {
+    release = () => done(null);
+  });
+  stopRecordingCapture(meeting, "interrupted");
+  expect(receiver.subscriptions.size).toBe(0);
+  let settled = false;
+  const drain = waitForCaptureStreamSettlement(meeting).then(() => {
+    settled = true;
+  });
+  await new Promise<void>((done) => setImmediate(done));
+  expect(settled).toBe(false);
+  release();
+  await drain;
+  expect(streams[0].closed).toBe(true);
+  expect(mockDecoders.at(-1)!.closed).toBe(true);
+});
+
+test("queued resubscribe cannot dispatch after synchronous capture fence", async () => {
+  jest.useFakeTimers();
+  const streams: PassThrough[] = [];
+  const { meeting, receiver } = createMeeting(streams);
+  const diagnostic = jest.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await subscribeToUserVoice(meeting, "user-1");
+    streams[0].emit("error", new Error("synthetic receiver failure"));
+    expect(diagnostic).toHaveBeenCalled();
+    stopRecordingCapture(meeting, "interrupted");
+    await jest.advanceTimersByTimeAsync(1000);
+    await waitForCaptureStreamSettlement(meeting);
+    expect(receiver.subscribe).toHaveBeenCalledTimes(1);
+  } finally {
+    diagnostic.mockRestore();
     jest.useRealTimers();
   }
 });

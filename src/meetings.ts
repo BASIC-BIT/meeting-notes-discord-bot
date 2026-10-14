@@ -239,15 +239,21 @@ async function applyVoiceSessionNickname(
   }
 }
 
-export async function restoreVoiceSessionNickname(meeting: MeetingData) {
-  if (!meeting.botNicknameChanged) return;
+export async function restoreVoiceSessionNickname(
+  meeting: MeetingData,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (!meeting.botNicknameChanged) return true;
+  signal?.throwIfAborted();
   try {
     const botMember = meeting.guild.members.me;
-    if (!botMember) return;
+    if (!botMember) return false;
     await botMember.setNickname(meeting.botNicknameBeforeSession ?? null);
     meeting.botNicknameChanged = false;
+    return true;
   } catch (error) {
     console.warn("Failed to restore bot session nickname.", error);
+    return false;
   }
 }
 

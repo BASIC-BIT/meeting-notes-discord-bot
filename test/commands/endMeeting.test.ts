@@ -1,4 +1,11 @@
 /** @jest-environment node */
+jest.mock("../../src/services/recordingDeliveryService", () => ({
+  acknowledgeRecordingDeliveryHistory: jest.fn(async () => {}),
+}));
+jest.mock("../../src/services/ownedMeetingInterruption", () => ({
+  interruptOwnedMeeting: jest.fn(async () => ({ kind: "unresolved" })),
+}));
+import { interruptOwnedMeeting } from "../../src/services/ownedMeetingInterruption";
 jest.mock("../../src/services/notesService", () => ({ getNotes: jest.fn() }));
 import { getNotes } from "../../src/services/notesService";
 import { notifyRecordingLimit } from "../../src/services/recordingLimitService";
@@ -1446,12 +1453,14 @@ it("preparationFailurePersistsFailure", async () => {
   await expect(
     runEndMeetingFlow({ client: {} as Client, meeting }),
   ).rejects.toThrow("Discord unavailable");
-  expect(transitionOwnedMeetingHistoryService).toHaveBeenLastCalledWith(
+  expect(interruptOwnedMeeting).toHaveBeenCalledWith(
     meeting,
-    expect.objectContaining({ status: "failed" }),
-    ["starting", "in_progress", "processing"],
+    expect.objectContaining({ reason: "processing_failure" }),
   );
-  expect(meeting.finalization?.historyDisposition).toBe("failed");
+  expect(interruptOwnedMeeting).toHaveBeenCalledWith(
+    meeting,
+    expect.objectContaining({ reason: "processing_failure" }),
+  );
   expect(meeting.setFinished).not.toHaveBeenCalled();
   expect(mockedCleanupMeetingTempDir).not.toHaveBeenCalled();
 });
@@ -1570,7 +1579,10 @@ describe("H4 review outcome and fence regressions", () => {
     expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
     expect(mockedDeleteIfExists).not.toHaveBeenCalled();
     expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
-    expect(meeting.finalization?.historyDisposition).toBe("failed");
+    expect(interruptOwnedMeeting).toHaveBeenCalledWith(
+      meeting,
+      expect.objectContaining({ reason: "processing_failure" }),
+    );
   });
   it.each(["audio", "chat", "transcript"] as const)(
     "missing expected %s never commits complete or deletes artifacts",
@@ -1594,7 +1606,10 @@ describe("H4 review outcome and fence regressions", () => {
       expect(mockedCleanupSpeakerTracks).not.toHaveBeenCalled();
       expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
       expect(captureEvent).not.toHaveBeenCalled();
-      expect(meeting.finalization?.historyDisposition).toBe("failed");
+      expect(interruptOwnedMeeting).toHaveBeenCalledWith(
+        meeting,
+        expect.objectContaining({ reason: "processing_failure" }),
+      );
       expect(errorOutput).toHaveBeenCalledWith(
         "Expected meeting artifacts were not durably uploaded; retained local artifacts",
         expect.objectContaining({
@@ -1630,7 +1645,10 @@ describe("H4 review outcome and fence regressions", () => {
         "cancelled_artifact_upload_failed",
       );
       expect(meeting.cancelled).not.toBe(true);
-      expect(meeting.finalization?.historyDisposition).toBe("failed");
+      expect(interruptOwnedMeeting).toHaveBeenCalledWith(
+        meeting,
+        expect.objectContaining({ reason: "processing_failure" }),
+      );
       expect(mockedSaveMeetingHistoryToDatabase).not.toHaveBeenCalled();
       expect(mockedDeleteIfExists).not.toHaveBeenCalled();
       expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
@@ -1655,7 +1673,10 @@ describe("H4 review outcome and fence regressions", () => {
         runEndMeetingFlow({ client: {} as Client, meeting }),
       ).rejects.toThrow("processing");
       expect(mockedEvaluateAutoRecordCancellation).not.toHaveBeenCalled();
-      expect(meeting.finalization?.historyDisposition).toBe("failed");
+      expect(interruptOwnedMeeting).toHaveBeenCalledWith(
+        meeting,
+        expect.objectContaining({ reason: "processing_failure" }),
+      );
       expect(mockedDeleteIfExists).not.toHaveBeenCalled();
       expect(mockedReleaseMeetingLeaseForMeeting).not.toHaveBeenCalled();
     },

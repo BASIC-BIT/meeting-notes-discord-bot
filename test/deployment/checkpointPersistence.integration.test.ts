@@ -773,3 +773,341 @@ test("ordinary producer can preserve late content under its original lease after
   expect(saved.manifest.capture.executionVersion).toBe(1);
   expect(saved.verified).toHaveLength(1);
 });
+
+async function initialTerminalFixture() {
+  const f = await originalProducerFixture();
+  return {
+    ...f,
+    request: {
+      capture: f.meeting.recordingCheckpoint!.capture,
+      expectedStatus: "starting" as const,
+      status: "failed" as const,
+      previous: f.meeting.recordingCheckpoint,
+      artifacts: [],
+      captureState: f.meeting.recordingCaptureState!,
+      recovery,
+      preservation: {
+        ownership,
+        deadlineEpochMs: Date.now() + 20000,
+        signal: new AbortController().signal,
+        assertOwnership: async () => {},
+      },
+    },
+  };
+}
+test.each(["missing", "expired", "owner", "mode", "attempt", "version"])(
+  "initial terminal transaction rejects %s original lease and leaves history unchanged",
+  async (race) => {
+    const f = await initialTerminalFixture();
+    const before = await repository.getMeetingHistory({
+      guildId: history.guildId,
+      channelId_timestamp: history.channelId_timestamp,
+    });
+    if (race === "missing")
+      await client.send(
+        new DeleteItemCommand({
+          TableName: tables.activeMeeting,
+          Key: marshall({ guildId: history.guildId }),
+        }),
+      );
+    else
+      await client.send(
+        new PutItemCommand({
+          TableName: tables.activeMeeting,
+          Item: marshall({
+            ...f.lease,
+            ...(race === "expired"
+              ? { leaseExpiresAt: Math.floor(Date.now() / 1000) - 1 }
+              : {}),
+            ...(race === "owner" ? { ownerInstanceId: "replacement" } : {}),
+            ...(race === "mode" ? { sessionMode: "tts_only" } : {}),
+            ...(race === "attempt"
+              ? { voiceOperationAttemptId: "replacement" }
+              : {}),
+            ...(race === "version" ? { executionVersion: 2 } : {}),
+          }),
+        }),
+      );
+    expect(
+      (await service.preserveInitialTerminalRecordingCheckpoint(f.request))
+        .kind,
+    ).toBe("stale_owner");
+    expect(
+      await repository.getMeetingHistory({
+        guildId: history.guildId,
+        channelId_timestamp: history.channelId_timestamp,
+      }),
+    ).toEqual(before);
+  },
+);
+test("initial terminal transaction preserves complete capture and exact lost ACK is read back", async () => {
+  const f = await initialTerminalFixture();
+  const apply = repository.transitionMeetingHistory.bind(repository);
+  const transition = jest
+    .spyOn(repository, "transitionMeetingHistory")
+    .mockImplementationOnce(async (request) => {
+      expect(request.initialTerminalDisposition?.ownership).toEqual(ownership);
+      expect(request.signal?.aborted).toBe(false);
+      expect(await apply(request)).toBe("applied");
+      throw new Error("synthetic lost terminal ACK");
+    });
+  try {
+    expect(
+      (await service.preserveInitialTerminalRecordingCheckpoint(f.request))
+        .kind,
+    ).toBe("committed");
+    expect(
+      await repository.getMeetingHistory({
+        guildId: history.guildId,
+        channelId_timestamp: history.channelId_timestamp,
+      }),
+    ).toMatchObject({
+      status: "failed",
+      capture: f.request.captureState,
+      checkpoint: f.request.previous,
+      recovery,
+    });
+  } finally {
+    transition.mockRestore();
+  }
+});
+
+test.each(["abort", "deadline"] as const)(
+  "initial terminal SDK transaction settles under shared %s",
+  async (cancellation) => {
+    const fixture = await initialTerminalFixture();
+    const controller = new AbortController();
+    const handler = new NodeHttpHandler();
+    const originalHandle = handler.handle.bind(handler);
+    let entered!: () => void;
+    const submitted = new Promise<void>((done) => {
+      entered = done;
+    });
+    let settled = false;
+    let actualSignal: AbortSignal | undefined;
+    jest
+      .spyOn(handler, "handle")
+      .mockImplementation(async (request, options) => {
+        if (
+          request.headers["x-amz-target"] !==
+          "DynamoDB_20120810.TransactWriteItems"
+        )
+          return originalHandle(request, options);
+        actualSignal = options?.abortSignal as AbortSignal;
+        try {
+          return await new Promise<never>((_done, reject) => {
+            actualSignal!.addEventListener(
+              "abort",
+              () =>
+                reject(
+                  Object.assign(new Error("synthetic transaction cancelled"), {
+                    name: "AbortError",
+                  }),
+                ),
+              { once: true },
+            );
+            entered();
+          });
+        } finally {
+          settled = true;
+        }
+      });
+    const heldClient = new DynamoDBClient({
+      endpoint: process.env.DEPLOYMENT_TEST_DYNAMODB_ENDPOINT,
+      region: "local",
+      credentials: { accessKeyId: "dummy", secretAccessKey: "dummy" },
+      requestHandler: handler,
+      maxAttempts: 1,
+    });
+    const heldService = createRecordingCheckpointService({
+      repository: createDynamoDeploymentControlRepository(heldClient, tables),
+      objects: {
+        upload: async (key, body) => {
+          objects.set(key, Buffer.from(body));
+          return key;
+        },
+        read: async (key) => objects.get(key),
+      },
+    });
+    try {
+      const pending = heldService.preserveInitialTerminalRecordingCheckpoint({
+        ...fixture.request,
+        preservation: {
+          ...fixture.request.preservation,
+          signal: controller.signal,
+          deadlineEpochMs:
+            Date.now() + (cancellation === "deadline" ? 500 : 10000),
+        },
+      });
+      await submitted;
+      expect(settled).toBe(false);
+      if (cancellation === "abort") controller.abort();
+      expect((await pending).kind).toBe("preservation_failed");
+      expect(actualSignal?.aborted).toBe(true);
+      expect(settled).toBe(true);
+      expect(
+        await repository.getMeetingHistory({
+          guildId: history.guildId,
+          channelId_timestamp: history.channelId_timestamp,
+        }),
+      ).toMatchObject({
+        status: "starting",
+        checkpoint: fixture.request.previous,
+      });
+    } finally {
+      heldClient.destroy();
+    }
+  },
+);
+
+async function recordingDeliveryFixture() {
+  const f = await initialTerminalFixture();
+  const key = {
+    guildId: history.guildId,
+    channelId_timestamp: history.channelId_timestamp,
+  };
+  const row = (await repository.getMeetingHistory(key))!;
+  row.status = "processing";
+  await client.send(
+    new PutItemCommand({
+      TableName: tables.meetingHistory,
+      Item: marshall(row, { removeUndefinedValues: true }),
+    }),
+  );
+  const marker = {
+    ...recovery,
+    disposition: "needs_reconciliation" as const,
+    stage: "delivery" as const,
+    reason: "delivery_uncertain" as const,
+  };
+  const intent: import("../../src/types/deploymentControl").HistoryTransition =
+    {
+      key,
+      expectedMeetingId: row.meetingId!,
+      expectedOwnerInstanceId: row.ownerInstanceId!,
+      expectedExecutionVersion: row.executionVersion!,
+      expectedStatus: "processing",
+      expectedCheckpointRevision: row.checkpoint!.revision,
+      signal: new AbortController().signal,
+      recordingDelivery: {
+        kind: "recording_delivery",
+        phase: "intent",
+        ownership,
+        now: Math.floor(Date.now() / 1000),
+        previous: {
+          recovery: undefined,
+          summaryMessageId: undefined,
+          notesMessageIds: undefined,
+          notesChannelId: undefined,
+        },
+      },
+      patch: { recovery: marker },
+    };
+  return { ...f, key, row, marker, intent };
+}
+test.each(["missing", "expired", "owner", "mode", "attempt", "version"])(
+  "recording delivery intent rejects %s original lease",
+  async (race) => {
+    const f = await recordingDeliveryFixture();
+    if (race === "missing")
+      await client.send(
+        new DeleteItemCommand({
+          TableName: tables.activeMeeting,
+          Key: marshall({ guildId: history.guildId }),
+        }),
+      );
+    else
+      await client.send(
+        new PutItemCommand({
+          TableName: tables.activeMeeting,
+          Item: marshall({
+            ...f.lease,
+            ...(race === "expired"
+              ? { leaseExpiresAt: Math.floor(Date.now() / 1000) - 1 }
+              : {}),
+            ...(race === "owner" ? { ownerInstanceId: "replacement" } : {}),
+            ...(race === "mode" ? { sessionMode: "tts_only" } : {}),
+            ...(race === "attempt"
+              ? { voiceOperationAttemptId: "replacement" }
+              : {}),
+            ...(race === "version" ? { executionVersion: 2 } : {}),
+          }),
+        }),
+      );
+    expect(await repository.transitionMeetingHistory(f.intent)).toBe("stale");
+    expect(await repository.getMeetingHistory(f.key)).toEqual(f.row);
+  },
+);
+test("recording delivery partial IDs and uncertainty survive terminal preservation and cannot be replayed", async () => {
+  const f = await recordingDeliveryFixture();
+  expect(await repository.transitionMeetingHistory(f.intent)).toBe("applied");
+  expect(await repository.transitionMeetingHistory(f.intent)).toBe("stale");
+  const acknowledgment = {
+    ...f.intent,
+    recordingDelivery: {
+      ...f.intent.recordingDelivery!,
+      phase: "acknowledgment" as const,
+      previous: { ...f.intent.recordingDelivery!.previous, recovery: f.marker },
+    },
+    patch: {
+      recovery: f.marker,
+      summaryMessageId: "summary-ack",
+      notesMessageIds: ["first-ack"],
+      notesChannelId: "text",
+    },
+  };
+  expect(await repository.transitionMeetingHistory(acknowledgment)).toBe(
+    "applied",
+  );
+  // The next submitted Discord batch has an unknown response. No second ID is invented.
+  expect(
+    (
+      await service.preserveInitialTerminalRecordingCheckpoint({
+        ...f.request,
+        expectedStatus: "processing",
+        recovery: f.marker,
+      })
+    ).kind,
+  ).toBe("committed");
+  expect(await repository.getMeetingHistory(f.key)).toMatchObject({
+    status: "failed",
+    summaryMessageId: "summary-ack",
+    notesMessageIds: ["first-ack"],
+    recovery: f.marker,
+  });
+  expect(
+    await repository.listPendingRecordingRecoveries(history.guildId),
+  ).toEqual([]);
+});
+test("recording delivery acknowledgment refuses stale prior IDs rather than overwriting them", async () => {
+  const f = await recordingDeliveryFixture();
+  expect(await repository.transitionMeetingHistory(f.intent)).toBe("applied");
+  const acknowledgment = {
+    ...f.intent,
+    recordingDelivery: {
+      ...f.intent.recordingDelivery!,
+      phase: "acknowledgment" as const,
+      previous: { ...f.intent.recordingDelivery!.previous, recovery: f.marker },
+    },
+    patch: {
+      recovery: f.marker,
+      notesMessageIds: ["first"],
+      notesChannelId: "text",
+    },
+  };
+  expect(await repository.transitionMeetingHistory(acknowledgment)).toBe(
+    "applied",
+  );
+  expect(
+    await repository.transitionMeetingHistory({
+      ...acknowledgment,
+      patch: {
+        ...acknowledgment.patch,
+        notesMessageIds: ["stale-replacement"],
+      },
+    }),
+  ).toBe("stale");
+  expect((await repository.getMeetingHistory(f.key))?.notesMessageIds).toEqual([
+    "first",
+  ]);
+});

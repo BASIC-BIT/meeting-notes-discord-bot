@@ -1,3 +1,5 @@
+import { acknowledgeRecordingDeliveryHistory } from "../services/recordingDeliveryService";
+import { interruptOwnedMeeting } from "../services/ownedMeetingInterruption";
 import {
   checkpointRecordingContext,
   checkpointCompletedTranscription,
@@ -386,32 +388,11 @@ async function executeOwnedFinalization(
     // Close capture/voice even when the history provider cannot return.
     const preservation = preserveStoppedCapture(meeting);
     if (meeting.finalization) meeting.finalization.preservation = preservation;
-    // Failure is a durable disposition, never evidence that local artifacts can be deleted.
-    try {
-      await transitionOwnedMeetingHistoryService(
-        meeting,
-        {
-          status: MEETING_STATUS.FAILED,
-          processing: meeting.processing,
-          endReason: meeting.endReason,
-          audioS3Key: meeting.audioS3Key,
-          chatS3Key: meeting.chatS3Key,
-          transcriptS3Key: meeting.transcriptS3Key,
-        },
-        [
-          MEETING_STATUS.STARTING,
-          MEETING_STATUS.IN_PROGRESS,
-          MEETING_STATUS.PROCESSING,
-        ],
-      );
-      if (meeting.finalization)
-        meeting.finalization.historyDisposition = "failed";
-    } catch (historyError) {
-      console.error("Meeting finalization disposition remains unresolved", {
-        meetingId: meeting.meetingId,
-        error: historyError,
-      });
-    }
+    // The interruption owner performs the original-lease terminal transaction after actual work settles.
+    void interruptOwnedMeeting(meeting, {
+      reason: "processing_failure",
+      deadline: Date.now() + 100_000,
+    });
     // A failed encoder/storage/provider leaves work counted for preservation/reconciliation.
     fenceMeetingFinalization(meeting);
     throw error;
@@ -662,13 +643,14 @@ async function finalizeRecording(
 
     assertMeetingProcessingSucceeded(meeting);
     await runMeetingEndStep(meeting, "update-summary-message", () =>
-      updateMeetingSummaryMessage(meeting),
+      updateMeetingSummaryMessage(meeting, { finalization: true }),
     );
 
     // Save meeting history to database before cleanup
     await runMeetingEndStep(meeting, "save-meeting-history", () =>
       saveMeetingHistoryToDatabase(meeting),
     );
+    await acknowledgeRecordingDeliveryHistory(meeting);
     if (meeting.finalization) {
       meeting.finalization.disposition = "durable";
       meeting.finalization.historyDisposition = "complete";

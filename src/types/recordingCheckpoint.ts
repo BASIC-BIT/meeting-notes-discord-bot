@@ -92,6 +92,7 @@ export const recoveryDispositionSchema = z
         disposition: z.literal("needs_reconciliation"),
         reason: z.enum([
           "ownership_uncertain",
+          "delivery_uncertain",
           "invalid_checkpoint",
           "invalid_payload",
           "retry_exhausted",

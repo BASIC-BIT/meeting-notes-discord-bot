@@ -20,6 +20,7 @@ import {
   unwindSessionInitialization,
   getOwnedSessionReservations,
   releaseSessionReservation,
+  reconcilePreservedRecordingReservation,
   attachMeetingReservation,
   isReservationControlEligible,
 } from "../../src/services/activeMeetingLeaseService";
@@ -272,6 +273,70 @@ describe("activeMeetingLeaseService", () => {
       expect.objectContaining({ reservation }),
     );
   });
+  test.each([true, false])(
+    "delete-applied reconciliation requires terminal checkpoint proof: %s",
+    async (terminalProof) => {
+      const { reservation, getMeetingHistory } = await recordingReservation();
+      if (reservation.sessionMode !== "meeting")
+        throw new Error("fixture mode");
+      const meeting = {
+        reservation,
+        finalization: {
+          disposition: "durable",
+          controller: new AbortController(),
+        },
+      } as unknown as MeetingData;
+      attachMeetingReservation(meeting, reservation);
+      let completeDelete!: () => void;
+      mockedReleaseActiveMeetingLease.mockImplementationOnce(async () => {
+        await new Promise<void>((done) => {
+          completeDelete = done;
+        });
+        return true;
+      });
+      const deleting = releaseSessionReservation(reservation);
+      await Promise.resolve();
+      await Promise.resolve();
+      meeting.finalizationFenced = true;
+      completeDelete();
+      expect(await deleting).toBe(false);
+      const checkpoint = {
+        revision: 1,
+        capture: {
+          guildId: reservation.guildId,
+          meetingId: reservation.meetingId,
+          ownerInstanceId: reservation.ownerInstanceId,
+          executionVersion: reservation.executionVersion,
+        },
+      } as import("../../src/types/recordingCheckpoint").RecordingCheckpoint;
+      getMeetingHistory.mockResolvedValue({
+        guildId: reservation.guildId,
+        meetingId: reservation.meetingId,
+        ownerInstanceId: reservation.ownerInstanceId,
+        executionVersion: reservation.executionVersion,
+        status: terminalProof ? "complete" : "processing",
+        checkpoint,
+      } as import("../../src/types/db").MeetingHistory);
+      mockedGetActiveMeetingLease.mockResolvedValue(undefined);
+      const signal = new AbortController().signal;
+      const released = await reconcilePreservedRecordingReservation(
+        reservation,
+        {
+          checkpoint,
+          status: "complete",
+          localWork: Promise.resolve(),
+          signal,
+          deadline: Date.now() + 100000,
+        },
+      );
+      expect(released).toBe(terminalProof);
+      expect(reservation.workHandle.settle).toHaveBeenCalledTimes(
+        terminalProof ? 1 : 0,
+      );
+      expect(mockedReleaseActiveMeetingLease).toHaveBeenCalledTimes(1);
+    },
+  );
+
   test("rejected history unwind retains counted ownership but still settles voice", async () => {
     const { reservation, getMeetingHistory } = await recordingReservation();
     jest

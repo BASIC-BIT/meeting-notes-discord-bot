@@ -1,3 +1,7 @@
+import {
+  getMeetingProcessingSignal,
+  runMeetingProcessingEffect,
+} from "./meetingProcessingLifetime";
 import type OpenAI from "openai";
 import type { MeetingData } from "../types/meeting-data";
 import type { ChatAttachment, ChatEntry } from "../types/chat";
@@ -38,6 +42,7 @@ type CreateCaptionOptions = {
   url: string;
   name: string;
   timeoutMs: number;
+  signal: AbortSignal;
 };
 
 const clampFiniteNumber = (value: unknown, fallback: number) => {
@@ -180,6 +185,7 @@ const createCaption = async (
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
   try {
+    options.signal.throwIfAborted();
     const response = await options.openAIClient.chat.completions.create(
       {
         model: options.model,
@@ -210,9 +216,10 @@ const createCaption = async (
           },
         ],
       },
-      { signal: controller.signal },
+      { signal: AbortSignal.any([controller.signal, options.signal]) },
     );
 
+    options.signal.throwIfAborted();
     const raw = response.choices?.[0]?.message?.content ?? "";
     return parseCaptionOutput(raw);
   } finally {
@@ -220,12 +227,19 @@ const createCaption = async (
   }
 };
 
-export async function captionMeetingImages(meeting: MeetingData): Promise<{
+export function captionMeetingImages(meeting: MeetingData) {
+  return runMeetingProcessingEffect(meeting, () =>
+    captionOwnedMeetingImages(meeting),
+  );
+}
+async function captionOwnedMeetingImages(meeting: MeetingData): Promise<{
   candidates: number;
   captioned: number;
   skipped: number;
   truncatedChars: number;
 }> {
+  const signal = getMeetingProcessingSignal(meeting);
+  signal.throwIfAborted();
   const visionConfig = meeting.runtimeConfig?.visionCaptions;
   if (!visionConfig?.enabled) {
     return { candidates: 0, captioned: 0, skipped: 0, truncatedChars: 0 };
@@ -283,6 +297,7 @@ export async function captionMeetingImages(meeting: MeetingData): Promise<{
   let truncatedChars = 0;
 
   for (const candidate of candidates) {
+    signal.throwIfAborted();
     const elapsedMs = Date.now() - startedAt;
     const remainingBudgetMs = MAX_CAPTION_DURATION_MS - elapsedMs;
     if (remainingBudgetMs <= 0) {
@@ -305,6 +320,7 @@ export async function captionMeetingImages(meeting: MeetingData): Promise<{
         url: attachment.url,
         name: attachment.name?.trim() || "image",
         timeoutMs,
+        signal,
       });
       if (!output) {
         skipped += 1;
@@ -336,6 +352,7 @@ export async function captionMeetingImages(meeting: MeetingData): Promise<{
 
       captioned += 1;
     } catch (error) {
+      signal.throwIfAborted();
       skipped += 1;
       console.warn("Failed to caption image attachment, skipping.", {
         meetingId: meeting.meetingId,

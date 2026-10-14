@@ -680,6 +680,31 @@ export function buildInitialMeetingHistoryPut(
   };
 }
 
+function recordingDeliveryCondition(
+  input: HistoryTransition,
+  names: Record<string, string>,
+  values: NonNullable<UpdateItemCommandInput["ExpressionAttributeValues"]>,
+): string {
+  if (!input.recordingDelivery) return "";
+  return (
+    [
+      "recovery",
+      "summaryMessageId",
+      "notesMessageIds",
+      "notesChannelId",
+    ] as const
+  )
+    .map((field, index) => {
+      const name = `#delivery${index}`;
+      const value = `:delivery${index}`;
+      names[name] = field;
+      const previous = input.recordingDelivery!.previous[field];
+      if (previous === undefined) return ` AND attribute_not_exists(${name})`;
+      Object.assign(values, marshall({ [value]: previous }));
+      return ` AND ${name} = ${value}`;
+    })
+    .join("");
+}
 export function buildHistoryTransition(
   input: HistoryTransition,
   tables: ControlTableNames,
@@ -723,7 +748,8 @@ export function buildHistoryTransition(
     Key: marshall(input.key),
     ConditionExpression:
       "meetingId = :meeting AND ownerInstanceId = :owner AND executionVersion = :version AND #status = :prior" +
-      checkpointCondition,
+      checkpointCondition +
+      recordingDeliveryCondition(input, names, values),
     UpdateExpression: `SET ${updates.join(", ")}`,
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: values,
@@ -736,7 +762,11 @@ export function buildOwnedCheckpointTransition(
   tables: ControlTableNames,
 ): TransactWriteItemsCommandInput {
   const update = buildHistoryTransition(input, tables);
-  const proof = input.terminalPreservation ?? input.checkpointPublication;
+  const proof =
+    input.recordingDelivery ??
+    input.initialTerminalDisposition ??
+    input.terminalPreservation ??
+    input.checkpointPublication;
   if (!proof || !tables.activeMeeting)
     throw new Error("Checkpoint publication requires its active lease table");
   const checks = buildWorkAdmissionChecks(

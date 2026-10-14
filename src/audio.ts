@@ -1,3 +1,4 @@
+import { interruptOwnedMeeting } from "./services/ownedMeetingInterruption";
 import { finished } from "node:stream/promises";
 import {
   getMeetingProcessingSignal,
@@ -166,34 +167,46 @@ function resolveSpeakerLabel(meeting: MeetingData, userId: string): string {
   });
 }
 
+const captureStreamClosures = new WeakMap<MeetingData, Set<Promise<void>>>();
+export async function waitForCaptureStreamSettlement(
+  meeting: MeetingData,
+): Promise<void> {
+  const pending = captureStreamClosures.get(meeting);
+  while (pending?.size) await Promise.all([...pending]);
+}
+function closeCaptureStream(meeting: MeetingData, stream: Readable) {
+  stream.removeAllListeners();
+  if (stream.closed) return;
+  let pending = captureStreamClosures.get(meeting);
+  if (!pending) {
+    pending = new Set();
+    captureStreamClosures.set(meeting, pending);
+  }
+  const closed = new Promise<void>((resolve) => stream.once("close", resolve));
+  pending.add(closed);
+  const ignoreError = () => {};
+  stream.on("error", ignoreError);
+  void closed.then(() => {
+    pending.delete(closed);
+    stream.removeListener("error", ignoreError);
+  });
+  stream.destroy();
+}
 function clearVoiceSubscription(meeting: MeetingData, userId: string) {
   const subscriptions = getVoiceSubscriptions(meeting);
   const existing = subscriptions.get(userId);
-  if (existing?.resubscribeTimer) {
-    clearTimeout(existing.resubscribeTimer);
-  }
-  if (existing) {
-    existing.suppressResubscribe = true;
-  }
-  if (existing?.decodedStream) {
-    existing.decodedStream.removeAllListeners();
-  }
-  if (existing?.decoder) {
-    existing.decoder.removeAllListeners();
-    existing.decoder.destroy();
-  }
-  if (existing?.opusStream) {
-    existing.opusStream.removeAllListeners();
-    existing.opusStream.destroy();
-  }
-  subscriptions.delete(userId);
-
+  if (existing?.resubscribeTimer) clearTimeout(existing.resubscribeTimer);
+  if (existing) existing.suppressResubscribe = true;
   const receiverStream = meeting.connection.receiver.subscriptions.get(userId);
-  if (receiverStream) {
-    receiverStream.removeAllListeners();
-    receiverStream.destroy();
-    meeting.connection.receiver.subscriptions.delete(userId);
-  }
+  const streams = new Set([
+    existing?.decodedStream,
+    existing?.decoder,
+    existing?.opusStream,
+    receiverStream,
+  ]);
+  subscriptions.delete(userId);
+  meeting.connection.receiver.subscriptions.delete(userId);
+  for (const stream of streams) if (stream) closeCaptureStream(meeting, stream);
 }
 
 function scheduleResubscribe(
@@ -221,7 +234,12 @@ function scheduleResubscribe(
       updated.resubscribeTimer = undefined;
     }
     if (!isCaptureActive(meeting)) return;
-    void subscribeToUserVoice(meeting, userId);
+    void runMeetingProcessingEffect(meeting, () =>
+      subscribeToUserVoice(meeting, userId),
+    ).catch((error) => {
+      if (!getMeetingProcessingSignal(meeting).aborted)
+        console.error("Voice resubscription failed", error);
+    });
   }, RESUBSCRIBE_DELAY_MS);
 
   if (existing) {
@@ -1237,14 +1255,25 @@ async function waitForSpeakerTrackWrites(meeting: MeetingData) {
   await Promise.all(writes);
 }
 
-export async function buildMixedAudio(
+export function buildMixedAudio(
   meeting: MeetingData,
 ): Promise<string | undefined> {
+  return runMeetingProcessingEffect(meeting, () =>
+    buildOwnedMixedAudio(meeting),
+  );
+}
+async function buildOwnedMixedAudio(
+  meeting: MeetingData,
+): Promise<string | undefined> {
+  const signal = getMeetingProcessingSignal(meeting);
+  signal.throwIfAborted();
   const tracks = Array.from(meeting.audioData.speakerTracks?.values() ?? []);
   if (tracks.length === 0) return undefined;
 
   await ensureMeetingTempDir(meeting);
+  signal.throwIfAborted();
   await waitForSpeakerTrackWrites(meeting);
+  signal.throwIfAborted();
 
   const usable = tracks.filter((track) => {
     if (track.writeFailed) return false;
@@ -1263,65 +1292,55 @@ export async function buildMixedAudio(
     "recording_mixed.mp3",
   );
 
-  if (usable.length === 1) {
-    return await new Promise<string | undefined>((resolve) => {
-      ffmpeg(usable[0].filePath)
-        .inputOptions([
-          "-f s16le",
-          `-ar ${RECORD_SAMPLE_RATE}`,
-          `-ac ${CHANNELS}`,
-        ])
-        .audioCodec("libmp3lame")
-        .outputOptions([
-          `-b:a 128k`,
-          `-ac ${CHANNELS}`,
-          `-ar ${RECORD_SAMPLE_RATE}`,
-        ])
-        .toFormat("mp3")
-        .on("error", (err) => {
-          console.error("Failed to render single-speaker audio:", err);
-          resolve(undefined);
-        })
-        .on("end", () => {
-          resolve(outputFileName);
-        })
-        .save(outputFileName);
-    });
-  }
-
-  return await new Promise<string | undefined>((resolve) => {
-    const command = ffmpeg();
-
-    usable.forEach((track) => {
-      command
-        .input(track.filePath)
-        .inputOptions([
-          "-f s16le",
-          `-ar ${RECORD_SAMPLE_RATE}`,
-          `-ac ${CHANNELS}`,
-        ]);
-    });
-
-    const mixInputs = usable.map((_track, index) => `[${index}:a]`).join("");
-    const filter = `${mixInputs}amix=inputs=${usable.length}:dropout_transition=0:normalize=0[mixed]`;
-
+  const command = ffmpeg();
+  for (const track of usable)
     command
-      .complexFilter(filter)
-      .outputOptions([
-        "-map [mixed]",
-        `-b:a 128k`,
-        `-ac ${CHANNELS}`,
+      .input(track.filePath)
+      .inputOptions([
+        "-f s16le",
         `-ar ${RECORD_SAMPLE_RATE}`,
-      ])
-      .audioCodec("libmp3lame")
-      .on("error", (err) => {
-        console.error("Failed to render mixed audio:", err);
-        resolve(undefined);
+        `-ac ${CHANNELS}`,
+      ]);
+  const outputOptions = [
+    `-b:a 128k`,
+    `-ac ${CHANNELS}`,
+    `-ar ${RECORD_SAMPLE_RATE}`,
+  ];
+  if (usable.length > 1) {
+    const mixInputs = usable.map((_track, index) => `[${index}:a]`).join("");
+    command.complexFilter(
+      `${mixInputs}amix=inputs=${usable.length}:dropout_transition=0:normalize=0[mixed]`,
+    );
+    outputOptions.unshift("-map [mixed]");
+  }
+  command.audioCodec("libmp3lame").outputOptions(outputOptions).toFormat("mp3");
+  return finishMixedAudioEncoder(command, outputFileName, signal);
+}
+function finishMixedAudioEncoder(
+  command: ReturnType<typeof ffmpeg>,
+  output: string,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const cancel = () => command.kill("SIGTERM");
+    signal.addEventListener("abort", cancel, { once: true });
+    const finish = (error?: Error) => {
+      signal.removeEventListener("abort", cancel);
+      if (signal.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      if (error) console.error("Failed to render mixed audio:", error);
+      resolve(error ? undefined : output);
+    };
+    command
+      .on("start", () => {
+        if (signal.aborted) cancel();
       })
-      .on("end", () => {
-        resolve(outputFileName);
-      })
-      .save(outputFileName);
+      .on("end", () => finish())
+      .on("error", finish)
+      .save(output);
   });
 }
 
@@ -1342,6 +1361,38 @@ export function unsubscribeToVoiceUponLeaving(
   userId: string,
 ) {
   clearVoiceSubscription(meeting, userId);
+}
+
+function notifyCapturePreservationFailure(meeting: MeetingData): void {
+  let complete!: () => void;
+  const notification: NonNullable<
+    MeetingData["recordingPreservationNotification"]
+  > = {
+    promise: new Promise<void>((resolve) => {
+      complete = resolve;
+    }),
+    outcome: "pending",
+  };
+  meeting.recordingPreservationNotification = notification;
+  try {
+    void meeting.textChannel
+      .send(
+        "Recording stopped because audio could not be safely saved. Some recent audio may be unavailable.",
+      )
+      .then(
+        () => {
+          notification.outcome = "acknowledged";
+          complete();
+        },
+        () => {
+          notification.outcome = "unknown";
+          complete();
+        },
+      );
+  } catch {
+    notification.outcome = "unknown";
+    complete();
+  }
 }
 
 /** Called only after actual receiver attachment, never from reservation time. */
@@ -1408,17 +1459,12 @@ export function ensureRecordingCheckpointCapture(meeting: MeetingData): void {
           handoff.preservation = "unconfirmed";
           return false;
         });
-      if (reason === "storage_preservation") {
-        try {
-          void meeting.textChannel
-            .send(
-              "Recording stopped because audio could not be safely saved. Some recent audio may be unavailable.",
-            )
-            .catch(() => {});
-        } catch {
-          /* Notification is independent of capture preservation. */
-        }
-      }
+      if (reason === "storage_preservation")
+        notifyCapturePreservationFailure(meeting);
+      void interruptOwnedMeeting(meeting, {
+        reason: "capture_failure",
+        deadline: Date.now() + 100_000,
+      });
     },
   });
   startRecordingContentCheckpoint(meeting);

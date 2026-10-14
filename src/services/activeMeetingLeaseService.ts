@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import type { RecordingCheckpoint } from "../types/recordingCheckpoint";
 import {
   getActiveMeetingLease,
   requestActiveMeetingEnd,
@@ -61,6 +63,7 @@ type OwnedReservation = {
   timer?: ReturnType<typeof setInterval>;
   meeting?: MeetingData;
   renewal?: Promise<void>;
+  release?: Promise<boolean>;
   initializationUnresolved?: boolean;
   initializationCleanup?: Promise<boolean>;
 };
@@ -333,7 +336,8 @@ async function observeReservationSuppression(
 }
 function renewReservation(owned: OwnedReservation): Promise<void> {
   if (owned.renewal) return owned.renewal;
-  if (owned.controller.signal.aborted) return Promise.resolve();
+  if (owned.controller.signal.aborted || owned.releasing)
+    return Promise.resolve();
   let resolve!: () => void;
   const renewal = new Promise<void>((done) => {
     resolve = done;
@@ -441,12 +445,16 @@ export async function releaseSessionReservation(
   }
   if (reservationReleaseBlocked(owned)) return false;
   if (owned) owned.releasing = true;
-  const released = await releaseActiveMeetingLease(
-    reservation.guildId,
-    reservation.meetingId,
-    reservation.ownerInstanceId,
-    reservation,
+  const deletion = Promise.resolve().then(() =>
+    releaseActiveMeetingLease(
+      reservation.guildId,
+      reservation.meetingId,
+      reservation.ownerInstanceId,
+      reservation,
+    ),
   );
+  if (owned) owned.release = deletion;
+  const released = await deletion;
   if (!released || reservationReleaseBlocked(owned)) return false;
   if (owned?.timer) clearInterval(owned.timer);
   reservation.workHandle.settle();
@@ -454,6 +462,104 @@ export async function releaseSessionReservation(
   pendingReservations.delete(key);
   return true;
 }
+export type PreservedRecordingReleaseProof = {
+  checkpoint: RecordingCheckpoint;
+  status: "complete" | "failed" | "interrupted";
+  localWork: Promise<void>;
+  signal: AbortSignal;
+  deadline: number;
+};
+function matchesPreservedHistory(
+  row: Awaited<
+    ReturnType<
+      ReturnType<typeof getDeploymentControlRepository>["getMeetingHistory"]
+    >
+  >,
+  reservation: Extract<SessionReservation, { sessionMode: "meeting" }>,
+  proof: PreservedRecordingReleaseProof,
+): boolean {
+  return !(
+    !row ||
+    (row.recovery?.stage === "delivery" &&
+      row.recovery.disposition !== "done") ||
+    row.meetingId !== reservation.meetingId ||
+    row.ownerInstanceId !== reservation.ownerInstanceId ||
+    row.executionVersion !== reservation.executionVersion ||
+    row.status !== proof.status ||
+    !isDeepStrictEqual(
+      JSON.parse(JSON.stringify(row.checkpoint ?? null)),
+      JSON.parse(JSON.stringify(proof.checkpoint)),
+    ) ||
+    (proof.status !== "complete" &&
+      (!row.recovery ||
+        row.recovery.executionVersion !== reservation.executionVersion ||
+        !["pending", "needs_reconciliation"].includes(
+          row.recovery.disposition,
+        )))
+  );
+}
+/** Only the exact original attempt, verified terminal checkpoint and actual local/voice settlement permit this reconciliation. */
+export async function reconcilePreservedRecordingReservation(
+  reservation: Extract<SessionReservation, { sessionMode: "meeting" }>,
+  proof: PreservedRecordingReleaseProof,
+): Promise<boolean> {
+  const key = reservationKey(reservation.guildId, reservation.meetingId);
+  const owned = reservations.get(key);
+  if (!owned || owned.reservation !== reservation) return false;
+  await proof.localWork;
+  proof.signal.throwIfAborted();
+  const row = await getDeploymentControlRepository().getMeetingHistory(
+    reservation.historyKey,
+    proof.signal,
+  );
+  if (!matchesPreservedHistory(row, reservation, proof)) return false;
+  if (
+    (await settleOwnedVoiceSession(reservation, {
+      deadline: proof.deadline,
+      signal: proof.signal,
+    })) !== "settled"
+  )
+    return false;
+  owned.releasing = true;
+  if (owned.timer) clearInterval(owned.timer);
+  await Promise.allSettled([owned.renewal, owned.release]);
+  proof.signal.throwIfAborted();
+  let lease = await getActiveMeetingLease(reservation.guildId, proof.signal);
+  if (lease) {
+    if (!samePreservedLease(lease, reservation)) return false;
+    try {
+      await releaseActiveMeetingLease(
+        reservation.guildId,
+        reservation.meetingId,
+        reservation.ownerInstanceId,
+        reservation,
+        proof.signal,
+      );
+    } catch {
+      proof.signal.throwIfAborted();
+    }
+    lease = await getActiveMeetingLease(reservation.guildId, proof.signal);
+  }
+  proof.signal.throwIfAborted();
+  if (lease || Date.now() >= proof.deadline) return false;
+  reservation.workHandle.settle();
+  reservations.delete(key);
+  pendingReservations.delete(key);
+  return true;
+}
+function samePreservedLease(
+  lease: ActiveMeetingLease,
+  reservation: SessionReservation,
+) {
+  return (
+    lease.meetingId === reservation.meetingId &&
+    lease.ownerInstanceId === reservation.ownerInstanceId &&
+    lease.executionVersion === reservation.executionVersion &&
+    lease.voiceOperationAttemptId === reservation.voiceOperationAttemptId &&
+    lease.sessionMode === reservation.sessionMode
+  );
+}
+
 export async function unwindSessionInitialization(
   reservation: SessionReservation,
   cleanup?: Promise<boolean>,

@@ -52,6 +52,10 @@ export interface MeetingData {
   recordingCapture?: RecordingCheckpointCapture;
   recordingContentTask?: Promise<void>;
   recordingPreservationTask?: Promise<boolean>;
+  recordingPreservationNotification?: {
+    promise: Promise<void>;
+    outcome: "pending" | "acknowledged" | "unknown";
+  };
   recordingPreservationFailure?: {
     reason: "storage_preservation" | "ownership_lost";
     stoppedAt: string;

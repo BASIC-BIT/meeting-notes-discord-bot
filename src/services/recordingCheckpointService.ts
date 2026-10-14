@@ -4,6 +4,7 @@ import { getDeploymentControlRepository } from "../db";
 import type { DeploymentControlRepository } from "../repositories/deploymentControlRepository";
 import type {
   TerminalCheckpointPreservation,
+  HistoryTransition,
   CheckpointPublication,
 } from "../types/deploymentControl";
 import type { MeetingHistory } from "../types/db";
@@ -75,10 +76,17 @@ export type TerminalRecordingCheckpointInput = Omit<
     assertOwnership(signal: AbortSignal): Promise<void>;
   };
 };
+export type InitialTerminalRecordingCheckpointInput = Omit<
+  TerminalRecordingCheckpointInput,
+  "expectedStatus"
+> & {
+  expectedStatus: "starting" | "in_progress" | "processing";
+  status: "failed" | "interrupted";
+};
 type Preservation = Pick<
   TerminalRecordingCheckpointInput,
   "preservation" | "recovery"
->;
+> & { status?: "failed" | "interrupted" };
 async function assertPreservation(
   proof: Preservation | undefined,
   signal: AbortSignal | undefined,
@@ -297,6 +305,30 @@ function captureState(
     throw new Error("Capture stop precedes capture start");
   return state;
 }
+function matchesAcknowledgedTransition(
+  row: MeetingHistory | undefined,
+  transition: HistoryTransition,
+): boolean {
+  return !(
+    row?.meetingId !== transition.expectedMeetingId ||
+    row.ownerInstanceId !== transition.expectedOwnerInstanceId ||
+    row.executionVersion !== transition.expectedExecutionVersion ||
+    row.status !== (transition.patch.status ?? transition.expectedStatus) ||
+    (row.checkpoint?.revision ?? 0) !==
+      (transition.patch.checkpoint?.revision ??
+        transition.expectedCheckpointRevision) ||
+    !Object.entries(transition.patch).every(
+      ([field, value]) =>
+        value === undefined ||
+        isDeepStrictEqual(
+          JSON.parse(
+            JSON.stringify(row[field as keyof MeetingHistory] ?? null),
+          ),
+          JSON.parse(JSON.stringify(value)),
+        ),
+    )
+  );
+}
 export function createRecordingCheckpointService(
   dependencies: { repository: Repository; objects: Objects } = {
     repository: getDeploymentControlRepository(),
@@ -402,6 +434,25 @@ export function createRecordingCheckpointService(
       ),
     };
   }
+  async function commitTransition(transition: HistoryTransition) {
+    try {
+      return await repository.transitionMeetingHistory(transition);
+    } catch (error) {
+      if (
+        !transition.initialTerminalDisposition &&
+        !transition.terminalPreservation
+      )
+        throw error;
+      transition.signal?.throwIfAborted();
+      const row = await repository.getMeetingHistory(
+        transition.key,
+        transition.signal,
+      );
+      transition.signal?.throwIfAborted();
+      if (!matchesAcknowledgedTransition(row, transition)) throw error;
+      return "applied" as const;
+    }
+  }
   async function publish(
     input: CheckpointFlushInput,
     artifacts: CheckpointArtifact[],
@@ -476,12 +527,13 @@ export function createRecordingCheckpointService(
           ...(checkpoint === input.previous ? {} : { checkpoint }),
           capture: state,
           recovery: proof.recovery,
+          ...(proof.status ? { status: proof.status } : {}),
         }
       : checkpoint === input.previous
         ? { updatedAt: new Date().toISOString() }
         : { checkpoint };
     await assertPreservation(proof, input.signal);
-    const result = await repository.transitionMeetingHistory({
+    const transition: HistoryTransition = {
       key,
       expectedMeetingId: capture.meetingId,
       expectedOwnerInstanceId: capture.ownerInstanceId,
@@ -499,7 +551,7 @@ export function createRecordingCheckpointService(
             },
           }
         : {}),
-      ...(proof
+      ...(proof && !proof.status
         ? {
             terminalPreservation: {
               kind: "terminal_preservation" as const,
@@ -508,7 +560,17 @@ export function createRecordingCheckpointService(
             },
           }
         : {}),
-    });
+      ...(proof?.status
+        ? {
+            initialTerminalDisposition: {
+              kind: "initial_terminal_disposition",
+              ownership: proof.preservation.ownership,
+              now: Math.floor(Date.now() / 1000),
+            },
+          }
+        : {}),
+    };
+    const result = await commitTransition(transition);
     input.signal?.throwIfAborted();
     if (proof && Date.now() >= proof.preservation.deadlineEpochMs)
       throw new Error("Preservation deadline elapsed");
@@ -639,7 +701,9 @@ export function createRecordingCheckpointService(
     }
   }
   async function preserveTerminalRecordingCheckpoint(
-    input: TerminalRecordingCheckpointInput,
+    input:
+      | TerminalRecordingCheckpointInput
+      | InitialTerminalRecordingCheckpointInput,
   ): Promise<CheckpointAppendResult> {
     const remaining = input.preservation.deadlineEpochMs - Date.now();
     if (remaining <= 0 || input.preservation.signal.aborted)
@@ -779,7 +843,12 @@ export function createRecordingCheckpointService(
     appendArtifactsRecordingCheckpoint: forMeeting,
     createProducerSession: () =>
       createRecordingCheckpointService(dependencies, true),
-    preserveTerminalRecordingCheckpoint,
+    preserveTerminalRecordingCheckpoint: (
+      input: TerminalRecordingCheckpointInput,
+    ) => preserveTerminalRecordingCheckpoint(input),
+    preserveInitialTerminalRecordingCheckpoint: (
+      input: InitialTerminalRecordingCheckpointInput,
+    ) => preserveTerminalRecordingCheckpoint(input),
     append: (
       input: Omit<CheckpointFlushInput, "artifacts"> & {
         artifact: CheckpointArtifactInput;

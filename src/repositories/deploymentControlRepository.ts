@@ -381,7 +381,10 @@ export function createDynamoDeploymentControlRepository(
       ),
     transitionMeetingHistory: (input) =>
       conditional(() =>
-        input.terminalPreservation || input.checkpointPublication
+        input.recordingDelivery ||
+        input.initialTerminalDisposition ||
+        input.terminalPreservation ||
+        input.checkpointPublication
           ? client.send(
               new TransactWriteItemsCommand(
                 buildOwnedCheckpointTransition(input, tables),
@@ -887,6 +890,15 @@ export function createMockDeploymentControlRepository(
       const row = getHistory(input.key);
       if (!checkpointLeaseAllowed(input, records, leases)) return "stale";
       if (
+        input.recordingDelivery &&
+        !Object.entries(input.recordingDelivery.previous).every(
+          ([field, value]) =>
+            JSON.stringify(row?.[field as keyof MeetingHistory]) ===
+            JSON.stringify(value),
+        )
+      )
+        return "stale";
+      if (
         !row ||
         row.meetingId !== input.expectedMeetingId ||
         row.ownerInstanceId !== input.expectedOwnerInstanceId ||
@@ -936,7 +948,11 @@ function checkpointLeaseAllowed(
   records: Map<string, DeploymentControlRecord>,
   leases: Map<string, ActiveMeetingLease>,
 ) {
-  const proof = input.terminalPreservation ?? input.checkpointPublication;
+  const proof =
+    input.recordingDelivery ??
+    input.initialTerminalDisposition ??
+    input.terminalPreservation ??
+    input.checkpointPublication;
   return (
     !proof ||
     (leases.get(proof.ownership.guildId)?.sessionMode === "meeting" &&
