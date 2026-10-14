@@ -25,7 +25,8 @@ export type BillingChangeReviewQuote = {
   unusedCredit: number;
   taxAmount: number;
   taxTreatment: "added" | "included";
-  billingCredit: number;
+  // Positive means an amount owed; negative means available credit applied.
+  billingBalance: number;
   amountDue: number;
   remainingCredit: number;
   // Base plan rate before added tax or account credit.
@@ -116,12 +117,22 @@ function QuoteAmounts({ quote }: { quote: BillingChangeReviewQuote }) {
         amount={quote.taxAmount}
         currency={currency}
       />
-      {quote.billingCredit > 0 && (
+      {quote.billingBalance !== 0 && (
         <AmountRow
-          label="Billing credit applied"
-          amount={-quote.billingCredit}
+          label={
+            quote.billingBalance > 0
+              ? "Previous balance"
+              : "Billing credit applied"
+          }
+          amount={quote.billingBalance}
           currency={currency}
         />
+      )}
+      {quote.billingBalance > 0 && (
+        <Text size="xs" c="dimmed">
+          This balance is from your billing account, which may include other
+          servers.
+        </Text>
       )}
       <Divider />
       <Group justify="space-between">

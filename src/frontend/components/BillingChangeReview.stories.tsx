@@ -33,7 +33,7 @@ const pro: BillingChangeReviewQuote = {
   unusedCredit: 300,
   taxAmount: 0,
   taxTreatment: "added",
-  billingCredit: 0,
+  billingBalance: 0,
   amountDue: 900,
   remainingCredit: 0,
   nextPlanRate: 2400,
@@ -236,7 +236,21 @@ export const ReturnToUsedMonthlyOffer: Story = {
   },
 };
 export const CreditCoversAnnual: Story = {
-  args: { quote: { ...annual, billingCredit: 5700, amountDue: 0 } },
+  args: { quote: { ...annual, billingBalance: -5700, amountDue: 0 } },
+};
+export const AnnualWithPreviousBalance: Story = {
+  tags: ["previous-balance"],
+  args: { quote: { ...annual, billingBalance: 500, amountDue: 6200 } },
+  play: async ({ canvasElement }) => {
+    const screen = within(canvasElement.ownerDocument.body);
+    await expect(
+      screen.getByText("Previous balance", { exact: true }),
+    ).toBeVisible();
+    await expect(screen.getByText("$5", { exact: true })).toBeVisible();
+    await expect(
+      screen.getByRole("button", { name: "Confirm and pay $62", exact: true }),
+    ).toBeVisible();
+  },
 };
 export const AnnualWithTax: Story = {
   args: {
@@ -247,7 +261,7 @@ export const ExcessBillingCredit: Story = {
   args: {
     quote: {
       ...annual,
-      billingCredit: 5700,
+      billingBalance: -5700,
       amountDue: 0,
       remainingCredit: 3000,
     },
