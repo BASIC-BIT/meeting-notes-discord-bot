@@ -268,6 +268,20 @@
     "@smithy/types" "^4.17.2"
     tslib "^2.6.2"
 
+"@aws-sdk/client-ecs@3.1131.0":
+  version "3.1131.0"
+  resolved "https://registry.yarnpkg.com/@aws-sdk/client-ecs/-/client-ecs-3.1131.0.tgz#00a2c4bd8bc3645f478e98a47e13e820633edbae"
+  integrity sha512-QhV4/LPqE0STMydoHhpJkJfNx1GD4rC0TOT427NFlAaHZPLAA1HAOkUj/2jiCqyVs03Pja8serxLyhOPumQpUQ==
+  dependencies:
+    "@aws-sdk/core" "^3.978.0"
+    "@aws-sdk/credential-provider-node" "^3.972.83"
+    "@aws-sdk/types" "^3.974.5"
+    "@smithy/core" "^3.33.3"
+    "@smithy/fetch-http-handler" "^5.7.2"
+    "@smithy/node-http-handler" "^4.11.3"
+    "@smithy/types" "^4.17.2"
+    tslib "^2.6.2"
+
 "@aws-sdk/client-s3@3.1131.0":
   version "3.1131.0"
   resolved "https://registry.yarnpkg.com/@aws-sdk/client-s3/-/client-s3-3.1131.0.tgz#b3b3a87a35faecc83a10899996db18b369bca660"
@@ -3751,10 +3765,10 @@
   resolved "https://registry.yarnpkg.com/@floating-ui/utils/-/utils-0.2.12.tgz#afefe785949f16ac4cdd1e695935a321572dd56a"
   integrity sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==
 
-"@grpc/grpc-js@^1.14.3", "@grpc/grpc-js@^1.14.4":
-  version "1.14.5"
-  resolved "https://registry.yarnpkg.com/@grpc/grpc-js/-/grpc-js-1.14.5.tgz#12f97bd9f716358e377ffaa768195d1219eb76a3"
-  integrity sha512-7VZM+SVdEcUUqSQeNI3zM8Qs/BhQKZndPo2h5VkYkAM8Iz0wJIa8mKV5ekQGqG8UUsnkQ0NMxIxwkIHYvj0qOw==
+"@grpc/grpc-js@^1.14.3", "@grpc/grpc-js@^1.14.5":
+  version "1.14.6"
+  resolved "https://registry.yarnpkg.com/@grpc/grpc-js/-/grpc-js-1.14.6.tgz#f3f3d65315bf9b45252f575e4cc142148c587cac"
+  integrity sha512-SgC/B3/VZ8lTyOZ4Cwk6f1skWhmkNAaVfiX90qd5u1rRXGKk1//8FTUEN9GvOUq7rfWIqAYkA3CoyumYVpOS6g==
   dependencies:
     "@grpc/proto-loader" "^0.8.0"
     "@js-sdsl/ordered-map" "^4.4.2"

@@ -21,12 +21,13 @@ closed. Rejected writes do not revoke comp grants.
 ## Deployment prerequisite
 
 `STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED` defaults to false; only the exact value
-`true` enables hosted transitions. While disabled, any saved subscription ID stops
-the purchase request before subscription/customer retrieval or session creation
-with actionable guidance. The router can still read price and promotion metadata
-before reaching this guard. It cannot fall
-through to new Checkout. This conservatively includes terminal subscriptions that
-would otherwise qualify for a new purchase. Enable only after hosted test-mode
+`true` enables hosted transitions. The billing service first retrieves the saved
+subscription and verifies its server and customer association. While disabled,
+nonterminal subscriptions stop before payer/customer lookup or session creation.
+Provider-confirmed canceled or incomplete_expired subscriptions can enter the
+existing initial Checkout path. A failed read or mismatched association never
+falls through to a purchase. The router can still read price and promotion
+metadata before this classification. Enable only after hosted test-mode
 validation and a deliberate activation decision. No production setting is changed
 by this PR.
 

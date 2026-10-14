@@ -1,9 +1,38 @@
+import type { IntroOfferAuthority } from "./types/introOfferAuthority";
+import { validateBoundarySample } from "./types/historyWriterBoundary";
+import {
+  historyWriterBoundaryKey,
+  HISTORY_WRITER_VERSION,
+  historyWriterBoundarySchema,
+  type HistoryWriterBoundary,
+} from "./types/historyWriterBoundary";
+import {
+  historicalOfferImportKey,
+  historicalOfferImportSchema,
+  parseHistoricalOfferImportWrite,
+  type HistoricalOfferImport,
+  type HistoricalOfferImportWrite,
+} from "./types/historicalOfferImport";
+import { assertPurchaseInvoiceBinding } from "./types/purchase";
+import { z } from "zod";
+import {
+  offerUsageKey,
+  offerUsageSchema,
+  parseOfferUsageChange,
+  type OfferUsage,
+  type IntroOfferId,
+  type ProviderMode,
+  type OfferUsageWrite,
+  type OfferUsageMutation,
+} from "./types/offerUsage";
 import type { PurchaseAttempt, PurchaseIncident } from "./types/purchase";
 import { config } from "./services/configService";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   AttributeValue,
+  type Put,
+  type ConditionCheck,
   DynamoDBClient,
   TransactWriteItemsCommand,
   type TransactionCanceledException,
@@ -3106,7 +3135,12 @@ export async function compareAndWritePurchaseAttempt(
   expected: PurchaseAttempt | undefined,
   pointer: GuildSubscription | undefined,
   incident?: PurchaseIncident,
+  offerUsage?: OfferUsageMutation,
 ): Promise<boolean> {
+  assertPurchaseInvoiceBinding(next, expected);
+  const usage =
+    offerUsage &&
+    parseOfferUsageChange({ ...offerUsage, pointer, operation: next });
   const names: Record<string, string> = { "#guildId": "guildId" };
   const values: Record<string, string> = {};
   const conditions = [
@@ -3159,6 +3193,12 @@ export async function compareAndWritePurchaseAttempt(
                 : {}),
             },
           },
+          ...(usage
+            ? [
+                { Put: offerUsagePut(usage.next, usage.expected) },
+                ...offerAuthorityFences(usage.authority),
+              ]
+            : []),
           ...(incident
             ? [
                 {
@@ -3276,4 +3316,442 @@ function purchaseIncidentUpdate(incident: PurchaseIncident) {
     ExpressionAttributeNames: names,
     ExpressionAttributeValues: marshall(values),
   };
+}
+
+export async function readOfferUsage(
+  guildId: string,
+  offerId: IntroOfferId,
+  mode: ProviderMode,
+): Promise<OfferUsage | undefined> {
+  const key = offerUsageKey(guildId, offerId, mode);
+  const result = await dynamoDbClient.send(
+    new GetItemCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      Key: marshall({ guildId: key }),
+      ConsistentRead: true,
+    }),
+  );
+  if (!result.Item) return undefined;
+  const { guildId: storedKey, serverId, ...record } = unmarshall(result.Item);
+  if (
+    storedKey !== key ||
+    serverId !== guildId ||
+    record.offerId !== offerId ||
+    record.mode !== mode
+  )
+    throw new Error("Stored offer usage scope mismatch");
+  return offerUsageSchema.parse({ ...record, guildId });
+}
+function subscriptionRevisionFence(
+  guildId: string,
+  pointer: GuildSubscription | undefined,
+) {
+  const names: Record<string, string> = { "#guildId": "guildId" };
+  const values: Record<string, string> = {};
+  const conditions = [
+    pointer ? "attribute_exists(#guildId)" : "attribute_not_exists(#guildId)",
+  ];
+  if (pointer)
+    for (const key of ["stripeSubscriptionId", "stripeSyncRevision"] as const) {
+      names[`#${key}`] = key;
+      if (pointer[key] === undefined)
+        conditions.push(`attribute_not_exists(#${key})`);
+      else {
+        conditions.push(`#${key} = :${key}`);
+        values[`:${key}`] = pointer[key];
+      }
+    }
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId }),
+    ConditionExpression: conditions.join(" AND "),
+    ExpressionAttributeNames: names,
+    ...(Object.keys(values).length
+      ? { ExpressionAttributeValues: marshall(values) }
+      : {}),
+  };
+}
+export async function compareAndWriteOfferUsage(
+  input: OfferUsageWrite,
+): Promise<boolean> {
+  const { next, expected, authority } = parseOfferUsageChange(input);
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand({
+        TransactItems: [
+          {
+            ConditionCheck: subscriptionRevisionFence(
+              next.guildId,
+              input.pointer,
+            ),
+          },
+          {
+            ConditionCheck: {
+              TableName: tableName("GuildSubscriptionTable"),
+              Key: marshall({ guildId: purchaseRecordKey(next.guildId) }),
+              ConditionExpression:
+                "#revision = :revision AND #attemptId = :attemptId AND #mode = :mode",
+              ExpressionAttributeNames: {
+                "#revision": "revision",
+                "#attemptId": "attemptId",
+                "#mode": "mode",
+              },
+              ExpressionAttributeValues: marshall({
+                ":revision": input.operation.revision,
+                ":attemptId": input.operation.attemptId,
+                ":mode": next.mode,
+              }),
+            },
+          },
+          { Put: offerUsagePut(next, expected) },
+          ...offerAuthorityFences(authority),
+        ],
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (isBillingTransactionConflict(error)) return false;
+    throw error;
+  }
+}
+function isBillingTransactionConflict(error: unknown): boolean {
+  const failure = billingCancellationSchema.safeParse(error);
+  if (!failure.success) return false;
+  const codes = failure.data.CancellationReasons.map((reason) => reason.Code);
+  return (
+    codes.some(
+      (code) =>
+        code === "ConditionalCheckFailed" || code === "TransactionConflict",
+    ) &&
+    codes.every(
+      (code) =>
+        !code ||
+        ["None", "ConditionalCheckFailed", "TransactionConflict"].includes(
+          code,
+        ),
+    )
+  );
+}
+const billingCancellationSchema = z.object({
+  name: z.literal("TransactionCanceledException"),
+  CancellationReasons: z.array(z.object({ Code: z.string().optional() })),
+});
+
+function offerUsagePut(
+  next: OfferUsage,
+  expected: OfferUsage | undefined,
+): Put {
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Item: marshall({
+      ...next,
+      guildId: offerUsageKey(next.guildId, next.offerId, next.mode),
+      serverId: next.guildId,
+    }),
+    ConditionExpression: expected
+      ? "#revision = :revision"
+      : "attribute_not_exists(#guildId)",
+    ExpressionAttributeNames: expected
+      ? { "#revision": "revision" }
+      : { "#guildId": "guildId" },
+    ...(expected
+      ? {
+          ExpressionAttributeValues: marshall({
+            ":revision": expected.revision,
+          }),
+        }
+      : {}),
+  };
+}
+
+export async function readHistoricalOfferImport(
+  guildId: string,
+  offerId: IntroOfferId,
+  mode: ProviderMode,
+  accountId: string,
+): Promise<HistoricalOfferImport | undefined> {
+  const key = historicalOfferImportKey(guildId, offerId, mode, accountId);
+  const result = await dynamoDbClient.send(
+    new GetItemCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      Key: marshall({ guildId: key }),
+      ConsistentRead: true,
+    }),
+  );
+  if (!result.Item) return undefined;
+  const { guildId: storedKey, serverId, ...record } = unmarshall(result.Item);
+  if (
+    storedKey !== key ||
+    serverId !== guildId ||
+    record.accountId !== accountId ||
+    record.mode !== mode ||
+    record.offerId !== offerId
+  )
+    throw new Error("Stored historical import scope mismatch");
+  return historicalOfferImportSchema.parse({ ...record, guildId });
+}
+export async function compareAndWriteHistoricalOfferImport(
+  input: HistoricalOfferImportWrite,
+): Promise<boolean> {
+  const { next, expected, usageNext, usageExpected } =
+    parseHistoricalOfferImportWrite(input);
+  const key = historicalOfferImportKey(
+    next.guildId,
+    next.offerId,
+    next.mode,
+    next.accountId,
+  );
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand({
+        TransactItems: [
+          {
+            ConditionCheck: subscriptionRevisionFence(
+              next.guildId,
+              input.pointer,
+            ),
+          },
+          {
+            ConditionCheck: historicalOperationFence(
+              next.guildId,
+              input.operation,
+            ),
+          },
+          usageNext
+            ? { Put: offerUsagePut(usageNext, usageExpected) }
+            : {
+                ConditionCheck: historicalRevisionFence(
+                  offerUsageKey(next.guildId, next.offerId, next.mode),
+                  usageExpected?.revision,
+                ),
+              },
+          {
+            Put: {
+              ...historicalImportPut(key, next, expected?.revision),
+            },
+          },
+          ...(next.state === "unused"
+            ? [{ ConditionCheck: historyWriterBoundaryFence(next) }]
+            : []),
+        ],
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (isBillingTransactionConflict(error)) return false;
+    throw error;
+  }
+}
+function historicalRevisionFence(
+  key: string,
+  revision: string | undefined,
+): ConditionCheck {
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId: key }),
+    ConditionExpression: revision
+      ? "#revision = :revision"
+      : "attribute_not_exists(#guildId)",
+    ExpressionAttributeNames: revision
+      ? { "#revision": "revision" }
+      : { "#guildId": "guildId" },
+    ...(revision
+      ? { ExpressionAttributeValues: marshall({ ":revision": revision }) }
+      : {}),
+  };
+}
+function historicalOperationFence(
+  guildId: string,
+  operation: PurchaseAttempt | undefined,
+): ConditionCheck {
+  if (!operation)
+    return historicalRevisionFence(purchaseRecordKey(guildId), undefined);
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId: purchaseRecordKey(guildId) }),
+    ConditionExpression:
+      "#revision = :revision AND #attemptId = :attemptId AND #mode = :mode",
+    ExpressionAttributeNames: {
+      "#revision": "revision",
+      "#attemptId": "attemptId",
+      "#mode": "mode",
+    },
+    ExpressionAttributeValues: marshall({
+      ":revision": operation.revision,
+      ":attemptId": operation.attemptId,
+      ":mode": operation.mode,
+    }),
+  };
+}
+
+function historicalImportPut(
+  key: string,
+  next: HistoricalOfferImport,
+  revision: string | undefined,
+): Put {
+  const fence = historicalRevisionFence(key, revision);
+  return {
+    TableName: fence.TableName,
+    Item: marshall({ ...next, guildId: key, serverId: next.guildId }),
+    ConditionExpression: fence.ConditionExpression,
+    ExpressionAttributeNames: fence.ExpressionAttributeNames,
+    ...(fence.ExpressionAttributeValues
+      ? { ExpressionAttributeValues: fence.ExpressionAttributeValues }
+      : {}),
+  };
+}
+
+function historyWriterBoundaryFence(
+  next: Extract<HistoricalOfferImport, { state: "unused" }>,
+): ConditionCheck {
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({
+      guildId: historyWriterBoundaryKey(next.accountId, next.mode),
+    }),
+    ConditionExpression:
+      "#revision = :revision AND #state = :state AND #version = :version AND #cutover <= :cutoff AND #verified <= :verified",
+    ExpressionAttributeNames: {
+      "#revision": "revision",
+      "#state": "state",
+      "#version": "writerVersion",
+      "#cutover": "cutoverAt",
+      "#verified": "verifiedAt",
+    },
+    ExpressionAttributeValues: marshall({
+      ":revision": next.writerBoundaryRevision,
+      ":state": "verified",
+      ":version": HISTORY_WRITER_VERSION,
+      ":cutoff": next.createdBefore * 1000,
+      ":verified": next.verifiedAt,
+    }),
+  };
+}
+export async function readHistoryWriterBoundary(
+  accountId: string,
+  mode: ProviderMode,
+): Promise<HistoryWriterBoundary | undefined> {
+  const key = historyWriterBoundaryKey(accountId, mode);
+  const result = await dynamoDbClient.send(
+    new GetItemCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      Key: marshall({ guildId: key }),
+      ConsistentRead: true,
+    }),
+  );
+  if (!result.Item) return undefined;
+  const { guildId: storedKey, ...record } = unmarshall(result.Item);
+  if (
+    storedKey !== key ||
+    record.accountId !== accountId ||
+    record.mode !== mode
+  )
+    throw new Error("Stored writer boundary scope mismatch");
+  return historyWriterBoundarySchema.parse(record);
+}
+
+export async function compareAndWriteHistoryWriterBoundary(
+  next: HistoryWriterBoundary,
+  expected: HistoryWriterBoundary | undefined,
+  sample: PurchaseAttempt,
+): Promise<boolean> {
+  validateBoundarySample(next, expected, sample);
+  const key = historyWriterBoundaryKey(next.accountId, next.mode);
+  const fence = historicalRevisionFence(key, expected?.revision);
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand({
+        TransactItems: [
+          { ConditionCheck: historicalOperationFence(sample.guildId, sample) },
+          {
+            Put: {
+              TableName: fence.TableName,
+              Item: marshall({ ...next, guildId: key }),
+              ConditionExpression: fence.ConditionExpression,
+              ExpressionAttributeNames: fence.ExpressionAttributeNames,
+              ...(fence.ExpressionAttributeValues
+                ? { ExpressionAttributeValues: fence.ExpressionAttributeValues }
+                : {}),
+            },
+          },
+        ],
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (isBillingTransactionConflict(error)) return false;
+    throw error;
+  }
+}
+export async function removeHistoryWriterBoundary(
+  expected: HistoryWriterBoundary,
+): Promise<boolean> {
+  historyWriterBoundarySchema.parse(expected);
+  const fence = historicalRevisionFence(
+    historyWriterBoundaryKey(expected.accountId, expected.mode),
+    expected.revision,
+  );
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand({ TransactItems: [{ Delete: fence }] }),
+    );
+    return true;
+  } catch (error) {
+    if (isBillingTransactionConflict(error)) return false;
+    throw error;
+  }
+}
+
+function offerAuthorityFences(
+  authority: IntroOfferAuthority | undefined,
+): { ConditionCheck: ConditionCheck }[] {
+  if (!authority) return [];
+  return [
+    {
+      ConditionCheck: {
+        ...historicalRevisionFence(
+          historicalOfferImportKey(
+            authority.guildId,
+            authority.offerId,
+            authority.mode,
+            authority.accountId,
+          ),
+          authority.coverageRevision,
+        ),
+        ConditionExpression:
+          "#revision = :revision AND #state = :state AND #boundary = :boundary",
+        ExpressionAttributeNames: {
+          "#revision": "revision",
+          "#state": "state",
+          "#boundary": "writerBoundaryRevision",
+        },
+        ExpressionAttributeValues: marshall({
+          ":revision": authority.coverageRevision,
+          ":state": "unused",
+          ":boundary": authority.boundaryRevision,
+        }),
+      },
+    },
+    {
+      ConditionCheck: {
+        ...historicalRevisionFence(
+          historyWriterBoundaryKey(authority.accountId, authority.mode),
+          authority.boundaryRevision,
+        ),
+        ConditionExpression:
+          "#revision = :revision AND #state = :state AND #deployment.#image = :image",
+        ExpressionAttributeNames: {
+          "#revision": "revision",
+          "#state": "state",
+          "#deployment": "deployment",
+          "#image": "imageDigest",
+        },
+        ExpressionAttributeValues: marshall({
+          ":revision": authority.boundaryRevision,
+          ":state": "verified",
+          ":image": authority.writerImageDigest,
+        }),
+      },
+    },
+  ];
 }
