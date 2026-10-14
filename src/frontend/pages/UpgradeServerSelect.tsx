@@ -29,7 +29,6 @@ import {
 import PricingCard from "../components/PricingCard";
 import BasicIntroTerms from "../components/BasicIntroTerms";
 import IntroPromotionChoice from "../components/IntroPromotionChoice";
-import SampleSummary from "../components/SampleSummary";
 import type { inferRouterInputs } from "@trpc/server";
 import type { AppRouter } from "../../trpc/router";
 import ServerPicker from "../components/ServerPicker";
@@ -628,9 +627,6 @@ export default function UpgradeServerSelect({
               ]}
               disabled={busy || Boolean(failedCheckout)}
             />
-            <Text size="sm" c="dimmed" ta="center">
-              Per server, not per member.
-            </Text>
           </Stack>
           {pricingQuery.isError && (
             <Alert color="red" title="Pricing unavailable">
@@ -794,15 +790,9 @@ export default function UpgradeServerSelect({
             </Box>
           )}
           <Text size="sm" c="dimmed">
-            Payment is handled securely by Stripe. Any available changes and
-            discounts are confirmed before payment.
+            Prices are per server. Payment is handled securely by Stripe. Any
+            available changes and discounts are confirmed before payment.
           </Text>
-        </Stack>
-        <Stack gap="sm">
-          <Title order={2} size="h3">
-            What comes back
-          </Title>
-          <SampleSummary />
         </Stack>
       </Stack>
     </Container>
