@@ -1,3 +1,4 @@
+import { areMeetingNoticesSettled } from "./meetingProcessingLifetime";
 import { isDeepStrictEqual } from "node:util";
 import type { RecordingCheckpoint } from "../types/recordingCheckpoint";
 import {
@@ -427,9 +428,10 @@ function reservationReleaseBlocked(
   owned: OwnedReservation | undefined,
 ): boolean {
   if (owned?.initializationUnresolved) return true;
-  const meeting = owned?.meeting;
-  if (!meeting) return false;
+  if (!owned?.meeting) return false;
+  const meeting = owned.meeting;
   return Boolean(
+    !areMeetingNoticesSettled(meeting, owned.reservation) ||
     meeting.finalizationFenced ||
     meeting.ownershipSignal?.aborted ||
     meeting.finalization?.controller.signal.aborted ||

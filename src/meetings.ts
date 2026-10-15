@@ -5,6 +5,8 @@ import {
 import {
   getMeetingProcessingSignal,
   runMeetingNoticeMutation,
+  stopMeetingProcessing,
+  areMeetingNoticesSettled,
 } from "./services/meetingProcessingLifetime";
 import { notifyRecordingLimit } from "./services/recordingLimitService";
 import { MeetingData, MeetingSetup } from "./types/meeting-data";
@@ -498,20 +500,38 @@ async function disposeFailedInitialization(initialization: {
 }): Promise<boolean> {
   const meeting = initialization.meeting;
   if (!meeting) return true;
-  meeting.finishing = true;
-  meeting.finished = true;
-  const closeAudio =
-    meeting.captureAudio ||
-    meeting.recordBotAudio ||
-    Boolean(meeting.audioData.ffmpegProcess);
-  meeting.captureAudio = false;
-  meeting.recordBotAudio = false;
-  meeting.ttsQueue?.stopAndClear();
-  for (const cleanup of initialization.cleanup) cleanup();
-  if (meeting.timeoutTimer) clearTimeout(meeting.timeoutTimer);
-  if (getMeeting(meeting.guildId) === meeting) deleteMeeting(meeting.guildId);
-  meeting.setFinished();
-  return closeAudio ? closeFailedInitializationOutput(meeting) : true;
+  const original = meeting.reservation;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), 5_000);
+  });
+  try {
+    meeting.finishing = true;
+    meeting.finished = true;
+    const closeAudio =
+      meeting.captureAudio ||
+      meeting.recordBotAudio ||
+      Boolean(meeting.audioData.ffmpegProcess);
+    meeting.captureAudio = false;
+    meeting.recordBotAudio = false;
+    const processing = stopMeetingProcessing(meeting);
+    const output = closeAudio
+      ? closeFailedInitializationOutput(meeting)
+      : Promise.resolve(true);
+    meeting.ttsQueue?.stopAndClear();
+    for (const cleanup of initialization.cleanup) cleanup();
+    if (meeting.timeoutTimer) clearTimeout(meeting.timeoutTimer);
+    if (getMeeting(meeting.guildId) === meeting) deleteMeeting(meeting.guildId);
+    meeting.setFinished();
+    return await Promise.race([
+      Promise.all([processing, output]).then(
+        ([, closed]) => closed && areMeetingNoticesSettled(meeting, original),
+      ),
+      expired,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function initializeReservedMeeting(
@@ -683,6 +703,7 @@ async function initializeReservedMeeting(
 
   // Set up error handling for the connection
   connection.on("error", (error) => {
+    if (meeting.finishing || meeting.finished) return;
     console.error("Voice connection error:", error);
     void runMeetingNoticeMutation(
       meeting,
