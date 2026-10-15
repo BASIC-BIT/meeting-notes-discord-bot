@@ -1,3 +1,7 @@
+import {
+  buildBillingLifecycleState,
+  publishBillingLifecycleTransition,
+} from "./billingLifecycleAnalytics";
 import { resolveSubscriptionCancellationAt } from "../utils/stripeCancellation";
 import type { SettlementInvoice } from "./offerUsageSettlement";
 import { randomUUID } from "node:crypto";
@@ -118,6 +122,7 @@ export const reconcileSubscription = async (
   guildId: string,
   subscriptionId: string,
   settlement?: SettlementInvoice,
+  analyticsContext?: { userId: string; analyticsOptOut: boolean },
 ) => {
   const repo = getSubscriptionRepository();
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -146,35 +151,41 @@ export const reconcileSubscription = async (
       : resolveTierFromSubscription(subscription);
     const updatedBy =
       readMetadataValue(subscription.metadata, "discord_id") || undefined;
-    const accepted = await repo.compareAndWrite(
-      {
-        ...buildSubscriptionPayload({
-          guildId,
-          status: subscription.status,
-          tier,
-          startDate: toIso(subscription.start_date),
-          endDate: toIso(subscription.ended_at),
-          nextBillingDate: toIso(resolveSubscriptionPeriodEnd(subscription)),
-          cancellationAt: toIso(
-            resolveSubscriptionCancellationAt(subscription),
-          ),
-          paymentMethod: subscription.default_payment_method
-            ? "card"
-            : "unknown",
-          stripeCustomerId:
-            typeof subscription.customer === "string"
-              ? subscription.customer
-              : subscription.customer.id,
-          stripeSubscriptionId: subscription.id,
-          updatedBy,
-          priceId: subscription.items.data[0]?.price.id,
-          mode: subscription.livemode ? "live" : "test",
-        }),
-        stripeSyncRevision: randomUUID(),
-      },
-      existing,
-    );
+    const payload: GuildSubscription = {
+      ...buildSubscriptionPayload({
+        guildId,
+        status: subscription.status,
+        tier,
+        startDate: toIso(subscription.start_date),
+        endDate: toIso(subscription.ended_at),
+        nextBillingDate: toIso(resolveSubscriptionPeriodEnd(subscription)),
+        cancellationAt: toIso(resolveSubscriptionCancellationAt(subscription)),
+        paymentMethod: subscription.default_payment_method ? "card" : "unknown",
+        stripeCustomerId:
+          typeof subscription.customer === "string"
+            ? subscription.customer
+            : subscription.customer.id,
+        stripeSubscriptionId: subscription.id,
+        updatedBy,
+        priceId: subscription.items.data[0]?.price.id,
+        mode: subscription.livemode ? "live" : "test",
+      }),
+      stripeSyncRevision: randomUUID(),
+      billingAnalyticsState: ["incomplete", "trialing"].includes(
+        subscription.status,
+      )
+        ? existing?.billingAnalyticsState
+        : buildBillingLifecycleState(subscription),
+    };
+    const accepted = await repo.compareAndWrite(payload, existing);
     if (!accepted) continue;
+    await publishBillingLifecycleTransition({
+      previous: existing,
+      current: payload,
+      provider: subscription,
+      observedAt: new Date(),
+      ...analyticsContext,
+    });
     clearGuildSubscriptionCache(guildId);
     await acceptPurchaseSubscription(guildId, subscription, stripe, settlement);
     await maybeAutoRevokeCoveredCompGrants({

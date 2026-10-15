@@ -135,9 +135,10 @@ export function assertRenewalOperationTransition(
 ) {
   if (
     next.revision === previous.revision ||
+    (previous.analyticsOptOut && !next.analyticsOptOut) ||
     !isDeepStrictEqual(
-      renewalBindingSchema.parse(next),
-      renewalBindingSchema.parse(previous),
+      renewalBindingSchema.omit({ analyticsOptOut: true }).parse(next),
+      renewalBindingSchema.omit({ analyticsOptOut: true }).parse(previous),
     )
   )
     throw new Error("Renewal consent binding cannot change");

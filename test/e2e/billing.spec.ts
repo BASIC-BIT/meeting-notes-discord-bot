@@ -19,15 +19,16 @@ test("Free access is separate from a canceled paid subscription", async ({
   await expect(currentPlan).not.toContainText("No subscription needed");
   await expect(currentPlan).toContainText("45m / 4h");
   await expect(
-    page.getByRole("button", { name: "Upgrade to Basic" }),
+    page.getByRole("button", { name: "Get Basic again" }),
   ).toBeEnabled();
   await expect(
     page.getByRole("button", { name: "Upgrade to Pro" }),
   ).toBeEnabled();
-  const history = page.getByTestId("billing-subscription-history");
+  const history = page.getByTestId("billing-payment-history");
+  await history.getByRole("button", { name: "Payment history" }).click();
   await expect(history).toContainText("Previous subscription: Canceled");
   await expect(
-    history.getByRole("button", { name: "View billing history" }),
+    history.getByRole("button", { name: "View invoices and receipts" }),
   ).toBeEnabled();
 });
 
@@ -35,7 +36,7 @@ const historyEntries = [
   {
     name: "billing",
     path: (id: string) => `/portal/server/${id}/billing`,
-    basic: "Upgrade to Basic",
+    basic: "Get Basic again",
     pro: "Upgrade to Pro",
   },
   {
@@ -87,7 +88,10 @@ for (const terminalStatus of ["canceled", "incomplete_expired"] as const) {
           await expect(page.getByTestId("billing-current-plan")).toContainText(
             "Free",
           );
-          const history = page.getByTestId("billing-subscription-history");
+          const history = page.getByTestId("billing-payment-history");
+          await history
+            .getByRole("button", { name: "Payment history" })
+            .click();
           await expect(history).toContainText(
             terminalStatus === "canceled"
               ? "Previous subscription: Canceled"
@@ -397,11 +401,14 @@ for (const scheme of ["light", "dark"] as const) {
       details: annualSubscriber,
     });
     await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
-    await expect(page.getByTestId("subscription-details")).toContainText(
+    await page
+      .getByRole("button", { name: "Payment history", exact: true })
+      .click();
+    await expect(page.getByTestId("billing-payment-history")).toContainText(
       "First year paid: $64.20",
     );
     await expectReadableText(
-      page.getByTestId("subscription-details").locator("p"),
+      page.getByTestId("billing-payment-history").locator("p"),
     );
   });
 }
@@ -581,6 +588,7 @@ test("checkout return preserves the full Discord server ID and billing destinati
 });
 
 test("billing page shows current plan states (mock)", async ({
+  page,
   serverSelectPage,
   nav,
   billingPage,
@@ -594,7 +602,10 @@ test("billing page shows current plan states (mock)", async ({
   await expect(billingPage.currentPlan()).toContainText(
     mockBilling.paidTierLabel,
   );
-  await expect(billingPage.manageButton()).toBeVisible();
+  // FORCE_TIER is complimentary local access, with no payer or Stripe pointer.
+  await expect(
+    page.getByRole("button", { name: "Manage billing", exact: true }),
+  ).toHaveCount(0);
   await billingPage.expandPlans();
   await billingPage
     .intervalToggle()
@@ -783,11 +794,14 @@ test("basic intro Billing uses actual taxed annual invoice without account-wide 
     },
   });
   await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
-  await expect(page.getByTestId("subscription-details")).toContainText(
+  await page
+    .getByRole("button", { name: "Payment history", exact: true })
+    .click();
+  await expect(page.getByTestId("billing-payment-history")).toContainText(
     "First year paid: $64.20",
   );
-  await expect(page.getByTestId("subscription-details")).toContainText(
-    "Next renewal: $100/year",
+  await expect(page.getByTestId("billing-current-plan")).toContainText(
+    "$100/year before tax",
   );
   await expect(
     page.getByText("Account-wide plan changes are temporarily restricted"),
@@ -807,21 +821,11 @@ test("basic intro Billing shows actual monthly discount and cancellation", async
     nextBillingDate: monthlySubscriber.renewalAt,
   });
   await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
-  await expect(page.getByTestId("subscription-details")).toContainText(
-    "Current price: $6/month",
-  );
-  await expect(page.getByTestId("subscription-details")).toContainText(
-    `Cancels on ${new Date(monthlySubscriber.renewalAt!).toLocaleDateString()}. No automatic renewal.`,
-  );
-  await expect(page.getByTestId("subscription-details")).not.toContainText(
-    "Next renewal",
-  );
-  await expect(page.getByTestId("billing-current-plan")).toContainText(
-    `Active, ends ${new Date(monthlySubscriber.renewalAt!).toLocaleDateString()}`,
-  );
-  await expect(page.getByTestId("billing-current-plan")).not.toContainText(
-    "next billing",
-  );
+  const current = page.getByTestId("billing-current-plan");
+  await expect(current).toContainText("$6/month before tax");
+  await expect(current).toContainText("Your Basic plan ends");
+  await expect(current).toContainText("Renewal off");
+  await expect(current).not.toContainText("next billing");
 });
 
 test("scheduled cancellation remains visible when price details are unavailable", async ({
@@ -837,7 +841,7 @@ test("scheduled cancellation remains visible when price details are unavailable"
   await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
   const current = page.getByTestId("billing-current-plan");
   await expect(current).toContainText(
-    `Active, ends ${new Date(cancellationAt).toLocaleDateString()}`,
+    "Your plan currently ends November 12, 2026.",
   );
   await expect(current).not.toContainText("next billing");
   await expect(

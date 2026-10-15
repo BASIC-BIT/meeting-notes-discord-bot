@@ -131,7 +131,10 @@ export async function readRenewalSource({
     return review("unverified_terms");
   const invoiceId = id(subscription.latest_invoice);
   if (!invoiceId) return review("unverified_terms");
-  const invoice = await stripe.invoices.retrieve(invoiceId);
+  const invoice = await stripe.invoices
+    .retrieve(invoiceId)
+    .catch(() => undefined);
+  if (!invoice) return review("unverified_terms");
   if (!isFundedPeriod(invoice, subscription, item.id, customer.id))
     return review("payment_problem");
   const paidLine = invoice.lines.data.find(
@@ -155,10 +158,13 @@ export async function readRenewalSource({
     subscription.billing_mode.type === "classic"
       ? { cancel_at_period_end: false, proration_behavior: "none" }
       : { cancel_at: "", proration_behavior: "none" };
-  const preview = await stripe.invoices.createPreview({
-    subscription: subscription.id,
-    subscription_details: stripeRequest,
-  });
+  const preview = await stripe.invoices
+    .createPreview({
+      subscription: subscription.id,
+      subscription_details: stripeRequest,
+    })
+    .catch(() => undefined);
+  if (!preview) return review("unverified_terms");
   const terms = previewTerms(preview, subscription, tier, paidLine.period.end);
   if (!terms) return review("unverified_terms");
   const invariant = {

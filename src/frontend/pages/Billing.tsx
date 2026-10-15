@@ -1,4 +1,4 @@
-import {useBillingRenewal} from "../hooks/useBillingRenewal";
+import { useBillingRenewal } from "../hooks/useBillingRenewal";
 import BillingRenewalStatus from "../components/BillingRenewalStatus";
 import BillingPaymentHistory from "../components/BillingPaymentHistory";
 import { useIntroOfferExpiry } from "../hooks/useIntroOfferExpiry";
@@ -96,8 +96,8 @@ type BillingPaidProps = BillingBaseProps & {
   data: BillingData;
   statusLabel: string;
   statusLine: string;
-  busy:boolean;
-  renewal:ReturnType<typeof useBillingRenewal>;
+  busy: boolean;
+  renewal: ReturnType<typeof useBillingRenewal>;
   onPortal: () => void;
   normalPrice: string | null;
 };
@@ -286,9 +286,17 @@ const BillingPaidPanel = ({
     {(() => {
       const isComped = data.billingSource === "manual_comp";
       const planName = formatStatusLabel(data.tier);
-      const renewalState=renewal.view?.state??{kind:"unavailable",knownEndsAt:data.cancellationAt??null} as const;
-      const showRenewal=Boolean(data.hasStripeBilling);
-      const progress=data.subscriptionDetails?.status === "available" ? data.subscriptionDetails.paymentProgress:undefined;
+      const renewalState =
+        renewal.view?.state ??
+        ({
+          kind: "unavailable",
+          knownEndsAt: data.cancellationAt ?? null,
+        } as const);
+      const showRenewal = Boolean(data.hasStripeBilling);
+      const progress =
+        data.subscriptionDetails?.status === "available"
+          ? data.subscriptionDetails.paymentProgress
+          : undefined;
       const expiryLine = data.activeGrant?.expiresAt
         ? `Comp runs through ${new Date(
             data.activeGrant.expiresAt,
@@ -337,11 +345,22 @@ const BillingPaidPanel = ({
               <Text size="sm" c="dimmed">
                 Server: {serverName}
               </Text>
-              {showRenewal ? <BillingRenewalStatus state={renewalState} canManageBilling={renewal.view?.canManageBilling??false} busy={busy} onConfirm={renewal.onConfirm} onCheckStatus={renewal.onCheckStatus} onRetry={renewal.onRetry} onPortal={onPortal}/> : null}
-              {!isComped && progress && progress !== "not_pending" ? <SubscriptionDetails details={data.subscriptionDetails}/> : null}
+              {showRenewal ? (
+                <BillingRenewalStatus
+                  state={renewalState}
+                  canManageBilling={renewal.view?.canManageBilling ?? false}
+                  busy={busy}
+                  onConfirm={renewal.onConfirm}
+                  onCheckStatus={renewal.onCheckStatus}
+                  onRetry={renewal.onRetry}
+                  onPortal={onPortal}
+                />
+              ) : null}
+              {!isComped && progress && progress !== "not_pending" ? (
+                <SubscriptionDetails details={data.subscriptionDetails} />
+              ) : null}
               <BillingUsageMeter usage={usage} />
             </Stack>
-
           </Stack>
 
           <Stack gap="xs">
@@ -369,7 +388,8 @@ const BillingPaidPanel = ({
 );
 
 function basicPlanCta(data: BillingData, isComped: boolean): string {
-  if(data.tier==="free" && isTerminalStripeHistory(data))return "Get Basic again";
+  if (data.tier === "free" && isTerminalStripeHistory(data))
+    return "Get Basic again";
   const basicCta =
     data.tier === "basic"
       ? isComped
@@ -800,13 +820,19 @@ function BillingCurrentPlan({
   busy: boolean;
   onPortal: () => void;
   normalPlan: ReturnType<typeof resolvePaidPlan>;
-  renewal:ReturnType<typeof useBillingRenewal>;
+  renewal: ReturnType<typeof useBillingRenewal>;
 }) {
   const isFreeTier = data.tier === "free";
   const hasTerminalSubscription = isTerminalStripeHistory(data);
-  const firstYearPayment=data.subscriptionDetails?.status === "available" ? data.subscriptionDetails.firstYearPayment:null;
-  const canViewReceipts=Boolean(selectedGuildId) && (renewal.view?.canManageBilling??false);
-  const showHistory=data.hasStripeBilling && Boolean(firstYearPayment || canViewReceipts || hasTerminalSubscription);
+  const firstYearPayment =
+    data.subscriptionDetails?.status === "available"
+      ? data.subscriptionDetails.firstYearPayment
+      : null;
+  const canViewReceipts =
+    Boolean(selectedGuildId) && (renewal.view?.canManageBilling ?? false);
+  const showHistory =
+    data.hasStripeBilling &&
+    Boolean(firstYearPayment || canViewReceipts || hasTerminalSubscription);
   const statusLabel = formatStatusLabel(data.status);
   const statusLine = formatStatusLine(
     statusLabel,
@@ -830,7 +856,17 @@ function BillingCurrentPlan({
           normalPrice={normalPlan ? formatPlanPrice(normalPlan, "month") : null}
         />
       )}
-      {showHistory ? <Surface p="md"><BillingPaymentHistory firstYearPayment={firstYearPayment} previousStatus={data.stripeStatus??data.status} canViewReceipts={canViewReceipts} onViewReceipts={handlePortal} busy={isPortalPending || busy}/></Surface>:null}
+      {showHistory ? (
+        <Surface p="md">
+          <BillingPaymentHistory
+            firstYearPayment={firstYearPayment}
+            previousStatus={data.stripeStatus ?? data.status}
+            canViewReceipts={canViewReceipts}
+            onViewReceipts={handlePortal}
+            busy={isPortalPending || busy}
+          />
+        </Surface>
+      ) : null}
     </>
   );
 }
@@ -1087,7 +1123,12 @@ export function Billing() {
   } = useBillingQueries(routeServerId);
   const checkoutMutation = trpc.billing.checkout.useMutation();
   const portalMutation = trpc.billing.portal.useMutation();
-  const renewal=useBillingRenewal({serverId:selectedGuildId,active:Boolean(data?.hasStripeBilling) && selectedGuildId===routeServerId,onBillingChanged:()=>billingQuery.refetch()});
+  const renewal = useBillingRenewal({
+    serverId: selectedGuildId,
+    active:
+      Boolean(data?.hasStripeBilling) && selectedGuildId === routeServerId,
+    onBillingChanged: () => billingQuery.refetch(),
+  });
   const attemptIdentity = JSON.stringify([
     routeServerId,
     interval,
@@ -1103,7 +1144,8 @@ export function Billing() {
 
   const { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans } =
     useBillingPricing(pricingQuery.data, data, frozenOffer, interval);
-  const busy = checkoutMutation.isPending || portalMutation.isPending || renewal.busy;
+  const busy =
+    checkoutMutation.isPending || portalMutation.isPending || renewal.busy;
   const isPortalPending = portalMutation.isPending;
   const displayedOffer = useBillingOfferExposure({
     data,

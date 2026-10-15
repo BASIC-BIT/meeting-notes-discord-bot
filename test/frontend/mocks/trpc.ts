@@ -1,4 +1,4 @@
-import type {RenewalView,RenewalResult} from "../../../src/types/renewal";
+import type { RenewalView, RenewalResult } from "../../../src/types/renewal";
 import { jest } from "@jest/globals";
 import type {
   AskConversation,
@@ -296,8 +296,15 @@ export const guildQuery = buildQueryState<{
   guilds: { id: string; name: string; canManage?: boolean }[];
 } | null>(null);
 export const pricingQuery = buildQueryState<PricingPlansData>({ plans: [] });
-export const billingRenewalQuery=buildQueryState<RenewalView>({state:{kind:"not_applicable"},canManageBilling:false,lifecycleAnalyticsEnabled:false});
-export const billingRenewalMutation=buildMutationState<[unknown],RenewalResult>({kind:"changed"});
+export const billingRenewalQuery = buildQueryState<RenewalView>({
+  state: { kind: "not_applicable" },
+  canManageBilling: false,
+  lifecycleAnalyticsEnabled: false,
+});
+export const billingRenewalMutation = buildMutationState<
+  [unknown],
+  RenewalResult
+>({ kind: "changed" });
 export const billingQuery = buildQueryState<BillingDataQuery | null>(null);
 export const meetingsListQuery = buildQueryState<MeetingsListData>({
   meetings: [],
@@ -675,8 +682,12 @@ export const resetTrpcMocks = () => {
   resetQueryState(guildQuery, null);
   resetQueryState(pricingQuery, { plans: [] });
   resetQueryState(billingQuery, null);
-  resetQueryState(billingRenewalQuery,{state:{kind:"not_applicable"},canManageBilling:false,lifecycleAnalyticsEnabled:false});
-  resetMutationState(billingRenewalMutation,{kind:"changed"});
+  resetQueryState(billingRenewalQuery, {
+    state: { kind: "not_applicable" },
+    canManageBilling: false,
+    lifecycleAnalyticsEnabled: false,
+  });
+  resetMutationState(billingRenewalMutation, { kind: "changed" });
   resetQueryState(meetingsListQuery, { meetings: [] });
   resetQueryState(meetingsDetailQuery, { meeting: null });
   resetQueryState(serversChannelsQuery, {
@@ -1032,8 +1043,8 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
     },
     pricing: { plans: { useQuery: () => pricingQuery } },
     billing: {
-      renewal:{useQuery:()=>billingRenewalQuery},
-      reactivateRenewal:{useMutation:()=>billingRenewalMutation},
+      renewal: { useQuery: () => billingRenewalQuery },
+      reactivateRenewal: { useMutation: () => billingRenewalMutation },
       me: { useQuery: () => billingQuery },
       checkout: { useMutation: () => billingCheckoutMutation },
       portal: { useMutation: () => billingPortalMutation },

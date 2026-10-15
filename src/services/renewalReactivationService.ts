@@ -1,3 +1,4 @@
+import { captureRenewalOperationEvent } from "./billingLifecycleAnalytics";
 import {
   renewalBindingSchema,
   renewalOperationSchema,
@@ -62,7 +63,7 @@ export async function readRenewalState({
   ): RenewalView => ({
     state,
     canManageBilling,
-    lifecycleAnalyticsEnabled: false,
+    lifecycleAnalyticsEnabled: config.analytics.billingLifecycleEnabled,
   });
   if (!saved?.stripeSubscriptionId) return view({ kind: "not_applicable" });
   let recovery: RenewalOperation | undefined;
@@ -208,7 +209,7 @@ export async function restoreRenewal({
   const operationId =
     request.kind === "recover" ? request.operationId : signed?.nonce;
   if (!operationId) return { kind: "changed" };
-  const prior = await repo.getOperation({ guildId, operationId });
+  let prior = await repo.getOperation({ guildId, operationId });
   if (prior) {
     if (prior.payerId !== payerId)
       throw new BillingActionError(
@@ -222,6 +223,25 @@ export async function restoreRenewal({
     )
       return { kind: "changed" };
     if (prior.state === "rejected") return { kind: "changed" };
+    if (
+      analyticsOptOut &&
+      !prior.analyticsOptOut &&
+      prior.state !== "succeeded"
+    ) {
+      const optedOut = {
+        ...prior,
+        analyticsOptOut: true,
+        revision: randomUUID(),
+      };
+      if (
+        !(await repo.compareAndWrite({
+          next: optedOut,
+          expectedRevision: prior.revision,
+        }))
+      )
+        return { kind: "processing", operationId: prior.operationId };
+      prior = optedOut;
+    }
     return recover({ stripe, guildId, payerId, now }, prior);
   }
   if (request.kind !== "confirm" || !config.stripe.renewalReactivationEnabled)
@@ -273,6 +293,7 @@ export async function restoreRenewal({
   };
   if (!(await repo.claim({ operation, expectedSubscription: saved })))
     return { kind: "changed" };
+  await captureRenewalOperationEvent({ operation, phase: "requested" });
   return recover({ stripe, guildId, payerId, now }, operation);
 }
 async function recover(
@@ -295,16 +316,30 @@ async function recover(
       revision: randomUUID(),
       ...result,
     });
-  const save = async (next: RenewalOperation) =>
-    await repo.compareAndWrite({ next, expectedRevision: operation.revision });
+  const save = async (next: RenewalOperation) => {
+    const accepted = await repo.compareAndWrite({
+      next,
+      expectedRevision: operation.revision,
+    });
+    if (
+      accepted &&
+      operation.state !== "needs_review" &&
+      ["succeeded", "rejected", "needs_review"].includes(next.state)
+    )
+      await captureRenewalOperationEvent({ operation: next, phase: "result" });
+    return accepted;
+  };
   const processing = (): RenewalResult => ({
     kind: "processing",
     operationId: operation.operationId,
   });
   try {
     const saved = await getSubscriptionRepository().get(guildId);
-    if (saved?.stripeSubscriptionId !== operation.subscriptionId)
+    if (saved?.stripeSubscriptionId !== operation.subscriptionId) {
+      if (operation.state === "succeeded") return { kind: "changed" };
+      await save(next({ state: "needs_review", reason: "terms_changed" }));
       return { kind: "needs_review", operationId: operation.operationId };
+    }
     let source = await readRenewalSource({
       stripe,
       guildId,
@@ -368,7 +403,13 @@ async function recover(
       return { kind: "needs_review", operationId: operation.operationId };
     }
     if (source.cancellationAt !== null) return processing();
-    await reconcileSubscription(stripe, guildId, operation.subscriptionId);
+    await reconcileSubscription(
+      stripe,
+      guildId,
+      operation.subscriptionId,
+      undefined,
+      { userId: payerId, analyticsOptOut: operation.analyticsOptOut },
+    );
     const persisted = await getSubscriptionRepository().get(guildId);
     const confirmed = await readRenewalSource({
       stripe,
@@ -393,6 +434,17 @@ async function recover(
   } catch (error) {
     if (error instanceof BillingActionError && error.code === "FORBIDDEN")
       throw error;
+    if (error instanceof BillingActionError && error.code === "BAD_REQUEST") {
+      if (operation.state === "succeeded") return { kind: "changed" };
+      try {
+        if (
+          await save(next({ state: "needs_review", reason: "terms_changed" }))
+        )
+          return { kind: "needs_review", operationId: operation.operationId };
+      } catch {
+        /* Keep the existing durable control if persistence is unavailable. */
+      }
+    }
     return processing();
   }
 }

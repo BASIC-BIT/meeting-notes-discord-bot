@@ -8,7 +8,10 @@ import type {
   MeetingStatus,
 } from "./meetingLifecycle";
 
+import type { BillingLifecycleState } from "./billingAnalytics";
+
 export interface GuildSubscription {
+  billingAnalyticsState?: BillingLifecycleState;
   guildId: string;
   status: string;
   tier: string;

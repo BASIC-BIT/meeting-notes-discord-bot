@@ -1,3 +1,4 @@
+import { captureBillingInvoiceOutcome } from "../services/billingLifecycleAnalytics";
 import { checkoutInvoiceHint } from "../services/purchaseSession";
 import type Stripe from "stripe";
 import {
@@ -136,6 +137,7 @@ const handleInvoicePaymentFailed: WebhookHandler = async ({
     guildId,
     typeof subscription === "string" ? subscription : subscription.id,
   );
+  await captureBillingInvoiceOutcome({ stripe, invoice, outcome: "failed" });
 };
 
 const handleSubscriptionUpsert: WebhookHandler = async ({ stripe, event }) => {
@@ -189,6 +191,7 @@ const handleInvoicePaymentSucceeded: WebhookHandler = async ({
         { invoiceId: invoice.id },
       )
     : undefined;
+  await captureBillingInvoiceOutcome({ stripe, invoice, outcome: "settled" });
   if (
     invoice.status === "paid" &&
     invoice.amount_paid > 0 &&
