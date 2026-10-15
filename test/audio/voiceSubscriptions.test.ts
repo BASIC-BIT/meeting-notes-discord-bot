@@ -633,13 +633,15 @@ describe("actual capture preservation cutoff handoff", () => {
         });
       const streams: PassThrough[] = [];
       const { meeting, receiver } = createMeeting(streams);
+      Object.assign(meeting.voiceChannel, { id: history.channelId });
       const owner = new AbortController();
       Object.assign(meeting, {
         guildId: history.guildId,
-        channelId: history.channelId,
+        channelId: "text",
         meetingId: history.meetingId,
         ownershipSignal: owner.signal,
         textChannel: {
+          id: "text",
           send: jest.fn().mockRejectedValue(new Error("notice unavailable")),
         },
         reservation: {
