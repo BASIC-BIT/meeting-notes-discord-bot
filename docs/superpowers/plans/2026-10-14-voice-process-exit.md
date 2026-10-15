@@ -79,6 +79,8 @@ This task can run independently of Tasks 1-2. It produces test evidence, not a p
 
 ## Task 4: Guard pending DAVE input before Opus, if Task 3 passes
 
+**Excluded after Task 3 evaluation on 2026-10-14.** The [measured DAVE gate result](../specs/2026-10-14-dave-inclusion-gate.md) found native parser disagreement with the approved structural bounds. Authenticated two-member proof remains unperformed. Keep the process-exit work and do not implement the following conditional task in this PR.
+
 **Files:** [Task 4 file map](#task-4-file-map) in the appendix. No voice patch or manifest change is intended.
 
 **Interfaces:** Produce hasDAVEProtocolFrameStructure(packet: Uint8Array): boolean, a bounded, nonthrowing structural check that neither authenticates nor retains its input. Extend the internal OpusDiagnosticDecoder constructor with an optional synchronous onPendingDAVEInput(diagnostics: ReceiverDiagnostics): void callback. ReceiverDiagnostics remains derived from VoiceReceiver.packetDiagnostics. _transform continues using its existing signature and callback contract.
