@@ -2,11 +2,15 @@ import {
   reservationTimingReceipt,
   freezeCompletionPolicy,
 } from "./services/meetingCompletionPolicyService";
-import { getMeetingProcessingSignal } from "./services/meetingProcessingLifetime";
+import {
+  getMeetingProcessingSignal,
+  runMeetingNoticeMutation,
+} from "./services/meetingProcessingLifetime";
 import { notifyRecordingLimit } from "./services/recordingLimitService";
 import { MeetingData, MeetingSetup } from "./types/meeting-data";
 import {
   ButtonInteraction,
+  DiscordAPIError,
   Guild,
   TextChannel,
   User,
@@ -680,9 +684,22 @@ async function initializeReservedMeeting(
   // Set up error handling for the connection
   connection.on("error", (error) => {
     console.error("Voice connection error:", error);
-    textChannel.send(
-      `There was an error trying to join the voice channel${isAutoRecording ? " for auto-recording" : ""}.`,
-    );
+    void runMeetingNoticeMutation(
+      meeting,
+      () =>
+        textChannel.send(
+          `There was an error trying to join the voice channel${isAutoRecording ? " for auto-recording" : ""}.`,
+        ),
+      (error) =>
+        error instanceof DiscordAPIError &&
+        error.status >= 400 &&
+        error.status < 500,
+    ).catch(() => {
+      console.warn("Voice error notification failed:", {
+        stage: "connection-error-notification",
+        meetingId: meeting.meetingId,
+      });
+    });
   });
 
   // Snapshot participants for initial members

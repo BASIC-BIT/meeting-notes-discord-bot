@@ -355,6 +355,17 @@ index 63c6dfb..e6b6d9e 100644
      return packet;
    }
    /**
+@@ -2151,7 +2200,9 @@ var VoiceReceiver = class {
+       ...createDefaultAudioReceiveStreamOptions(),
+       ...options
+     });
+-    stream.once("close", () => this.subscriptions.delete(userId));
++    stream.once("close", () => {
++      if (this.subscriptions.get(userId) === stream) this.subscriptions.delete(userId);
++    });
+     this.subscriptions.set(userId, stream);
+     return stream;
+   }
 diff --git a/node_modules/@discordjs/voice/dist/index.mjs b/node_modules/@discordjs/voice/dist/index.mjs
 index 4a5678c..c21d7b6 100644
 --- a/node_modules/@discordjs/voice/dist/index.mjs
@@ -562,3 +573,14 @@ index 4a5678c..c21d7b6 100644
      return packet;
    }
    /**
+@@ -2091,7 +2140,9 @@ var VoiceReceiver = class {
+       ...createDefaultAudioReceiveStreamOptions(),
+       ...options
+     });
+-    stream.once("close", () => this.subscriptions.delete(userId));
++    stream.once("close", () => {
++      if (this.subscriptions.get(userId) === stream) this.subscriptions.delete(userId);
++    });
+     this.subscriptions.set(userId, stream);
+     return stream;
+   }

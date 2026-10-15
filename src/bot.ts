@@ -529,7 +529,15 @@ export async function setupBot() {
       );
     });
 
-    client.on("voiceStateUpdate", handleVoiceStateUpdate);
+    client.on("voiceStateUpdate", (oldState, newState) => {
+      void handleVoiceStateUpdate(oldState, newState).catch(() => {
+        const meeting = getMeeting(newState.guild.id);
+        console.warn("Voice state operation failed:", {
+          stage: "voice-state-update",
+          ...(meeting ? { meetingId: meeting.meetingId } : {}),
+        });
+      });
+    });
   });
 
   client.on("guildCreate", async (guild) => {
