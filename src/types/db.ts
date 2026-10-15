@@ -8,13 +8,17 @@ import type {
   MeetingStatus,
 } from "./meetingLifecycle";
 
+import type { BillingLifecycleState } from "./billingAnalytics";
+
 export interface GuildSubscription {
+  billingAnalyticsState?: BillingLifecycleState;
   guildId: string;
   status: string;
   tier: string;
   startDate: string;
   endDate?: string;
   nextBillingDate?: string;
+  cancellationAt?: string;
   paymentMethod?: string;
   subscriptionType: string;
   stripeCustomerId?: string;

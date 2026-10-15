@@ -1,3 +1,4 @@
+import type { RenewalView, RenewalResult } from "../../../src/types/renewal";
 import { jest } from "@jest/globals";
 import type {
   AskConversation,
@@ -15,6 +16,7 @@ import type { MeetingStatus } from "../../../src/types/meetingLifecycle";
 import type { PaidPlan, BasicIntroOffer } from "../../../src/types/pricing";
 
 type QueryState<T> = {
+  dataUpdatedAt: number;
   data: T | null;
   isLoading: boolean;
   isFetching: boolean;
@@ -256,6 +258,7 @@ type AdminFeedbackData = {
 };
 
 const buildQueryState = <T>(data: T | null): QueryState<T> => ({
+  dataUpdatedAt: 0,
   data,
   isLoading: false,
   isFetching: false,
@@ -272,6 +275,7 @@ const buildMutationState = <TArgs extends unknown[], TResult>(
 });
 
 const resetQueryState = <T>(state: QueryState<T>, data: T | null) => {
+  state.dataUpdatedAt = 0;
   state.data = data;
   state.isLoading = false;
   state.isFetching = false;
@@ -295,6 +299,15 @@ export const guildQuery = buildQueryState<{
   guilds: { id: string; name: string; canManage?: boolean }[];
 } | null>(null);
 export const pricingQuery = buildQueryState<PricingPlansData>({ plans: [] });
+export const billingRenewalQuery = buildQueryState<RenewalView>({
+  state: { kind: "not_applicable" },
+  canManageBilling: false,
+  lifecycleAnalyticsEnabled: false,
+});
+export const billingRenewalMutation = buildMutationState<
+  [unknown],
+  RenewalResult
+>({ kind: "changed" });
 export const billingQuery = buildQueryState<BillingDataQuery | null>(null);
 export const meetingsListQuery = buildQueryState<MeetingsListData>({
   meetings: [],
@@ -672,6 +685,12 @@ export const resetTrpcMocks = () => {
   resetQueryState(guildQuery, null);
   resetQueryState(pricingQuery, { plans: [] });
   resetQueryState(billingQuery, null);
+  resetQueryState(billingRenewalQuery, {
+    state: { kind: "not_applicable" },
+    canManageBilling: false,
+    lifecycleAnalyticsEnabled: false,
+  });
+  resetMutationState(billingRenewalMutation, { kind: "changed" });
   resetQueryState(meetingsListQuery, { meetings: [] });
   resetQueryState(meetingsDetailQuery, { meeting: null });
   resetQueryState(serversChannelsQuery, {
@@ -1027,6 +1046,8 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
     },
     pricing: { plans: { useQuery: () => pricingQuery } },
     billing: {
+      renewal: { useQuery: () => billingRenewalQuery },
+      reactivateRenewal: { useMutation: () => billingRenewalMutation },
       me: { useQuery: () => billingQuery },
       checkout: { useMutation: () => billingCheckoutMutation },
       portal: { useMutation: () => billingPortalMutation },

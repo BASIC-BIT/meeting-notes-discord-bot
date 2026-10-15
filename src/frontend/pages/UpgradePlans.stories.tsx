@@ -1,3 +1,5 @@
+import type { RenewalView } from "../../types/renewal";
+import { createRenewalFixture } from "./renewalFixtures";
 import type { TerminalSubscriptionStatus } from "../utils/billingManagement";
 import { useEffect, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react";
@@ -81,6 +83,7 @@ function previewBilling(
 }
 
 type UpgradePreviewProps = {
+  renewal?: RenewalView;
   path?: string;
   tier?: "free" | "basic" | "pro";
   colorScheme?: "light" | "dark";
@@ -89,6 +92,7 @@ type UpgradePreviewProps = {
   billingSource?: "free" | "stripe" | "manual_comp" | "forced";
   introStatus?: BasicIntroOffer["status"];
   subscriptionDetails?: ProviderSubscriptionDetails;
+  cancellationAt?: string | null;
   loadingBilling?: boolean;
   staleQuote?: boolean;
   pendingCheckout?: boolean;
@@ -97,16 +101,25 @@ type UpgradePreviewProps = {
   terminalStatus?: TerminalSubscriptionStatus;
 };
 
+function previewIntroOffers(status: BasicIntroOffer["status"]) {
+  return {
+    introOffer: status === "available" ? monthlyIntroOffer : { status },
+    annualIntroOffer: status === "available" ? annualIntroOffer : { status },
+  };
+}
+
 function previewResponses({
   tier = "free",
   signedIn = true,
   billingSource,
   terminalStatus,
   subscriptionDetails,
+  cancellationAt,
   paymentSettling,
   introStatus,
   staleQuote,
   missingPrices,
+  renewal,
 }: UpgradePreviewProps): Record<string, unknown> {
   const data: Record<string, unknown> = {
     "auth.me": signedIn
@@ -151,33 +164,27 @@ function previewResponses({
         },
       ],
     },
+    "billing.renewal":
+      renewal ??
+      createRenewalFixture({
+        details: subscriptionDetails,
+        cancellationAt,
+        terminalStatus,
+      }),
     "billing.me": {
       ...previewBilling(tier, billingSource, terminalStatus),
       ...(paymentSettling
         ? { status: "incomplete", stripeStatus: "incomplete" }
         : {}),
       subscriptionDetails,
-      introOffer:
-        introStatus === "available"
-          ? monthlyIntroOffer
-          : { status: introStatus ?? "inactive" },
-      annualIntroOffer:
-        introStatus === "available"
-          ? annualIntroOffer
-          : { status: introStatus ?? "inactive" },
+      cancellationAt: cancellationAt ?? null,
+      ...previewIntroOffers(introStatus ?? "inactive"),
     },
   };
   if (introStatus)
     data["pricing.plans"] = {
       plans: introPlans,
-      introOffer:
-        introStatus === "available"
-          ? monthlyIntroOffer
-          : { status: introStatus },
-      annualIntroOffer:
-        introStatus === "available"
-          ? annualIntroOffer
-          : { status: introStatus },
+      ...previewIntroOffers(introStatus),
     };
   if (staleQuote)
     data["billing.me"] = {
@@ -204,12 +211,14 @@ export function UpgradePreview({
   billingSource,
   introStatus,
   subscriptionDetails,
+  cancellationAt,
   loadingBilling = false,
   staleQuote = false,
   pendingCheckout = false,
   paymentSettling = false,
   missingPrices = false,
   terminalStatus,
+  renewal,
 }: UpgradePreviewProps) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => notifications.clean(), []);
@@ -223,8 +232,15 @@ export function UpgradePreview({
         },
       }),
   );
-  const [client] = useState(() =>
-    trpc.createClient({
+  const [client] = useState(() => {
+    let currentRenewal =
+      renewal ??
+      createRenewalFixture({
+        details: subscriptionDetails,
+        cancellationAt,
+        terminalStatus,
+      });
+    return trpc.createClient({
       links: [
         httpBatchLink({
           url: "/trpc",
@@ -235,15 +251,31 @@ export function UpgradePreview({
               billingSource,
               terminalStatus,
               subscriptionDetails,
+              cancellationAt,
               paymentSettling,
               introStatus,
               staleQuote,
               missingPrices,
+              renewal: currentRenewal,
             });
             const paths = new URL(String(url), window.location.origin).pathname
               .split("/")
               .at(-1)!
               .split(",");
+            if (paths.includes("billing.reactivateRenewal")) {
+              const state = currentRenewal.state;
+              if (state.kind === "off" && state.action.kind === "ready") {
+                const terms = state.action.terms;
+                currentRenewal = {
+                  ...currentRenewal,
+                  state: { kind: "on", terms },
+                };
+                data["billing.reactivateRenewal"] = {
+                  kind: "confirmed",
+                  terms,
+                };
+              } else data["billing.reactivateRenewal"] = { kind: "changed" };
+            }
             if (errorFor && paths.includes(errorFor))
               throw new Error("Preview request failed");
             if (loadingBilling && paths.includes("billing.me"))
@@ -262,8 +294,8 @@ export function UpgradePreview({
           },
         }),
       ],
-    }),
-  );
+    });
+  });
   const [router] = useState(() => {
     localStorage.setItem("mn-selected-guild", "example");
     const root = createRootRoute({ component: Outlet });
@@ -482,15 +514,20 @@ export const BillingCanceledSubscription: Story = {
     await expect(currentPlan).not.toHaveTextContent("Canceled");
     await expect(currentPlan).not.toHaveTextContent("No subscription needed");
     await expect(
-      canvas.getByRole("button", { name: "Upgrade to Basic" }),
+      canvas.getByRole("button", { name: "Get Basic again" }),
     ).toBeEnabled();
     await expect(
       canvas.getByRole("button", { name: "Upgrade to Pro" }),
     ).toBeEnabled();
-    const history = canvas.getByTestId("billing-subscription-history");
+    const history = canvas.getByTestId("billing-payment-history");
+    await userEvent.click(
+      within(history).getByRole("button", { name: "Payment history" }),
+    );
     await expect(history).toHaveTextContent("Previous subscription: Canceled");
     await expect(
-      within(history).getByRole("button", { name: "View billing history" }),
+      within(history).getByRole("button", {
+        name: "View invoices and receipts",
+      }),
     ).toBeEnabled();
   },
 };
@@ -527,17 +564,20 @@ export const BillingCanceledOfferUnavailable: Story = {
     await expect(
       canvas.getByTestId("billing-current-plan"),
     ).not.toHaveTextContent("Canceled");
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Payment history", exact: true }),
+    );
     await expect(
-      canvas.getByTestId("billing-subscription-history"),
+      canvas.getByTestId("billing-payment-history"),
     ).toHaveTextContent("Previous subscription: Canceled");
     await expect(
-      canvas.getByRole("button", { name: "Upgrade to Basic" }),
+      canvas.getByRole("button", { name: "Get Basic again" }),
     ).toBeDisabled();
     await expect(
       canvas.getByRole("button", { name: "Upgrade to Pro" }),
     ).toBeEnabled();
     await expect(
-      canvas.getByRole("button", { name: "View billing history" }),
+      canvas.getByRole("button", { name: "View invoices and receipts" }),
     ).toBeEnabled();
   },
 };
@@ -859,9 +899,38 @@ export const IntroAnnualSharedRestriction: Story = {
 };
 export const IntroSubscriberCanceled: Story = {
   ...IntroAnnualSubscriber,
+  tags: ["cancellation-status"],
   args: {
     ...IntroAnnualSubscriber.args,
+    cancellationAt: annualSubscriber.renewalAt,
     subscriptionDetails: { ...annualSubscriber, cancelAtPeriodEnd: true },
+  },
+  play: async ({ canvasElement }) => {
+    const current = within(
+      await within(canvasElement).findByTestId("billing-current-plan"),
+    );
+    await expect(
+      current.getByText("Renewal off", { exact: true }),
+    ).toBeVisible();
+    await expect(current.queryByText(/next billing/)).toBeNull();
+    await expect(
+      current.getByRole("button", { name: "Turn renewal back on" }),
+    ).toBeEnabled();
+    await expect(current.queryByText("ACTIVE", { exact: true })).toBeNull();
+  },
+};
+export const CancellationPriceUnavailable: Story = {
+  ...IntroSubscriberCanceled,
+  args: {
+    ...IntroSubscriberCanceled.args,
+    subscriptionDetails: { status: "unavailable" },
+  },
+  play: async ({ canvasElement }) => {
+    const current = within(
+      await within(canvasElement).findByTestId("billing-current-plan"),
+    );
+    await expect(current.getByText(/Your plan currently ends/)).toBeVisible();
+    await expect(current.queryByText(/next billing/)).toBeNull();
   },
 };
 export const IntroProviderUnavailable: Story = {
@@ -912,11 +981,14 @@ export const BillingExpiredSubscription: Story = {
     await expect(
       await canvas.findByTestId("billing-current-plan"),
     ).toHaveTextContent("Free");
-    const history = canvas.getByTestId("billing-subscription-history");
+    const history = canvas.getByTestId("billing-payment-history");
+    await userEvent.click(
+      within(history).getByRole("button", { name: "Payment history" }),
+    );
     await expect(history).toHaveTextContent("Previous subscription: Expired");
     await expect(history).not.toHaveTextContent("paid");
     await expect(
-      canvas.getByRole("button", { name: "Upgrade to Basic" }),
+      canvas.getByRole("button", { name: "Get Basic again" }),
     ).toBeEnabled();
     await expect(
       canvas.getByRole("button", { name: "Upgrade to Pro" }),
@@ -963,8 +1035,11 @@ export const BillingCompedTerminalHistory: Story = {
     await expect(canvas.getByTestId("billing-current-plan")).toHaveTextContent(
       "Basic",
     );
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Payment history", exact: true }),
+    );
     await expect(
-      canvas.getByTestId("billing-subscription-history"),
+      canvas.getByTestId("billing-payment-history"),
     ).toHaveTextContent("Previous subscription: Canceled");
   },
 };

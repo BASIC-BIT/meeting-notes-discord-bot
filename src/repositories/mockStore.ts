@@ -1,3 +1,4 @@
+import type { RenewalOperation, RenewalControl } from "../types/renewal";
 import type { HistoryWriterBoundary } from "../types/historyWriterBoundary";
 import type { HistoricalOfferImport } from "../types/historicalOfferImport";
 import type { OfferUsage } from "../types/offerUsage";
@@ -41,6 +42,8 @@ import type {
 } from "./types";
 
 type MockStore = {
+  renewalOperations: Map<string, RenewalOperation>;
+  renewalControls: Map<string, RenewalControl>;
   purchaseAttempts: Map<string, PurchaseAttempt>;
   offerUsages: Map<string, OfferUsage>;
   historicalOfferImports: Map<string, HistoricalOfferImport>;
@@ -928,6 +931,8 @@ function buildDefaultStore(): MockStore {
     subscriptions,
     paymentTransactions,
     stripeWebhookEvents,
+    renewalOperations: new Map(),
+    renewalControls: new Map(),
     purchaseAttempts: new Map(),
     offerUsages: new Map(),
     historicalOfferImports: new Map(),

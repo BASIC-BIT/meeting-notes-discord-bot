@@ -1,3 +1,6 @@
+import { useBillingRenewal } from "../hooks/useBillingRenewal";
+import BillingRenewalStatus from "../components/BillingRenewalStatus";
+import BillingPaymentHistory from "../components/BillingPaymentHistory";
 import { useIntroOfferExpiry } from "../hooks/useIntroOfferExpiry";
 import {
   isTerminalStripeHistory,
@@ -93,8 +96,8 @@ type BillingPaidProps = BillingBaseProps & {
   data: BillingData;
   statusLabel: string;
   statusLine: string;
-  isPortalPending: boolean;
-  canManage: boolean;
+  busy: boolean;
+  renewal: ReturnType<typeof useBillingRenewal>;
   onPortal: () => void;
   normalPrice: string | null;
 };
@@ -170,12 +173,15 @@ const formatStatusLabel = (status: string) =>
 const formatStatusLine = (
   statusLabel: string,
   nextBillingDate?: string | null,
+  cancellationAt?: string | null,
 ) =>
-  nextBillingDate
-    ? `${statusLabel} - next billing ${new Date(
-        nextBillingDate,
-      ).toLocaleDateString()}`
-    : statusLabel;
+  cancellationAt
+    ? `${statusLabel}, ends ${new Date(cancellationAt).toLocaleDateString()}`
+    : nextBillingDate
+      ? `${statusLabel} - next billing ${new Date(
+          nextBillingDate,
+        ).toLocaleDateString()}`
+      : statusLabel;
 
 const BillingShell = ({
   children,
@@ -265,14 +271,63 @@ const BillingFreePanel = ({ serverName, usage }: BillingBaseProps) => (
   </Surface>
 );
 
+const BillingPlanDescription = ({
+  data,
+  normalPrice,
+  statusLine,
+}: Pick<BillingPaidProps, "data" | "normalPrice" | "statusLine">) => {
+  const isComped = data.billingSource === "manual_comp";
+  const planName = formatStatusLabel(data.tier);
+  const showRenewal = Boolean(data.hasStripeBilling);
+  const expiryLine = data.activeGrant?.expiresAt
+    ? `Comp runs through ${new Date(data.activeGrant.expiresAt).toLocaleDateString()}.`
+    : "No payment required.";
+  return (
+    <>
+      {isComped ? (
+        <Stack gap={4}>
+          <Text c="var(--mantine-color-text)" size="sm">
+            Chronote has granted this server {planName} for free.{" "}
+            {normalPrice
+              ? `This is normally ${normalPrice}.`
+              : "Regular pricing is unavailable right now."}
+          </Text>
+          <Text c="dimmed" size="sm">
+            {expiryLine}
+          </Text>
+          {data.activeGrant?.publicNote ? (
+            <Text size="sm">{data.activeGrant.publicNote}</Text>
+          ) : null}
+        </Stack>
+      ) : !showRenewal && data.tier !== "free" ? (
+        <Text c="dimmed" size="sm">
+          {statusLine}
+        </Text>
+      ) : null}
+    </>
+  );
+};
+
+const BillingPlanPaymentStatus = ({ data }: Pick<BillingPaidProps, "data">) => {
+  const progress =
+    data.subscriptionDetails?.status === "available"
+      ? data.subscriptionDetails.paymentProgress
+      : undefined;
+  return data.billingSource !== "manual_comp" &&
+    progress &&
+    progress !== "not_pending" ? (
+    <SubscriptionDetails details={data.subscriptionDetails} />
+  ) : null;
+};
+
 const BillingPaidPanel = ({
   data,
   serverName,
   statusLabel,
   statusLine,
   usage,
-  isPortalPending,
-  canManage,
+  busy,
+  renewal,
   onPortal,
   normalPrice,
 }: BillingPaidProps) => (
@@ -280,11 +335,13 @@ const BillingPaidPanel = ({
     {(() => {
       const isComped = data.billingSource === "manual_comp";
       const planName = formatStatusLabel(data.tier);
-      const expiryLine = data.activeGrant?.expiresAt
-        ? `Comp runs through ${new Date(
-            data.activeGrant.expiresAt,
-          ).toLocaleDateString()}.`
-        : "No payment required.";
+      const renewalState =
+        renewal.view?.state ??
+        ({
+          kind: "unavailable",
+          knownEndsAt: data.cancellationAt ?? null,
+        } as const);
+      const showRenewal = Boolean(data.hasStripeBilling);
       return (
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
           <Stack gap="md">
@@ -299,63 +356,33 @@ const BillingPaidPanel = ({
                 <Text size="lg" fw={700}>
                   {planName}
                 </Text>
-                {(isComped || data.tier !== "free") && (
+                {(isComped || (!showRenewal && data.tier !== "free")) && (
                   <Badge color={isComped ? "teal" : "brand"}>
                     {isComped ? "Comped by Chronote" : statusLabel}
                   </Badge>
                 )}
               </Group>
-              {isComped ? (
-                <Stack gap={4}>
-                  <Text c="var(--mantine-color-text)" size="sm">
-                    Chronote has granted this server {planName} for free.{" "}
-                    {normalPrice
-                      ? `This is normally ${normalPrice}.`
-                      : "Regular pricing is unavailable right now."}
-                  </Text>
-                  <Text c="dimmed" size="sm">
-                    {expiryLine}
-                  </Text>
-                  {data.activeGrant?.publicNote ? (
-                    <Text size="sm">{data.activeGrant.publicNote}</Text>
-                  ) : null}
-                </Stack>
-              ) : data.tier !== "free" ? (
-                <Text c="dimmed" size="sm">
-                  {statusLine}
-                </Text>
-              ) : null}
+              <BillingPlanDescription
+                data={data}
+                normalPrice={normalPrice}
+                statusLine={statusLine}
+              />
               <Text size="sm" c="dimmed">
                 Server: {serverName}
               </Text>
-              {!isComped && (
-                <SubscriptionDetails details={data.subscriptionDetails} />
-              )}
-              <BillingUsageMeter usage={usage} />
-            </Stack>
-
-            <Divider />
-
-            <Stack gap="xs">
-              <Text fw={600}>Actions</Text>
-              {data.canManageBillingPortal ? (
-                <Group gap="sm" wrap="wrap">
-                  <Button
-                    variant="filled"
-                    disabled={!canManage}
-                    loading={isPortalPending}
-                    onClick={onPortal}
-                    data-testid="billing-manage"
-                  >
-                    Manage billing
-                  </Button>
-                </Group>
+              {showRenewal ? (
+                <BillingRenewalStatus
+                  state={renewalState}
+                  canManageBilling={renewal.view?.canManageBilling ?? false}
+                  busy={busy}
+                  onConfirm={renewal.onConfirm}
+                  onCheckStatus={renewal.onCheckStatus}
+                  onRetry={renewal.onRetry}
+                  onPortal={onPortal}
+                />
               ) : null}
-              <Text size="xs" c="dimmed">
-                {isComped
-                  ? "Use the plans below to start paying or upgrade when you're ready."
-                  : "Review available changes in the billing portal."}
-              </Text>
+              <BillingPlanPaymentStatus data={data} />
+              <BillingUsageMeter usage={usage} />
             </Stack>
           </Stack>
 
@@ -384,6 +411,8 @@ const BillingPaidPanel = ({
 );
 
 function basicPlanCta(data: BillingData, isComped: boolean): string {
+  if (data.tier === "free" && isTerminalStripeHistory(data))
+    return "Get Basic again";
   const basicCta =
     data.tier === "basic"
       ? isComped
@@ -805,6 +834,7 @@ function BillingCurrentPlan({
   busy,
   onPortal: handlePortal,
   normalPlan,
+  renewal,
 }: {
   data: BillingData;
   serverName: string;
@@ -813,11 +843,25 @@ function BillingCurrentPlan({
   busy: boolean;
   onPortal: () => void;
   normalPlan: ReturnType<typeof resolvePaidPlan>;
+  renewal: ReturnType<typeof useBillingRenewal>;
 }) {
   const isFreeTier = data.tier === "free";
   const hasTerminalSubscription = isTerminalStripeHistory(data);
+  const firstYearPayment =
+    data.subscriptionDetails?.status === "available"
+      ? data.subscriptionDetails.firstYearPayment
+      : null;
+  const canViewReceipts =
+    Boolean(selectedGuildId) && (renewal.view?.canManageBilling ?? false);
+  const showHistory =
+    data.hasStripeBilling &&
+    Boolean(firstYearPayment || canViewReceipts || hasTerminalSubscription);
   const statusLabel = formatStatusLabel(data.status);
-  const statusLine = formatStatusLine(statusLabel, data.nextBillingDate);
+  const statusLine = formatStatusLine(
+    statusLabel,
+    data.nextBillingDate,
+    data.cancellationAt,
+  );
   return (
     <>
       {isFreeTier && (!data.hasStripeBilling || hasTerminalSubscription) ? (
@@ -829,39 +873,21 @@ function BillingCurrentPlan({
           statusLabel={statusLabel}
           statusLine={statusLine}
           usage={data.usage}
-          isPortalPending={isPortalPending}
-          canManage={
-            Boolean(selectedGuildId) && data.canManageBillingPortal && !busy
-          }
+          busy={busy}
+          renewal={renewal}
           onPortal={handlePortal}
           normalPrice={normalPlan ? formatPlanPrice(normalPlan, "month") : null}
         />
       )}
-      {hasTerminalSubscription ? (
-        <Surface p="xl" data-testid="billing-subscription-history">
-          <Stack gap="sm">
-            <Title order={4}>Billing history</Title>
-            <Text size="sm" c="dimmed">
-              Previous subscription:{" "}
-              {(data.stripeStatus ?? data.status) === "canceled"
-                ? "Canceled"
-                : "Expired"}
-              .
-            </Text>
-            {data.canManageBillingPortal ? (
-              <Group>
-                <Button
-                  variant="light"
-                  disabled={!selectedGuildId || busy}
-                  loading={isPortalPending}
-                  onClick={handlePortal}
-                  data-testid="billing-manage"
-                >
-                  View billing history
-                </Button>
-              </Group>
-            ) : null}
-          </Stack>
+      {showHistory ? (
+        <Surface p="md">
+          <BillingPaymentHistory
+            firstYearPayment={firstYearPayment}
+            previousStatus={data.stripeStatus ?? data.status}
+            canViewReceipts={canViewReceipts}
+            onViewReceipts={handlePortal}
+            busy={isPortalPending || busy}
+          />
         </Surface>
       ) : null}
     </>
@@ -1120,6 +1146,12 @@ export function Billing() {
   } = useBillingQueries(routeServerId);
   const checkoutMutation = trpc.billing.checkout.useMutation();
   const portalMutation = trpc.billing.portal.useMutation();
+  const renewal = useBillingRenewal({
+    serverId: selectedGuildId,
+    active:
+      Boolean(data?.hasStripeBilling) && selectedGuildId === routeServerId,
+    onBillingChanged: () => billingQuery.refetch(),
+  });
   const attemptIdentity = JSON.stringify([
     routeServerId,
     interval,
@@ -1135,7 +1167,8 @@ export function Billing() {
 
   const { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans } =
     useBillingPricing(pricingQuery.data, data, frozenOffer, interval);
-  const busy = checkoutMutation.isPending || portalMutation.isPending;
+  const busy =
+    checkoutMutation.isPending || portalMutation.isPending || renewal.busy;
   const isPortalPending = portalMutation.isPending;
   const displayedOffer = useBillingOfferExposure({
     data,
@@ -1298,6 +1331,7 @@ export function Billing() {
         busy={busy}
         onPortal={handlePortal}
         normalPlan={normalPlan}
+        renewal={renewal}
       />
       <BillingPlansSection
         data={data}

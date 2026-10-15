@@ -35,10 +35,18 @@ reservation keeps its agreed price while the reservation remains valid. If no
 cutoff is shown,
 enrollment remains open while the offer is available.
 
-Use **Manage billing** for an existing subscription. Billing shows the available
-management actions, payment status and verified renewal details. When verified,
-it shows the first annual invoice's amount paid separately from its subtotal and
-the next annual renewal price.
+Billing shows the verified renewal date and rate for an existing subscription.
+If renewal is off, it shows when paid access ends. Where **Turn renewal back on**
+is available, the original payer can accept the displayed terms to keep that
+same subscription. A pending result stays visible while Chronote checks it.
+Unsupported subscriptions use **Manage billing** for review in Stripe.
+
+**Payment history** holds past payment amounts and coverage dates. The original
+payer can use **View invoices and receipts** to open Stripe. Manage Server
+permission alone does not grant access to another person's billing account.
+After a subscription ends, **Get Basic again** starts a new purchase using the
+selected monthly or annual period. It does not reset a used introductory offer.
+Returning from Stripe takes you back to the same server's Billing page.
 
 | Limit                             | Free       | Basic    | Pro             |
 | --------------------------------- | ---------- | -------- | --------------- |

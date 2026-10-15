@@ -32,8 +32,8 @@ const show = (details: ProviderSubscriptionDetails) =>
   );
 it("separates verified first-year payment including tax from annual renewal", () => {
   show(annual);
-  expect(screen.getByText(/First year paid: \$64.20/)).toBeVisible();
-  expect(screen.getByText(/First-year subtotal: \$60/)).toBeVisible();
+  expect(screen.getByText(/\$64.20 paid/)).toBeVisible();
+  expect(screen.getByText(/10\/12\/2026 to 10\/12\/2027/)).toBeVisible();
   expect(screen.getByText(/Next renewal: \$100\/year/)).toBeVisible();
   expect(screen.queryByText(/restricted/)).not.toBeInTheDocument();
 });
