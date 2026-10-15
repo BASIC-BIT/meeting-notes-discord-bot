@@ -93,6 +93,6 @@ References: [Stripe confirmation flows](https://docs.stripe.com/customer-managem
 [portal limitations](https://docs.stripe.com/customer-management#limitations),
 [webhook ordering](https://docs.stripe.com/webhooks#event-ordering).
 
-## Renewal reactivation design
+## Renewal reactivation
 
-A pending cancellation keeps paid access until its end date. The proposed in-app renewal action has a separate [design](superpowers/specs/2026-10-14-renewal-reactivation-design.md) and [implementation plan](superpowers/plans/2026-10-14-renewal-reactivation.md). It restores renewal on the same subscription after verified consent and moves past payment details into Payment history. These documents are proposals for implementation review; the current product still uses general Stripe management, and this planning change adds no billing mutation or activation.
+A pending cancellation keeps paid access until its end date. The implemented, default-off in-app renewal action has a separate [design](superpowers/specs/2026-10-14-renewal-reactivation-design.md) and [implementation plan](superpowers/plans/2026-10-14-renewal-reactivation.md). It restores renewal on the same subscription after verified consent and moves past payment details into Payment history. `STRIPE_RENEWAL_REACTIVATION_ENABLED` remains false until separately activated. Native provider proof uses owned Sandbox fixtures; local UI/API tests are separate from signed-in deployed-app acceptance. No deployment or activation is claimed.

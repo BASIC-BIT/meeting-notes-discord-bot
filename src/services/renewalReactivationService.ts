@@ -1,3 +1,4 @@
+import { isPurchaseAnalyticsOptedOut } from "./purchaseReconciliation";
 import { captureRenewalOperationEvent } from "./billingLifecycleAnalytics";
 import {
   renewalBindingSchema,
@@ -57,13 +58,15 @@ export async function readRenewalState({
   now = Date.now(),
 }: Context): Promise<RenewalView> {
   const saved = await getSubscriptionRepository().get(guildId);
+  let lifecycleAllowed = false;
   const view = (
     state: RenewalState,
     canManageBilling = false,
   ): RenewalView => ({
     state,
     canManageBilling,
-    lifecycleAnalyticsEnabled: config.analytics.billingLifecycleEnabled,
+    lifecycleAnalyticsEnabled:
+      config.analytics.billingLifecycleEnabled && lifecycleAllowed,
   });
   if (!saved?.stripeSubscriptionId) return view({ kind: "not_applicable" });
   let recovery: RenewalOperation | undefined;
@@ -91,6 +94,10 @@ export async function readRenewalState({
       guildId,
       subscriptionId: saved.stripeSubscriptionId,
     });
+    lifecycleAllowed = !(await isPurchaseAnalyticsOptedOut(
+      guildId,
+      source.subscription,
+    ).catch(() => true));
     const payer = isPayer(source, payerId);
     if (source.kind === "terminal") return view({ kind: "terminal" }, payer);
     if (payer && recovery)
@@ -287,7 +294,9 @@ export async function restoreRenewal({
     firstAttemptAt: now,
     analyticsOptOut:
       analyticsOptOut ||
-      source.subscription.metadata.analytics_opt_out === "true",
+      (await isPurchaseAnalyticsOptedOut(guildId, source.subscription).catch(
+        () => true,
+      )),
     revision: randomUUID(),
     state: "applying",
   };

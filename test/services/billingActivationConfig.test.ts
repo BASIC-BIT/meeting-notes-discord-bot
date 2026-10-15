@@ -54,3 +54,28 @@ it("enables renewal independently of hosted transitions", async () => {
   expect(config.stripe.renewalReactivationEnabled).toBe(true);
   expect(config.stripe.subscriptionTransitionsEnabled).toBe(false);
 });
+const originalLifecycle = process.env.BILLING_LIFECYCLE_ANALYTICS_ENABLED;
+afterEach(() => {
+  if (originalLifecycle === undefined)
+    delete process.env.BILLING_LIFECYCLE_ANALYTICS_ENABLED;
+  else process.env.BILLING_LIFECYCLE_ANALYTICS_ENABLED = originalLifecycle;
+});
+it.each([undefined, "false", "", "TRUE", "1", " true "])(
+  "keeps lifecycle capture disabled for %s",
+  async (value) => {
+    if (value === undefined)
+      delete process.env.BILLING_LIFECYCLE_ANALYTICS_ENABLED;
+    else process.env.BILLING_LIFECYCLE_ANALYTICS_ENABLED = value;
+    jest.resetModules();
+    const { config } = await import("../../src/services/configService");
+    expect(config.analytics.billingLifecycleEnabled).toBe(false);
+  },
+);
+it("activates lifecycle analytics independently of renewal writes", async () => {
+  process.env.BILLING_LIFECYCLE_ANALYTICS_ENABLED = "true";
+  process.env.STRIPE_RENEWAL_REACTIVATION_ENABLED = "false";
+  jest.resetModules();
+  const { config } = await import("../../src/services/configService");
+  expect(config.analytics.billingLifecycleEnabled).toBe(true);
+  expect(config.stripe.renewalReactivationEnabled).toBe(false);
+});

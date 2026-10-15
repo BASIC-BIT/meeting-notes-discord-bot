@@ -4,11 +4,11 @@
 
 A server that has paid time remaining should keep its Basic or Pro plan and clearly show **Renewal off**. Its Billing card should explain when access ends and offer one direct way to keep the subscription. The current ACTIVE badge, repeated cancellation date and first-year invoice details obscure that choice.
 
-The UX direction below is approved. This document recommends a provider route and defines the checks needed before implementation can be accepted. No cancellation undo, payment, deployment or activation is authorized by this design task.
+BASIC approved this implementation and separately authorized owned Stripe Sandbox tests on October 14. Local code, tests and the native provider proof are complete. Both new feature gates remain false. Deployment, activation, signed-in deployed-app acceptance and received lifecycle-event acceptance remain separate.
 
 **Recommendation:** use an in-app action backed by a narrowly scoped Stripe subscription update for a verified, simple active subscription. Keep Stripe management as the alternative for unsupported schedules, payment problems or uncertain terms. This preserves the existing subscription and avoids sending ordinary renewals through plan selection or Checkout.
 
-The tradeoff is additional consent and recovery code. Stripe supports reversing a pending cancellation, but our exact update and portal configuration still require Sandbox proof. External Stripe edits cannot be made atomic with a Chronote preflight check. Detect changed terms before the write and verify them afterward; never present an uncertain result as success.
+The tradeoff is additional consent and recovery code. The exact classic and flexible updates passed owned Sandbox proof; a read-only portal check confirmed the advertised controls. External Stripe edits cannot be made atomic with a Chronote preflight check. Detect changed terms before the write and verify them afterward; never present an uncertain result as success.
 
 ## The Billing experience
 
@@ -139,13 +139,13 @@ Add the proposed visibility, action and confirmed-outcome events defined in the 
 
 Measure business outcomes by guild, because the organizer, payer and cancellation actor may differ. Use a real acting user only when the app knows one. Retain the existing two-identifier limit, DNT and stored opt-out behavior. Use fixed categories plus the bounded maturity duration described below. New events must not include prices, amounts, provider/operation IDs, cancellation text or raw errors. A bounded remaining_seconds_to_scheduled_end duration and boundary_known flag make cohort maturity measurable without another identifier. Use the server observation as the standard event timestamp, update a changed scheduled end without counting another cancellation, and report unknown boundaries separately.
 
-Add meaningful analytics tests and Sandbox event-row acceptance to feature completion. Source events, received rows and saved funnel configuration are separate evidence. Inspect existing saved definitions before publishing anything, then integrate the verified views into existing Chronote reporting. No PostHog dashboard, capture implementation or production setting is changed by this planning revision.
+Add meaningful analytics tests and Sandbox event-row acceptance to feature completion. Source events, received rows and saved funnel configuration are separate evidence. Inspect existing saved definitions before publishing anything, then integrate the verified views into existing Chronote reporting. The capture implementation is now local and disabled by default. No PostHog dashboard or production setting was changed.
 
 A separate default-false BILLING_LIFECYCLE_ANALYTICS_ENABLED gate controls new capture. Publish the privacy-policy detail/provider table/date and What's New notice before enabling it. Keep this independent of the renewal action's rollout so disabling that action does not hide already-approved losses or payment recovery.
 
 ## Proof and release conditions
 
-Implementation acceptance needs all of the following. This document does not claim these tests ran.
+The local and provider checks below have run. Signed-in deployed-app and received-event checks remain release acceptance gates. See the implementation plan for exact evidence.
 
 1. Local service/repository/API tests prove authorization, quote expiry/tampering, both cancellation representations, unrelated server isolation, stale terms, duplicate submission, lost responses and current-state reconciliation.
 2. Storybook and Playwright cover renewal off, confirmed renewal, processing, provider failure, nonpayer, payment problem, unsupported schedule and terminal Free. Capture and visually review desktop 1280px, intermediate 768px and mobile 390px. Assert the actual modal or page scroll container moves when overflow exists. Preserve the approved plan selectors/comparison.
@@ -160,7 +160,7 @@ Approved: renewal-off hierarchy, direct primary action with authoritative terms,
 
 Recommended engineering choices: direct minimal update for simple active subscriptions; inline consent; five-minute signed quote; narrow durable operation; separate default-false gate; provider review for unsupported states. These keep the approved UX small while making uncertain outcomes visible. The builder may choose internal helper layout but may not relax these behavioral constraints.
 
-Requested in this revision: incorporate all three lifecycle funnels and loss/recovery measurement. Reporting windows remain proposed until reviewed; no saved views are authorized by this amendment. No additional pricing or eligibility decision is requested. The provider proof can invalidate the direct candidate. If it does, return with the observed mismatch rather than substituting a different billing flow or weakening consent.
+Requested in this revision: incorporate all three lifecycle funnels and loss/recovery measurement. The approved default windows are seven days for onboarding and purchase, and 30 days for win-back. Annual cancellation maturity follows its actual paid boundary; immature cohorts stay separate. No saved view changes are authorized. No additional pricing or eligibility decision is requested. The provider proof can invalidate the direct candidate. If it does, return with the observed mismatch rather than substituting a different billing flow or weakening consent.
 
 ## Evidence appendix
 
