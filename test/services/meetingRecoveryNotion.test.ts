@@ -154,6 +154,8 @@ async function readyFixture() {
 }
 type Mode =
   | "read_failure"
+  | "read_exhausted"
+  | "marker_unknown"
   | "enabled"
   | "disabled"
   | "no_config"
@@ -161,8 +163,41 @@ type Mode =
   | "held"
   | "unknown"
   | "post_fence";
+function installReadFailure(
+  f: Awaited<ReturnType<typeof readyFixture>>,
+  mode: Mode,
+) {
+  if (mode === "read_exhausted")
+    f.histories.get("guild")![0].recovery = {
+      attempt: 3,
+      executionVersion: 1,
+      stage: "verification",
+      disposition: "failed",
+      retry: { maxAttempts: 4, nextAttemptAt: null },
+    };
+  if (mode === "read_failure" || mode === "read_exhausted")
+    mockNotionRepository.getAutomationConfig.mockRejectedValueOnce(
+      new Error("eligibility read failed"),
+    );
+  if (mode === "marker_unknown") {
+    const update = f.repository.updateRecordingRecovery.bind(f.repository);
+    jest
+      .spyOn(f.repository, "updateRecordingRecovery")
+      .mockImplementation(async (...args) => {
+        const result = await update(...args);
+        if (args[1].recoveryExport?.state === "submitted") {
+          jest
+            .spyOn(f.repository, "getMeetingHistory")
+            .mockRejectedValueOnce(new Error("marker readback unavailable"));
+          throw new Error("marker ACK lost");
+        }
+        return result;
+      });
+  }
+}
 async function exerciseAutoExport(mode: Mode) {
   const f = await readyFixture();
+  installReadFailure(f, mode);
   const { config } = await import("../../src/services/configService");
   jest.spyOn(config.notion, "enabled", "get").mockReturnValue(true);
   const { autoExportRecoveredMeeting } =
@@ -193,7 +228,6 @@ async function exerciseAutoExport(mode: Mode) {
     Parameters<RecoveryDependencies["autoExport"]>
   >(async (meeting, signal) => {
     expect(meeting.recovery).toMatchObject({
-      disposition: "pending",
       stage: "export",
     });
     expect(meeting.processing).toMatchObject({
@@ -214,10 +248,11 @@ async function exerciseAutoExport(mode: Mode) {
     });
     expect(meeting.notesMessageIds).toEqual(["generated-message-2"]);
     expect(meeting.summaryMessageId).toBe("generated-message-1");
-    expect(release).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(autoExport.mock.calls.length - 1);
     expect(await f.repository.getMeetingHistory(key)).toEqual(meeting);
     return autoExportRecoveredMeeting(meeting, signal);
   });
+  let generationCalls = 0;
   const worker = createMeetingRecoveryWorker({
     repository: f.repository,
     begin: beginRuntimeWorkClaim,
@@ -230,11 +265,13 @@ async function exerciseAutoExport(mode: Mode) {
       send,
       autoExport,
       notes: async (input) => {
+        generationCalls++;
         input.notesText = "Generated recovered partial notes.";
         input.processing = { ...input.processing, notes: "generated" };
         return input.notesText;
       },
       summaries: async (input) => {
+        generationCalls++;
         input.summarySentence = "Generated saved summary.";
         input.processing = { ...input.processing, summary: "generated" };
         return { summarySentence: input.summarySentence };
@@ -243,7 +280,7 @@ async function exerciseAutoExport(mode: Mode) {
   });
   const delayed = ["held", "unknown", "post_fence"].includes(mode);
   mockProvider.mockImplementationOnce(async (_meeting, signal) => {
-    expect(signal).toBe(autoExport.mock.calls[0][1]);
+    expect(signal).toBe(autoExport.mock.calls.at(-1)![1]);
     expect(signal?.aborted).toBe(false);
     if (!delayed) return;
     entered.release();
@@ -251,10 +288,6 @@ async function exerciseAutoExport(mode: Mode) {
     if (mode === "unknown")
       throw new Error("Generated unknown Notion acknowledgment");
   });
-  if (mode === "read_failure")
-    mockNotionRepository.getAutomationConfig.mockRejectedValueOnce(
-      new Error("eligibility read failed"),
-    );
   const processing = worker.process(key);
   const id = "recovery:" + key.guildId + ":" + key.channelId_timestamp;
   try {
@@ -287,7 +320,14 @@ async function exerciseAutoExport(mode: Mode) {
     expect(autoExport).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledTimes(2);
     expect(mockProvider).toHaveBeenCalledTimes(
-      ["disabled", "no_config", "reserved", "read_failure"].includes(mode)
+      [
+        "disabled",
+        "no_config",
+        "reserved",
+        "read_failure",
+        "read_exhausted",
+        "marker_unknown",
+      ].includes(mode)
         ? 0
         : 1,
     );
@@ -295,7 +335,7 @@ async function exerciseAutoExport(mode: Mode) {
       "unknown",
       "post_fence",
       "reserved",
-      "read_failure",
+      "marker_unknown",
     ].includes(mode);
     expect(f.lifecycle.getWorkCounts().recovery_processing).toBe(
       unresolved ? 1 : 0,
@@ -304,13 +344,21 @@ async function exerciseAutoExport(mode: Mode) {
     expect(f.leases.has("guild")).toBe(unresolved);
     expect(f.histories.get("guild")![0].recovery).toMatchObject(
       mode === "read_failure"
-        ? { disposition: "pending", stage: "export" }
-        : unresolved
-          ? {
-              disposition: "needs_reconciliation",
-              reason: "export_uncertain",
-            }
-          : { disposition: "done", outcome: "completed" },
+        ? {
+            disposition: "failed",
+            stage: "export",
+            retry: {
+              nextAttemptAt: new Date((f.now + 60) * 1000).toISOString(),
+            },
+          }
+        : mode === "read_exhausted"
+          ? { disposition: "needs_reconciliation", reason: "retry_exhausted" }
+          : unresolved
+            ? {
+                disposition: "needs_reconciliation",
+                reason: "export_uncertain",
+              }
+            : { disposition: "done", outcome: "completed" },
     );
     if (unresolved) {
       expect(
@@ -330,15 +378,42 @@ async function exerciseAutoExport(mode: Mode) {
           f.histories.get("guild")![0],
           f.now + 3600,
         ),
-      ).toBe(mode === "read_failure");
+      ).toBe(false);
     }
     await worker.process(key);
     expect(autoExport).toHaveBeenCalledTimes(1);
     expect(mockProvider).toHaveBeenCalledTimes(
-      ["disabled", "no_config", "reserved", "read_failure"].includes(mode)
+      [
+        "disabled",
+        "no_config",
+        "reserved",
+        "read_failure",
+        "read_exhausted",
+        "marker_unknown",
+      ].includes(mode)
         ? 0
         : 1,
     );
+    if (mode === "read_failure") {
+      expect(f.histories.get("guild")![0].recoveryExport?.state).toBe(
+        "pending",
+      );
+      expect(
+        getRuntimeWorkAdmissionCheckpoints().find((entry) => entry.id === id),
+      ).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(60000);
+      await worker.process(key);
+      expect(autoExport).toHaveBeenCalledTimes(2);
+      expect(mockProvider).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(generationCalls).toBe(2);
+      expect(f.histories.get("guild")![0].recovery).toMatchObject({
+        disposition: "done",
+        attempt: 2,
+      });
+      expect(f.leases.has("guild")).toBe(false);
+      expect(f.lifecycle.getWorkCounts().recovery_processing).toBe(0);
+    }
     expect(f.records.get(JSON.stringify(["ENV", "RUNTIME#old"]))).toEqual(
       f.oldRuntime,
     );
@@ -356,6 +431,8 @@ async function exerciseAutoExport(mode: Mode) {
 }
 test.each<Mode>([
   "read_failure",
+  "read_exhausted",
+  "marker_unknown",
   "enabled",
   "disabled",
   "no_config",

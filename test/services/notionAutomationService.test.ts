@@ -1,3 +1,4 @@
+/** @jest-environment node */
 import { jest } from "@jest/globals";
 import type { MeetingHistory } from "../../src/types/db";
 import type {
@@ -10,15 +11,19 @@ const mockRepository = {
   getConnection: jest.fn(async () => undefined),
   deleteConnection: jest.fn(async () => undefined),
   writeAutomationConfig: jest.fn(async () => undefined),
-  getAutomationConfig: jest.fn(async () => undefined),
+  getAutomationConfig: jest.fn(
+    async (): Promise<NotionAutomationConfig | undefined> => undefined,
+  ),
   reserveMeetingExport: jest.fn(async () => true),
   writeMeetingExport: jest.fn(async () => undefined),
   deleteMeetingExport: jest.fn(async () => undefined),
   getMeetingExport: jest.fn(async () => undefined),
   reserveAutomationMeetingExport: jest.fn(async () => true),
-  writeAutomationMeetingExport: jest.fn(async () => undefined),
+  writeAutomationMeetingExport: jest.fn(async (): Promise<void> => undefined),
   deleteAutomationMeetingExport: jest.fn(async () => undefined),
-  getAutomationMeetingExport: jest.fn(async () => undefined),
+  getAutomationMeetingExport: jest.fn(
+    async (): Promise<NotionAutomationMeetingExport | undefined> => undefined,
+  ),
 };
 
 jest.mock("../../src/services/configService", () => ({
@@ -50,6 +55,7 @@ import {
   syncMeetingToNotionAutomation,
 } from "../../src/services/notionService";
 import {
+  autoExportRecoveredMeeting,
   maybeAutoExportCompletedMeeting,
   maybeAutoSyncMeetingNotes,
   retryNotionAutomationExport,
@@ -117,7 +123,7 @@ const personalAutomationConfig: NotionAutomationConfig = {
 describe("notionAutomationService", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    config.notion.enabled = true;
+    jest.replaceProperty(config.notion, "enabled", true);
     mockRepository.getAutomationConfig.mockResolvedValue(automationConfig);
     mockRepository.getAutomationMeetingExport.mockResolvedValue(undefined);
     mockRepository.reserveAutomationMeetingExport.mockResolvedValue(true);
@@ -161,7 +167,7 @@ describe("notionAutomationService", () => {
   });
 
   it("skips background exports and syncs when Notion is disabled", async () => {
-    config.notion.enabled = false;
+    jest.replaceProperty(config.notion, "enabled", false);
 
     await maybeAutoExportCompletedMeeting(meeting);
     await maybeAutoSyncMeetingNotes(meeting);
@@ -304,5 +310,127 @@ describe("notionAutomationService", () => {
     release();
     expect(await observed).toBe("interrupted");
     expect(mockRepository.writeAutomationConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe("ordinary Notion callers during recovery", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.replaceProperty(config.notion, "enabled", true);
+    mockRepository.getAutomationConfig.mockResolvedValue(automationConfig);
+    mockRepository.getAutomationMeetingExport.mockResolvedValue(undefined);
+    mockRepository.reserveAutomationMeetingExport.mockResolvedValue(true);
+    jest
+      .mocked(exportMeetingToNotionAutomation)
+      .mockResolvedValue({ ...existingExport, status: "exported" });
+    jest
+      .mocked(syncMeetingToNotionAutomation)
+      .mockResolvedValue({ ...existingExport, status: "exported" });
+  });
+
+  function recovering(
+    status: "complete" | "interrupted",
+    state: "pending" | "submitted",
+  ): MeetingHistory {
+    return {
+      ...meeting,
+      status,
+      recovery: {
+        attempt: 1,
+        executionVersion: 2,
+        stage: "export",
+        retry: { maxAttempts: 4, nextAttemptAt: null },
+        ...(state === "pending"
+          ? { disposition: "pending" as const }
+          : {
+              disposition: "needs_reconciliation" as const,
+              reason: "export_uncertain" as const,
+            }),
+      },
+      recoveryExport: {
+        checkpointRevision: 1,
+        intentExecutionVersion: 2,
+        state,
+      },
+    };
+  }
+
+  const cases = (["complete", "interrupted"] as const).flatMap((status) =>
+    (["pending", "submitted"] as const).flatMap((state) =>
+      (["background", "retry_create", "retry_sync", "auto_sync"] as const).map(
+        (caller) => ({ status, state, caller }),
+      ),
+    ),
+  );
+  it.each(cases)(
+    "$caller refuses $status $state recovery without mutation",
+    async ({ status, state, caller }) => {
+      const row = recovering(status, state);
+      const before = structuredClone(row);
+      if (caller !== "background")
+        mockRepository.getAutomationMeetingExport.mockResolvedValue({
+          ...existingExport,
+          notionPageId:
+            caller === "retry_create" ? undefined : existingExport.notionPageId,
+          status: caller === "auto_sync" ? "exported" : "failed",
+        });
+      if (caller.startsWith("retry"))
+        await expect(retryNotionAutomationExport(row)).rejects.toMatchObject({
+          code: "automation_not_eligible",
+        });
+      else if (caller === "auto_sync") await maybeAutoSyncMeetingNotes(row);
+      else await maybeAutoExportCompletedMeeting(row);
+      expect(exportMeetingToNotionAutomation).not.toHaveBeenCalled();
+      expect(syncMeetingToNotionAutomation).not.toHaveBeenCalled();
+      expect(
+        mockRepository.reserveAutomationMeetingExport,
+      ).not.toHaveBeenCalled();
+      expect(
+        mockRepository.writeAutomationMeetingExport,
+      ).not.toHaveBeenCalled();
+      expect(mockRepository.writeAutomationConfig).not.toHaveBeenCalled();
+      expect(row).toEqual(before);
+    },
+  );
+
+  it.each(
+    (["complete", "interrupted"] as const).flatMap((status) =>
+      (["acknowledged", "skipped"] as const).map((state) => ({
+        status,
+        state,
+      })),
+    ),
+  )(
+    "terminal $status $state recovery preserves ordinary create, retry and sync",
+    async ({ status, state }) => {
+      const row = recovering(status, "pending");
+      row.recovery = {
+        ...row.recovery!,
+        disposition: "done",
+        outcome: "completed",
+      };
+      row.recoveryExport = { ...row.recoveryExport!, state };
+      await maybeAutoExportCompletedMeeting(row);
+      expect(exportMeetingToNotionAutomation).toHaveBeenCalledTimes(1);
+      mockRepository.getAutomationMeetingExport.mockResolvedValue({
+        ...existingExport,
+        status: "exported",
+      });
+      await retryNotionAutomationExport(row);
+      await maybeAutoSyncMeetingNotes(row);
+      expect(syncMeetingToNotionAutomation).toHaveBeenCalledTimes(2);
+    },
+  );
+  it("the recovery entrypoint accepts a claimed never-submitted export and refuses submitted uncertainty", async () => {
+    const row = recovering("interrupted", "pending");
+    row.recovery = { ...row.recovery!, disposition: "claimed" };
+    await expect(autoExportRecoveredMeeting(row)).resolves.toBe("acknowledged");
+    const unknown = recovering("complete", "submitted");
+    const before = structuredClone(unknown);
+    await expect(autoExportRecoveredMeeting(unknown)).rejects.toThrow(
+      "not pending",
+    );
+    expect(exportMeetingToNotionAutomation).toHaveBeenCalledTimes(1);
+    expect(unknown).toEqual(before);
   });
 });

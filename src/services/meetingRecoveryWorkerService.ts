@@ -8,6 +8,7 @@ import type { ControlRecord, HistoryKey } from "../types/deploymentControl";
 import type { RecoveryClaim } from "../types/meetingRecovery";
 import {
   beginRuntimeWorkClaim,
+  getRuntimeWorkAdmissionCheckpoints,
   type RuntimeWorkClaim,
   releaseAcknowledgedRuntimeWork,
 } from "./runtimeWorkAdmissionService";
@@ -40,6 +41,10 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
   let timer: ReturnType<typeof setInterval> | undefined;
   let pending: Promise<void> | undefined;
   const handlers = new Set<Promise<boolean>>();
+  const ownedRecoveries = new Map<
+    string,
+    { claim: RecoveryClaim; work: RuntimeWorkClaim }
+  >();
   let unresolvedCursor:
     { id: string; work: RuntimeWorkClaim; expected: ControlRecord } | undefined;
   let transientCursor: HistoryKey | undefined;
@@ -128,14 +133,32 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
     if (lease || !isDeepStrictEqual(history, claim.history))
       throw new Error("Recovery release is unresolved");
   }
+  function ownsRecovery(id: string) {
+    const owned = ownedRecoveries.get(id);
+    if (!owned) return false;
+    const registered = getRuntimeWorkAdmissionCheckpoints().find(
+      (entry) => entry.id === id,
+    );
+    return (
+      registered?.domain === "recovery" &&
+      registered.signal === owned.work.signal &&
+      isDeepStrictEqual(registered.claim, {
+        claimId: owned.claim.lease.recoveryAttemptId,
+        instanceId: owned.claim.lease.ownerInstanceId,
+        attempt: owned.claim.history.recovery!.attempt,
+        expiresAt: owned.claim.lease.leaseExpiresAt,
+      })
+    );
+  }
   function process(key: HistoryKey) {
     key = recoveryHistoryKey(key);
+    if (stopped) return Promise.resolve(false);
+    const id = `recovery:${key.guildId}:${key.channelId_timestamp}`;
+    // An existing exact claim is visited, never re-admitted, released or replayed.
+    if (ownsRecovery(id)) return Promise.resolve(true);
     let work: RuntimeWorkClaim;
     try {
-      work = deps.begin(
-        "recovery",
-        `recovery:${key.guildId}:${key.channelId_timestamp}`,
-      );
+      work = deps.begin("recovery", id);
     } catch {
       return Promise.resolve(false);
     }
@@ -151,6 +174,7 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
         if (!claim) return true;
         register(claim, work);
         work.claimed();
+        ownedRecoveries.set(id, { claim, work });
         renewal = setInterval(() => {
           if (renewing || stopped || work.signal.aborted) return;
           renewing = work
@@ -183,10 +207,12 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
           throw new Error("Recovery disposition remains unresolved");
         await release(claim, work);
         work.acknowledgeTerminal();
+        ownedRecoveries.delete(id);
         return true;
       } catch {
+        const cancelled = stopped || work.signal.aborted;
         work.fence();
-        return false;
+        return !cancelled && ownsRecovery(id);
       } finally {
         clearInterval(renewal);
         await renewing;

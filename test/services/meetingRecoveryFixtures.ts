@@ -17,6 +17,7 @@ import type { CheckpointArtifactInput } from "../../src/types/recordingCheckpoin
 export async function recoveryFixture(
   text = "We agreed to finish the release testing tomorrow.",
   options: {
+    guildId?: string;
     requested?: { transcribeMeeting: boolean; generateNotes: boolean };
     artifacts?: CheckpointArtifactInput[];
     context?: (
@@ -30,6 +31,7 @@ export async function recoveryFixture(
   const now = Math.floor(Date.now() / 1000);
   const row: MeetingHistory = {
     ...history,
+    guildId: options.guildId ?? history.guildId,
     participants: [],
     textChannelId: "text",
     ...(options.requested ?? {}),

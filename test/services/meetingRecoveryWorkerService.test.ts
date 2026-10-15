@@ -3,10 +3,7 @@ jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
 import { createMeetingRecoveryWorker } from "../../src/services/meetingRecoveryWorkerService";
 import { recoverMeeting } from "../../src/services/meetingRecoveryService";
 import { recoverTranscript } from "../../src/services/meetingRecoveryContent";
-import {
-  createRuntimeLifecycle,
-  installRuntimeLifecycle,
-} from "../../src/services/runtimeLifecycleService";
+import { createRuntimeLifecycle } from "../../src/services/runtimeLifecycleService";
 import { createRuntimeProtectionService } from "../../src/services/runtimeProtectionService";
 import {
   beginRuntimeWorkClaim,
@@ -242,10 +239,11 @@ async function verifyCursorFailurePolling(
   }
 }
 
-test("actual compatible replacement discovers recovery, owns renewal tails, seals synchronously and retains unknown delivery", async () => {
-  jest.useFakeTimers({ now: Date.parse("2026-10-14T00:00:00Z") });
-  const f = await recoveryFixture();
-  const history = f.histories.get("guild")![0];
+async function readyWorkerFixture(guildId?: string) {
+  const { createRuntimeLifecycle, installRuntimeLifecycle } =
+    await import("../../src/services/runtimeLifecycleService");
+  const f = await recoveryFixture(undefined, { guildId });
+  const history = f.histories.get(guildId ?? "guild")![0];
   history.ownerInstanceId = "old";
   history.executionVersion = 1;
   history.recovery = undefined;
@@ -321,6 +319,12 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
   });
   installRuntimeLifecycle(lifecycle);
   await lifecycle.start();
+  return { f, lifecycle };
+}
+
+test("actual compatible replacement discovers recovery, owns renewal tails, seals synchronously and retains unknown delivery", async () => {
+  jest.useFakeTimers({ now: Date.parse("2026-10-14T00:00:00Z") });
+  const { f, lifecycle } = await readyWorkerFixture();
   await verifyNewWorkerCursorContinuation(f);
   await verifyScanSchedulingBounds(f);
   expect(
@@ -408,3 +412,176 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
   await lifecycle.shutdown();
   jest.useRealTimers();
 });
+
+test.each(["retained", "active"] as const)(
+  "an exactly owned %s recovery does not starve later keys or replay on the next poll",
+  async (mode) => {
+    await jest.isolateModulesAsync(async () => {
+      const { createMeetingRecoveryWorker } =
+        await import("../../src/services/meetingRecoveryWorkerService");
+      const {
+        beginRuntimeWorkClaim,
+        getRuntimeWorkAdmissionCheckpoints,
+        fenceRuntimeWorkAdmissions,
+      } = await import("../../src/services/runtimeWorkAdmissionService");
+      jest.useFakeTimers({ now: Date.parse("2026-10-14T00:00:00Z") });
+      const { f, lifecycle } = await readyWorkerFixture("n6-a");
+      const second = await recoveryFixture(undefined, { guildId: "n6-b" });
+      const later = second.histories.get("n6-b")![0];
+      later.ownerInstanceId = "old";
+      later.executionVersion = 1;
+      later.recovery = undefined;
+      later.textChannelId = "later-text";
+      f.histories.set("n6-b", [later]);
+      for (const [key, value] of second.objects) f.objects.set(key, value);
+      f.histories.set(
+        "n6-z",
+        Array.from({ length: 99 }, (_, i) => ({
+          ...later,
+          guildId: "n6-z",
+          channelId_timestamp: `filler#${i.toString().padStart(3, "0")}`,
+          status: "complete",
+          recovery: undefined,
+        })),
+      );
+      const firstKey = {
+        guildId: "n6-a",
+        channelId_timestamp: f.histories.get("n6-a")![0].channelId_timestamp,
+      };
+      const firstId = `recovery:${firstKey.guildId}:${firstKey.channelId_timestamp}`;
+      const writes = jest.spyOn(f.repository, "saveRecoveryCursor");
+      let deliverySequence = 0;
+      const send = jest.fn(async (channel: string) => {
+        if (channel !== "later-text")
+          throw new Error("actual first delivery ACK lost");
+        return { id: `later-message-${++deliverySequence}` };
+      });
+      const entered = barrier(),
+        gate = barrier();
+      let active: Promise<boolean> | undefined;
+      const generateNotes: typeof import("../../src/services/meetingNotesService").ensureMeetingNotes =
+        async (input) => {
+          if (mode === "active" && input.guildId === "n6-a") {
+            entered.resolve();
+            await gate.promise;
+          }
+          input.notesText = "Verified conversation.";
+          input.processing = { ...input.processing, notes: "generated" };
+          return input.notesText;
+        };
+      const notes = jest.fn(generateNotes);
+      const worker = createMeetingRecoveryWorker({
+        repository: f.repository,
+        begin: beginRuntimeWorkClaim,
+        recover: recoverMeeting,
+        now: () => Math.floor(Date.now() / 1000),
+        content: {
+          autoExport: async () => "skipped",
+          reader: f.reader,
+          upload: f.upload,
+          transcript: recoverTranscript,
+          send,
+          notes,
+          summaries: async (input) => {
+            input.summarySentence = "Saved summary";
+            input.processing = { ...input.processing, summary: "generated" };
+            return { summarySentence: input.summarySentence };
+          },
+        },
+      });
+      try {
+        const refused = scanWorker(
+          f,
+          () => f.now,
+          (...args) => {
+            if (args[1] === firstId)
+              throw new Error("genuine admission refusal");
+            return beginRuntimeWorkClaim(...args);
+          },
+        );
+        await refused.poll();
+        await refused.stop();
+        expect(writes).not.toHaveBeenCalled();
+        const unproved = beginRuntimeWorkClaim("recovery", firstId);
+        const unknownOwner = scanWorker(f, () => f.now, beginRuntimeWorkClaim);
+        await unknownOwner.poll();
+        await unknownOwner.stop();
+        expect(writes).not.toHaveBeenCalled();
+        unproved.acknowledgeReadOnlyRecoveryPoll();
+        await unproved.settle();
+        if (mode === "active") {
+          active = worker.process(firstKey);
+          await entered.promise;
+        }
+        await worker.poll();
+        if (active) {
+          gate.resolve();
+          await active;
+        }
+        expect(
+          send.mock.calls.filter(([channel]) => channel !== "later-text"),
+        ).toHaveLength(1);
+        expect(
+          send.mock.calls.filter(([channel]) => channel === "later-text"),
+        ).toHaveLength(2);
+        expect(f.histories.get("n6-b")![0].recovery).toMatchObject({
+          disposition: "done",
+        });
+        expect(writes).toHaveBeenCalledTimes(2);
+        expect(writes.mock.calls[0][2]).toMatchObject({
+          guildId: "n6-z",
+          channelId_timestamp: "filler#097",
+        });
+        const retained = getRuntimeWorkAdmissionCheckpoints().find(
+          (entry) => entry.id === firstId,
+        )!;
+        expect(retained).toMatchObject({
+          fenced: true,
+          localSettled: true,
+          stage: "unresolved",
+        });
+        const originalHistory = structuredClone(f.histories.get("n6-a")![0]);
+        const originalLease = structuredClone(f.leases.get("n6-a"));
+        expect(lifecycle.getWorkCounts().recovery_processing).toBe(1);
+        await worker.poll();
+        expect(send).toHaveBeenCalledTimes(3);
+        expect(notes).toHaveBeenCalledTimes(2);
+        expect(writes).toHaveBeenCalledTimes(4);
+        expect(f.histories.get("n6-a")![0]).toEqual(originalHistory);
+        expect(f.leases.get("n6-a")).toEqual(originalLease);
+        expect(
+          getRuntimeWorkAdmissionCheckpoints().find(
+            (entry) => entry.id === firstId,
+          )?.signal,
+        ).toBe(retained.signal);
+        expect(lifecycle.getWorkCounts().recovery_processing).toBe(1);
+        const registry =
+          await import("../../src/services/runtimeWorkAdmissionService");
+        const snapshot = registry.getRuntimeWorkAdmissionCheckpoints();
+        const stale = jest
+          .spyOn(registry, "getRuntimeWorkAdmissionCheckpoints")
+          .mockReturnValue(
+            snapshot.map((entry) =>
+              entry.id === firstId
+                ? { ...entry, signal: new AbortController().signal }
+                : entry,
+            ),
+          );
+        try {
+          await worker.poll();
+          expect(writes).toHaveBeenCalledTimes(4);
+          expect(send).toHaveBeenCalledTimes(3);
+        } finally {
+          stale.mockRestore();
+        }
+      } finally {
+        gate.resolve();
+        await active;
+        await worker.stop();
+        fenceRuntimeWorkAdmissions();
+        await lifecycle.shutdown();
+        jest.useRealTimers();
+      }
+    });
+  },
+);

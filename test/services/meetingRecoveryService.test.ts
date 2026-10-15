@@ -536,7 +536,7 @@ test("actual empty transcript receipt survives crash after notice ACK before don
 });
 
 test.each(["delivery", "pending"])(
-  "crash at %s resumes only never-submitted export",
+  "interruption at %s resumes only never-submitted export",
   async (crash) => {
     const f = await fixture();
     const update = f.repository.updateRecordingRecovery;
@@ -546,9 +546,17 @@ test.each(["delivery", "pending"])(
       return update(claim, patch, now);
     };
     f.autoExport.mockImplementationOnce(async () => {
-      throw new Error("crash before submission");
+      throw new Error("read failure before submission");
     });
-    await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow();
+    if (crash === "delivery")
+      await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow();
+    else {
+      await recoverMeeting(f.claim, f.deps);
+      expect(f.claim.history.recovery).toMatchObject({
+        disposition: "failed",
+        stage: "export",
+      });
+    }
     expect(f.claim.history.recovery?.disposition).not.toBe("done");
     f.repository.updateRecordingRecovery = update;
     f.autoExport.mockReset();
@@ -557,7 +565,7 @@ test.each(["delivery", "pending"])(
     const restarted = await f.repository.claimRecordingRecovery({
       history: structuredClone(f.histories.get("guild")![0]),
       lease: undefined,
-      context: f.context,
+      context: { ...f.context, now: f.context.now + 61 },
       attemptId: "restart-export",
     });
     expect(restarted).toBeDefined();

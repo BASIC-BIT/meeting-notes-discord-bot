@@ -28,7 +28,10 @@ import { createDiscordMessage } from "./discordMessageService";
 import { uploadObjectToS3 } from "./storageService";
 import type { TranscriptionContentInput } from "./transcriptionService";
 import { autoExportRecoveredMeeting } from "./notionAutomationService";
-import { registerNotionMutationTracker } from "./notionOperationLifetime";
+import {
+  registerNotionMutationTracker,
+  UnresolvedNotionMutation,
+} from "./notionOperationLifetime";
 
 type RecoveryPatch = Parameters<
   DeploymentControlRepository["updateRecordingRecovery"]
@@ -563,9 +566,11 @@ async function completeRecoveryExport(
       "Submitted export requires reconciliation",
     );
   if (receipt.state === "pending") {
+    let submissionStarted = false;
     const unregister = registerNotionMutationTracker(
       deps.signal,
       async (run) => {
+        submissionStarted = true;
         if (claim.history.recoveryExport!.state === "pending")
           await persistRecovery(
             claim,
@@ -585,19 +590,31 @@ async function completeRecoveryExport(
         return deps.effect(run);
       },
     );
+    let state: Awaited<ReturnType<RecoveryDependencies["autoExport"]>>;
     try {
-      const state = await deps.effect(() =>
+      state = await deps.effect(() =>
         deps.autoExport(claim.history, deps.signal),
       );
-      deps.signal.throwIfAborted();
-      await persistRecovery(
-        claim,
-        { recoveryExport: { ...receipt, state } },
-        deps,
-      );
+    } catch (error) {
+      // The local pending receipt alone cannot disprove an unknown submission write.
+      if (
+        submissionStarted ||
+        claim.history.recoveryExport?.state !== "pending" ||
+        error instanceof RecoveryMutationUnknown ||
+        error instanceof UnresolvedNotionMutation
+      )
+        throw error;
+      await recoverFailure(claim, error, deps);
+      return;
     } finally {
       unregister();
     }
+    deps.signal.throwIfAborted();
+    await persistRecovery(
+      claim,
+      { recoveryExport: { ...receipt, state } },
+      deps,
+    );
   }
   await finish(claim, "completed", deps, true);
 }
