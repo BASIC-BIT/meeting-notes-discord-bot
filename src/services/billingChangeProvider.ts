@@ -1,0 +1,300 @@
+import { createHash } from "node:crypto";
+import type Stripe from "stripe";
+import type {
+  StripeClient,
+  StripeInvoice,
+  StripeSubscription,
+} from "../types/stripe";
+import {
+  billingChangeSourceSchema,
+  type BillingChangeSource,
+  type BillingChangeTarget,
+} from "../types/billingChange";
+import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
+import { getBillingChangeRepository } from "../repositories/billingChangeRepository";
+import { resolveTierFromPrice } from "./pricingService";
+import { config } from "./configService";
+import { BillingActionError } from "./billingActionError";
+
+export const stripeId = (value: string | { id: string } | null | undefined) =>
+  typeof value === "string" ? value : value?.id;
+export const changePending = () =>
+  new BillingActionError(
+    "BAD_REQUEST",
+    "Your previous payment is still being settled. Please come back later.",
+    "purchase_pending",
+  );
+export const changeUnavailable = () =>
+  new BillingActionError(
+    "BAD_REQUEST",
+    "We could not verify this plan change. Refresh billing and try again.",
+  );
+export function changeSourceFingerprint(subscription: StripeSubscription) {
+  const item = subscription.items.data[0];
+  const discounts = subscription.discounts.map((discount) =>
+    typeof discount === "string"
+      ? discount
+      : {
+          id: discount.id,
+          start: discount.start,
+          end: discount.end,
+          coupon: stripeId(discount.source.coupon),
+          promotionCode: stripeId(discount.promotion_code),
+        },
+  );
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        id: subscription.id,
+        guildId: subscription.metadata.guild_id,
+        customer: stripeId(subscription.customer),
+        status: subscription.status,
+        mode: subscription.livemode,
+        billingMode: subscription.billing_mode,
+        schedule: stripeId(subscription.schedule),
+        pending: subscription.pending_update,
+        cancelAt: subscription.cancel_at,
+        cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        item: {
+          id: item.id,
+          price: item.price.id,
+          amount: item.price.unit_amount,
+          currency: item.price.currency,
+          tax: item.price.tax_behavior,
+          quantity: item.quantity,
+          discounts: item.discounts,
+          start: item.current_period_start,
+          end: item.current_period_end,
+        },
+        discounts,
+        anchor: subscription.billing_cycle_anchor,
+        invoice: stripeId(subscription.latest_invoice),
+        automaticTax: subscription.automatic_tax,
+        taxRates: (subscription.default_tax_rates ?? []).map((rate) => rate.id),
+      }),
+    )
+    .digest("hex");
+}
+export async function readBillingChangeSource(input: {
+  stripe: StripeClient;
+  guildId: string;
+  payerId: string;
+  at?: number;
+}) {
+  const saved = await getSubscriptionRepository().get(input.guildId);
+  if (!saved?.stripeSubscriptionId) throw changeUnavailable();
+  const subscription = await input.stripe.subscriptions.retrieve(
+    saved.stripeSubscriptionId,
+    { expand: ["discounts.source.coupon"] },
+  );
+  const customerId = stripeId(subscription.customer);
+  if (
+    !customerId ||
+    subscription.id !== saved.stripeSubscriptionId ||
+    subscription.metadata.guild_id !== input.guildId ||
+    (saved.stripeCustomerId && saved.stripeCustomerId !== customerId) ||
+    subscription.livemode !== (config.subscription.stripeMode === "live")
+  )
+    throw changeUnavailable();
+  const customer = await input.stripe.customers.retrieve(customerId);
+  if (customer.deleted || customer.livemode !== subscription.livemode)
+    throw changeUnavailable();
+  if (customer.metadata.discord_id !== input.payerId)
+    throw new BillingActionError(
+      "FORBIDDEN",
+      "Only the original payer can change this subscription.",
+    );
+  if (
+    subscription.status !== "active" ||
+    subscription.pending_update ||
+    subscription.pause_collection ||
+    subscription.pending_setup_intent
+  )
+    throw changePending();
+  const item = subscription.items.data[0];
+  if (
+    subscription.items.has_more ||
+    subscription.items.data.length !== 1 ||
+    !item ||
+    item.quantity !== 1 ||
+    item.discounts.length ||
+    subscription.collection_method !== "charge_automatically" ||
+    subscription.trial_end
+  )
+    throw changeUnavailable();
+  const tier = resolveTierFromPrice({
+    priceId: item.price.id,
+    lookupKey: item.price.lookup_key,
+  });
+  const interval = item.price.recurring?.interval;
+  if (
+    !tier ||
+    (interval !== "month" && interval !== "year") ||
+    item.price.recurring?.interval_count !== 1 ||
+    item.price.recurring.usage_type !== "licensed" ||
+    item.price.currency !== "usd" ||
+    item.price.billing_scheme !== "per_unit" ||
+    (item.price.tax_behavior !== "inclusive" &&
+      item.price.tax_behavior !== "exclusive")
+  )
+    throw changeUnavailable();
+  const invoiceId = stripeId(subscription.latest_invoice);
+  if (!invoiceId) throw changePending();
+  const invoice = await input.stripe.invoices.retrieve(invoiceId);
+  if (
+    invoice.status !== "paid" ||
+    invoice.amount_remaining !== 0 ||
+    stripeId(invoice.customer) !== customerId ||
+    invoice.livemode !== subscription.livemode ||
+    stripeId(invoice.parent?.subscription_details?.subscription) !==
+      subscription.id
+  )
+    throw changePending();
+  const positiveService = invoice.lines.data.some(
+    (line) =>
+      line.parent?.subscription_item_details?.subscription_item === item.id &&
+      line.pricing?.price_details?.price === item.price.id &&
+      line.amount > 0,
+  );
+  if (invoice.lines.has_more || !positiveService) throw changeUnavailable();
+  if (
+    invoice.total <= 0 ||
+    (invoice.status === "paid" && invoice.amount_due === 0)
+  ) {
+    const previousId = subscription.metadata.chronote_change_operation;
+    if (previousId) {
+      const operation = await getBillingChangeRepository().getOperation(
+        input.guildId,
+        previousId,
+      );
+      if (
+        !operation ||
+        operation.state !== "succeeded" ||
+        operation.source.subscriptionId !== subscription.id ||
+        operation.target.priceId !== item.price.id ||
+        !operation.funding
+      )
+        throw changePending();
+      const funded = await input.stripe.invoices.retrieve(
+        operation.funding.invoiceId,
+      );
+      if (
+        funded.status !== "paid" ||
+        funded.amount_remaining !== 0 ||
+        funded.metadata?.chronote_change_operation !== operation.operationId
+      )
+        throw changePending();
+    } else if (invoice.total === 0) throw changePending();
+  }
+  const source = billingChangeSourceSchema.parse({
+    subscriptionId: subscription.id,
+    customerId,
+    itemId: item.id,
+    priceId: item.price.id,
+    tier,
+    interval,
+    periodStart: item.current_period_start,
+    periodEnd: item.current_period_end,
+    billingMode: subscription.billing_mode.type,
+    revision: saved.stripeSyncRevision ?? null,
+    at: input.at ?? Math.floor(Date.now() / 1000),
+    fingerprint: changeSourceFingerprint(subscription),
+  });
+  if (source.at < source.periodStart || source.at >= source.periodEnd)
+    throw changePending();
+  return { source, subscription, customer, saved, invoice };
+}
+export function readChangePreview(
+  invoice: StripeInvoice,
+  source: BillingChangeSource,
+  target: BillingChangeTarget,
+) {
+  if (
+    invoice.lines.has_more ||
+    !invoice.lines.data.length ||
+    invoice.currency !== target.currency
+  )
+    throw changeUnavailable();
+  let planCharge = 0;
+  let offerSavings = 0;
+  let unusedCredit = 0;
+  for (const line of invoice.lines.data) {
+    const parent = line.parent?.subscription_item_details;
+    const priceId = line.pricing?.price_details?.price;
+    if (
+      !parent ||
+      parent.subscription_item !== source.itemId ||
+      (line.amount < 0
+        ? priceId !== source.priceId
+        : priceId !== target.priceId)
+    )
+      throw changeUnavailable();
+    const savings = (line.discount_amounts ?? []).reduce(
+      (sum, discount) => sum + discount.amount,
+      0,
+    );
+    if (line.amount < 0) unusedCredit -= line.amount - savings;
+    else {
+      planCharge += line.amount;
+      offerSavings += savings;
+    }
+  }
+  const taxAmount = (invoice.total_taxes ?? []).reduce(
+    (sum, tax) => sum + tax.amount,
+    0,
+  );
+  const addedTax = (invoice.total_taxes ?? [])
+    .filter((tax) => tax.tax_behavior === "exclusive")
+    .reduce((sum, tax) => sum + tax.amount, 0);
+  if (planCharge - offerSavings - unusedCredit + addedTax !== invoice.total)
+    throw changeUnavailable();
+  return {
+    planCharge,
+    offerSavings,
+    unusedCredit,
+    taxAmount,
+    serviceTotal: invoice.total,
+  };
+}
+export function changeUpdateParams(
+  source: BillingChangeSource,
+  target: BillingChangeTarget,
+  timing: "preview" | "apply",
+): Stripe.SubscriptionUpdateParams {
+  if (!target.priceId) throw changeUnavailable();
+  const reset = source.interval !== target.selection.interval;
+  return {
+    items: [{ id: source.itemId, price: target.priceId, quantity: 1 }],
+    discounts: target.offer ? [{ coupon: target.offer.terms.couponId }] : "",
+    proration_behavior: reset ? "none" : "always_invoice",
+    ...(reset
+      ? { billing_cycle_anchor: "now" }
+      : { proration_date: source.at }),
+    ...(timing === "apply" ? { payment_behavior: "default_incomplete" } : {}),
+  };
+}
+export async function previewBillingChange(input: {
+  stripe: StripeClient;
+  subscription: StripeSubscription;
+  source: BillingChangeSource;
+  target: BillingChangeTarget;
+}) {
+  const request = changeUpdateParams(input.source, input.target, "preview");
+  // Preview both source credit and a full new target period when the cadence changes.
+  const reset = input.source.interval !== input.target.selection.interval;
+  const invoice = await input.stripe.invoices.createPreview({
+    subscription: input.source.subscriptionId,
+    discounts: request.discounts,
+    subscription_details: {
+      items: request.items,
+      proration_behavior: "always_invoice",
+      ...(reset
+        ? { billing_cycle_anchor: "now" }
+        : { proration_date: input.source.at }),
+    },
+  });
+  return {
+    invoice,
+    amounts: readChangePreview(invoice, input.source, input.target),
+  };
+}

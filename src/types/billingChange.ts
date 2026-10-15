@@ -39,6 +39,7 @@ export const billingChangeQuoteSchema = z
     billingBalance: money,
     amountDue: money.nonnegative(),
     remainingCredit: money.nonnegative(),
+    balanceCarriedForward: money.nonnegative().default(0),
     nextPlanRate: money.nonnegative().nullable(),
     nextAt: z.iso.datetime().nullable(),
     offerTerms: z.string().nullable(),
@@ -102,8 +103,24 @@ const base = z.object({
   timing: z.enum(["immediate", "renewal"]),
   quote: billingChangeQuoteSchema,
   expiresAt: seconds,
+  draftInvoiceId: id.nullable().default(null),
 });
 const accepted = z.object({ at: seconds, quoteRevision: id }).strict();
+export const billingChangeRecoverySchema = z
+  .object({
+    creditNoteId: id.nullable(),
+    debtRefundId: id.nullable(),
+    balanceTransactionId: id.nullable(),
+  })
+  .strict();
+export type BillingChangeRecoveryReceipt = z.infer<
+  typeof billingChangeRecoverySchema
+>;
+const emptyRecovery = {
+  creditNoteId: null,
+  debtRefundId: null,
+  balanceTransactionId: null,
+};
 export const billingChangeOperationSchema = z.discriminatedUnion("state", [
   base.extend({ state: z.literal("preparing") }).strict(),
   base
@@ -132,6 +149,7 @@ export const billingChangeOperationSchema = z.discriminatedUnion("state", [
       funding: funding.nullable(),
       scheduleId: id.nullable(),
       consent: accepted.nullable(),
+      recovery: billingChangeRecoverySchema.default(emptyRecovery),
     })
     .strict(),
   base
@@ -143,7 +161,13 @@ export const billingChangeOperationSchema = z.discriminatedUnion("state", [
       consent: accepted,
     })
     .strict(),
-  base.extend({ state: z.literal("canceled"), completedAt: seconds }).strict(),
+  base
+    .extend({
+      state: z.literal("canceled"),
+      completedAt: seconds,
+      recovery: billingChangeRecoverySchema.default(emptyRecovery),
+    })
+    .strict(),
 ]);
 export type BillingChangeOperation = z.infer<
   typeof billingChangeOperationSchema
@@ -211,14 +235,18 @@ export function assertBillingChangeTransition(
   const {
     revision: oldRevision,
     quote: oldQuote,
+    draftInvoiceId: oldDraft,
     ...oldBase
   } = base.parse(previous);
   const {
     revision: newRevision,
     quote: newQuote,
+    draftInvoiceId: newDraft,
     ...newBase
   } = base.parse(next);
   if (
+    (oldDraft !== newDraft &&
+      (previous.state !== "preparing" || oldDraft !== null)) ||
     !isDeepStrictEqual(oldBase, newBase) ||
     (previous.state !== "preparing" && !isDeepStrictEqual(oldQuote, newQuote))
   )
