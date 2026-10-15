@@ -1,3 +1,11 @@
+import { createCoordinator } from "../../scripts/deployment/coordinator.cjs";
+import * as builders from "../../src/services/deploymentControlTransactions";
+import * as types from "../../src/types/deploymentControl";
+import type {
+  GetItemCommandInput,
+  PutItemCommandInput,
+  UpdateItemCommandInput,
+} from "@aws-sdk/client-dynamodb";
 import { randomUUID } from "node:crypto";
 import {
   DynamoDBClient,
@@ -5,6 +13,7 @@ import {
   DeleteTableCommand,
   PutItemCommand,
   GetItemCommand,
+  UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { createDynamoDeploymentControlRepository } from "../../src/repositories/deploymentControlRepository";
@@ -232,4 +241,75 @@ test("cursor acknowledgment lost after commit is readable and newer coordinator 
   expect(await restarted.saveRecoveryCursor(context, cursor, undefined)).toBe(
     false,
   );
+});
+
+test("coordinator renewal preserves a cursor acknowledged between its read and write", async () => {
+  await fixture();
+  const config = {
+    cluster: "cluster",
+    service: "service",
+    family: "family",
+    runToken: "coordinator",
+    candidateId: "candidate",
+    image: `repo@sha256:${"a".repeat(64)}`,
+    tablePrefix: prefix,
+  };
+  await put(tables.deploymentControl, {
+    ...control,
+    deployment: {
+      ...config,
+      runtimeMode: "all",
+      phase: "complete",
+      originalGeneration: 6,
+      originalMembers: [runtime("old").identity],
+      outgoing: runtime("old").identity,
+      previousTaskDefinition: "previous",
+      updatedAt: 100,
+    },
+  });
+  const cursor = { guildId: "acknowledged", channelId_timestamp: "next-page" };
+  let raced = false;
+  const coordinator = createCoordinator({
+    env: {
+      SECRETS_PREFIX: prefix.slice(0, -1),
+      ECS_CLUSTER: config.cluster,
+      ECS_SERVICE: config.service,
+      ECS_TASK_FAMILY: config.family,
+      DEPLOYMENT_RUN_TOKEN: config.runToken,
+      DEPLOYMENT_CANDIDATE_ID: config.candidateId,
+      CANDIDATE_IMAGE: config.image,
+    },
+    builders,
+    types,
+    now: () => 100,
+    aws: async (service: string, operation: string, input: object) => {
+      expect(service).toBe("dynamodb");
+      const translated = { ...input, TableName: tables.deploymentControl };
+      if (operation === "get-item")
+        return client.send(
+          new GetItemCommand(translated as GetItemCommandInput),
+        );
+      if (!raced) {
+        raced = true;
+        expect(
+          await repository.saveRecoveryCursor(context, undefined, cursor),
+        ).toBe(true);
+      }
+      if (operation === "put-item")
+        return client.send(
+          new PutItemCommand(translated as PutItemCommandInput),
+        );
+      if (operation === "update-item")
+        return client.send(
+          new UpdateItemCommand(translated as UpdateItemCommandInput),
+        );
+      throw new Error("Unexpected operation");
+    },
+  });
+  expect(await coordinator.reconcile()).toEqual({ kind: "complete" });
+  expect(raced).toBe(true);
+  expect(await repository.getRecord("ENV", "CONTROL")).toMatchObject({
+    recoveryScanCursor: cursor,
+    coordinatorExpiresAt: 280,
+  });
 });

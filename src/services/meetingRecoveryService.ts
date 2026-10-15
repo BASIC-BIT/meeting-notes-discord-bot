@@ -1,3 +1,4 @@
+import { EMPTY_RECORDING_NOTICE } from "../utils/meetingProcessing";
 import type { MeetingHistory } from "../types/db";
 import {
   summarizeCaptureCoverage,
@@ -227,6 +228,67 @@ async function deliver(claim: RecoveryClaim, deps: RecoveryDependencies) {
       { cause: error },
     );
   }
+}
+async function deliverNoSpeechNotice(
+  claim: RecoveryClaim,
+  deps: RecoveryDependencies,
+) {
+  await persistRecovery(
+    claim,
+    {
+      recovery: {
+        ...claim.history.recovery!,
+        stage: "delivery",
+        disposition: "needs_reconciliation",
+        reason: "delivery_uncertain",
+        retry: { maxAttempts: 4, nextAttemptAt: null },
+      },
+    },
+    deps,
+  );
+  try {
+    const row = claim.history;
+    const message = await deps.effect(() =>
+      deps.send(
+        row.textChannelId ?? row.channelId,
+        {
+          content:
+            row.capture?.kind === "complete"
+              ? EMPTY_RECORDING_NOTICE
+              : `Recording was interrupted. ${EMPTY_RECORDING_NOTICE}`,
+          allowed_mentions: { parse: [] },
+        },
+        deps.signal,
+      ),
+    );
+    if (!message.id) throw new Error("Notice acknowledgment missing");
+    await persistRecovery(
+      claim,
+      {
+        summaryMessageId: message.id,
+        delivery: {
+          ...claim.history.delivery,
+          summary: { outcome: "complete", intended: 1, sent: 1, errors: [] },
+        },
+      },
+      deps,
+    );
+    await finish(claim, "no_usable_speech", deps);
+  } catch (error) {
+    throw new RecoveryMutationUnknown(
+      "Interruption notice acknowledgment is unknown",
+      { cause: error },
+    );
+  }
+}
+function noSpeechNoticeAcknowledged(row: MeetingHistory) {
+  return (
+    row.processing?.transcription === "empty" &&
+    row.processing.notes === "skipped" &&
+    row.processing.summary === "skipped" &&
+    Boolean(row.recoveryTranscript) &&
+    summaryDeliveryAcknowledged(row)
+  );
 }
 async function recoveryTranscript(
   claim: RecoveryClaim,
@@ -473,7 +535,9 @@ export async function recoverMeeting(
 ): Promise<void> {
   // Reconciliation consumes existing acknowledgments and never sends.
   if (claim.history.recovery?.stage === "delivery") {
-    if (terminalDeliveryAcknowledged(claim.history))
+    if (noSpeechNoticeAcknowledged(claim.history))
+      await finish(claim, "no_usable_speech", deps);
+    else if (terminalDeliveryAcknowledged(claim.history))
       await finish(claim, "completed", deps, true);
     return;
   }
@@ -512,7 +576,7 @@ export async function recoverMeeting(
         },
         deps,
       );
-      await finish(claim, "no_usable_speech", deps);
+      await deliverNoSpeechNotice(claim, deps);
       return;
     }
     await persistRecovery(

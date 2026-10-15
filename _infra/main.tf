@@ -2029,7 +2029,7 @@ resource "aws_ecs_service" "app_service" {
   # Deployments update the ECS service task definition outside Terraform.
   # Avoid Terraform reverting task definition revisions during infra applies.
   lifecycle {
-    ignore_changes = [task_definition]
+    ignore_changes = [task_definition, load_balancer]
   }
 
   enable_execute_command = true

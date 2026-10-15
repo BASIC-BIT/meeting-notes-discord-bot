@@ -2,289 +2,18 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
-import * as builders from "../../src/services/deploymentControlTransactions";
-import * as types from "../../src/types/deploymentControl";
 import {
-  createCoordinator,
   candidateDefinition,
   runCli,
 } from "../../scripts/deployment/coordinator.cjs";
 
-const oldIdentity: types.RuntimeIdentity = {
-  kind: "ecs",
-  instanceId: "old",
-  taskArn: "task:old",
-  imageDigest: `sha256:${"b".repeat(64)}`,
-  candidateId: "previous",
-  protocolVersion: 1,
-};
-const candidateIdentity: types.RuntimeIdentity = {
-  kind: "ecs",
-  instanceId: "new",
-  taskArn: "task:new",
-  imageDigest: `sha256:${"a".repeat(64)}`,
-  candidateId: "run-2",
-  protocolVersion: 1,
-};
-const env = {
-  SECRETS_PREFIX: "fixture",
-  ECS_CLUSTER: "cluster",
-  ECS_SERVICE: "service",
-  ECS_TASK_FAMILY: "family",
-  DEPLOYMENT_RUN_TOKEN: "run-2",
-  DEPLOYMENT_CANDIDATE_ID: "run-2",
-  CANDIDATE_IMAGE: `repo@${candidateIdentity.imageDigest}`,
-};
-const counts = (recording = 0) => ({
-  pending_admission: 0,
-  recording,
-  finalization: 0,
-  personal_processing: 0,
-  recovery_processing: 0,
-  voice_operation: 0,
-  ancillary_delivery: 0,
-});
-function fixture() {
-  let time = 1000;
-  const ctl: types.ControlRecord = {
-    pk: "ENV",
-    sk: "CONTROL",
-    recordType: "control",
-    runtimeEnvironment: "ecs",
-    protocolVersion: 1,
-    coordinatorToken: "previous",
-    coordinatorEpoch: 1,
-    coordinatorExpiresAt: 0,
-    servingGeneration: 1,
-    servingMembers: { old: oldIdentity },
-  };
-  const row = (
-    identity: types.RuntimeIdentity,
-    role: types.RuntimeRecord["role"],
-  ): types.RuntimeRecord => ({
-    pk: "ENV",
-    sk: `RUNTIME#${identity.instanceId}`,
-    recordType: "runtime",
-    identity,
-    role,
-    authorizedGeneration: 1,
-    heartbeatAt: time,
-    readiness: {
-      identity,
-      runtimeMode: "all",
-      observedEpoch: 1,
-      observedGeneration: 1,
-      gatewayReady: true,
-      cacheReady: true,
-      dependenciesReady: true,
-      provenAt: time,
-      expiresAt: time + 30,
-    },
-    protection: { identity, provenAt: time, expiresAt: time + 600 },
-    workCounts: counts(role === "serving" ? 1 : 0),
-  });
-  const state = {
-    ctl,
-    rows: {
-      old: row(oldIdentity, "serving"),
-      new: row(candidateIdentity, "candidate"),
-    },
-    launched: false,
-    protected: true,
-    losePromotionResponse: false,
-    loseUpdateResponse: false,
-    retirementAcknowledged: false,
-    onSleep: () => undefined,
-  };
-  const definition = {
-    taskDefinitionArn: "definition:old",
-    family: "family",
-    revision: 1,
-    taskRoleArn: "task-role",
-    executionRoleArn: "execution-role",
-    networkMode: "awsvpc",
-    volumes: [{ name: "keep" }],
-    containerDefinitions: [
-      {
-        name: "fixture",
-        image: "repo:previous",
-        environment: [{ name: "DDB_TABLE_PREFIX", value: "fixture-" }],
-        secrets: [{ name: "EXAMPLE", valueFrom: "fixture-reference" }],
-        logConfiguration: { logDriver: "awslogs" },
-      },
-    ],
-  };
-  const svc = {
-    taskDefinition: "definition:old",
-    desiredCount: 1,
-    runningCount: 1,
-    pendingCount: 0,
-    deploymentController: { type: "ECS" },
-    deploymentConfiguration: {
-      alarms: { enable: true, rollback: true, alarmNames: ["fixture"] },
-    },
-    deployments: [{ rolloutState: "COMPLETED" }],
-  };
-  const calls: Array<{ operation: string; input: unknown }> = [];
-  function refreshProofs() {
-    for (const runtime of Object.values(state.rows)) {
-      runtime.readiness.observedEpoch = state.ctl.coordinatorEpoch;
-      runtime.readiness.observedGeneration = state.ctl.servingGeneration;
-      runtime.readiness.expiresAt = time + 30;
-      runtime.protection.expiresAt = time + 600;
-    }
-  }
-  function promotion(input) {
-    const controlUpdate = input.TransactItems[0].Update;
-    const values = unmarshall(controlUpdate.ExpressionAttributeValues);
-    if (
-      values[":token"] !== state.ctl.coordinatorToken ||
-      values[":epoch"] !== state.ctl.coordinatorEpoch ||
-      values[":generation"] !== state.ctl.servingGeneration ||
-      JSON.stringify(values[":expectedMembers"]) !==
-        JSON.stringify(state.ctl.servingMembers)
-    )
-      throw new Error("conditional conflict");
-    const runtimeValues = unmarshall(
-      input.TransactItems[1].Update.ExpressionAttributeValues,
-    );
-    const selected = state.rows[runtimeValues[":identity"].instanceId];
-    if (
-      !selected.readiness.dependenciesReady ||
-      !selected.readiness.gatewayReady ||
-      selected.readiness.expiresAt <= time
-    )
-      throw new Error("not ready");
-    state.ctl.servingGeneration = values[":next"];
-    state.ctl.servingMembers = values[":members"];
-    selected.role = "serving";
-    selected.authorizedGeneration = values[":next"];
-    selected.readiness.observedGeneration = values[":next"];
-    if (state.losePromotionResponse) {
-      state.losePromotionResponse = false;
-      throw new Error("response lost after commit");
-    }
-  }
-  function dynamo(operation, input) {
-    switch (operation) {
-      case "get-item": {
-        const sk = unmarshall(input.Key).sk;
-        const item = sk === "CONTROL" ? state.ctl : state.rows[sk.substring(8)];
-        return { Item: item ? marshall(item) : undefined };
-      }
-      case "put-item": {
-        const values = unmarshall(input.ExpressionAttributeValues);
-        if (
-          values[":token"] !== state.ctl.coordinatorToken ||
-          values[":epoch"] !== state.ctl.coordinatorEpoch ||
-          values[":generation"] !== state.ctl.servingGeneration
-        )
-          throw new Error("conditional conflict");
-        state.ctl = unmarshall(input.Item) as types.ControlRecord;
-        return {};
-      }
-      case "query":
-        return {
-          Items: Object.values(state.rows).map((runtime) => marshall(runtime)),
-        };
-      case "transact-write-items": {
-        if (input.TransactItems[0].Update) promotion(input);
-        else {
-          const values = unmarshall(
-            input.TransactItems[1].Update.ExpressionAttributeValues,
-          );
-          const runtime = state.rows[values[":identity"].instanceId];
-          runtime.retirementRequest = values[":request"];
-          if (state.retirementAcknowledged) {
-            runtime.role = "retired";
-            runtime.workCounts = counts();
-            runtime.retirementAcknowledgment = {
-              request: values[":request"],
-              retiredAt: time,
-            };
-          }
-        }
-        return {};
-      }
-      default:
-        throw new Error(`Unexpected AWS operation: ${operation}`);
-    }
-  }
-  function ecs(operation, input) {
-    switch (operation) {
-      case "describe-services":
-        return { services: [svc] };
-      case "validate-update-service":
-        return {};
-      case "describe-task-definition":
-        return { taskDefinition: definition };
-      case "list-task-definitions":
-        return { taskDefinitionArns: [] };
-      case "register-task-definition":
-        return {
-          taskDefinition: { ...input, taskDefinitionArn: "definition:new" },
-        };
-      case "list-tasks":
-        return {
-          taskArns: state.launched ? ["task:old", "task:new"] : ["task:old"],
-        };
-      case "describe-tasks":
-        return {
-          tasks: input.tasks.map((arn) => ({
-            taskArn: arn,
-            taskDefinitionArn:
-              arn === "task:old" ? "definition:old" : "definition:new",
-            lastStatus: "RUNNING",
-            containers: [
-              {
-                imageDigest:
-                  arn === "task:old"
-                    ? oldIdentity.imageDigest
-                    : candidateIdentity.imageDigest,
-              },
-            ],
-          })),
-        };
-      case "get-task-protection":
-        return {
-          protectedTasks: input.tasks.map((taskArn) => ({
-            taskArn,
-            protectionEnabled: state.protected,
-            expirationDate: new Date((time + 600) * 1000).toISOString(),
-          })),
-        };
-      case "update-service": {
-        svc.taskDefinition = input.taskDefinition;
-        svc.deploymentConfiguration = input.deploymentConfiguration;
-        state.launched = true;
-        refreshProofs();
-        if (state.loseUpdateResponse) throw new Error("update response lost");
-        return {};
-      }
-      default:
-        throw new Error(`Unexpected ECS operation: ${operation}`);
-    }
-  }
-  const aws = jest.fn(async (service, operation, input) => {
-    calls.push({ operation, input });
-    return service === "ecs" ? ecs(operation, input) : dynamo(operation, input);
-  });
-  const options = {
-    env,
-    aws,
-    builders,
-    types,
-    now: () => time,
-    sleep: async () => {
-      time += 1000;
-      refreshProofs();
-      state.onSleep();
-    },
-  };
-  const coordinator = createCoordinator(options);
-  return { state, aws, calls, coordinator, definition, refreshProofs, options };
-}
+import {
+  fixture,
+  oldIdentity,
+  candidateIdentity,
+  env,
+  counts,
+} from "../deployment/fixtures/coordinatorFixture";
 
 test("CLI reports unsupported capability before mutation without provider output", async () => {
   const f = fixture();
@@ -294,7 +23,7 @@ test("CLI reports unsupported capability before mutation without provider output
       throw new Error("RAW_PROVIDER_SECRET_AND_PAYLOAD");
     return original(service, operation, input);
   });
-  const output = { log: jest.fn(), error: jest.fn() };
+  const output = { ...console, log: jest.fn(), error: jest.fn() };
   expect(await runCli("prepare", f.options, output)).toBe(1);
   expect(JSON.parse(output.error.mock.calls[0][0])).toMatchObject({
     requestedPhase: "prepare",
@@ -347,7 +76,7 @@ test("CLI labels a positive native proof only as the last completed check", asyn
       throw new Error("PRIVATE_PROVIDER_DETAIL");
     return original(service, operation, input);
   });
-  const output = { log: jest.fn(), error: jest.fn() };
+  const output = { ...console, log: jest.fn(), error: jest.fn() };
   expect(await runCli("prepare", f.options, output)).toBe(1);
   expect(JSON.parse(output.error.mock.calls[0][0])).toMatchObject({
     knownPhase: "preparing",
@@ -367,7 +96,7 @@ test("CLI labels a positive native proof only as the last completed check", asyn
 test("CLI reports rejected native protection truthfully without replacement writes", async () => {
   const f = fixture();
   f.state.protected = false;
-  const output = { log: jest.fn(), error: jest.fn() };
+  const output = { ...console, log: jest.fn(), error: jest.fn() };
   expect(await runCli("prepare", f.options, output)).toBe(1);
   expect(JSON.parse(output.error.mock.calls[0][0])).toMatchObject({
     requestedPhase: "prepare",
@@ -396,7 +125,7 @@ test("CLI reports rejected native protection truthfully without replacement writ
 test("CLI identifies a control-store failure without guessing availability or logging details", async () => {
   const f = fixture();
   f.aws.mockRejectedValue(new Error("PRIVATE_DATABASE_PAYLOAD"));
-  const output = { log: jest.fn(), error: jest.fn() };
+  const output = { ...console, log: jest.fn(), error: jest.fn() };
   expect(await runCli("prepare", f.options, output)).toBe(1);
   expect(JSON.parse(output.error.mock.calls[0][0])).toMatchObject({
     operation: "dynamodb.get-item",
@@ -448,7 +177,7 @@ test("deferredCleanupCapabilityIsValidatedBeforeMutationAndPreservesSettings", a
     (call) => call.operation === "validate-update-service",
   );
   expect(validation).toBeLessThan(
-    f.calls.findIndex((call) => call.operation === "put-item"),
+    f.calls.findIndex((call) => call.operation === "update-item"),
   );
   const update = f.calls.find((call) => call.operation === "update-service");
   expect(update?.input).toMatchObject({
@@ -574,7 +303,7 @@ test("retirementWithoutAckPreservesProtectedBusyOwner", async () => {
   await f.coordinator.prepare();
   await f.coordinator.promote();
   await expect(f.coordinator.retire()).rejects.toThrow("incomplete");
-  expect(f.state.rows.old.workCounts.recording).toBe(1);
+  expect(f.state.rows.old.workCounts!.recording).toBe(1);
   expect(await f.coordinator.reconcile()).toMatchObject({
     kind: "recovery_required",
     phase: "retiring",

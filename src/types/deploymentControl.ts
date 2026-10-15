@@ -104,6 +104,24 @@ export type RetirementAcknowledgment = z.infer<
   typeof retirementAcknowledgmentSchema
 >;
 const deploymentText = z.string().min(1).max(1024);
+const deploymentRoutingSchema = z
+  .object({
+    listenerArn: deploymentText,
+    sourceGroup: deploymentText,
+    candidateGroup: deploymentText,
+    containerName: deploymentText,
+    containerPort: z.number().int().positive(),
+    sourceRevision: deploymentText,
+    candidateRevision: deploymentText.optional(),
+    state: z.enum([
+      "source",
+      "forward_submitted",
+      "candidate",
+      "rollback_submitted",
+      "rolled_back",
+    ]),
+  })
+  .strict();
 export const deploymentPhaseSchema = z
   .object({
     runToken: deploymentText,
@@ -128,6 +146,7 @@ export const deploymentPhaseSchema = z
     originalMembers: runtimeMembersSchema,
     outgoing: runtimeIdentitySchema,
     previousTaskDefinition: deploymentText,
+    routing: deploymentRoutingSchema.optional(),
     taskDefinition: deploymentText.optional(),
     candidate: runtimeIdentitySchema.optional(),
     updatedAt: epochSecond,

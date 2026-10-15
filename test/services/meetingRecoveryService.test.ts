@@ -130,12 +130,26 @@ test("partialSpeechGeneratesNotesWithoutVoiceJoin and verifiedTranscriptRecovers
     }),
   );
 });
-test("noUsableSpeechSkipsNotes", async () => {
+test("no usable speech sends an acknowledged interruption notice without notes", async () => {
   const f = await fixture("");
   await recoverMeeting(f.claim, f.deps);
   expect(f.autoExport).not.toHaveBeenCalled();
   expect(f.notes).not.toHaveBeenCalled();
-  expect(f.send).not.toHaveBeenCalled();
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(f.send.mock.calls)).toContain(
+    "Recording was interrupted.",
+  );
+  expect(JSON.stringify(f.send.mock.calls)).toContain(
+    "No usable speech was found, so no notes were generated.",
+  );
+  expect(f.claim.history.summaryMessageId).toBe("message-1");
+  expect(f.claim.history.processing).toEqual({
+    transcription: "empty",
+    notes: "skipped",
+    summary: "skipped",
+  });
+  expect(f.claim.history.notes).toBeUndefined();
+  expect(f.claim.history.summarySentence).toBeUndefined();
   expect(f.claim.history.recovery).toMatchObject({
     disposition: "done",
     outcome: "no_usable_speech",
@@ -410,5 +424,51 @@ test("transcription disabled never reaches the ancillary callback", async () => 
   });
   expect(f.notes).not.toHaveBeenCalled();
   expect(f.send).not.toHaveBeenCalled();
+  expect(f.autoExport).not.toHaveBeenCalled();
+});
+
+test.each(["send", "acknowledgment"])(
+  "no-speech unknown %s is retained without automatic replay",
+  async (failure) => {
+    const f = await fixture("");
+    if (failure === "send")
+      f.send.mockRejectedValueOnce(new Error("lost send ACK"));
+    else {
+      const update = f.repository.updateRecordingRecovery;
+      f.repository.updateRecordingRecovery = async (claim, patch, now) => {
+        if (patch.summaryMessageId) throw new Error("unknown persistence ACK");
+        return update(claim, patch, now);
+      };
+    }
+    await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow(
+      "acknowledgment is unknown",
+    );
+    expect(f.claim.history.recovery).toMatchObject({
+      stage: "delivery",
+      disposition: "needs_reconciliation",
+      reason: "delivery_uncertain",
+    });
+    await recoverMeeting(f.claim, f.deps);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.autoExport).not.toHaveBeenCalled();
+    expect(f.notes).not.toHaveBeenCalled();
+  },
+);
+
+test("no-speech acknowledgment readback and restart finish without another notice", async () => {
+  const f = await fixture("");
+  const update = f.repository.updateRecordingRecovery;
+  f.repository.updateRecordingRecovery = async (claim, patch, now) => {
+    const result = await update(claim, patch, now);
+    if (patch.summaryMessageId) throw new Error("ACK lost after persistence");
+    return result;
+  };
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.claim.history.recovery).toMatchObject({
+    disposition: "done",
+    outcome: "no_usable_speech",
+  });
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.send).toHaveBeenCalledTimes(1);
   expect(f.autoExport).not.toHaveBeenCalled();
 });

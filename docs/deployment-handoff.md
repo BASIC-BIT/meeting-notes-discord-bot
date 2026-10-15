@@ -42,7 +42,7 @@ Recovery never rejoins voice. Successful notes do not make interrupted capture c
 
 An ECS control cannot be bootstrapped by a local identity. Local bootstrap is restricted to explicit mock storage or opted-in loopback DynamoDB with local/dummy credentials. It preserves existing leases, histories and unresolved voice guards, retains fresh disjoint bot/API members and refuses overlapping fresh owners.
 
-Both workflows use the same coordinator. It requests minimum healthy percent 100, maximum percent 200, unchanged desired count and stopTimeout 120. ECS early success uses healthyPercent 100 with sourceServiceRevisionCleanup `DEFERRED`. That result is not application readiness, promotion or retirement. A health-only listener starts before bounded exact-task protection retries; full application readiness remains unqualified until protection and boot complete. Warming requests receive retryable responses.
+Both workflows use the same coordinator. It requests minimum healthy percent 100, maximum percent 200, unchanged desired count and stopTimeout 120. ECS early success uses healthyPercent 100 with sourceServiceRevisionCleanup `DEFERRED`. That result is not application readiness, promotion or retirement. A health-only listener starts before bounded exact-task protection retries; full application readiness remains unqualified until protection and boot complete. Early health does not grant user traffic; the routing contract below keeps warming candidates at zero weight.
 
 After promotion, existing work renews and finishes under its original claim. Runtime retirement moves through `draining`, `releasing`, then `retired`. The releasing state is durable before the native disable call. Unknown disable outcomes retain uncertainty. A coordinator never uses a missing task, lease expiry or zero cached counters to release protection.
 
@@ -60,7 +60,43 @@ Checkpoint uploads precede manifest publication and canonical history CAS. The o
 
 Verified saved text can recover without audio. Saved text with no exact processing-coverage proof does not suppress verified PCM. Each confirmed PCM interval is processed separately, preserving gaps. This can cost extra transcription requests or duplicate wording; it does not silently discard preserved speech.
 
-Before final summary or notes mutations, ordinary finalization persists coarse delivery intent. Unknown intent prevents dispatch. Unknown sends or acknowledgment writes retain known message IDs and `needs_reconciliation`; recovery never automatically replays them. Exact terminal readback can reconcile already acknowledged delivery without sending again. Existing enabled Notion automation follows newly recovered usable notes only after delivery proof. An unknown ancillary mutation retains its own ownership and is never reclassified as a generation retry.
+Before final summary or notes mutations, ordinary finalization persists coarse delivery intent. Unknown intent prevents dispatch. No usable recovered speech sends the deterministic interruption notice with no notes, summary generation or Notion export. The notice uses the same durable delivery intent and acknowledgment discipline. Unknown sends or acknowledgment writes retain known message IDs and `needs_reconciliation`; recovery never automatically replays them. Exact terminal readback can reconcile already acknowledged delivery without sending again. Existing enabled Notion automation follows newly recovered usable notes only after delivery proof. An unknown ancillary mutation retains its own ownership and is never reclassified as a generation retry.
+
+## Candidate traffic and routing ownership
+
+Ordinary portal, OAuth, desktop, webhook and MCP requests stay on the old application while the candidate acquires native protection and finishes booting. The existing rolling service uses two ALB target groups, with one group bound to each service revision. The listener assigns the serving group weight 100 and the candidate group weight 0, with stickiness disabled. Both groups remain associated for early `/health` checks. This keeps the DEFERRED/100 protection convergence path without sending ordinary traffic to an unavailable application.
+
+### When does a request move to the replacement?
+
+```mermaid
+flowchart TD
+  A[Request enters existing HTTPS listener] --> B[Old group has all traffic]
+  B --> C[Candidate group has zero traffic and early health]
+  C --> D{Protection and application ready?}
+  D -->|No| B
+  D -->|Yes| E[Promote exact admission generation]
+  E --> F[Switch exact listener weights and confirm acknowledgment]
+  F --> G[New requests reach candidate]
+  G --> H[Old owner finishes existing work]
+```
+
+Admission promotion and ALB routing are separate operations. New correction requests reaching the old API during that short transition receive a typed retryable response. Existing requests and owner-directed recording controls keep their original owner. A failed or unknown provider operation can prolong the transition, so this design does not promise zero request failures under provider failure. Retirement requires acknowledged candidate routing, fresh readiness and native protection.
+
+The coordinator checks exact listener, groups, revision bindings, container port, task IP targets, health and empty spare membership. Foreign actions, extra listener rules, stickiness, ambiguous revisions, and occupied or draining spare targets refuse rollout. Each new rollout reverses the two group roles only after the previous rollout has completed and the spare is empty. Same-group launches are refused. A replacement after loss of the only available application still needs to boot; this routing contract cannot make an unavailable application healthy.
+
+A durable submitted routing marker precedes `ModifyListener`. If that call or its acknowledgment is unknown, the marker remains unresolved. A later read showing the intended weights does not prove the original RPC has settled. It cannot authorize replay, opposite routing, retirement or slot reuse. This conservative rule can leave extra protected tasks and a blocked rollout until separately authorized reconciliation. A known successful response plus exact readback allows the acknowledgment transition. Ordinary Dynamo write-response loss still uses exact readback of the written fields.
+
+Before retirement starts, rollback validates both protected identities and the old application, grants old admission a fresh generation, and reverses the exact weights. Candidate-owned work remains protected. Rollback stays `recovery_required`, because changing the ECS primary revision would launch another deployment. The coordinator does not do that or retire candidate work automatically.
+
+### Infrastructure introduction and permissions
+
+Terraform owns group and listener identities, health settings and the create-time weighted action. After introduction, the coordinator owns `aws_ecs_service.app_service.load_balancer` and `aws_lb_listener.api_https.default_action`; Terraform explicitly ignores those attributes and its existing task-definition drift. Applying Terraform to an existing simple-forward listener does not rewrite the ignored action. A separately approved introduction must associate both groups and set the exact old100/spare0 action before the coordinator can run. No merge, runtime default or missing input activates this topology.
+
+Set the existing GitHub environment variables `DEPLOYMENT_LISTENER_ARN`, `DEPLOYMENT_TARGET_GROUP_A` and `DEPLOYMENT_TARGET_GROUP_B` to the exact reviewed Terraform `deployment_routing` output. An ALB-backed service with missing inputs refuses deployment. Bot-only services without a load-balancer binding omit all three. Do not change desired count, rolling strategy, min100/max200 or DEFERRED/100.
+
+The generated `deployment_routing_policy_arn` is an unattached policy for the existing deployment principal. Its new write permission is `elasticloadbalancing:ModifyListener` on the exact listener. ELB describe operations use their required wildcard resource scope; ECS revision/deployment reads are scoped to this service. Introduction must attach and verify the policy through the existing credential authority. Runtime roles receive no routing permission. The coordinator has no target registration, task stop or forced-unprotection operation. Serialize other authorized listener writers with this coordinator; ELB offers no conditional compare-and-swap.
+
+AWS documents [revision-specific immutable configuration](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-revision.html), [load-balancer update behavior](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_UpdateService.html), [deferred source cleanup](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/early-success-criteria.html), and [weighted target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/rule-action-types.html). Generated local tests compose actual HTTP listeners, protection retries, persisted Dynamo admission and routing decisions. They do not prove hosted ALB propagation or protected source registration retention. Those facts, first activation and the legacy admission bridge remain separate acceptance requirements.
 
 ## Evidence and remaining acceptance
 

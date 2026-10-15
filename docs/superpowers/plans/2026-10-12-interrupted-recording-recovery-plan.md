@@ -10,7 +10,7 @@ Read [Recording handoff and recovery](../../deployment-handoff.md) for the parti
 
 ## Participant experience after interruption
 
-Participants can return to the meeting in Discord or the Library and see that capture was interrupted. When verified saved speech and the original settings permit it, Chronote generates clearly partial notes. With no usable saved speech, it gives a truthful notice and skips notes. Without a first checkpoint, coverage remains UNKNOWN or unavailable. Recovery never rejoins voice automatically.
+Participants can return to the meeting in Discord or the Library and see that capture was interrupted. When verified saved speech and the original settings permit it, Chronote generates clearly partial notes. With no usable saved speech, it sends the deterministic Discord interruption notice after durable delivery intent, records its acknowledgment and skips notes, summary generation and Notion export. An unknown send or acknowledgment remains review-required and is never automatically resent. Without a first checkpoint, coverage remains UNKNOWN or unavailable. Recovery never rejoins voice automatically.
 
 Existing access rules still govern direct links, the Library and MCP reads. An uncertain delivery requires reconciliation instead of an automatic resend. See the [participant journey](../../deployment-handoff.md) for entry paths and the original cancellation and recovery rules.
 

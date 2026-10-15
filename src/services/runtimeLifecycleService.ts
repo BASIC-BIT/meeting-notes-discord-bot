@@ -1,3 +1,4 @@
+import { RuntimeAdmissionUnavailable } from "./runtimeAdmissionError";
 import { admitCompatibleReplacement } from "./runtimeCompatibleReplacementService";
 import type { DeploymentControlRepository } from "../repositories/deploymentControlRepository";
 import { isDeepStrictEqual } from "node:util";
@@ -234,7 +235,7 @@ export function createRuntimeLifecycle(options: {
       !row ||
       row.readiness.expiresAt <= now()
     )
-      throw new Error("Runtime is not accepting work");
+      throw new RuntimeAdmissionUnavailable("Runtime is not accepting work");
     counts[kind]++;
     let settled = false;
     return {
@@ -282,7 +283,8 @@ export function createRuntimeLifecycle(options: {
         allowed = false;
         throw error;
       }
-      if (!allowed || !row) throw new Error("Runtime is not serving");
+      if (!allowed || !row)
+        throw new RuntimeAdmissionUnavailable("Runtime is not serving");
       return {
         instanceId: identity.instanceId,
         identity,

@@ -167,6 +167,14 @@ function createAwsCaller(executeAws, diagnostic) {
     }
   };
 }
+function protocolModules(options) {
+  const builders =
+    options.builders ??
+    require("../../dist/services/deploymentControlTransactions.js");
+  const types =
+    options.types ?? require("../../dist/types/deploymentControl.js");
+  return { builders, types };
+}
 function createCoordinator(options = {}) {
   const { diagnostic = {} } = options;
   const config = configuration(options.env ?? process.env);
@@ -175,17 +183,58 @@ function createCoordinator(options = {}) {
   const sleep =
     options.sleep ??
     ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const builders =
-    options.builders ??
-    require("../../dist/services/deploymentControlTransactions.js");
-  const types =
-    options.types ?? require("../../dist/types/deploymentControl.js");
+  const { builders, types } = protocolModules(options);
   const tables = {
     deploymentControl: `${config.tablePrefix}DeploymentControlTable`,
     meetingHistory: `${config.tablePrefix}MeetingHistoryTable`,
     activeMeeting: `${config.tablePrefix}ActiveMeetingTable`,
   };
   const same = types.sameRuntimeIdentity;
+  const routing = require("./routing.cjs").createRouting({
+    aws,
+    config,
+    env: options.env ?? process.env,
+    failure: (category, message) => new CoordinatorFailure(category, message),
+  });
+  const persistRouting = (ctl, value) =>
+    phase(ctl, ctl.deployment.phase, { routing: value });
+  async function routingAuthority(expected) {
+    const current = await control();
+    own(current);
+    if (
+      current.coordinatorExpiresAt <= now() ||
+      !isDeepStrictEqual(current.deployment, expected.deployment) ||
+      !isDeepStrictEqual(current.servingMembers, expected.servingMembers) ||
+      current.servingGeneration !== expected.servingGeneration
+    )
+      throw new CoordinatorFailure(
+        "coordinator_authority_changed",
+        "Routing authority changed",
+      );
+  }
+  async function completePromotion(ctl, candidate) {
+    const row = await runtime(candidate);
+    if (!ready(row, ctl, candidate, ctl.deployment.runtimeMode))
+      throw new CoordinatorFailure(
+        "application_not_ready",
+        "Promoted candidate application readiness must refresh before routing",
+      );
+    await protectedTask(candidate);
+    await protectedTask(ctl.deployment.outgoing);
+    const revision = await routing.validate(ctl, await service(), candidate);
+    if (ctl.deployment.routing && !ctl.deployment.routing.candidateRevision)
+      ctl = await persistRouting(ctl, {
+        ...ctl.deployment.routing,
+        candidateRevision: revision,
+      });
+    ctl = await routing.switchTraffic(
+      ctl,
+      true,
+      persistRouting,
+      routingAuthority,
+    );
+    return phase(ctl, "promoted");
+  }
   const key = (sk) => marshall({ pk: "ENV", sk });
   async function read(sk) {
     const result = await aws("dynamodb", "get-item", {
@@ -222,19 +271,44 @@ function createCoordinator(options = {}) {
       condition += " AND deployment = :deployment";
       values[":deployment"] = previous.deployment;
     } else condition += " AND attribute_not_exists(deployment)";
+    // Recovery cursor and compatible-replacement evidence have independent writers.
+    const fields = [
+      "coordinatorToken",
+      "coordinatorEpoch",
+      "coordinatorExpiresAt",
+      "deployment",
+    ];
+    const names = {};
+    const assignments = fields.map((field, index) => {
+      names[`#field${index}`] = field;
+      values[`:next${index}`] = next[field];
+      return `#field${index} = :next${index}`;
+    });
+    let observed;
     try {
-      await aws("dynamodb", "put-item", {
+      const result = await aws("dynamodb", "update-item", {
         TableName: tables.deploymentControl,
-        Item: marshall(next, { removeUndefinedValues: true }),
+        Key: key("CONTROL"),
+        UpdateExpression: `SET ${assignments.join(", ")}`,
         ConditionExpression: condition,
+        ExpressionAttributeNames: names,
         ExpressionAttributeValues: marshall(values),
+        ReturnValues: "ALL_NEW",
       });
+      observed = types.controlRecordSchema.parse(unmarshall(result.Attributes));
     } catch (error) {
-      if (!isDeepStrictEqual(await control(), next)) throw error;
+      observed = await control();
+      if (
+        ![...fields, "servingGeneration", "servingMembers"].every((field) =>
+          isDeepStrictEqual(observed[field], next[field]),
+        )
+      )
+        throw error;
     }
-    diagnostic.knownPhase = next.deployment?.phase ?? "none";
-    return next;
+    diagnostic.knownPhase = observed.deployment?.phase ?? "none";
+    return observed;
   }
+
   function own(row) {
     const d = row.deployment;
     if (
@@ -254,6 +328,7 @@ function createCoordinator(options = {}) {
         "coordinator_authority_changed",
         "Deployment ownership or environment mismatch",
       );
+    routing.assertInputs(d.routing);
     return d;
   }
   async function renew(row) {
@@ -284,7 +359,12 @@ function createCoordinator(options = {}) {
         "Target service unavailable",
       );
     const value = result.services[0];
-    if (value.desiredCount !== 1 || value.deploymentController?.type !== "ECS")
+    if (
+      value.desiredCount !== 1 ||
+      value.deploymentController?.type !== "ECS" ||
+      (value.deploymentConfiguration?.strategy &&
+        value.deploymentConfiguration.strategy !== "ROLLING")
+    )
       throw new CoordinatorFailure(
         "configuration_invalid",
         "This coordinator requires the reviewed one-task ECS rolling service",
@@ -522,6 +602,7 @@ function createCoordinator(options = {}) {
           "Another coordinator or unresolved deployment owns this environment",
         );
       const previous = await original(ctl, svc);
+      const traffic = await routing.prepare(svc, previous.outgoing);
       ctl = await save(ctl, {
         ...ctl,
         coordinatorToken: config.runToken,
@@ -535,6 +616,7 @@ function createCoordinator(options = {}) {
           originalMembers: Object.values(ctl.servingMembers),
           outgoing: previous.outgoing,
           previousTaskDefinition: svc.taskDefinition,
+          ...(traffic ? { routing: traffic } : {}),
           updatedAt: now(),
         },
       });
@@ -547,12 +629,23 @@ function createCoordinator(options = {}) {
         cluster: config.cluster,
         service: config.service,
         taskDefinition: ctl.deployment.taskDefinition,
+        ...(ctl.deployment.routing
+          ? { loadBalancers: routing.binding(ctl.deployment.routing, true) }
+          : {}),
         deploymentConfiguration,
       });
     } catch (error) {
       if ((await service()).taskDefinition !== ctl.deployment.taskDefinition)
         throw error;
     }
+    const updated = await service();
+    if (updated.taskDefinition !== ctl.deployment.taskDefinition)
+      throw new CoordinatorFailure(
+        "outcome_uncertain",
+        "Candidate task definition is unconfirmed",
+      );
+    if (ctl.deployment.routing)
+      routing.assertBinding(updated, ctl.deployment.routing, true);
     return { kind: "warming" };
   }
   async function candidate(ctl) {
@@ -668,14 +761,21 @@ function createCoordinator(options = {}) {
         d.candidate &&
         promotionObserved(ctl, d.candidate, d.originalGeneration + 1, retained)
       ) {
-        await phase(ctl, "promoted");
+        await completePromotion(ctl, d.candidate);
         return { kind: "promoted", recovered: true };
       }
       const warm = await candidate(ctl);
       if (warm) {
         await protectedTask(d.outgoing);
         await protectedTask(warm.identity);
-        ctl = await phase(ctl, "promoting", { candidate: warm.identity });
+        const revision = await routing.validate(ctl, svc, warm.identity);
+        if (d.routing) await routing.assertAction(d.routing, false);
+        ctl = await phase(ctl, "promoting", {
+          candidate: warm.identity,
+          ...(d.routing
+            ? { routing: { ...d.routing, candidateRevision: revision } }
+            : {}),
+        });
         const transaction = builders.buildPromotionTransaction({
           tables,
           coordinatorToken: config.runToken,
@@ -695,7 +795,7 @@ function createCoordinator(options = {}) {
           d.originalGeneration + 1,
           retained,
         );
-        await phase(ctl, "promoted");
+        await completePromotion(ctl, warm.identity);
         return { kind: "promoted" };
       }
       await sleep(10000);
@@ -779,6 +879,15 @@ function createCoordinator(options = {}) {
           "Promoted runtime readiness lost; reconcile before retirement",
         );
       await protectedTask(d.candidate);
+      if (d.routing) {
+        if (d.routing.state !== "candidate")
+          throw new CoordinatorFailure(
+            "routing_unconfirmed",
+            "Routing acknowledgment required before retirement",
+          );
+        await routing.assertAction(d.routing, true);
+        await routing.serving(ctl, await service());
+      }
       ctl = await phase(ctl, "retiring");
       if (await requestRetirement(ctl, d.outgoing, d.originalGeneration)) {
         const svc = await service();
@@ -804,6 +913,12 @@ function createCoordinator(options = {}) {
     let ctl = await renew(await control());
     const d = ctl.deployment;
     if (d.phase === "complete") return { kind: "complete" };
+    if (d.routing?.state.endsWith("_submitted"))
+      return {
+        kind: "recovery_required",
+        reason: "routing_request_settlement_unknown",
+        observedRouting: await routing.observe(d.routing),
+      };
     const retained = d.originalMembers.filter(
       (member) => member.instanceId !== d.outgoing.instanceId,
     );
@@ -812,12 +927,18 @@ function createCoordinator(options = {}) {
       d.candidate &&
       promotionObserved(ctl, d.candidate, d.originalGeneration + 1, retained)
     )
-      ctl = await phase(ctl, "promoted");
+      ctl = await completePromotion(ctl, d.candidate);
     if (!["promoted", "rollback_promoting"].includes(ctl.deployment.phase))
       return { kind: "recovery_required", phase: ctl.deployment.phase };
     if (
       promotionObserved(ctl, d.outgoing, d.originalGeneration + 2, retained)
     ) {
+      ctl = await routing.switchTraffic(
+        ctl,
+        false,
+        persistRouting,
+        routingAuthority,
+      );
       await phase(ctl, "rolled_back");
       return {
         kind: "rolled_back",
@@ -839,6 +960,8 @@ function createCoordinator(options = {}) {
       };
     await protectedTask(d.outgoing);
     await protectedTask(d.candidate);
+    await routing.validate(ctl, await service(), d.candidate);
+    if (d.routing) await routing.assertAction(d.routing, true);
     ctl = await phase(ctl, "rollback_promoting");
     ctl = await transactPromotion(
       ctl,
@@ -846,6 +969,12 @@ function createCoordinator(options = {}) {
       d.outgoing,
       d.originalGeneration + 2,
       retained,
+    );
+    ctl = await routing.switchTraffic(
+      ctl,
+      false,
+      persistRouting,
+      routingAuthority,
     );
     await phase(ctl, "rolled_back");
     return {
