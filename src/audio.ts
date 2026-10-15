@@ -1,3 +1,13 @@
+import type {
+  PcmSpan,
+  TranscriptCorrespondence,
+} from "./types/transcriptCorrespondence";
+import {
+  appendPcmSpan,
+  copyCorrespondence,
+  combineCorrespondence,
+  containsPcmSpans,
+} from "./utils/transcriptCorrespondence";
 import { renderMixedPcmTracks } from "./services/mixedPcmService";
 import { interruptOwnedMeeting } from "./services/ownedMeetingInterruption";
 import { finished } from "node:stream/promises";
@@ -9,6 +19,7 @@ import {
   startRecordingContentCheckpoint,
   checkpointCompletedTranscription,
   checkpointRecordingContext,
+  captureRecordingTranscriptScope,
 } from "./services/recordingContentService";
 import { createRecordingCheckpointCapture } from "./services/recordingCheckpointCapture";
 import { appendMeetingCheckpointArtifacts } from "./services/recordingCheckpointService";
@@ -389,6 +400,7 @@ function cloneSnippet(snippet: AudioSnippet): AudioSnippet {
   return {
     ...snippet,
     chunks: [...snippet.chunks],
+    pcmSpans: snippet.pcmSpans?.map((span) => ({ ...span })),
   };
 }
 
@@ -600,6 +612,12 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
         const entry = {
           revision,
           text: transcription,
+          correspondence: snapshot.pcmSpans
+            ? {
+                kind: "pcm" as const,
+                spans: snapshot.pcmSpans.map((span) => ({ ...span })),
+              }
+            : undefined,
           createdAt: nowIso(),
         };
         if (!audioFileData.fastTranscripts) {
@@ -607,6 +625,9 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
         }
         audioFileData.fastTranscripts.push(entry);
         audioFileData.transcript = transcription;
+        audioFileData.transcriptCorrespondence = copyCorrespondence(
+          entry.correspondence,
+        );
         checkpointCompletedTranscription(meeting);
         snippet.fastTranscribed = true;
         snippet.lastFastTranscriptBytes = snapshotBytes;
@@ -671,6 +692,10 @@ export function startProcessingSnippet(
   audioFileData.processing = true;
 
   const promises: Promise<void>[] = [speakerWrite];
+  const inputCorrespondence: TranscriptCorrespondence | undefined =
+    snippet.pcmSpans
+      ? { kind: "pcm", spans: snippet.pcmSpans.map((span) => ({ ...span })) }
+      : undefined;
 
   const { minSnippetSeconds, fastFinalizationEnabled } =
     getTranscriptionTiming(meeting);
@@ -702,6 +727,9 @@ export function startProcessingSnippet(
     );
     audioFileData.transcriptionFailed = false;
     audioFileData.transcript = latestFastText;
+    audioFileData.transcriptCorrespondence = copyCorrespondence(
+      latestFastTranscript?.correspondence,
+    );
   } else if (
     hasAudio &&
     (duration > minSnippetSeconds || options.forceTranscribe)
@@ -730,7 +758,14 @@ export function startProcessingSnippet(
               const transcription = result.text;
               audioFileData.transcriptionFailed = false;
               audioFileData.slowTranscript = transcription;
+              audioFileData.slowCorrespondence =
+                copyCorrespondence(inputCorrespondence);
               audioFileData.transcript = transcription;
+              audioFileData.transcriptCorrespondence =
+                copyCorrespondence(inputCorrespondence);
+              if (!transcription.trim())
+                audioFileData.terminalOmission =
+                  copyCorrespondence(inputCorrespondence);
               checkpointCompletedTranscription(meeting);
               if (!options.skipLiveVoice) {
                 void runMeetingProcessingEffect(meeting, () =>
@@ -750,13 +785,38 @@ export function startProcessingSnippet(
                 audioFileData.fastTranscripts.length > 0
               ) {
                 try {
+                  const fastCandidates = audioFileData.fastTranscripts.map(
+                    (entry) => ({
+                      ...entry,
+                      correspondence: copyCorrespondence(entry.correspondence),
+                    }),
+                  );
+                  if (
+                    inputCorrespondence?.kind === "pcm" &&
+                    fastCandidates.some(
+                      (entry) =>
+                        entry.correspondence?.kind === "pcm" &&
+                        !containsPcmSpans(
+                          inputCorrespondence.spans,
+                          entry.correspondence.spans,
+                        ),
+                    )
+                  )
+                    throw new Error(
+                      "Fast transcript input exceeds finalized snippet",
+                    );
                   const coalesced = await coalesceTranscription(meeting, {
                     slowTranscript: transcription,
-                    fastTranscripts: audioFileData.fastTranscripts,
+                    fastTranscripts: fastCandidates,
                   });
                   if (getMeetingProcessingSignal(meeting).aborted) return;
                   if (coalesced && coalesced.trim().length > 0) {
                     audioFileData.coalescedTranscript = coalesced;
+                    audioFileData.coalescedCorrespondence =
+                      combineCorrespondence([
+                        inputCorrespondence,
+                        ...fastCandidates.map((entry) => entry.correspondence),
+                      ]);
                     audioFileData.coalesceMeta = {
                       model: getModelChoice(
                         "transcriptionCoalesce",
@@ -770,6 +830,9 @@ export function startProcessingSnippet(
                       createdAt: nowIso(),
                     };
                     audioFileData.transcript = coalesced;
+                    audioFileData.transcriptCorrespondence = copyCorrespondence(
+                      audioFileData.coalescedCorrespondence,
+                    );
                   }
                 } catch (error) {
                   console.error(
@@ -787,8 +850,10 @@ export function startProcessingSnippet(
             }),
         ),
       );
-    }
+    } else
+      audioFileData.terminalOmission = copyCorrespondence(inputCorrespondence);
   } else {
+    audioFileData.terminalOmission = copyCorrespondence(inputCorrespondence);
     const participant = meeting.participants?.get(snippet.userId);
     const speakerLabel = participant
       ? formatParticipantLabel(participant, {
@@ -1027,9 +1092,17 @@ export async function subscribeToUserVoice(
     const onPcmData = (chunk: Buffer) => {
       if (subscriptionState.suppressResubscribe) return;
       if (!isCaptureActive(meeting) || meeting.ownershipSignal?.aborted) return;
+      let acceptedSpan: PcmSpan | undefined;
       if (
         meeting.recordingCapture &&
-        !meeting.recordingCapture.push(`user:${userId}`, chunk)
+        !meeting.recordingCapture.push(
+          `user:${userId}`,
+          chunk,
+          Date.now(),
+          (span) => {
+            acceptedSpan = span;
+          },
+        )
       )
         return;
       subscriptionState.lastPcmAt = Date.now();
@@ -1058,6 +1131,10 @@ export async function subscribeToUserVoice(
 
       const snippet = meeting.audioData.currentSnippets.get(userId);
       if (snippet) {
+        if (acceptedSpan) {
+          if (!snippet.chunks.length) snippet.pcmSpans = [];
+          if (snippet.pcmSpans) appendPcmSpan(snippet.pcmSpans, acceptedSpan);
+        } else snippet.pcmSpans = undefined;
         snippet.chunks.push(chunk);
         snippet.audioBytes = (snippet.audioBytes ?? 0) + chunk.length;
         maybeFinalizeSnippetsForInterjection(meeting, userId, snippet);
@@ -1180,7 +1257,9 @@ export async function compileTranscriptions(
     ) => void;
   } = {},
 ): Promise<string> {
-  const segments = meeting.audioData.audioFiles
+  const inputFiles = [...meeting.audioData.audioFiles];
+  captureRecordingTranscriptScope(meeting, inputFiles);
+  const segments = inputFiles
     .map((fileData) => ({
       userId: fileData.userId,
       timestamp: fileData.timestamp,

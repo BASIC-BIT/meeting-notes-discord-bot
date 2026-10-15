@@ -1,3 +1,9 @@
+import type { AudioFileData } from "../types/audio";
+import type { TranscriptCorrespondence } from "../types/transcriptCorrespondence";
+import {
+  combineCorrespondence,
+  copyCorrespondence,
+} from "../utils/transcriptCorrespondence";
 import { liveTranscriptionProcessingSettings } from "./transcriptionProcessingSettings";
 import {
   freezeCompletionPolicy,
@@ -12,6 +18,7 @@ import {
   savedRecordingSettingsSchema,
   type GenerationContextCheckpoint,
   type SavedRecordingSettings,
+  type CompletedTranscriptionCheckpoint,
 } from "../types/recordingContent";
 import {
   collectMeetingContext,
@@ -32,13 +39,27 @@ import {
 import { resolveMeetingAttendees } from "../utils/meetingAttendees";
 import { formatParticipantLabel } from "../utils/participants";
 import { getBotNameVariants } from "../utils/botNames";
-import { resolveAudioFileText } from "../utils/audioTranscript";
+import { resolveAudioFileTranscript } from "../utils/audioTranscript";
 import { listRecentMeetingNamesForPrompt } from "./meetingNameService";
 
 type Frozen = Pick<
   GenerationContextCheckpoint,
   "capture" | "settings" | "context" | "prompts" | "recentMeetingNames"
-> & { sequence: number };
+> & {
+  sequence: number;
+  phase: "capturing" | "finalizing" | "finalized";
+  prePass?: {
+    files: Set<AudioFileData>;
+    entries: CompletedTranscriptionCheckpoint["entries"];
+    omitted?: TranscriptCorrespondence;
+    supplemental: Map<AudioFileData, ReturnType<typeof selectFile>>;
+  };
+  aggregate?: {
+    files: Map<AudioFileData, string>;
+    correspondence?: TranscriptCorrespondence;
+  };
+  processing?: CompletedTranscriptionCheckpoint["processing"];
+};
 const snapshots = new WeakMap<MeetingData, Frozen>();
 function provenance(meeting: MeetingData): RecordingCaptureProvenance {
   const reservation = meeting.reservation;
@@ -51,7 +72,7 @@ function provenance(meeting: MeetingData): RecordingCaptureProvenance {
   return {
     ...reservation.historyKey,
     meetingId: reservation.meetingId,
-    channelId: meeting.channelId,
+    channelId: meeting.voiceChannel.id,
     ownerInstanceId: reservation.ownerInstanceId,
     executionVersion: reservation.executionVersion,
     reservedAt: new Date(reservation.reservedAt).toISOString(),
@@ -211,44 +232,150 @@ export function checkpointRecordingContext(meeting: MeetingData): void {
   if (!frozen || !meeting.recordingCapture) return;
   enqueue(meeting, frozen, "context", snapshotDynamic(meeting, frozen));
 }
+function selectFile(file: AudioFileData) {
+  const selected = resolveAudioFileTranscript(file);
+  return {
+    file,
+    text: selected.text,
+    correspondence: copyCorrespondence(selected.correspondence),
+    settled: !file.processing,
+    revision: file.fastTranscripts?.length ?? 0,
+  };
+}
+function snapshotEntries(
+  meeting: MeetingData,
+  selected: ReturnType<typeof selectFile>[],
+  completedAt: string,
+): CompletedTranscriptionCheckpoint["entries"] {
+  return selected.flatMap(({ file, text, correspondence, revision }) =>
+    !text
+      ? []
+      : [
+          {
+            sourceId: `${file.source === "bot" || file.source === "chat_tts" ? "bot" : "user"}:${file.userId}`,
+            userId: file.userId,
+            source: file.source ?? "voice",
+            timestamp: file.timestamp,
+            text,
+            correspondence: copyCorrespondence(correspondence),
+            speakerLabel: formatParticipantLabel(
+              meeting.participants.get(file.userId),
+              { includeUsername: true, fallbackName: file.userId },
+            ),
+            completedAt,
+            revision,
+          },
+        ],
+  );
+}
+function snapshotOmissions(selected: ReturnType<typeof selectFile>[]) {
+  const values = selected
+    .filter((item) => !item.text && item.settled && item.correspondence)
+    .map((item) => item.correspondence);
+  return values.length ? combineCorrespondence(values) : undefined;
+}
+/** Seal opportunistic snapshots before mutable finalized-stage output exists. */
+export function guardRecordingFinalization(meeting: MeetingData): void {
+  const frozen = snapshots.get(meeting);
+  if (frozen?.phase !== "capturing") return;
+  const selected = meeting.audioData.audioFiles.map(selectFile);
+  frozen.prePass = {
+    files: new Set(meeting.audioData.audioFiles),
+    entries: snapshotEntries(meeting, selected, new Date().toISOString()),
+    omitted: snapshotOmissions(selected),
+    supplemental: new Map(),
+  };
+  frozen.phase = "finalizing";
+}
+/** Called at the exact synchronous selection boundary before asynchronous cleanup. */
+export function captureRecordingTranscriptScope(
+  meeting: MeetingData,
+  files: readonly AudioFileData[],
+): void {
+  const frozen = snapshots.get(meeting);
+  if (!frozen || frozen.phase === "finalized") return;
+  const selected = files.map((file) => ({
+    file,
+    ...resolveAudioFileTranscript(file),
+  }));
+  frozen.aggregate = {
+    files: new Map(selected.map((item) => [item.file, item.text])),
+    correspondence: combineCorrespondence(
+      selected
+        .filter(
+          (item) => item.text || (!item.file.processing && item.correspondence),
+        )
+        .map((item) => item.correspondence),
+    ),
+  };
+}
 export function checkpointCompletedTranscription(
   meeting: MeetingData,
-  processing?: import("../types/recordingContent").CompletedTranscriptionCheckpoint["processing"],
+  processing?: CompletedTranscriptionCheckpoint["processing"],
 ): void {
   const frozen = snapshots.get(meeting);
   if (!frozen || !frozen.capture.requested.transcribeMeeting) return;
+
+  if (processing && !frozen.processing) {
+    frozen.processing = {
+      ...processing,
+      correspondence: copyCorrespondence(frozen.aggregate?.correspondence),
+    };
+    frozen.phase = "finalized";
+  }
   const completedAt = new Date().toISOString();
-  const entries = meeting.audioData.audioFiles.flatMap((file) => {
-    const text = resolveAudioFileText(file);
-    if (file.transcriptionFailed || !text?.trim()) return [];
-    return [
-      {
-        sourceId: `${file.source === "bot" || file.source === "chat_tts" ? "bot" : "user"}:${file.userId}`,
-        userId: file.userId,
-        source: file.source ?? "voice",
-        timestamp: file.timestamp,
-        text,
-        speakerLabel: formatParticipantLabel(
-          meeting.participants.get(file.userId),
-          { includeUsername: true, fallbackName: file.userId },
-        ),
-        completedAt,
-        revision: file.fastTranscripts?.length ?? 0,
-      },
+  let selected = meeting.audioData.audioFiles.map(selectFile);
+  let entries = snapshotEntries(meeting, selected, completedAt);
+  let omitted = snapshotOmissions(selected);
+  if (!processing && frozen.phase === "finalizing") {
+    const baseline = frozen.prePass;
+    if (!baseline) return;
+    for (const item of selected) {
+      if (
+        !baseline.files.has(item.file) &&
+        !baseline.supplemental.has(item.file) &&
+        (item.text || (item.settled && item.correspondence))
+      )
+        baseline.supplemental.set(item.file, item);
+    }
+    if (!baseline.supplemental.size) return;
+    // Preserve sole late text without publishing mutable baseline final-pass output.
+    selected = [...baseline.supplemental.values()];
+    entries = [
+      ...baseline.entries,
+      ...snapshotEntries(meeting, selected, completedAt),
     ];
-  });
-  if (!entries.length) return;
+    const lateOmitted = snapshotOmissions(selected);
+    omitted =
+      baseline.omitted && lateOmitted
+        ? combineCorrespondence([baseline.omitted, lateOmitted])
+        : (baseline.omitted ?? lateOmitted);
+  }
+  const aggregate = frozen.aggregate;
+  const supplemental =
+    aggregate &&
+    selected.some(
+      (item) =>
+        item.text &&
+        (!aggregate.files.has(item.file) ||
+          aggregate.files.get(item.file) !== item.text),
+    );
+  if (supplemental && frozen.processing)
+    frozen.processing.supplementalEntries = true;
+  if (!entries.length && !omitted && !frozen.processing) return;
   const payload = completedTranscriptionSchema.parse({
     schemaVersion: 1,
     kind: "completed_transcription",
-    processing,
+    processing: frozen.processing,
     capture: frozen.capture,
     capturedAt: completedAt,
     entries,
+    omitted,
   });
   checkpointRecordingContext(meeting);
   enqueue(meeting, frozen, "transcription", payload);
 }
+
 async function capturePrompts(
   frozen: Frozen,
   names: Array<[keyof Frozen["prompts"], string, "text" | "chat"]>,
@@ -332,6 +459,7 @@ export function startRecordingContentCheckpoint(meeting: MeetingData): void {
   const frozen: Frozen = {
     capture: provenance(meeting),
     sequence: 0,
+    phase: "capturing",
     settings: { availability: "unavailable" },
     prompts: {},
     recentMeetingNames: { availability: "unavailable" },

@@ -26,9 +26,15 @@ jest.mock("../../src/services/modelFactory", () => ({
   buildModelOverrides: jest.fn(),
   getModelChoice: () => ({ model: "generated" }),
 }));
-jest.mock("../../src/services/recordingContentService", () => ({
-  checkpointCompletedTranscription: jest.fn(),
-}));
+import { Collection } from "discord.js";
+import {
+  startRecordingContentCheckpoint,
+  checkpointCompletedTranscription,
+  guardRecordingFinalization,
+  captureRecordingTranscriptScope,
+} from "../../src/services/recordingContentService";
+import { completedTranscriptionSchema } from "../../src/types/recordingContent";
+import type { CheckpointArtifactInput } from "../../src/types/recordingCheckpoint";
 jest.mock("../../src/services/recordingCheckpointPlayback", () => ({
   createCheckpointPlaybackTap: jest.fn(
     jest.requireActual("../../src/services/recordingCheckpointPlayback")
@@ -69,17 +75,24 @@ jest.mock("@discordjs/voice", () => ({
   StreamType: { Opus: "opus" },
   createAudioResource: (playStream: PassThrough) => {
     if (mockResourceFailure) throw new Error("synthetic resource failure");
-    return {
+    const resource = {
       playStream,
       playbackDuration: 0,
-      read: () => null,
+      read: () => {
+        resource.playbackDuration += 20;
+        return Buffer.alloc(1);
+      },
     };
+    return resource;
   },
 }));
 function fixture(recordBotAudio = false) {
   const player = Object.assign(new EventEmitter(), {
     state: { status: "idle" },
-    play: jest.fn(() => setImmediate(() => player.emit("idle"))),
+    play: jest.fn((resource?: unknown): void => {
+      void resource;
+      setImmediate(() => player.emit("idle"));
+    }),
     stop: jest.fn(),
   });
   const meeting = {
@@ -239,3 +252,167 @@ test("resource construction failure retains the started encoder until actual ter
     error.mockRestore();
   }
 });
+
+function attachCheckpoint(f: ReturnType<typeof fixture>) {
+  const artifacts: CheckpointArtifactInput[] = [];
+  Object.assign(f.meeting, {
+    guildId: "generated",
+    channelId: "notes",
+    transcribeMeeting: true,
+    generateNotes: false,
+    captureStartedAt: new Date(2000),
+    creator: { id: "generated" },
+    participants: new Map(),
+    attendance: new Set(),
+    chatLog: [],
+    reservation: {
+      sessionMode: "meeting",
+      meetingId: "generated",
+      guildId: "generated",
+      ownerInstanceId: "owner",
+      executionVersion: 1,
+      voiceOperationAttemptId: "voice",
+      reservedAt: 1000,
+      historyKey: { guildId: "generated", channelId_timestamp: "voice#1000" },
+    },
+    recordingCapture: {
+      queueContent: (artifact: CheckpointArtifactInput) => {
+        artifacts.push(artifact);
+        return true;
+      },
+    },
+  });
+  Object.assign(f.meeting.voiceChannel, { name: "Voice" });
+  Object.assign(f.meeting.guild, {
+    name: "Server",
+    roles: new Collection(),
+    scheduledEvents: new Collection(),
+    channels: new Collection(),
+    members: {},
+    client: {},
+  });
+  startRecordingContentCheckpoint(f.meeting);
+  return artifacts;
+}
+test.each([false, true])(
+  "delayed actual TTS termination preserves late text across failed/finalized guard (%s)",
+  async (acknowledged) => {
+    mockHoldEncoder = true;
+    const f = fixture(false);
+    const artifacts = attachCheckpoint(f);
+    const baseline = {
+      userId: "generated",
+      timestamp: 2000,
+      transcript: "Before final pass",
+      transcriptCorrespondence: { kind: "text_only" as const },
+      processing: false,
+      audioOnlyProcessing: false,
+    };
+    f.meeting.audioData.audioFiles.push(baseline);
+    checkpointCompletedTranscription(f.meeting);
+    f.queue.enqueue(item);
+    await settle();
+    expect(f.meeting.audioData.audioFiles).toHaveLength(1);
+    guardRecordingFinalization(f.meeting);
+    Object.assign(baseline, { finalPassTranscript: "Final pass result" });
+    if (acknowledged) {
+      captureRecordingTranscriptScope(f.meeting, [baseline]);
+      checkpointCompletedTranscription(f.meeting, {
+        finalPass: "acknowledged",
+        cleanup: "disabled",
+        finalText: "Final pass result",
+      });
+    }
+    // stopAndClear requests termination but does not await the running finally block.
+    f.queue.stopAndClear();
+    await settle();
+    expect(f.meeting.audioData.audioFiles).toHaveLength(1);
+    mockCommands[0].emit("end");
+    await settle();
+    const raw = artifacts
+      .filter((artifact) => artifact.kind === "transcription")
+      .at(-1)!;
+    const result = completedTranscriptionSchema.parse(
+      JSON.parse(Buffer.from(raw.bytes).toString()),
+    );
+    expect(result.entries.map((entry) => entry.text)).toEqual([
+      acknowledged ? "Final pass result" : "Before final pass",
+      item.text,
+    ]);
+    expect(result.entries[1].correspondence).toEqual({ kind: "text_only" });
+    if (acknowledged)
+      expect(result.processing).toMatchObject({
+        finalText: "Final pass result",
+        supplementalEntries: true,
+      });
+    else expect(result.processing).toBeUndefined();
+    await stopMeetingProcessing(f.meeting);
+  },
+);
+
+test.each(["full", "partial"] as const)(
+  "actual consumed TTS %s frames carry only acknowledged input receipts",
+  async (mode) => {
+    const f = fixture(true);
+    let offset = 0;
+    Object.assign(f.meeting, {
+      recordingCapture: {
+        push: (
+          sourceId: string,
+          chunk: Buffer,
+          _at: number,
+          accepted: (span: {
+            sourceId: string;
+            sequence: number;
+            startByte: number;
+            endByte: number;
+          }) => void,
+        ) => {
+          accepted({
+            sourceId,
+            sequence: 0,
+            startByte: offset,
+            endByte: offset + chunk.length,
+          });
+          offset += chunk.length;
+          return true;
+        },
+        interrupt: jest.fn(),
+      },
+    });
+    f.player.play.mockImplementationOnce((resource?: unknown) => {
+      const input = resource as {
+        playStream: PassThrough;
+        read(): Buffer | null;
+      };
+      input.playStream.resume();
+      input.playStream.once("end", () => {
+        if (mode === "full") input.read();
+        f.player.emit("idle");
+      });
+    });
+    f.queue.enqueue(item);
+    await settle();
+    await settle();
+    const entry = f.meeting.audioData.audioFiles[0];
+    if (mode === "full") {
+      expect(entry.transcript).toBe(item.text);
+      expect(entry.transcriptCorrespondence).toEqual({
+        kind: "pcm",
+        spans: [
+          {
+            sourceId: "bot:generated",
+            sequence: 0,
+            startByte: 0,
+            endByte: 3840,
+          },
+        ],
+      });
+    } else {
+      expect(entry.transcript).toBeUndefined();
+      expect(entry.transcriptCorrespondence).toBeUndefined();
+      expect(offset).toBe(0);
+    }
+    await stopMeetingProcessing(f.meeting);
+  },
+);

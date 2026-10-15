@@ -1,3 +1,4 @@
+import type { PcmSpan } from "../types/transcriptCorrespondence";
 import { createHash } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -195,7 +196,12 @@ export function createRecordingCheckpointCapture(input: Input) {
         arm();
       });
   }
-  function push(sourceId: string, chunk: Buffer, at = Date.now()): boolean {
+  function push(
+    sourceId: string,
+    chunk: Buffer,
+    at = Date.now(),
+    onAccepted?: (span: PcmSpan) => void,
+  ): boolean {
     if (stopped || intakeStopped || signal.aborted) return false;
     const sourceBytes =
       (open.get(sourceId)?.bytes ?? 0) +
@@ -245,6 +251,7 @@ export function createRecordingCheckpointCapture(input: Input) {
       piece.maxCursorAdjustmentMs,
       sampleAt - at,
     );
+    const startByte = piece.bytes;
     piece.chunks.push(Buffer.from(chunk));
     piece.bytes += chunk.length;
     const durationMs = (chunk.length * 1000) / RATE;
@@ -258,7 +265,14 @@ export function createRecordingCheckpointCapture(input: Input) {
     if (piece.bytes >= RATE * 30 || reservedBytes >= PRESSURE) closeAll();
     startWorker();
     arm();
-    return !stopped;
+    if (stopped) return false;
+    onAccepted?.({
+      sourceId,
+      sequence: piece.sequence,
+      startByte,
+      endByte: piece.bytes,
+    });
+    return true;
   }
   async function finish(): Promise<boolean> {
     intakeStopped = true;

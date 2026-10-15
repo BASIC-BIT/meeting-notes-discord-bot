@@ -301,3 +301,45 @@ test("normal 21ms cadence batches storage while preserving every byte interval a
   expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
   f.capture.releaseSettledBuffers();
 });
+
+test("accepted PCM returns exact immutable piece offsets before publication", async () => {
+  const f = fixture();
+  const spans: unknown[] = [];
+  try {
+    expect(
+      f.capture.push("user:speaker", pcm(), 0, (span) => spans.push(span)),
+    ).toBe(true);
+    expect(
+      f.capture.push("user:speaker", pcm(), 20, (span) => spans.push(span)),
+    ).toBe(true);
+    expect(spans).toEqual([
+      { sourceId: "user:speaker", sequence: 0, startByte: 0, endByte: 3840 },
+      { sourceId: "user:speaker", sequence: 0, startByte: 3840, endByte: 7680 },
+    ]);
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(
+      f.capture.push("user:speaker", pcm(), 30000, (span) => spans.push(span)),
+    ).toBe(true);
+    expect(spans[2]).toEqual({
+      sourceId: "user:speaker",
+      sequence: 1,
+      startByte: 0,
+      endByte: 3840,
+    });
+    expect(spans[0]).toEqual({
+      sourceId: "user:speaker",
+      sequence: 0,
+      startByte: 0,
+      endByte: 3840,
+    });
+    f.capture.fence();
+    expect(
+      f.capture.push("user:speaker", pcm(), 30020, (span) => spans.push(span)),
+    ).toBe(false);
+    expect(spans).toHaveLength(3);
+  } finally {
+    f.capture.fence();
+    await f.capture.settled();
+    f.capture.releaseSettledBuffers();
+  }
+});

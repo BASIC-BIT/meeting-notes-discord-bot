@@ -12,6 +12,7 @@ import { interruptOwnedMeeting } from "../services/ownedMeetingInterruption";
 import {
   checkpointRecordingContext,
   checkpointCompletedTranscription,
+  guardRecordingFinalization,
 } from "../services/recordingContentService";
 import { stopRecordingCapture } from "../audio";
 import { ButtonInteraction, Client, EmbedBuilder } from "discord.js";
@@ -595,6 +596,7 @@ async function finalizeRecording(
       )
         throw new Error("Completed transcript preservation failed");
 
+      guardRecordingFinalization(meeting);
       const finalPassResult = await runMeetingEndStep(
         meeting,
         "transcription-final-pass",

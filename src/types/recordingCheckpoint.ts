@@ -102,6 +102,7 @@ export const recoveryDispositionSchema = z
           "export_uncertain",
           "invalid_checkpoint",
           "invalid_payload",
+          "transcript_overlap_unknown",
           "retry_exhausted",
           "policy_unknown",
         ]),

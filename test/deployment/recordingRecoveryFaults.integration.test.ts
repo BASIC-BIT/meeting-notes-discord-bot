@@ -135,6 +135,11 @@ test.each(["missing", "corrupt", "invalid_context"] as const)(
 test("verified PCM supplements saved text and missing PCM reduces verified coverage", async () => {
   const f = await published({
     artifacts: [generatedAudio()],
+    // This fault scenario supplements independent chat text, not legacy same-source speech.
+    transcript: (saved) => {
+      for (const entry of saved.entries)
+        entry.correspondence = { kind: "text_only" };
+    },
     context: (saved) => {
       saved.prompts.transcription = {
         availability: "available",

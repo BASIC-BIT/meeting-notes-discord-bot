@@ -103,13 +103,13 @@ function fixture() {
   const meeting = {
     guildId: "synthetic",
     meetingId: "synthetic",
-    channelId: "voice",
+    channelId: "separate-notes",
     startMessageId: message.id,
     startTime: new Date(0),
     endTime: new Date(1000),
     attendance: new Set(),
-    voiceChannel: { name: "Synthetic" },
-    textChannel: { messages: { fetch }, send },
+    voiceChannel: { id: "voice", name: "Synthetic" },
+    textChannel: { id: "separate-notes", messages: { fetch }, send },
     audioData: {},
     reservation,
     finalization: {
@@ -418,4 +418,16 @@ test("unrelated unsignaled notice keeps its early read-failure fallback", async 
   lookup.resolve(undefined);
   await task;
   expect(callsBeforeReadSettled).toBe(1);
+});
+
+test("processing notification keeps the configured text destination separate from capture voice", async () => {
+  const f = fixture();
+  f.meeting.startMessageId = undefined;
+  await updateMeetingProcessingMessage(f.meeting);
+  expect(f.meeting.voiceChannel.id).toBe("voice");
+  expect(f.meeting.channelId).toBe("separate-notes");
+  expect(f.meeting.textChannel.id).toBe("separate-notes");
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(f.fetch).not.toHaveBeenCalled();
+  expect(f.edit).not.toHaveBeenCalled();
 });

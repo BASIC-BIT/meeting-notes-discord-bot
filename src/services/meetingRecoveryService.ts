@@ -17,6 +17,7 @@ import {
   recoverTranscript,
   recoveryNotesInput,
   InvalidRecoveryContent,
+  TranscriptOverlapUnknown,
   type RecoveryReader,
 } from "./meetingRecoveryContent";
 import {
@@ -502,6 +503,10 @@ async function recoverFailure(
 ) {
   deps.signal.throwIfAborted();
   if (error instanceof RecoveryMutationUnknown) throw error;
+  if (error instanceof TranscriptOverlapUnknown) {
+    await reconcile(claim, "transcript_overlap_unknown", deps);
+    return;
+  }
   if (
     error instanceof InvalidRecoveryContent ||
     error instanceof z.ZodError ||

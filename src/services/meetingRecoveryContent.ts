@@ -36,6 +36,13 @@ export type RecoveryReader = Pick<
   "read" | "readVerifiedObject"
 >;
 export class InvalidRecoveryContent extends Error {}
+export class TranscriptOverlapUnknown extends Error {}
+import {
+  transcriptCorrespondenceSchema,
+  type PcmSpan,
+  type TranscriptCorrespondence,
+} from "../types/transcriptCorrespondence";
+import { normalizePcmSpans } from "../utils/transcriptCorrespondence";
 function latest(
   artifacts: CheckpointArtifact[],
   kind: CheckpointArtifact["kind"],
@@ -97,6 +104,7 @@ export async function readRecoveryContent(
   let entries:
     | import("../types/recordingContent").CompletedTranscriptionCheckpoint["entries"]
     | undefined;
+  let omitted: import("../types/recordingContent").CompletedTranscriptionCheckpoint["omitted"];
   if (transcriptRef) {
     const bytes = await reader.readVerifiedObject(transcriptRef.object, signal);
     if (!bytes)
@@ -107,9 +115,10 @@ export async function readRecoveryContent(
     boundContent(pointer.capture, transcript.capture);
     entries = transcript.entries;
     processing = transcript.processing;
+    omitted = transcript.omitted;
   }
   signal.throwIfAborted();
-  return { ...verified, context, entries, processing };
+  return { ...verified, context, entries, processing, omitted };
 }
 export type RecoveryContent = Awaited<ReturnType<typeof readRecoveryContent>>;
 export function recoveryCaptureNotice(
@@ -220,49 +229,119 @@ function alignedFrame(milliseconds: number) {
     throw new InvalidRecoveryContent("PCM coverage is not frame aligned");
   return rounded;
 }
+type ByteRange = { startByte: number; endByte: number };
 function audioGroups(
   item: Extract<CheckpointArtifact, { kind: "audio" }>,
   byteLength: number,
+  residual: readonly ByteRange[],
 ) {
   if (item.coverage.kind !== "known")
     throw new InvalidRecoveryContent("PCM coverage unavailable");
-  const groups: RecoveryAudioGroup[] = [];
-  let group: RecoveryAudioGroup | undefined;
-  let byteOffset = 0;
+  const intervals: Array<{
+    startFrame: number;
+    startByte: number;
+    endByte: number;
+  }> = [];
+  let offset = 0;
   let lastEnd = 0;
   for (const interval of item.coverage.intervals) {
-    let startFrame = alignedFrame(interval.startOffsetMs);
-    let remaining = alignedFrame(interval.durationMs);
-    if (
-      interval.sourceId !== item.sourceId ||
-      remaining === 0 ||
-      startFrame < lastEnd
-    )
+    const startFrame = alignedFrame(interval.startOffsetMs);
+    const frames = alignedFrame(interval.durationMs);
+    if (interval.sourceId !== item.sourceId || !frames || startFrame < lastEnd)
       throw new InvalidRecoveryContent(
         "PCM interval coverage is invalid or overlapping",
       );
-    lastEnd = startFrame + remaining;
-    while (remaining > 0) {
-      if (!group || startFrame >= group.startFrame + RECOVERY_CHUNK_FRAMES) {
-        group = { startFrame, endFrame: startFrame, slices: [] };
-        groups.push(group);
-      }
-      const frames = Math.min(
-        remaining,
-        group.startFrame + RECOVERY_CHUNK_FRAMES - startFrame,
-      );
-      group.slices.push({ startFrame, frames, byteOffset });
-      group.endFrame = startFrame + frames;
-      byteOffset += frames * 4;
-      startFrame += frames;
-      remaining -= frames;
-    }
+    intervals.push({
+      startFrame,
+      startByte: offset,
+      endByte: offset + frames * 4,
+    });
+    offset += frames * 4;
+    lastEnd = startFrame + frames;
   }
-  if (byteOffset !== byteLength)
+  if (offset !== byteLength)
     throw new InvalidRecoveryContent(
       "PCM interval coverage differs from saved bytes",
     );
+  const groups: RecoveryAudioGroup[] = [];
+  for (const range of residual) {
+    // An excluded represented range is a hard split, never padded back into ASR.
+    let group: RecoveryAudioGroup | undefined;
+    for (const interval of intervals) {
+      let byteOffset = Math.max(range.startByte, interval.startByte);
+      const endByte = Math.min(range.endByte, interval.endByte);
+      let startFrame =
+        interval.startFrame + (byteOffset - interval.startByte) / 4;
+      while (byteOffset < endByte) {
+        if (!group || startFrame >= group.startFrame + RECOVERY_CHUNK_FRAMES) {
+          group = { startFrame, endFrame: startFrame, slices: [] };
+          groups.push(group);
+        }
+        const frames = Math.min(
+          (endByte - byteOffset) / 4,
+          group.startFrame + RECOVERY_CHUNK_FRAMES - startFrame,
+        );
+        group.slices.push({ startFrame, frames, byteOffset });
+        group.endFrame = startFrame + frames;
+        byteOffset += frames * 4;
+        startFrame += frames;
+      }
+    }
+  }
   return groups;
+}
+function correspondenceSpans(
+  value: TranscriptCorrespondence | undefined,
+  content: RecoveryContent,
+  sourceId?: string,
+): PcmSpan[] {
+  if (!value) return [];
+  const parsed = transcriptCorrespondenceSchema.parse(value);
+  if (parsed.kind === "text_only") return [];
+  for (const span of parsed.spans) {
+    if (sourceId && sourceId !== span.sourceId)
+      throw new InvalidRecoveryContent(
+        "Transcript receipt source differs from entry",
+      );
+    const pieces = content.manifest.artifacts.filter(
+      (item) =>
+        item.kind === "audio" &&
+        item.sourceId === span.sourceId &&
+        item.sequence === span.sequence,
+    );
+    if (pieces.length > 1)
+      throw new InvalidRecoveryContent("Ambiguous PCM piece identity");
+    // An open or unverified piece proves no coverage of a different saved piece.
+    if (pieces[0] && span.endByte > pieces[0].object.byteLength)
+      throw new InvalidRecoveryContent(
+        "Transcript receipt exceeds saved PCM bytes",
+      );
+  }
+  return parsed.spans;
+}
+function residualRanges(
+  item: Extract<CheckpointArtifact, { kind: "audio" }>,
+  spans: readonly PcmSpan[],
+): ByteRange[] {
+  const ranges: ByteRange[] = [];
+  let cursor = 0;
+  for (const span of normalizePcmSpans(
+    spans.filter(
+      (span) =>
+        span.sourceId === item.sourceId && span.sequence === item.sequence,
+    ),
+  )) {
+    if (span.endByte > item.object.byteLength)
+      throw new InvalidRecoveryContent(
+        "Transcript receipt exceeds saved PCM bytes",
+      );
+    if (cursor < span.startByte)
+      ranges.push({ startByte: cursor, endByte: span.startByte });
+    cursor = span.endByte;
+  }
+  if (cursor < item.object.byteLength)
+    ranges.push({ startByte: cursor, endByte: item.object.byteLength });
+  return ranges;
 }
 async function transcribeAudioGroup(
   group: RecoveryAudioGroup,
@@ -302,6 +381,7 @@ async function recoverAudioIntervals(
   reader: RecoveryReader,
   input: TranscriptionContentInput,
   startedAt: number,
+  residual: readonly ByteRange[],
 ): Promise<AudioFileData[]> {
   const signal = input.signal;
   signal.throwIfAborted();
@@ -318,7 +398,7 @@ async function recoverAudioIntervals(
   if (!/^[a-zA-Z0-9_-]+$/.test(userId))
     throw new InvalidRecoveryContent("Invalid saved source identity");
   const files: AudioFileData[] = [];
-  for (const group of audioGroups(item, bytes.byteLength)) {
+  for (const group of audioGroups(item, bytes.byteLength, residual)) {
     const timestamp = startedAt + group.startFrame / 48;
     const text = await transcribeAudioGroup(
       group,
@@ -332,6 +412,17 @@ async function recoverAudioIntervals(
         userId,
         timestamp,
         transcript: text,
+        transcriptCorrespondence: {
+          kind: "pcm",
+          spans: normalizePcmSpans(
+            group.slices.map((slice) => ({
+              sourceId: item.sourceId,
+              sequence: item.sequence,
+              startByte: slice.byteOffset,
+              endByte: slice.byteOffset + slice.frames * 4,
+            })),
+          ),
+        },
         source: item.sourceId.startsWith("bot:") ? "bot" : "voice",
         processing: false,
         audioOnlyProcessing: false,
@@ -346,36 +437,85 @@ export async function recoverTranscript(
   effect: TranscriptionContentInput["effect"],
 ): Promise<{ text: string; segments: TranscriptSegment[] }> {
   const audio = content.verified.filter((item) => item.kind === "audio");
-  // Opportunistic entries and final text have no exact audio-object coverage receipt.
-  // Preserve them, but never let them hide verified PCM that remains unproved.
   const acknowledgedText = content.processing?.finalText;
-  const savedSegments = (content.entries ?? []).map((entry) => ({
+  const entries = content.entries ?? [];
+  const represented = entries.flatMap((entry) =>
+    correspondenceSpans(entry.correspondence, content, entry.sourceId),
+  );
+  const omitted = correspondenceSpans(content.omitted, content);
+  const aggregate = correspondenceSpans(
+    content.processing?.correspondence,
+    content,
+  );
+  const dispositions = [...represented, ...omitted].sort(
+    (a, b) =>
+      a.sourceId.localeCompare(b.sourceId) ||
+      a.sequence - b.sequence ||
+      a.startByte - b.startByte,
+  );
+  for (let i = 1; i < dispositions.length; i++) {
+    const before = dispositions[i - 1],
+      after = dispositions[i];
+    if (
+      before.sourceId === after.sourceId &&
+      before.sequence === after.sequence &&
+      before.endByte > after.startByte
+    )
+      throw new InvalidRecoveryContent("Transcript input dispositions overlap");
+  }
+  const savedSegments = entries.map((entry) => ({
     ...entry,
     startedAt: new Date(entry.timestamp).toISOString(),
   }));
-  if (acknowledgedText !== undefined && !audio.length)
+  if (acknowledgedText !== undefined) {
+    if (
+      content.processing?.supplementalEntries ||
+      (audio.length && !content.processing?.correspondence) ||
+      audio.some((item) => residualRanges(item, aggregate).length)
+    )
+      throw new TranscriptOverlapUnknown(
+        "Acknowledged transcript overlap with uncovered input is unknown",
+      );
     return { text: acknowledgedText, segments: savedSegments };
-  const files: AudioFileData[] =
-    acknowledgedText === undefined
-      ? (content.entries ?? []).map((entry) => ({
-          userId: entry.userId,
-          timestamp: entry.timestamp,
-          transcript: entry.text,
-          source: entry.source,
-          processing: false,
-          audioOnlyProcessing: false,
-        }))
-      : [];
-  if (audio.length) {
+  }
+  if (
+    entries.some(
+      (entry) =>
+        !entry.correspondence &&
+        audio.some((item) => item.sourceId === entry.sourceId),
+    )
+  )
+    throw new TranscriptOverlapUnknown(
+      "Legacy transcript overlap with saved PCM is unknown",
+    );
+  const files: AudioFileData[] = entries.map((entry) => ({
+    userId: entry.userId,
+    timestamp: entry.timestamp,
+    transcript: entry.text,
+    transcriptCorrespondence: entry.correspondence,
+    source: entry.source,
+    processing: false,
+    audioOnlyProcessing: false,
+  }));
+  const residual = audio
+    .map((item) => ({ item, ranges: residualRanges(item, dispositions) }))
+    .filter(({ ranges }) => ranges.length);
+  if (residual.length) {
     const input = transcriptionInput(content.context, signal, effect);
     const startedAt = Date.parse(
       content.manifest.capture.captureStartedAt ?? "",
     );
     if (!Number.isFinite(startedAt))
       throw new InvalidRecoveryContent("Original capture timing unavailable");
-    for (const item of audio)
+    for (const { item, ranges } of residual)
       files.push(
-        ...(await recoverAudioIntervals(item, reader, input, startedAt)),
+        ...(await recoverAudioIntervals(
+          item,
+          reader,
+          input,
+          startedAt,
+          ranges,
+        )),
       );
   }
   const text = await processRecoveryTranscript(
@@ -384,7 +524,6 @@ export async function recoverTranscript(
     files,
     signal,
     effect,
-    acknowledgedText,
   );
   // Final-pass corrections mutate these files. Cleanup can alter aggregate text,
   // but cannot invent a more precise speaker/time alignment for a segment.
@@ -404,10 +543,9 @@ export async function recoverTranscript(
   });
   return {
     text,
-    segments: [
-      ...(acknowledgedText === undefined ? [] : savedSegments),
-      ...segments,
-    ].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt)),
+    segments: [...segments].sort(
+      (a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt),
+    ),
   };
 }
 export function recoveryNotesInput(

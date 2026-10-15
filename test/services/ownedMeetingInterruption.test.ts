@@ -115,6 +115,7 @@ test.each([true, false])(
     const meeting = {
       ...owner,
       channelId: "voice",
+      voiceChannel: { id: "voice" },
       transcribeMeeting: true,
       generateNotes: true,
       reservation: {
@@ -216,6 +217,7 @@ test.each(["complete", "processing"] as const)(
       reservation: original,
       guildId: original.guildId,
       channelId: "voice",
+      voiceChannel: { id: "voice" },
       captureStartedAt: new Date(0),
       recordingCheckpoint: checkpoint,
       transcribeMeeting: true,
@@ -311,5 +313,151 @@ test.each([false, true])(
     expect(meeting.setFinished).toHaveBeenCalledTimes(
       uncertainFinalizer ? 0 : 1,
     );
+  },
+);
+
+test.each(["original", "stale", "wrong-voice"] as const)(
+  "actual preservation keeps distinct voice/text identity and %s ownership",
+  async (ownership) => {
+    const { createRecordingCheckpointService: createRealService } =
+      jest.requireActual<
+        typeof import("../../src/services/recordingCheckpointService")
+      >("../../src/services/recordingCheckpointService");
+    const { createMockDeploymentControlRepository } =
+      await import("../../src/repositories/deploymentControlRepository");
+    const { history } = await import("../deployment/controlFixtures");
+    const { createHash } = await import("node:crypto");
+    const row = {
+      ...history,
+      textChannelId: "separate-notes",
+      status: "in_progress" as const,
+    };
+    const original = {
+      guildId: row.guildId,
+      meetingId: row.meetingId,
+      ownerInstanceId: "old",
+      executionVersion: 1,
+      voiceOperationAttemptId: "voice",
+      sessionMode: "meeting" as const,
+      reservedAt: Date.parse(row.timestamp),
+      historyKey: {
+        guildId: row.guildId,
+        channelId_timestamp: row.channelId_timestamp,
+      },
+      workHandle: {
+        settle: jest.fn(),
+        transition: jest.fn(),
+        beginOwnedControl: () => ({ settle: jest.fn() }),
+      },
+    };
+    const lease = {
+      ...original,
+      voiceChannelId: row.channelId,
+      textChannelId: row.textChannelId,
+      isAutoRecording: false,
+      leaseExpiresAt: Math.floor(Date.now() / 1000) + 120,
+      createdAt: row.timestamp,
+      updatedAt: row.timestamp,
+      expiresAt: 0,
+      ...(ownership === "stale"
+        ? { ownerInstanceId: "new-owner", executionVersion: 2 }
+        : {}),
+    };
+    const repo = createMockDeploymentControlRepository(
+      new Map(),
+      new Map([[row.guildId, [row]]]),
+      new Map([[row.guildId, lease]]),
+    );
+    const objects = new Map<string, Buffer>();
+    const service = createRealService({
+      repository: repo,
+      objects: {
+        upload: async (key, bytes) => {
+          objects.set(key, Buffer.from(bytes));
+          return key;
+        },
+        read: async (key) => objects.get(key),
+      },
+    });
+    jest
+      .mocked(createRecordingCheckpointService)
+      .mockImplementationOnce(() => service)
+      .mockImplementationOnce(() => service);
+    jest.mocked(getDeploymentControlRepository).mockReturnValue(repo);
+    jest.mocked(getActiveMeetingLease).mockResolvedValue(lease);
+    const bytes = Buffer.alloc(96000);
+    const artifact = {
+      kind: "audio" as const,
+      sourceId: "user:generated",
+      sequence: 0,
+      bytes,
+      checksumSha256: createHash("sha256").update(bytes).digest("hex"),
+      contentType: "application/octet-stream",
+      format: {
+        encoding: "pcm_s16le" as const,
+        sampleRate: 48000,
+        channels: 1,
+      },
+      coverage: {
+        kind: "known" as const,
+        intervals: [
+          { sourceId: "user:generated", startOffsetMs: 0, durationMs: 1000 },
+        ],
+      },
+    };
+    const meeting = {
+      guildId: row.guildId,
+      meetingId: row.meetingId,
+      channelId: "separate-notes",
+      textChannel: { id: "separate-notes", send: jest.fn() },
+      voiceChannel: {
+        id: ownership === "wrong-voice" ? "wrong-voice" : row.channelId,
+      },
+      reservation: original,
+      captureStartedAt: new Date("2026-01-01T00:00:02Z"),
+      transcribeMeeting: true,
+      generateNotes: true,
+      ownershipSignal: new AbortController().signal,
+      recordingCaptureState: {
+        kind: "interrupted",
+        startedAt: "2026-01-01T00:00:02.000Z",
+        endedAt: "2026-01-01T00:00:03.000Z",
+        detectedAt: "2026-01-01T00:00:03.000Z",
+      },
+      recordingCapture: {
+        fence: jest.fn(),
+        settled: async () => {},
+        pending: () => [{ artifact }],
+        releaseSettledBuffers: jest.fn(),
+      },
+      setFinished: jest.fn(),
+      audioData: {},
+    } as unknown as MeetingData;
+    expect(
+      await interruptOwnedMeeting(meeting, {
+        reason: "shutdown",
+        deadline: Date.now() + 100000,
+      }),
+    ).toEqual({ kind: ownership === "original" ? "settled" : "unresolved" });
+    expect(meeting.channelId).toBe("separate-notes");
+    expect(meeting.textChannel.id).toBe("separate-notes");
+    expect(row.textChannelId).toBe("separate-notes");
+    expect(meeting.textChannel.send).not.toHaveBeenCalled();
+    if (ownership === "original") {
+      expect(row.checkpoint!.capture.channelId).toBe(row.channelId);
+      expect((await service.read(row.checkpoint!)).manifest.capture).toEqual(
+        row.checkpoint!.capture,
+      );
+      expect(reconcilePreservedRecordingReservation).toHaveBeenCalledWith(
+        original,
+        expect.anything(),
+      );
+    } else {
+      expect(row.checkpoint).toBeUndefined();
+      expect(reconcilePreservedRecordingReservation).not.toHaveBeenCalled();
+      expect(
+        meeting.recordingCapture!.releaseSettledBuffers,
+      ).not.toHaveBeenCalled();
+    }
   },
 );

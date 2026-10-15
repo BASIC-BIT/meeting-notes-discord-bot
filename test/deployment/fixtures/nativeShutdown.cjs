@@ -158,6 +158,8 @@ async function recordingFixture() {
     throw new Error(`Fixture admission rejected: ${result.reason}`);
   meeting = {
     ...history,
+    channelId: "text",
+    voiceChannel: { id: "voice" },
     reservation: result.reservation,
     captureStartedAt: new Date(startedAt),
     captureAudio: true,

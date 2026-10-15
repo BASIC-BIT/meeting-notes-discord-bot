@@ -653,3 +653,79 @@ test("complete capture delivery receipt and status survive crash before export i
   expect(f.autoExport).toHaveBeenCalledTimes(1);
   expect(f.send).toHaveBeenCalledTimes(2);
 });
+
+test.each(["legacy", "malformed", "finalized_tail"] as const)(
+  "%s overlap preserves artifacts and performs no recovery effects",
+  async (kind) => {
+    const bytes = Buffer.alloc(3840, 1);
+    const f = await fixture(undefined, {
+      artifacts: [
+        {
+          kind: "audio",
+          sourceId: "user:123",
+          sequence: 0,
+          contentType: "audio/pcm",
+          format: { encoding: "pcm_s16le", sampleRate: 48000, channels: 2 },
+          coverage: {
+            kind: "known",
+            intervals: [
+              { sourceId: "user:123", startOffsetMs: 0, durationMs: 20 },
+            ],
+          },
+          bytes,
+          checksumSha256: createHash("sha256").update(bytes).digest("hex"),
+        },
+      ],
+      transcript: (payload) => {
+        if (kind === "malformed")
+          payload.entries[0].correspondence = {
+            kind: "pcm",
+            spans: [
+              {
+                sourceId: "user:123",
+                sequence: 0,
+                startByte: 0,
+                endByte: 3844,
+              },
+            ],
+          };
+        if (kind === "finalized_tail") {
+          payload.entries[0].correspondence = {
+            kind: "pcm",
+            spans: [
+              {
+                sourceId: "user:123",
+                sequence: 0,
+                startByte: 0,
+                endByte: 1920,
+              },
+            ],
+          };
+          payload.processing = {
+            finalPass: "acknowledged",
+            cleanup: "disabled",
+            finalText: "Exact finalized input",
+            correspondence: payload.entries[0].correspondence,
+          };
+        }
+      },
+    });
+    const pointer = structuredClone(f.claim.history.checkpoint);
+    const keys = [...f.objects.keys()];
+    f.upload.mockClear();
+    await recoverMeeting(f.claim, f.deps);
+    expect(f.claim.history.recovery).toMatchObject({
+      disposition: "needs_reconciliation",
+      reason:
+        kind === "malformed" ? "invalid_payload" : "transcript_overlap_unknown",
+      retry: { nextAttemptAt: null },
+    });
+    expect(f.claim.history.checkpoint).toEqual(pointer);
+    expect([...f.objects.keys()]).toEqual(keys);
+    expect(transcribeContentSnippet).not.toHaveBeenCalled();
+    expect(f.notes).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.autoExport).not.toHaveBeenCalled();
+    expect(f.upload).not.toHaveBeenCalled();
+  },
+);

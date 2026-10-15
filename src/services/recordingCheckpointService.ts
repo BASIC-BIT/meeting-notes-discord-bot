@@ -39,13 +39,12 @@ export type RecordingCheckpointMeeting = Pick<
   | "meetingId"
   | "guildId"
   | "ownershipSignal"
-  | "channelId"
   | "captureStartedAt"
   | "transcribeMeeting"
   | "generateNotes"
   | "recordingCaptureState"
   | "recordingCheckpoint"
->;
+> & { voiceChannel: Pick<MeetingData["voiceChannel"], "id"> };
 type Repository = Pick<
   DeploymentControlRepository,
   "transitionMeetingHistory" | "getMeetingHistory"
@@ -784,7 +783,7 @@ export function createRecordingCheckpointService(
       capture: {
         ...reservation.historyKey,
         meetingId: reservation.meetingId,
-        channelId: meeting.channelId,
+        channelId: meeting.voiceChannel.id,
         ownerInstanceId: reservation.ownerInstanceId,
         executionVersion: reservation.executionVersion,
         reservedAt: new Date(reservation.reservedAt).toISOString(),

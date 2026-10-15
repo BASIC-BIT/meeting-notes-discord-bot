@@ -633,7 +633,7 @@ async function originalProducerFixture() {
   const meeting: RecordingCheckpointMeeting = {
     meetingId: history.meetingId,
     guildId: history.guildId,
-    channelId: history.channelId,
+    voiceChannel: { id: history.channelId },
     ownershipSignal: new AbortController().signal,
     captureStartedAt: new Date("2026-01-01T00:00:02Z"),
     recordingCaptureState: {

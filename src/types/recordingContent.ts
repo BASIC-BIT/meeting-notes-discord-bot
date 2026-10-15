@@ -1,3 +1,4 @@
+import { transcriptCorrespondenceSchema } from "./transcriptCorrespondence";
 import {
   autoCompletionPolicySchema,
   completionPolicySchema,
@@ -251,9 +252,12 @@ export const completedTranscriptionSchema = base
         ]),
         cleanup: z.enum(["acknowledged", "fallback", "disabled"]),
         finalText: text,
+        correspondence: transcriptCorrespondenceSchema.optional(),
+        supplementalEntries: z.literal(true).optional(),
       })
       .strict()
       .optional(),
+    omitted: transcriptCorrespondenceSchema.optional(),
     entries: z.array(
       z
         .object({
@@ -265,8 +269,17 @@ export const completedTranscriptionSchema = base
           speakerLabel: text,
           completedAt: z.iso.datetime(),
           revision: z.number().int().nonnegative(),
+          correspondence: transcriptCorrespondenceSchema.optional(),
         })
-        .strict(),
+        .strict()
+        .refine(
+          (entry) =>
+            entry.correspondence?.kind !== "pcm" ||
+            entry.correspondence.spans.every(
+              (span) => span.sourceId === entry.sourceId,
+            ),
+          "Transcript receipt source differs from entry",
+        ),
     ),
   })
   .strict();

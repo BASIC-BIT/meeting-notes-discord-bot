@@ -1,3 +1,5 @@
+import type { PcmSpan } from "./types/transcriptCorrespondence";
+import { appendPcmSpan } from "./utils/transcriptCorrespondence";
 import {
   getMeetingProcessingSignal,
   runMeetingProcessingEffect,
@@ -215,6 +217,9 @@ async function playTtsItem(
   let tap: ReturnType<typeof createCheckpointPlaybackTap> | undefined;
   const start = Date.now();
   let fullyPlayed: boolean;
+  const consumedSpans: PcmSpan[] = [];
+  let mappedPlayback = true;
+  const playbackTextOnly = meeting.recordBotAudio === false;
   try {
     tap =
       meeting.recordBotAudio === false
@@ -226,15 +231,21 @@ async function playTtsItem(
                 meeting.ownershipSignal?.aborted
               )
                 return false;
+              let receivedSpan = false;
               if (
                 meeting.recordingCapture &&
                 !meeting.recordingCapture.push(
                   `bot:${item.userId}`,
                   chunk,
                   observedAt,
+                  (span) => {
+                    receivedSpan = true;
+                    appendPcmSpan(consumedSpans, span);
+                  },
                 )
               )
                 return false;
+              if (chunk.length && !receivedSpan) mappedPlayback = false;
               meeting.audioData.audioPassThrough?.write(chunk, (error) => {
                 if (error) meeting.audioData.captureIncomplete = true;
               });
@@ -271,6 +282,13 @@ async function playTtsItem(
     userId: item.userId,
     timestamp: start,
     transcript: fullyPlayed ? item.text : undefined,
+    transcriptCorrespondence: !fullyPlayed
+      ? undefined
+      : playbackTextOnly
+        ? { kind: "text_only" }
+        : mappedPlayback
+          ? { kind: "pcm", spans: consumedSpans }
+          : undefined,
     processing: false,
     audioOnlyProcessing: false,
     source: item.source === "chat_tts" ? "chat_tts" : "bot",

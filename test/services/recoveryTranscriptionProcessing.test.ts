@@ -106,20 +106,33 @@ async function fixture(complete = false) {
       checksumSha256: createHash("sha256").update(bytes).digest("hex"),
     };
     f.objects.set(object.key, bytes);
-    content.verified.push({
-      kind: "audio",
+    const audio = {
+      kind: "audio" as const,
       sourceId: "user:123",
       sequence: 0,
       contentType: "audio/pcm",
       object,
-      format: { encoding: "pcm_s16le", channels: 2, sampleRate: 48000 },
+      format: {
+        encoding: "pcm_s16le" as const,
+        channels: 2,
+        sampleRate: 48000,
+      },
       coverage: {
-        kind: "known",
+        kind: "known" as const,
         intervals: [
           { sourceId: "user:123", startOffsetMs: 0, durationMs: 1000 },
         ],
       },
-    });
+    };
+    content.verified.push(audio);
+    content.manifest.artifacts.push(audio);
+    for (const entry of content.entries ?? [])
+      entry.correspondence = {
+        kind: "pcm",
+        spans: [
+          { sourceId: "user:123", sequence: 0, startByte: 0, endByte: 192000 },
+        ],
+      };
   }
   return { ...f, content, signal };
 }
@@ -177,22 +190,19 @@ test("known missing coverage never masquerades as a full finalized recording", a
   expect(f.content.processing?.finalPass).toBe("not_applicable");
 });
 
-test("processed transcript without exact audio coverage cannot bypass newer PCM", async () => {
+test("legacy processed transcript with PCM reconciles before any provider replay", async () => {
   const f = await fixture(true);
   f.content.processing = {
     finalPass: "acknowledged",
     cleanup: "disabled",
     finalText: "Previously acknowledged processed text.",
   };
-  if (f.content.context.settings.availability !== "available")
-    throw new Error("fixture");
-  f.content.context.settings.value.premiumTranscription.enabled = false;
-  const text = await recoverTranscript(f.content, f.reader, f.signal, (run) =>
-    run(),
-  );
-  expect(text.text).toContain("Previously acknowledged processed text.");
-  expect(text.text).toContain("New verified interval.");
-  expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
+  await expect(
+    recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
+  ).rejects.toThrow("overlap");
+  expect(transcribeContentSnippet).not.toHaveBeenCalled();
+  expect(runContentTranscriptionFinalPass).not.toHaveBeenCalled();
+  expect(createOpenAIClient).not.toHaveBeenCalled();
 });
 
 function addIntervalAudio(
@@ -231,6 +241,7 @@ function addIntervalAudio(
     },
   };
   f.content.verified.push(audio);
+  f.content.manifest.artifacts.push(audio);
   return audio;
 }
 
@@ -376,5 +387,197 @@ test.each(["alignment", "bytes", "overlap"])(
     ).rejects.toThrow("PCM");
     expect(transcribeContentSnippet).not.toHaveBeenCalled();
     expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+  },
+);
+
+function representedEntry(
+  f: Awaited<ReturnType<typeof fixture>>,
+  text: string,
+  spans: {
+    sourceId: string;
+    sequence: number;
+    startByte: number;
+    endByte: number;
+  }[],
+) {
+  return {
+    sourceId: "user:123",
+    userId: "123",
+    source: "voice" as const,
+    timestamp: Date.parse(f.claim.history.timestamp),
+    text,
+    speakerLabel: "Speaker",
+    completedAt: f.claim.history.timestamp,
+    revision: 0,
+    correspondence: { kind: "pcm" as const, spans },
+  };
+}
+const span = (startByte: number, endByte: number, sequence = 0) => ({
+  sourceId: "user:123",
+  sequence,
+  startByte,
+  endByte,
+});
+
+test("mapped saved prefix is retained once and only its real PCM tail reaches ASR", async () => {
+  const f = await fixture();
+  addIntervalAudio(f, [
+    { startOffsetMs: 0, durationMs: 20 },
+    { startOffsetMs: 20, durationMs: 20 },
+  ]);
+  f.content.entries = [representedEntry(f, "Saved prefix.", [span(0, 3840)])];
+  const result = await recoverTranscript(f.content, f.reader, f.signal, (run) =>
+    run(),
+  );
+  expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
+  expect(
+    jest.mocked(transcribeContentSnippet).mock.calls[0][1].chunks[0],
+  ).toEqual(Buffer.alloc(3840, 2));
+  expect(result.text.match(/Saved prefix\./g)).toHaveLength(1);
+  expect(result.segments).toHaveLength(2);
+});
+
+test("equal words and timestamps remain separate disjoint utterances", async () => {
+  const f = await fixture();
+  addIntervalAudio(f, [{ startOffsetMs: 0, durationMs: 40 }]);
+  f.content.entries = [
+    representedEntry(f, "again", [span(0, 3840)]),
+    representedEntry(f, "again", [span(3840, 7680)]),
+  ];
+  const result = await recoverTranscript(f.content, f.reader, f.signal, (run) =>
+    run(),
+  );
+  expect(result.segments.map((item) => item.text)).toEqual(["again", "again"]);
+  expect(transcribeContentSnippet).not.toHaveBeenCalled();
+});
+
+test("represented middle input splits residual runs while preserving observed gap positions", async () => {
+  const f = await fixture();
+  addIntervalAudio(f, [
+    { startOffsetMs: 0, durationMs: 20 },
+    { startOffsetMs: 21, durationMs: 20 },
+    { startOffsetMs: 42, durationMs: 20 },
+  ]);
+  f.content.entries = [representedEntry(f, "middle", [span(3840, 7680)])];
+  await recoverTranscript(f.content, f.reader, f.signal, (run) => run());
+  const calls = jest.mocked(transcribeContentSnippet).mock.calls;
+  expect(calls.map(([, item]) => item.chunks[0])).toEqual([
+    Buffer.alloc(3840, 1),
+    Buffer.alloc(3840, 3),
+  ]);
+  expect(
+    calls.map(
+      ([, item]) => item.timestamp - Date.parse(f.claim.history.timestamp),
+    ),
+  ).toEqual([0, 42]);
+  expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+});
+
+test.each(["complete", "tail", "empty", "supplemental"] as const)(
+  "acknowledged mapped finalText %s never replays its saved provider stages",
+  async (kind) => {
+    const f = await fixture();
+    addIntervalAudio(f, [{ startOffsetMs: 0, durationMs: 40 }]);
+    f.content.processing = {
+      finalPass: "acknowledged",
+      cleanup: "acknowledged",
+      finalText: kind === "empty" ? "" : "  exact saved block\n",
+      correspondence: {
+        kind: "pcm",
+        spans: [span(0, kind === "tail" ? 3840 : 7680)],
+      },
+      ...(kind === "supplemental" ? { supplementalEntries: true } : {}),
+    };
+    const saved = structuredClone(f.content.processing);
+    if (kind === "tail" || kind === "supplemental")
+      await expect(
+        recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
+      ).rejects.toThrow("overlap");
+    else
+      expect(
+        (await recoverTranscript(f.content, f.reader, f.signal, (run) => run()))
+          .text,
+      ).toBe(saved.finalText);
+    expect(f.content.processing).toEqual(saved);
+    expect(transcribeContentSnippet).not.toHaveBeenCalled();
+    expect(runContentTranscriptionFinalPass).not.toHaveBeenCalled();
+    expect(createOpenAIClient).not.toHaveBeenCalled();
+  },
+);
+
+test("terminal omitted input is not resurrected and a pending piece cannot cover a different sequence", async () => {
+  const f = await fixture();
+  addIntervalAudio(f, [{ startOffsetMs: 0, durationMs: 20 }]);
+  f.content.omitted = { kind: "pcm", spans: [span(0, 3840)] };
+  expect(
+    (await recoverTranscript(f.content, f.reader, f.signal, (run) => run()))
+      .text,
+  ).toBe("");
+  expect(transcribeContentSnippet).not.toHaveBeenCalled();
+  delete f.content.omitted;
+  f.content.entries = [
+    representedEntry(f, "Open piece text", [span(0, 3840, 99)]),
+  ];
+  await recoverTranscript(f.content, f.reader, f.signal, (run) => run());
+  expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
+});
+
+test.each([
+  "unaligned",
+  "out-of-bounds",
+  "overlapping",
+  "wrong-source",
+] as const)(
+  "malformed %s correspondence refuses providers and scratch",
+  async (kind) => {
+    const f = await fixture();
+    addIntervalAudio(f, [{ startOffsetMs: 0, durationMs: 20 }]);
+    let spans = [span(0, 3840)];
+    if (kind === "unaligned") spans = [span(1, 3840)];
+    if (kind === "out-of-bounds") spans = [span(0, 3844)];
+    if (kind === "overlapping") spans = [span(0, 2000), span(1000, 3840)];
+    if (kind === "wrong-source")
+      spans = [{ ...span(0, 3840), sourceId: "user:other" }];
+    f.content.entries = [representedEntry(f, "saved", spans)];
+    await expect(
+      recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
+    ).rejects.toThrow();
+    expect(transcribeContentSnippet).not.toHaveBeenCalled();
+    expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+  },
+);
+
+test.each(["text_only", "disjoint", "audio_only", "missing_pcm"] as const)(
+  "safe %s legacy boundary remains automatic",
+  async (kind) => {
+    const f = await fixture();
+    if (kind !== "missing_pcm")
+      addIntervalAudio(f, [{ startOffsetMs: 0, durationMs: 20 }]);
+    if (kind === "text_only")
+      f.content.entries = [
+        {
+          ...representedEntry(f, "Independent text", []),
+          correspondence: { kind: "text_only" },
+        },
+      ];
+    if (kind === "disjoint") {
+      const entry = {
+        ...representedEntry(f, "Other source", []),
+        correspondence: undefined,
+      };
+      f.content.entries = [
+        { ...entry, sourceId: "user:other", userId: "other" },
+      ];
+    }
+    if (kind === "missing_pcm")
+      f.content.entries = [
+        representedEntry(f, "Independently verified text", [span(0, 3840)]),
+      ];
+    await expect(
+      recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
+    ).resolves.toHaveProperty("text");
+    expect(transcribeContentSnippet).toHaveBeenCalledTimes(
+      kind === "missing_pcm" ? 0 : 1,
+    );
   },
 );

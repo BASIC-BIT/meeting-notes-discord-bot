@@ -161,7 +161,7 @@ function preservationInput(
     capture: {
       ...original.historyKey,
       meetingId: original.meetingId,
-      channelId: meeting.channelId,
+      channelId: meeting.voiceChannel.id,
       ownerInstanceId: original.ownerInstanceId,
       executionVersion: original.executionVersion,
       reservedAt: new Date(original.reservedAt).toISOString(),

@@ -29,7 +29,10 @@ import {
   isLowInformationTranscriptionText,
   isTrivialTranscriptionText,
 } from "../utils/transcriptionText";
-import { resolveAudioFileText } from "../utils/audioTranscript";
+import {
+  resolveAudioFileText,
+  resolveAudioFileTranscript,
+} from "../utils/audioTranscript";
 
 export type FinalPassContent = ChatMeetingInput & {
   startTime: Date;
@@ -426,6 +429,7 @@ const createResult = (
 const resetFinalPassTranscripts = (meeting: FinalPassContent) => {
   for (const fileData of meeting.audioData.audioFiles) {
     delete fileData.finalPassTranscript;
+    delete fileData.finalPassCorrespondence;
   }
 };
 
@@ -702,6 +706,9 @@ const applyAcceptedEdits = (
       continue;
     }
     if (edit.action === "drop") {
+      segment.fileData.finalPassCorrespondence = resolveAudioFileTranscript(
+        segment.fileData,
+      ).correspondence;
       segment.fileData.finalPassTranscript = "";
       continue;
     }
@@ -709,6 +716,9 @@ const applyAcceptedEdits = (
     if (!replacement) {
       continue;
     }
+    segment.fileData.finalPassCorrespondence = resolveAudioFileTranscript(
+      segment.fileData,
+    ).correspondence;
     segment.fileData.finalPassTranscript = replacement;
   }
 };
@@ -744,6 +754,9 @@ const applyRepeatedLowInformationFilter = (
     );
 
     if (duplicate) {
+      segment.fileData.finalPassCorrespondence = resolveAudioFileTranscript(
+        segment.fileData,
+      ).correspondence;
       segment.fileData.finalPassTranscript = "";
       repetitionFilteredSegments += 1;
       lastKeptBySpeaker.set(segment.speakerKey, recentEntries);

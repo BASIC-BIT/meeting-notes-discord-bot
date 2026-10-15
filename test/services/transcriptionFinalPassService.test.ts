@@ -324,3 +324,47 @@ test("interruption waits the actual final-pass provider and prevents reconciliat
   expect(heldBeforeRelease).toBe(true);
   expect(dependencies.reconcileBatch).not.toHaveBeenCalled();
 });
+
+test.each(["replace", "drop"] as const)(
+  "accepted final-pass %s retains exact selected PCM disposition",
+  async (action) => {
+    const meeting = buildMeeting();
+    const dependencies = buildDependencies();
+    const receipt = {
+      kind: "pcm" as const,
+      spans: [
+        { sourceId: "user:user-1", sequence: 0, startByte: 0, endByte: 3840 },
+      ],
+    };
+    meeting.audioData.audioFiles[0].transcriptCorrespondence = receipt;
+    // Keep one accepted edit below the existing deletion guardrail fraction.
+    for (let i = 0; i < 8; i++)
+      meeting.audioData.audioFiles.push(
+        buildAudioFile({
+          userId: `extra-${i}`,
+          timestamp: meeting.startTime.getTime() + 5000 + i * 1000,
+          transcript: `Independent conversation ${i}`,
+        }),
+      );
+    dependencies.reconcileBatch.mockResolvedValue([
+      {
+        segmentId: "seg-1",
+        action,
+        text: action === "replace" ? "Corrected words" : undefined,
+        confidence: 0.99,
+      },
+    ]);
+    const result = await runTranscriptionFinalPass(
+      meeting,
+      { audioFilePath: "recording.mp3" },
+      dependencies,
+    );
+    expect(result.applied).toBe(true);
+    expect(meeting.audioData.audioFiles[0].finalPassTranscript).toBe(
+      action === "replace" ? "Corrected words" : "",
+    );
+    expect(meeting.audioData.audioFiles[0].finalPassCorrespondence).toEqual(
+      receipt,
+    );
+  },
+);

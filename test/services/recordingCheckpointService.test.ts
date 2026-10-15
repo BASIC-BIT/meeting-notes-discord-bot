@@ -427,7 +427,7 @@ function meetingFixture(): RecordingCheckpointMeeting {
   return {
     meetingId: history.meetingId,
     guildId: history.guildId,
-    channelId: history.channelId,
+    voiceChannel: { id: history.channelId },
     ownershipSignal: new AbortController().signal,
     captureStartedAt: new Date(capture.captureStartedAt!),
     transcribeMeeting: true,
@@ -1041,4 +1041,58 @@ test("initial failure preserves known complete capture and resolves lost ACK onl
     checkpoint: first.checkpoint,
   });
   expect(result.kind).toBe("committed");
+});
+
+test("live checkpoint producer uses voice identity while notes target remains separate", async () => {
+  const f = fixture();
+  const meeting = {
+    ...meetingFixture(),
+    voiceChannel: { id: history.channelId },
+    channelId: "separate-notes",
+  };
+  const result = await f.service
+    .createProducerSession()
+    .appendArtifactsRecordingCheckpoint(
+      meeting,
+      [segment],
+      meeting.ownershipSignal!,
+    );
+  expect(result.kind).toBe("committed");
+  if (result.kind !== "committed")
+    throw new Error("Generated checkpoint failed");
+  expect(result.checkpoint.capture.channelId).toBe(history.channelId);
+  expect((await f.service.read(result.checkpoint)).manifest.capture).toEqual(
+    result.checkpoint.capture,
+  );
+  expect(meeting.channelId).toBe("separate-notes");
+});
+
+test("distinct-channel producer rejects a mismatched voice or stale owner", async () => {
+  const f = fixture();
+  const meeting = {
+    ...meetingFixture(),
+    voiceChannel: { id: "wrong-voice" },
+    channelId: "separate-notes",
+  };
+  await expect(
+    f.service
+      .createProducerSession()
+      .appendArtifactsRecordingCheckpoint(
+        meeting,
+        [segment],
+        meeting.ownershipSignal!,
+      ),
+  ).rejects.toThrow("history or requested settings mismatch");
+  expect(f.upload).not.toHaveBeenCalled();
+  f.histories.get(history.guildId)![0].executionVersion = 2;
+  await expect(
+    f.service
+      .createProducerSession()
+      .appendArtifactsRecordingCheckpoint(
+        { ...meeting, voiceChannel: { id: history.channelId } },
+        [segment],
+        meeting.ownershipSignal!,
+      ),
+  ).resolves.toMatchObject({ kind: "stale_owner" });
+  expect(f.upload).not.toHaveBeenCalled();
 });

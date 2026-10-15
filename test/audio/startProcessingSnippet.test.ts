@@ -487,4 +487,163 @@ describe("startProcessingSnippet", () => {
     jest.clearAllTimers();
     jest.useRealTimers();
   });
+  it.each(["coalesced", "slow-fallback"] as const)(
+    "selected %s text keeps exact complete input receipt",
+    async (mode) => {
+      const spans = [
+        { sourceId: "user:user-1", sequence: 0, startByte: 0, endByte: 60000 },
+      ];
+      const snippet: AudioSnippet = {
+        userId: "user-1",
+        timestamp: 1000,
+        chunks: [Buffer.alloc(60000)],
+        audioBytes: 60000,
+        pcmSpans: spans,
+      };
+      const file: AudioFileData = {
+        userId: "user-1",
+        timestamp: 1000,
+        processing: false,
+        audioOnlyProcessing: false,
+        fastTranscripts: [
+          {
+            revision: 1,
+            text: "fast",
+            createdAt: new Date().toISOString(),
+            correspondence: {
+              kind: "pcm",
+              spans: [{ ...spans[0], endByte: 10000 }],
+            },
+          },
+        ],
+      };
+      snippet.audioFileData = file;
+      const meeting = buildMeeting(snippet, file);
+      meeting.runtimeConfig!.premiumTranscription.enabled = true;
+      jest
+        .mocked(transcribeSnippet)
+        .mockResolvedValueOnce({ status: "succeeded", text: "slow" });
+      if (mode === "coalesced")
+        jest.mocked(coalesceTranscription).mockResolvedValueOnce("merged");
+      else
+        jest
+          .mocked(coalesceTranscription)
+          .mockRejectedValueOnce(new Error("optional failed"));
+      const error = jest.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        startProcessingSnippet(meeting, "user-1");
+        await waitForSnippetWork(meeting, file);
+        const { resolveAudioFileTranscript } =
+          await import("../../src/utils/audioTranscript");
+        expect(resolveAudioFileTranscript(file)).toEqual({
+          text: mode === "coalesced" ? "merged" : "slow",
+          correspondence: { kind: "pcm", spans },
+        });
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
+  it.each(["minimum", "gate", "empty", "empty-with-prefix"] as const)(
+    "terminal %s does not claim unselected input",
+    async (mode) => {
+      jest.mocked(transcribeSnippet).mockReset();
+      const bytes = mode === "minimum" ? 3840 : 60000;
+      const spans = [
+        { sourceId: "user:user-1", sequence: 0, startByte: 0, endByte: bytes },
+      ];
+      const prefix = {
+        kind: "pcm" as const,
+        spans: [{ ...spans[0], endByte: 3840 }],
+      };
+      const snippet: AudioSnippet = {
+        userId: "user-1",
+        timestamp: 1000,
+        chunks: [Buffer.alloc(bytes)],
+        audioBytes: bytes,
+        pcmSpans: spans,
+      };
+      const file: AudioFileData = {
+        userId: "user-1",
+        timestamp: 1000,
+        processing: false,
+        audioOnlyProcessing: false,
+        ...(mode === "empty-with-prefix"
+          ? {
+              fastTranscripts: [
+                {
+                  revision: 1,
+                  text: "prefix",
+                  createdAt: new Date().toISOString(),
+                  correspondence: prefix,
+                },
+              ],
+            }
+          : {}),
+      };
+      snippet.audioFileData = file;
+      const meeting = buildMeeting(snippet, file);
+      if (mode === "gate")
+        meeting.runtimeConfig!.transcription.noiseGate.enabled = true;
+      jest
+        .mocked(transcribeSnippet)
+        .mockResolvedValueOnce({ status: "succeeded", text: "" });
+      startProcessingSnippet(meeting, "user-1");
+      await waitForSnippetWork(meeting, file);
+      const { resolveAudioFileTranscript } =
+        await import("../../src/utils/audioTranscript");
+      expect(resolveAudioFileTranscript(file)).toEqual({
+        text: mode === "empty-with-prefix" ? "prefix" : "",
+        correspondence:
+          mode === "empty-with-prefix" ? prefix : { kind: "pcm", spans },
+      });
+      if (mode === "gate" || mode === "minimum")
+        expect(transcribeSnippet).not.toHaveBeenCalled();
+    },
+  );
+  it("late stale fast result cannot replace slow selected text or correspondence", async () => {
+    jest.useFakeTimers();
+    jest.mocked(transcribeSnippet).mockReset();
+    const spans = [
+      { sourceId: "user:user-1", sequence: 0, startByte: 0, endByte: 60000 },
+    ];
+    const snippet: AudioSnippet = {
+      userId: "user-1",
+      timestamp: 1000,
+      chunks: [Buffer.alloc(60000)],
+      audioBytes: 60000,
+      pcmSpans: spans,
+    };
+    const file: AudioFileData = {
+      userId: "user-1",
+      timestamp: 1000,
+      processing: false,
+      audioOnlyProcessing: false,
+    };
+    snippet.audioFileData = file;
+    const meeting = buildMeeting(snippet, file);
+    let complete!: (result: { status: "succeeded"; text: string }) => void;
+    jest
+      .mocked(transcribeSnippet)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+      )
+      .mockResolvedValueOnce({ status: "succeeded", text: "settled slow" });
+    try {
+      userStopTalking(meeting, "user-1");
+      await jest.advanceTimersByTimeAsync(400);
+      startProcessingSnippet(meeting, "user-1");
+      await waitForSnippetWork(meeting, file);
+      complete({ status: "succeeded", text: "stale fast" });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(file.fastTranscripts).toBeUndefined();
+      expect(file.slowCorrespondence).toEqual({ kind: "pcm", spans });
+      expect(file.transcript).toBe("settled slow");
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
 });

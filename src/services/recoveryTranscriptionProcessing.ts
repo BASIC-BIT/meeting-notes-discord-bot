@@ -246,9 +246,8 @@ export async function processRecoveryTranscript(
   files: AudioFileData[],
   signal: AbortSignal,
   effect: TranscriptionContentInput["effect"],
-  acknowledgedText = "",
 ) {
-  if (!files.length) return acknowledgedText;
+  if (!files.length) return "";
   const settings = originalSettings(content);
   let finalPass: "acknowledged" | "fallback" | "disabled" | "not_applicable" =
     settings.transcription.finalPassEnabled ? "not_applicable" : "disabled";
@@ -265,9 +264,7 @@ export async function processRecoveryTranscript(
     );
     finalPass = result.fallbackApplied ? "fallback" : "acknowledged";
   }
-  const original = [acknowledgedText, formattedTranscript(content, files)]
-    .filter(Boolean)
-    .join("\n");
+  const original = formattedTranscript(content, files);
   let finalText = original;
   let cleanup: "acknowledged" | "fallback" | "disabled" = "disabled";
   if (

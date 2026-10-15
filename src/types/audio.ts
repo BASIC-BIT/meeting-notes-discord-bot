@@ -1,8 +1,13 @@
+import type {
+  TranscriptCorrespondence,
+  PcmSpan,
+} from "./transcriptCorrespondence";
 import { FfmpegCommand } from "fluent-ffmpeg";
 import { PassThrough } from "node:stream";
 
 export interface AudioSnippet {
   chunks: Buffer[];
+  pcmSpans?: PcmSpan[];
   timestamp: number;
   userId: string;
   audioFileData?: AudioFileData;
@@ -18,6 +23,7 @@ export type TranscriptVariant = {
   revision: number;
   text: string;
   createdAt: string;
+  correspondence?: TranscriptCorrespondence;
 };
 
 export type CoalesceMeta = {
@@ -51,6 +57,11 @@ export interface AudioFileData {
   userId: string;
   timestamp: number;
   transcript?: string;
+  transcriptCorrespondence?: TranscriptCorrespondence;
+  slowCorrespondence?: TranscriptCorrespondence;
+  coalescedCorrespondence?: TranscriptCorrespondence;
+  finalPassCorrespondence?: TranscriptCorrespondence;
+  terminalOmission?: TranscriptCorrespondence;
   finalPassTranscript?: string;
   fastTranscripts?: TranscriptVariant[];
   slowTranscript?: string;
