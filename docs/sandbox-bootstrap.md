@@ -35,7 +35,7 @@ The private JSON supplies these exact fields. No field has a production default.
 
 Maintenance attestations describe the reviewed operator procedure. They do not replace provider checks or prove no content was lost. Initialization also checks that the service is at desired/running/pending zero, all discovered legacy tasks are stopped, the groups and Control table are empty, and no nonterminal or live active lease remains. Old ambiguous lease state causes refusal, not automatic cleanup. The maintenance receipt must be no older than 15 minutes at initialization.
 
-Compute the checksum over the parsed JSON using `manifestHash` from `scripts/deployment/sandbox-manifest.cjs`. It hashes `JSON.stringify(parsedManifest)`, preserving key order. Editing the manifest, including its operation identity, requires a new reviewed checksum. There is no implicit environment-file loading or endpoint override support.
+Compute the checksum over the parsed JSON using `manifestHash` from `scripts/deployment/sandbox-manifest.cjs`. It hashes `JSON.stringify(parsedManifest)`, preserving key order. Editing the manifest, including its operation identity, requires a new reviewed checksum. There is no implicit environment-file loading or endpoint override support. Child calls ignore shared-config endpoint URLs and refuse explicit endpoint environment overrides.
 
 ## Run each phase explicitly
 

@@ -576,3 +576,82 @@ test("changed empty service definition refuses launch instead of overriding anot
   await expect(bootstrap.launch()).rejects.toThrow();
   expect(f.state.updates).toBe(0);
 });
+
+test("launch uses the ECS early-success request contract", async () => {
+  const f = await fixture();
+  await f.bootstrap.initialize();
+  const bootstrap = createBootstrap({
+    manifest: f.manifest,
+    expectedSha256: f.hash,
+    builders,
+    types,
+    now: () => 1000,
+    aws: async (
+      service: string,
+      operation: string,
+      input: Record<string, never>,
+    ) => {
+      if (service === "ecs" && operation === "update-service")
+        expect(input).toMatchObject({
+          deploymentConfiguration: {
+            earlySuccessCriteria: {
+              enable: true,
+              healthyPercent: 100,
+              sourceServiceRevisionCleanup: "DEFERRED",
+            },
+          },
+        });
+      return f.aws(service, operation, input);
+    },
+  });
+  await expect(bootstrap.launch()).resolves.toEqual({ kind: "launched" });
+});
+
+test.each([false, true])(
+  "listener duration with stickiness enabled=%s follows the no-stickiness contract",
+  async (enabled) => {
+    const f = await fixture();
+    const bootstrap = createBootstrap({
+      manifest: f.manifest,
+      expectedSha256: f.hash,
+      builders,
+      types,
+      now: () => 1000,
+      aws: async (
+        service: string,
+        operation: string,
+        input: Record<string, never>,
+      ) => {
+        const result = await f.aws(service, operation, input);
+        if ("Listeners" in result)
+          return {
+            ...result,
+            Listeners: result.Listeners.map((listener) => ({
+              ...listener,
+              DefaultActions: listener.DefaultActions.map((action) => ({
+                ...action,
+                ForwardConfig: {
+                  ...action.ForwardConfig,
+                  TargetGroupStickinessConfig: {
+                    Enabled: enabled,
+                    DurationSeconds: 1,
+                  },
+                },
+              })),
+            })),
+          };
+        return result;
+      },
+    });
+    if (enabled) {
+      await expect(bootstrap.initialize()).rejects.toThrow("Weighted routing");
+      expect(await f.get("CONTROL")).toBeUndefined();
+    } else {
+      await bootstrap.initialize();
+      await bootstrap.launch();
+      await expect(bootstrap.promote()).resolves.toMatchObject({
+        kind: "complete",
+      });
+    }
+  },
+);

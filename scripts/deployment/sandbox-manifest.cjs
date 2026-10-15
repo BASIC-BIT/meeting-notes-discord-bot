@@ -97,6 +97,7 @@ function awsCaller(region) {
         windowsHide: true,
         env: {
           ...process.env,
+          AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: "true",
           AWS_MAX_ATTEMPTS: "1",
           AWS_RETRY_MODE: "standard",
         },

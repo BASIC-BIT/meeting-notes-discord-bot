@@ -128,6 +128,8 @@ function createBootstrap(options) {
     const actions = JSON.parse(JSON.stringify(listener?.DefaultActions ?? []));
     for (const a of actions) {
       delete a.Order;
+      if (a.ForwardConfig?.TargetGroupStickinessConfig?.Enabled === false)
+        delete a.ForwardConfig.TargetGroupStickinessConfig.DurationSeconds;
       if (a.ForwardConfig)
         a.ForwardConfig.TargetGroups.sort((a, b) =>
           a.TargetGroupArn.localeCompare(b.TargetGroupArn),
@@ -418,7 +420,7 @@ function createBootstrap(options) {
           maximumPercent: 200,
           strategy: "ROLLING",
           earlySuccessCriteria: {
-            enabled: true,
+            enable: true,
             healthyPercent: 100,
             sourceServiceRevisionCleanup: "DEFERRED",
           },
