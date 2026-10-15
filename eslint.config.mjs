@@ -9,9 +9,9 @@ export default [
   pluginJs.configs.recommended,
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
-  // Special configuration for Node.js scripts
+  // Node.js scripts and CommonJS child-process fixtures
   {
-    files: ["scripts/**/*.js"],
+    files: ["scripts/**/*.js", "test/audio/fixtures/voiceCaptureExit.cjs"],
     languageOptions: { globals: globals.node },
     rules: {
       "@typescript-eslint/no-require-imports": "off",

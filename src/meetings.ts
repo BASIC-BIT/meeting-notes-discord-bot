@@ -438,9 +438,16 @@ export async function initializeMeeting(
   // Set up error handling for the connection
   connection.on("error", (error) => {
     console.error("Voice connection error:", error);
-    textChannel.send(
-      `There was an error trying to join the voice channel${isAutoRecording ? " for auto-recording" : ""}.`,
-    );
+    void textChannel
+      .send(
+        `There was an error trying to join the voice channel${isAutoRecording ? " for auto-recording" : ""}.`,
+      )
+      .catch(() => {
+        console.warn("Voice error notification failed:", {
+          stage: "connection-error-notification",
+          meetingId: meeting.meetingId,
+        });
+      });
   });
 
   // Snapshot participants for initial members
