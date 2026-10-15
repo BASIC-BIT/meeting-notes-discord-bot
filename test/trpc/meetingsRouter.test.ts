@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { beforeEach, describe, expect, test, jest } from "@jest/globals";
 import * as unifiedConfig from "../../src/services/unifiedConfigService";
 import "../deployment/coldNetworkGuard.cjs";
 import { config } from "../../src/services/configService";
@@ -29,7 +30,6 @@ jest.mock("../../src/services/runtimeLifecycleService", () => ({
   },
   getRuntimeAdmissionContext: async () => ({ instanceId: "synthetic-api" }),
 }));
-import { beforeEach, describe, expect, test, jest } from "@jest/globals";
 import type { Request, Response } from "express";
 import type { MeetingHistory } from "../../src/types/db";
 import type { FeedbackRecord } from "../../src/types/db";

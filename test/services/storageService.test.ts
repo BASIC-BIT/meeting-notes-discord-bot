@@ -1,8 +1,8 @@
 /** @jest-environment node */
+import { afterEach, describe, expect, jest, test } from "@jest/globals";
 
 jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
 
-import { afterEach, describe, expect, jest, test } from "@jest/globals";
 import {
   S3Client,
   PutObjectCommand,

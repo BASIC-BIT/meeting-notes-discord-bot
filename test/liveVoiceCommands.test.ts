@@ -1,6 +1,6 @@
 /** @jest-environment node */
-jest.mock("dotenv", () => ({ config: jest.fn() }));
 import { afterEach, expect, jest, test } from "@jest/globals";
+jest.mock("dotenv", () => ({ config: jest.fn() }));
 import type { MeetingData } from "../src/types/meeting-data";
 import type { Participant } from "../src/types/participants";
 import type { LiveSegment } from "../src/liveVoice";

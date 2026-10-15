@@ -1,6 +1,6 @@
 /** @jest-environment node */
-jest.mock("dotenv", () => ({ config: jest.fn() }));
 import { jest } from "@jest/globals";
+jest.mock("dotenv", () => ({ config: jest.fn() }));
 import type { MeetingData } from "../../src/types/meeting-data";
 import type { AudioSnippet } from "../../src/types/audio";
 

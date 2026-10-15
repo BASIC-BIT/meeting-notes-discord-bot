@@ -1,5 +1,4 @@
 /** @jest-environment node */
-jest.mock("dotenv", () => ({ config: jest.fn() }));
 import {
   afterEach,
   beforeEach,
@@ -8,6 +7,7 @@ import {
   jest,
   test,
 } from "@jest/globals";
+jest.mock("dotenv", () => ({ config: jest.fn() }));
 import type { MeetingData } from "../../src/types/meeting-data";
 import {
   getActiveMeetingLeaseForGuild,
