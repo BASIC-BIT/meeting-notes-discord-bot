@@ -1,3 +1,4 @@
+import { assertStripePayer } from "./billingPayerService";
 import { resolveSubscriptionCancellationAt } from "../utils/stripeCancellation";
 import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
 import { getPaymentTransactionRepository } from "../repositories/paymentTransactionRepository";
@@ -601,7 +602,7 @@ async function createExistingSubscriptionConfirmation(params: {
           "Plan changes are not available yet. Your current subscription is unchanged; contact support for help.",
         );
       }
-      await assertStripePayer(stripe, customerId, user.id);
+      await assertStripePayer({ stripe, customerId, payerId: user.id });
       assertUpdatableSubscription(subscription);
       if (
         await getBasicIntroCustomerRestriction(stripe, customerId, subscription)
@@ -646,20 +647,6 @@ async function createExistingSubscriptionConfirmation(params: {
   return null;
 }
 
-async function assertStripePayer(
-  stripe: StripeClient,
-  customerId: string,
-  userId: string,
-): Promise<void> {
-  const customer = await stripe.customers.retrieve(customerId);
-  if (customer.deleted || customer.metadata.discord_id !== userId) {
-    throw new BillingActionError(
-      "FORBIDDEN",
-      "Only the original payer can manage this server's Stripe billing",
-    );
-  }
-}
-
 function providerCustomerId(subscription: StripeSubscription): string {
   return typeof subscription.customer === "string"
     ? subscription.customer
@@ -687,7 +674,7 @@ export async function createPortalSession(params: {
       ? providerCustomerId(providerSubscription)
       : undefined);
   if (!customerId) throw new Error("No Stripe customer found for guild");
-  await assertStripePayer(stripe, customerId, user.id);
+  await assertStripePayer({ stripe, customerId, payerId: user.id });
   if (
     providerSubscription &&
     (providerSubscription.metadata.guild_id !== guildId ||

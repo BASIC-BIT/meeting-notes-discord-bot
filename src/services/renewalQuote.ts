@@ -34,3 +34,24 @@ export function readRenewalQuote(
     return undefined;
   return quote;
 }
+
+// Expired signed consent may identify an already persisted operation, never start one.
+export function readRenewalRecoveryQuote(
+  token: string,
+  binding: Pick<RenewalQuote, "guildId" | "payerId">,
+): RenewalQuote | undefined {
+  if (!config.server.sessionSecret || token.split(".").length !== 2)
+    return undefined;
+  const quote = readConsentToken(
+    token,
+    signingKey(),
+    (value: unknown): value is RenewalQuote =>
+      renewalQuoteSchema.safeParse(value).success,
+    0,
+  );
+  return quote &&
+    quote.guildId === binding.guildId &&
+    quote.payerId === binding.payerId
+    ? quote
+    : undefined;
+}

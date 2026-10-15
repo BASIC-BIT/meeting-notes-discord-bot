@@ -1,3 +1,8 @@
+import {
+  readRenewalState,
+  restoreRenewal,
+} from "../../services/renewalReactivationService";
+import { renewalRequestSchema, type RenewalView } from "../../types/renewal";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
@@ -229,7 +234,67 @@ const portal = manageGuildProcedure
     }
   });
 
+const renewal = manageGuildProcedure
+  .input(z.object({ serverId: z.string().min(1) }).strict())
+  .query(async ({ ctx, input }): Promise<RenewalView> => {
+    if (config.mock.enabled)
+      return {
+        state: { kind: "not_applicable" },
+        canManageBilling: false,
+        lifecycleAnalyticsEnabled: false,
+      };
+    const stripe = getStripeClient();
+    if (!stripe)
+      return {
+        state: { kind: "unavailable", knownEndsAt: null },
+        canManageBilling: false,
+        lifecycleAnalyticsEnabled: false,
+      };
+    return readRenewalState({
+      stripe,
+      guildId: input.serverId,
+      payerId: ctx.user.id,
+    });
+  });
+const reactivateRenewal = manageGuildProcedure
+  .input(
+    z
+      .object({
+        serverId: z.string().min(1),
+        request: renewalRequestSchema,
+        analyticsOptOut: z.boolean().default(false),
+      })
+      .strict(),
+  )
+  .mutation(async ({ ctx, input }) => {
+    if (config.mock.enabled) return { kind: "changed" } as const;
+    const stripe = getStripeClient();
+    if (!stripe)
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Stripe not configured",
+      });
+    try {
+      return await restoreRenewal({
+        stripe,
+        guildId: input.serverId,
+        payerId: ctx.user.id,
+        request: input.request,
+        analyticsOptOut: input.analyticsOptOut || ctx.req.headers.dnt === "1",
+      });
+    } catch (error) {
+      if (error instanceof BillingActionError)
+        throw new TRPCError({ code: error.code, message: error.message });
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Unable to check renewal. Check status before trying again.",
+      });
+    }
+  });
+
 export const billingRouter = router({
+  renewal,
+  reactivateRenewal,
   me,
   checkout,
   portal,

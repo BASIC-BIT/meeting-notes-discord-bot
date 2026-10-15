@@ -126,7 +126,7 @@ export const renewalControlSchema = z
 export type RenewalControl = z.infer<typeof renewalControlSchema>;
 export const isRenewalComplete = (operation: RenewalOperation) =>
   operation.state === "succeeded" || operation.state === "rejected";
-const renewalBindingSchema = z
+export const renewalBindingSchema = z
   .object(operationBinding)
   .omit({ revision: true });
 export function assertRenewalOperationTransition(

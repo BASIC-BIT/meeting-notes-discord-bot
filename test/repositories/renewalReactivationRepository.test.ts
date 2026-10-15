@@ -1,4 +1,15 @@
 /** @jest-environment node */
+import type { RenewalOperation } from "../../src/types/renewal";
+
+import {
+  beforeEach,
+  afterEach,
+  afterAll,
+  describe,
+  it,
+  expect,
+  jest,
+} from "@jest/globals";
 import {
   DynamoDBClient,
   TransactWriteItemsCommand,
@@ -159,7 +170,7 @@ it("rejects mutations of immutable consent, timing, privacy and request fields",
     { analyticsOptOut: false },
     { approvedTerms: { ...renewalOperation.approvedTerms, unitAmount: 6000 } },
     { stripeRequest: { cancel_at: "", proration_behavior: "none" } },
-  ]) {
+  ] satisfies Array<Partial<RenewalOperation>>) {
     await expect(
       repo.compareAndWrite({
         next: { ...renewalOperation, ...patch, revision: "new" },
@@ -180,7 +191,7 @@ describe("real renewal Dynamo transaction boundary", () => {
   beforeEach(() => {
     config.mock.enabled = false;
     send.mockReset();
-    send.mockResolvedValue({});
+    send.mockImplementation(async () => ({}));
   });
   afterAll(() => send.mockRestore());
   it("uses a source fence plus separate immutable operation and absent server-control writes", async () => {
@@ -216,13 +227,13 @@ describe("real renewal Dynamo transaction boundary", () => {
     );
   });
   it("reads consistently and atomically releases only the matching control on terminal completion", async () => {
-    send.mockResolvedValueOnce({
+    send.mockImplementationOnce(async () => ({
       Item: marshall({
         ...renewalOperation,
         guildId:
           "RENEWAL_OP#111111111111111111#00000000-0000-4000-8000-000000000001",
       }),
-    });
+    }));
     const repo = getRenewalReactivationRepository();
     expect(
       await repo.compareAndWrite({
@@ -259,7 +270,9 @@ describe("real renewal Dynamo transaction boundary", () => {
         { Code: "ConditionalCheckFailed" },
       ],
     });
-    send.mockRejectedValueOnce(conflict);
+    send.mockImplementationOnce(async () => {
+      throw conflict;
+    });
     expect(
       await repo.claim({
         operation: renewalOperation,
@@ -270,7 +283,9 @@ describe("real renewal Dynamo transaction boundary", () => {
       new TransactionCanceledException({ $metadata: {}, message: "unknown" }),
       new Error("permission denied"),
     ]) {
-      send.mockRejectedValueOnce(error);
+      send.mockImplementationOnce(async () => {
+        throw error;
+      });
       await expect(
         repo.claim({
           operation: renewalOperation,
