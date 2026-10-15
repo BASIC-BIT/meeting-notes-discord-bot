@@ -10,6 +10,7 @@ import type { MeetingData } from "../../src/types/meeting-data";
 
 const mockDecoders: PassThrough[] = [];
 let mockBlockDecode = false;
+let mockFailDecoderConstruction = false;
 const mockDecodeCallbacks: TransformCallback[] = [];
 
 jest.mock("prism-media", () => {
@@ -20,6 +21,8 @@ jest.mock("prism-media", () => {
       Decoder: class FakeDecoder extends MockPassThrough {
         constructor() {
           super();
+          if (mockFailDecoderConstruction)
+            throw new Error("private decoder detail");
           mockDecoders.push(this);
         }
         _transform(
@@ -81,11 +84,175 @@ describe("voice subscriptions", () => {
     jest.useFakeTimers();
     mockDecoders.length = 0;
     mockBlockDecode = false;
+    mockFailDecoderConstruction = false;
     mockDecodeCallbacks.length = 0;
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     jest.useRealTimers();
+  });
+
+  test.each(["receiver", "decoder", "pipe"])(
+    "cleans up a failed awaited %s construction and preserves the rejection",
+    async (stage) => {
+      const streams: PassThrough[] = [];
+      const { meeting, receiver } = createMeeting(streams);
+      const failure = new Error("private construction detail");
+      if (stage === "receiver")
+        receiver.subscribe.mockImplementationOnce(() => {
+          throw failure;
+        });
+      if (stage === "decoder") mockFailDecoderConstruction = true;
+      if (stage === "pipe") {
+        const subscribe = receiver.subscribe.getMockImplementation()!;
+        receiver.subscribe.mockImplementationOnce((userId) => {
+          const stream = subscribe(userId);
+          jest.spyOn(stream, "pipe").mockImplementation(() => {
+            throw failure;
+          });
+          return stream;
+        });
+      }
+
+      await expect(subscribeToUserVoice(meeting, "user-1")).rejects.toThrow();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(meeting.audioData.captureIncomplete).toBe(true);
+      expect(streams.every((stream) => stream.destroyed)).toBe(true);
+      expect(mockDecoders.every((stream) => stream.destroyed)).toBe(true);
+      expect(receiver.subscriptions.size).toBe(0);
+      expect(jest.getTimerCount()).toBe(0);
+    },
+  );
+
+  test.each(["receiver", "decoder", "pipe"])(
+    "contains a timer %s construction failure once without another retry",
+    async (stage) => {
+      const streams: PassThrough[] = [];
+      const { meeting, receiver } = createMeeting(streams);
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      await subscribeToUserVoice(meeting, "user-1");
+      streams[0].emit("error", new Error("trigger"));
+      if (stage === "receiver")
+        receiver.subscribe.mockImplementationOnce(() => {
+          throw new Error("private receiver detail");
+        });
+      if (stage === "decoder") mockFailDecoderConstruction = true;
+      if (stage === "pipe") {
+        const subscribe = receiver.subscribe.getMockImplementation()!;
+        receiver.subscribe.mockImplementationOnce((userId) => {
+          const stream = subscribe(userId);
+          jest.spyOn(stream, "pipe").mockImplementation(() => {
+            throw new Error("private pipe detail");
+          });
+          return stream;
+        });
+      }
+      await jest.advanceTimersByTimeAsync(249);
+      expect(receiver.subscribe).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(1);
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(receiver.subscribe).toHaveBeenCalledTimes(2);
+      expect(receiver.subscriptions.size).toBe(0);
+      expect(streams.every((stream) => stream.destroyed)).toBe(true);
+      expect(mockDecoders.every((stream) => stream.destroyed)).toBe(true);
+      expect(meeting.audioData.captureIncomplete).toBe(true);
+      expect(jest.getTimerCount()).toBe(0);
+      const markers = warn.mock.calls.filter(([message]) =>
+        String(message).startsWith("Voice subscription replacement failed:"),
+      );
+      expect(markers).toEqual([
+        [
+          "Voice subscription replacement failed:",
+          { meetingId: "meeting-1", stage: "resubscribe" },
+        ],
+      ]);
+    },
+  );
+
+  test.each(["departure", "finishing", "destroyed", "replacement"])(
+    "ignores a queued recovery timer after %s",
+    async (staleReason) => {
+      const streams: PassThrough[] = [];
+      const { meeting, receiver } = createMeeting(streams);
+      const timeout = jest.spyOn(globalThis, "setTimeout");
+      await subscribeToUserVoice(meeting, "user-1");
+      streams[0].emit("error", new Error("trigger"));
+      const queued = timeout.mock.calls.find(([, delay]) => delay === 250)?.[0];
+      expect(typeof queued).toBe("function");
+      if (staleReason === "departure")
+        meeting.voiceChannel.members.delete("user-1");
+      if (staleReason === "finishing") meeting.finishing = true;
+      if (staleReason === "destroyed")
+        meeting.connection.state.status = VoiceConnectionStatus.Destroyed;
+      if (staleReason === "replacement")
+        await subscribeToUserVoice(meeting, "user-1");
+      const current = receiver.subscriptions.get("user-1");
+      if (typeof queued === "function") queued();
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      expect(receiver.subscribe).toHaveBeenCalledTimes(
+        staleReason === "replacement" ? 2 : 1,
+      );
+      expect(receiver.subscriptions.get("user-1")).toBe(current);
+      expect(current?.destroyed).toBe(false);
+      unsubscribeToVoiceUponLeaving(meeting, "user-1");
+    },
+  );
+
+  test("a failed old timer stays silent when a newer subscription replaces it before rejection handling", async () => {
+    const streams: PassThrough[] = [];
+    const { meeting, receiver } = createMeeting(streams);
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const timeout = jest.spyOn(globalThis, "setTimeout");
+    await subscribeToUserVoice(meeting, "user-1");
+    streams[0].emit("error", new Error("trigger"));
+    const queued = timeout.mock.calls.find(([, delay]) => delay === 250)?.[0];
+    receiver.subscribe.mockImplementationOnce(() => {
+      throw new Error("old private failure");
+    });
+    if (typeof queued !== "function") throw new Error("Missing recovery timer");
+    queued();
+    await subscribeToUserVoice(meeting, "user-1");
+    await jest.advanceTimersByTimeAsync(0);
+
+    expect(receiver.subscriptions.get("user-1")).toBe(streams[1]);
+    expect(streams[1].destroyed).toBe(false);
+    expect(
+      warn.mock.calls.filter(([message]) =>
+        String(message).startsWith("Voice subscription replacement failed:"),
+      ),
+    ).toHaveLength(0);
+    expect(meeting.audioData.captureIncomplete).toBe(true);
+    unsubscribeToVoiceUponLeaving(meeting, "user-1");
+  });
+
+  test("a failed old pipe cleans only its own streams after a replacement takes ownership", async () => {
+    const streams: PassThrough[] = [];
+    const { meeting, receiver } = createMeeting(streams);
+    const subscribe = receiver.subscribe.getMockImplementation()!;
+    receiver.subscribe.mockImplementationOnce((userId) => {
+      const stream = subscribe(userId);
+      jest.spyOn(stream, "pipe").mockImplementation(() => {
+        void subscribeToUserVoice(meeting, "user-1");
+        throw new Error("old private pipe failure");
+      });
+      return stream;
+    });
+    await expect(subscribeToUserVoice(meeting, "user-1")).rejects.toThrow(
+      "old private pipe failure",
+    );
+    await jest.advanceTimersByTimeAsync(0);
+
+    expect(streams[0].destroyed).toBe(true);
+    expect(mockDecoders[0].destroyed).toBe(true);
+    expect(receiver.subscriptions.get("user-1")).toBe(streams[1]);
+    expect(streams[1].destroyed).toBe(false);
+    expect(mockDecoders[1].destroyed).toBe(false);
+    expect(meeting.audioData.captureIncomplete).toBeUndefined();
+    unsubscribeToVoiceUponLeaving(meeting, "user-1");
   });
 
   test("disposes each distinct stream once and preserves external listeners", async () => {

@@ -156,15 +156,19 @@ function resolveSpeakerLabel(meeting: MeetingData, userId: string): string {
   });
 }
 
-function clearVoiceSubscription(meeting: MeetingData, userId: string) {
+function clearVoiceSubscription(
+  meeting: MeetingData,
+  userId: string,
+  expected?: VoiceSubscriptionState,
+) {
   const subscriptions = getVoiceSubscriptions(meeting);
-  const existing = subscriptions.get(userId);
+  const existing = expected ?? subscriptions.get(userId);
   if (!existing) return;
 
   existing.suppressResubscribe = true;
   if (existing.resubscribeTimer) clearTimeout(existing.resubscribeTimer);
   existing.resubscribeTimer = undefined;
-  subscriptions.delete(userId);
+  if (subscriptions.get(userId) === existing) subscriptions.delete(userId);
 
   if (
     meeting.connection.receiver.subscriptions.get(userId) ===
@@ -210,15 +214,21 @@ function scheduleResubscribe(
   );
 
   const timer = setTimeout(() => {
-    const updated = getVoiceSubscriptions(meeting).get(userId);
-    if (updated) {
-      updated.resubscribeTimer = undefined;
-    }
+    if (!existing || subscriptions.get(userId) !== existing) return;
+    existing.resubscribeTimer = undefined;
+    if (existing.suppressResubscribe) return;
     if (meeting.finishing) return;
     if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
       return;
     }
-    void subscribeToUserVoice(meeting, userId);
+    if (!meeting.voiceChannel.members.has(userId)) return;
+    void subscribeToUserVoice(meeting, userId).catch(() => {
+      if (subscriptions.has(userId)) return;
+      console.warn("Voice subscription replacement failed:", {
+        meetingId: meeting.meetingId,
+        stage: "resubscribe",
+      });
+    });
   }, RESUBSCRIBE_DELAY_MS);
 
   if (existing) {
@@ -822,138 +832,170 @@ export async function subscribeToUserVoice(
 
   clearVoiceSubscription(meeting, userId);
 
-  const opusStream = meeting.connection.receiver.subscribe(userId, {
-    end: {
-      behavior: EndBehaviorType.Manual,
-    },
-  });
+  let createdOpusStream: Readable | undefined;
+  let createdState: VoiceSubscriptionState | undefined;
+  try {
+    const opusStream = meeting.connection.receiver.subscribe(userId, {
+      end: {
+        behavior: EndBehaviorType.Manual,
+      },
+    });
+    createdOpusStream = opusStream;
 
-  const opusDecoder = new OpusDiagnosticDecoder(meeting.connection.receiver, {
-    rate: RECORD_SAMPLE_RATE,
-    channels: CHANNELS,
-    frameSize: FRAME_SIZE,
-  });
-
-  const subscriptions = getVoiceSubscriptions(meeting);
-  const subscriptionState: VoiceSubscriptionState = {
-    opusStream,
-    decoder: opusDecoder,
-    decodedStream: opusStream,
-    ownedListenerCleanups: new Map(),
-    decoderErrorCount: 0,
-    consecutiveNoPcmEvents: 0,
-  };
-
-  subscriptions.set(userId, subscriptionState);
-
-  // Prevent decoder errors (often caused by malformed or partial packets) from crashing the process.
-  const onDecoderError = (err: Error) => {
-    if (subscriptionState.suppressResubscribe) return;
-    if (isCaptureActive(meeting)) {
-      meeting.audioData.captureIncomplete = true;
-    }
-    subscriptionState.decoderErrorCount += 1;
-    console.warn(
-      `Opus decoder error: meetingId=${meeting.meetingId} message=${err.message} errors=${subscriptionState.decoderErrorCount} ${opusDecoder.formatFailureDiagnostics()}`,
-    );
-    scheduleResubscribe(meeting, userId, "decoder-error");
-  };
-  opusDecoder.on("error", onDecoderError);
-  subscriptionState.ownedListenerCleanups.set(opusDecoder, [
-    () => opusDecoder.removeListener("error", onDecoderError),
-  ]);
-
-  // Prism's Opus stream can also emit errors; guard those too.
-  const onOpusError = (err: Error) => {
-    if (subscriptionState.suppressResubscribe) return;
-    if (isCaptureActive(meeting)) {
-      meeting.audioData.captureIncomplete = true;
-    }
-    console.warn(
-      `Opus stream error: meetingId=${meeting.meetingId} message=${err.message}`,
-    );
-    scheduleResubscribe(meeting, userId, "opus-stream-error");
-  };
-  opusStream.on("error", onOpusError);
-  const opusListenerCleanups = [
-    () => opusStream.removeListener("error", onOpusError),
-  ];
-  subscriptionState.ownedListenerCleanups.set(opusStream, opusListenerCleanups);
-
-  const decodedStream = opusStream.pipe(opusDecoder);
-  subscriptionState.decodedStream = decodedStream;
-
-  const onDecodedError = (err: Error) => {
-    if (subscriptionState.suppressResubscribe) return;
-    if (isCaptureActive(meeting)) {
-      meeting.audioData.captureIncomplete = true;
-    }
-    console.warn(
-      `Decoded stream error: meetingId=${meeting.meetingId} message=${err.message}`,
-    );
-    scheduleResubscribe(meeting, userId, "decoded-stream-error");
-  };
-  decodedStream.on("error", onDecodedError);
-  const decodedListenerCleanups =
-    subscriptionState.ownedListenerCleanups.get(decodedStream) ?? [];
-  decodedListenerCleanups.push(() =>
-    decodedStream.removeListener("error", onDecodedError),
-  );
-  subscriptionState.ownedListenerCleanups.set(
-    decodedStream,
-    decodedListenerCleanups,
-  );
-
-  const onOpusClose = () => {
-    if (subscriptionState.suppressResubscribe) return;
-    scheduleResubscribe(meeting, userId, "opus-stream-close");
-  };
-  opusStream.on("close", onOpusClose);
-  opusListenerCleanups.push(() =>
-    opusStream.removeListener("close", onOpusClose),
-  );
-
-  const onOpusEnd = () => {
-    if (subscriptionState.suppressResubscribe) return;
-    scheduleResubscribe(meeting, userId, "opus-stream-end");
-  };
-  opusStream.on("end", onOpusEnd);
-  opusListenerCleanups.push(() => opusStream.removeListener("end", onOpusEnd));
-
-  const onPcmData = (chunk: Buffer) => {
-    if (subscriptionState.suppressResubscribe) return;
-    subscriptionState.lastPcmAt = Date.now();
-    subscriptionState.consecutiveNoPcmEvents = 0;
-    subscriptionState.lastNoPcmAt = undefined;
-
-    // Immediately write audio to the output stream to prevent memory buildup
-    // This ensures audio is saved even for very long recordings
-    if (meeting.audioData.audioPassThrough) {
-      meeting.audioData.audioPassThrough.write(chunk, (err) => {
-        if (err) {
-          console.error(`Error writing audio chunk from user ${userId}:`, err);
-        }
-      });
-    }
-
-    // Still maintain snippets for transcription purposes
-    // These will be processed and cleared when user stops speaking or after 60 seconds
-    const state = getSpeakerState(meeting, userId);
-    updateSnippetsIfNecessary(meeting, userId, {
-      startTimestamp: state?.lastStartMs,
+    const opusDecoder = new OpusDiagnosticDecoder(meeting.connection.receiver, {
+      rate: RECORD_SAMPLE_RATE,
+      channels: CHANNELS,
+      frameSize: FRAME_SIZE,
     });
 
-    const snippet = meeting.audioData.currentSnippets.get(userId);
-    if (snippet) {
-      snippet.chunks.push(chunk);
-      snippet.audioBytes = (snippet.audioBytes ?? 0) + chunk.length;
-      maybeFinalizeSnippetsForInterjection(meeting, userId, snippet);
+    const subscriptions = getVoiceSubscriptions(meeting);
+    const subscriptionState: VoiceSubscriptionState = {
+      opusStream,
+      decoder: opusDecoder,
+      decodedStream: opusStream,
+      ownedListenerCleanups: new Map(),
+      decoderErrorCount: 0,
+      consecutiveNoPcmEvents: 0,
+    };
+
+    subscriptions.set(userId, subscriptionState);
+    createdState = subscriptionState;
+
+    // Prevent decoder errors (often caused by malformed or partial packets) from crashing the process.
+    const onDecoderError = (err: Error) => {
+      if (subscriptionState.suppressResubscribe) return;
+      if (isCaptureActive(meeting)) {
+        meeting.audioData.captureIncomplete = true;
+      }
+      subscriptionState.decoderErrorCount += 1;
+      console.warn(
+        `Opus decoder error: meetingId=${meeting.meetingId} message=${err.message} errors=${subscriptionState.decoderErrorCount} ${opusDecoder.formatFailureDiagnostics()}`,
+      );
+      scheduleResubscribe(meeting, userId, "decoder-error");
+    };
+    opusDecoder.on("error", onDecoderError);
+    subscriptionState.ownedListenerCleanups.set(opusDecoder, [
+      () => opusDecoder.removeListener("error", onDecoderError),
+    ]);
+
+    // Prism's Opus stream can also emit errors; guard those too.
+    const onOpusError = (err: Error) => {
+      if (subscriptionState.suppressResubscribe) return;
+      if (isCaptureActive(meeting)) {
+        meeting.audioData.captureIncomplete = true;
+      }
+      console.warn(
+        `Opus stream error: meetingId=${meeting.meetingId} message=${err.message}`,
+      );
+      scheduleResubscribe(meeting, userId, "opus-stream-error");
+    };
+    opusStream.on("error", onOpusError);
+    const opusListenerCleanups = [
+      () => opusStream.removeListener("error", onOpusError),
+    ];
+    subscriptionState.ownedListenerCleanups.set(
+      opusStream,
+      opusListenerCleanups,
+    );
+
+    const decodedStream = opusStream.pipe(opusDecoder);
+    subscriptionState.decodedStream = decodedStream;
+
+    const onDecodedError = (err: Error) => {
+      if (subscriptionState.suppressResubscribe) return;
+      if (isCaptureActive(meeting)) {
+        meeting.audioData.captureIncomplete = true;
+      }
+      console.warn(
+        `Decoded stream error: meetingId=${meeting.meetingId} message=${err.message}`,
+      );
+      scheduleResubscribe(meeting, userId, "decoded-stream-error");
+    };
+    decodedStream.on("error", onDecodedError);
+    const decodedListenerCleanups =
+      subscriptionState.ownedListenerCleanups.get(decodedStream) ?? [];
+    decodedListenerCleanups.push(() =>
+      decodedStream.removeListener("error", onDecodedError),
+    );
+    subscriptionState.ownedListenerCleanups.set(
+      decodedStream,
+      decodedListenerCleanups,
+    );
+
+    const onOpusClose = () => {
+      if (subscriptionState.suppressResubscribe) return;
+      scheduleResubscribe(meeting, userId, "opus-stream-close");
+    };
+    opusStream.on("close", onOpusClose);
+    opusListenerCleanups.push(() =>
+      opusStream.removeListener("close", onOpusClose),
+    );
+
+    const onOpusEnd = () => {
+      if (subscriptionState.suppressResubscribe) return;
+      scheduleResubscribe(meeting, userId, "opus-stream-end");
+    };
+    opusStream.on("end", onOpusEnd);
+    opusListenerCleanups.push(() =>
+      opusStream.removeListener("end", onOpusEnd),
+    );
+
+    const onPcmData = (chunk: Buffer) => {
+      if (subscriptionState.suppressResubscribe) return;
+      subscriptionState.lastPcmAt = Date.now();
+      subscriptionState.consecutiveNoPcmEvents = 0;
+      subscriptionState.lastNoPcmAt = undefined;
+
+      // Immediately write audio to the output stream to prevent memory buildup
+      // This ensures audio is saved even for very long recordings
+      if (meeting.audioData.audioPassThrough) {
+        meeting.audioData.audioPassThrough.write(chunk, (err) => {
+          if (err) {
+            console.error(
+              `Error writing audio chunk from user ${userId}:`,
+              err,
+            );
+          }
+        });
+      }
+
+      // Still maintain snippets for transcription purposes
+      // These will be processed and cleared when user stops speaking or after 60 seconds
+      const state = getSpeakerState(meeting, userId);
+      updateSnippetsIfNecessary(meeting, userId, {
+        startTimestamp: state?.lastStartMs,
+      });
+
+      const snippet = meeting.audioData.currentSnippets.get(userId);
+      if (snippet) {
+        snippet.chunks.push(chunk);
+        snippet.audioBytes = (snippet.audioBytes ?? 0) + chunk.length;
+        maybeFinalizeSnippetsForInterjection(meeting, userId, snippet);
+      }
+    };
+    decodedStream.on("data", onPcmData);
+    decodedListenerCleanups.push(() =>
+      decodedStream.removeListener("data", onPcmData),
+    );
+  } catch (error) {
+    const current = getVoiceSubscriptions(meeting).get(userId);
+    const ownsAttempt = createdState ? current === createdState : !current;
+    if (ownsAttempt && isCaptureActive(meeting)) {
+      meeting.audioData.captureIncomplete = true;
     }
-  };
-  decodedStream.on("data", onPcmData);
-  decodedListenerCleanups.push(() =>
-    decodedStream.removeListener("data", onPcmData),
-  );
+    if (createdState) {
+      clearVoiceSubscription(meeting, userId, createdState);
+    } else if (createdOpusStream) {
+      if (
+        meeting.connection.receiver.subscriptions.get(userId) ===
+        createdOpusStream
+      ) {
+        meeting.connection.receiver.subscriptions.delete(userId);
+      }
+      disposeVoiceStream(createdOpusStream, () => {});
+    }
+    throw error;
+  }
 }
 
 export function userStartTalking(meeting: MeetingData, userId: string) {
