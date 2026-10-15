@@ -136,3 +136,7 @@ An authorized operational deletion procedure, with current ownership revalidatio
 - Generated cleanup refusal and dry-run validation: `test/deployment/sandboxHandoffRunner.test.ts`.
 
 Whole-branch review, published exact-head checks, clean mergeability and the post-30-minute feedback audit remain the PR readiness gate. Sandbox acceptance, first production activation and historical repair are separate outcomes.
+
+## First Sandbox bootstrap tooling
+
+For the separately reviewed one-time introduction from an incompatible runtime, see [Sandbox bootstrap tooling](sandbox-bootstrap.md). Normal deployments still use the existing coordinator. The bootstrap and read-only observation commands do not apply infrastructure, stop legacy work, register an image, alter the listener or start a monitor automatically.
