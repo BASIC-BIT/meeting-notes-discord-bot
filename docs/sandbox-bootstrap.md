@@ -14,7 +14,8 @@ Register the reviewed candidate definition through the existing deployment autho
 - Set `stopTimeout: 120` on the selected container.
 - Use the explicit Node command for its runtime mode: `["node", "dist/index.js"]`, `["node", "dist/apps/bot/main.js"]` or `["node", "dist/apps/api/main.js"]`.
 - Set exactly one `DDB_TABLE_PREFIX` and one `DEPLOYMENT_CANDIDATE_ID`, matching the manifest prefix and operation UUID.
-- Retain reviewed environment and native secret references. Do not extract or copy secret values.
+- Set exactly one literal `TRANSCRIPTS_BUCKET` matching the manifest bucket. Missing, different or duplicate values and secret overrides refuse launch.
+- Retain reviewed environment and native secret references for credentials. Do not extract or copy secret values.
 
 The bootstrap will not retry registration or reconstruct an unacknowledged registration outcome.
 
@@ -67,7 +68,7 @@ node scripts/deployment/observe-sandbox.cjs --manifest PRIVATE_FILE --sha256 REV
 
 The collector uses only read operations. It validates the same account/principal bindings, paginates explicit DynamoDB metadata projections and excludes transcript, notes body, context, prompts and delivery-error text. Output contains aggregate signals, not user content. An incomplete scan or read failure reports observation unavailable, never an empty healthy result.
 
-The window must end no later than now and span at most 24 hours. Keep the activation baseline and exact source/digest bindings with each private receipt. Requested flags, processing results and reported delivery outcomes remain separate. Stale-record candidates are investigation signals, not canonical failure or lost-audio classifications. Runtime and routing snapshots do not prove all provider operations have settled.
+The window must end no later than now and span at most 24 hours. Keep the activation baseline and exact source/digest bindings with each private receipt. Requested flags, transcription/notes/summary results and each delivery outcome remain separate. Unknown and not-applicable outcomes are counted separately from failure. Stale-record candidates are investigation signals, not canonical failure or lost-audio classifications. Runtime and routing snapshots do not prove all provider operations have settled.
 
 Use the native task heartbeat for the approved post-activation schedule, not a repository cron or newly installed service. Create it only after actual activation bindings and time are known. Verify its read access, retain the ID in the private owner note, check every 15 minutes through the bounded 24-hour window, notify only on meaningful changes and stop at the end. No watcher is started by either command.
 

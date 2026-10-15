@@ -48,6 +48,16 @@ function projection(fields) {
     .join(",");
   return { ProjectionExpression: text, ExpressionAttributeNames: names };
 }
+function outcomeCounts(rows, read, allowed) {
+  const counts = {};
+  for (const row of rows) {
+    const value = read(row);
+    const key = allowed.includes(value) ? value : "unknown";
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
+
 async function inspectRunningTasks(aws, m, service) {
   const arns = new Set();
   let nextToken;
@@ -285,7 +295,36 @@ async function collectSandboxObservation(options) {
     since: options.since,
     until: options.until,
     identityMatched: true,
-    history: result,
+    history: {
+      ...result,
+      outcomes: {
+        transcription: outcomeCounts(
+          cohort,
+          (r) => r.processing?.transcription,
+          ["ready", "empty", "partial", "failed"],
+        ),
+        notes: outcomeCounts(cohort, (r) => r.processing?.notes, [
+          "generated",
+          "skipped",
+          "failed",
+        ]),
+        summary: outcomeCounts(cohort, (r) => r.processing?.summary, [
+          "generated",
+          "skipped",
+          "failed",
+        ]),
+        notesDelivery: outcomeCounts(
+          cohort,
+          (r) => r.delivery?.notes?.outcome,
+          ["complete", "partial", "failed", "not_applicable"],
+        ),
+        summaryDelivery: outcomeCounts(
+          cohort,
+          (r) => r.delivery?.summary?.outcome,
+          ["complete", "partial", "failed", "not_applicable"],
+        ),
+      },
+    },
     health,
     routing,
     runtime: {

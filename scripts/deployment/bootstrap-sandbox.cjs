@@ -352,6 +352,7 @@ function createBootstrap(options) {
       svc.desiredCount !== 0 ||
       svc.runningCount !== 0 ||
       svc.pendingCount !== 0 ||
+      svc.taskDefinition !== m.legacyTaskDefinition ||
       (await tasks()).length
     )
       fail("Service is not empty");
@@ -374,6 +375,11 @@ function createBootstrap(options) {
       !container ||
       !container.image.endsWith("@" + m.imageDigest) ||
       container.stopTimeout !== 120 ||
+      container.environment.filter((v) => v.name === "TRANSCRIPTS_BUCKET")
+        .length !== 1 ||
+      container.environment.find((v) => v.name === "TRANSCRIPTS_BUCKET")
+        ?.value !== m.bucket ||
+      container.secrets?.some((v) => v.name === "TRANSCRIPTS_BUCKET") ||
       container.entryPoint?.length ||
       !same(container.command, commands[m.runtimeMode]) ||
       container.environment.filter((v) => v.name === "DDB_TABLE_PREFIX")

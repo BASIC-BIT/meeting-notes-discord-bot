@@ -219,3 +219,89 @@ test("observer rejects an excessive window and mismatched identity before readin
   ).rejects.toThrow();
   expect(reads).toBe(1);
 });
+
+test("generation and delivery failures are preserved as distinct observation outcomes", async () => {
+  const aws = async (
+    service: string,
+    operation: string,
+    input: Record<string, unknown>,
+  ) => {
+    if (service === "sts")
+      return { Account: account, Arn: manifest.principalArn };
+    if (service === "ecs" && operation === "describe-services")
+      return {
+        services: [
+          {
+            serviceName: manifest.service,
+            desiredCount: 1,
+            runningCount: 0,
+            pendingCount: 0,
+            taskDefinition: manifest.taskDefinition,
+          },
+        ],
+      };
+    if (service === "ecs" && operation === "list-tasks")
+      return { taskArns: [] };
+    if (service === "elbv2" && operation === "describe-target-health")
+      return { TargetHealthDescriptions: [] };
+    if (service === "elbv2" && operation === "describe-listeners")
+      return { Listeners: [] };
+    if (service === "dynamodb" && operation === "scan")
+      return {
+        Items:
+          input.TableName === "test-sandbox-MeetingHistoryTable"
+            ? [
+                {
+                  timestamp: { S: "2026-10-15T10:01:00.000Z" },
+                  status: { S: "complete" },
+                  processing: {
+                    M: { notes: { S: "failed" }, summary: { S: "failed" } },
+                  },
+                  delivery: {
+                    M: {
+                      notes: { M: { outcome: { S: "failed" } } },
+                      summary: { M: { outcome: { S: "partial" } } },
+                    },
+                  },
+                },
+                {
+                  timestamp: { S: "2026-10-15T10:02:00.000Z" },
+                  status: { S: "complete" },
+                  processing: { M: { notes: { S: "skipped" } } },
+                  delivery: {
+                    M: { notes: { M: { outcome: { S: "not_applicable" } } } },
+                  },
+                },
+                {
+                  timestamp: { S: "2026-10-15T10:03:00.000Z" },
+                  status: { S: "complete" },
+                  processing: {
+                    M: {
+                      notes: { S: "generated" },
+                      summary: { S: "generated" },
+                    },
+                  },
+                  delivery: {
+                    M: { notes: { M: { outcome: { S: "partial" } } } },
+                  },
+                },
+              ]
+            : [],
+      };
+    throw new Error("Unexpected operation");
+  };
+  const result = await collectSandboxObservation({
+    manifest,
+    expectedSha256: manifestHash(manifest),
+    aws,
+    since: "2026-10-15T10:00:00.000Z",
+    until: "2026-10-15T11:00:00.000Z",
+    now: () => Date.parse("2026-10-15T11:00:00.000Z"),
+  });
+  expect(result.history.outcomes).toMatchObject({
+    notes: { failed: 1, skipped: 1, generated: 1 },
+    summary: { failed: 1, unknown: 1, generated: 1 },
+    notesDelivery: { failed: 1, not_applicable: 1, partial: 1 },
+    summaryDelivery: { partial: 1, unknown: 2 },
+  });
+});

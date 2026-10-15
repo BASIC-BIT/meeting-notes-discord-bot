@@ -188,6 +188,7 @@ async function fixture() {
                 stopTimeout: 120,
                 environment: [
                   { name: "DDB_TABLE_PREFIX", value: prefix },
+                  { name: "TRANSCRIPTS_BUCKET", value: manifest.bucket },
                   {
                     name: "DEPLOYMENT_CANDIDATE_ID",
                     value: manifest.operationId,
@@ -476,4 +477,102 @@ test("missing candidate work accounting refuses promotion", async () => {
   );
   await expect(f.bootstrap.promote()).rejects.toThrow();
   expect((await f.get("CONTROL"))?.servingGeneration).toBe(0);
+});
+
+test.each(["wrong", "missing", "duplicate", "secret"] as const)(
+  "prepared %s recording bucket refuses launch before external mutation",
+  async (mode) => {
+    const f = await fixture();
+    await f.bootstrap.initialize();
+    const aws = async (
+      service: string,
+      operation: string,
+      input: Record<string, never>,
+    ) => {
+      const result = await f.aws(service, operation, input);
+      if (
+        service === "ecs" &&
+        operation === "describe-task-definition" &&
+        "taskDefinition" in result &&
+        result.taskDefinition
+      ) {
+        const definition = result;
+        const container = definition.taskDefinition.containerDefinitions[0];
+        container.environment = container.environment.filter(
+          (e) => e.name !== "TRANSCRIPTS_BUCKET",
+        );
+        if (mode === "wrong")
+          container.environment.push({
+            name: "TRANSCRIPTS_BUCKET",
+            value: "different-bucket",
+          });
+        if (mode === "duplicate")
+          container.environment.push(
+            ...[1, 2].map(() => ({
+              name: "TRANSCRIPTS_BUCKET",
+              value: f.manifest.bucket,
+            })),
+          );
+        if (mode === "secret")
+          return {
+            ...definition,
+            taskDefinition: {
+              ...definition.taskDefinition,
+              containerDefinitions: [
+                {
+                  ...container,
+                  secrets: [
+                    {
+                      name: "TRANSCRIPTS_BUCKET",
+                      valueFrom: "ambiguous-secret",
+                    },
+                  ],
+                },
+              ],
+            },
+          };
+      }
+      return result;
+    };
+    const bootstrap = createBootstrap({
+      manifest: f.manifest,
+      expectedSha256: f.hash,
+      aws,
+      builders,
+      types,
+      now: () => 1000,
+    });
+    await expect(bootstrap.launch()).rejects.toThrow();
+    expect(f.state.updates).toBe(0);
+  },
+);
+
+test("changed empty service definition refuses launch instead of overriding another operation", async () => {
+  const f = await fixture();
+  await f.bootstrap.initialize();
+  const aws = async (
+    service: string,
+    operation: string,
+    input: Record<string, never>,
+  ) => {
+    const result = await f.aws(service, operation, input);
+    if (
+      service === "ecs" &&
+      operation === "describe-services" &&
+      "services" in result &&
+      result.services
+    )
+      result.services[0].taskDefinition = f.manifest.taskDefinition;
+    return result;
+  };
+  const bootstrap = createBootstrap({
+    manifest: f.manifest,
+    expectedSha256: f.hash,
+    aws,
+    builders,
+    types,
+    now: () => 1000,
+  });
+  await expect(bootstrap.launch()).rejects.toThrow();
+  expect(f.state.updates).toBe(0);
 });
