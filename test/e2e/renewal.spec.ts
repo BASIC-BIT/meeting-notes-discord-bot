@@ -1,3 +1,4 @@
+import { RENEWAL_QUOTE_TTL_MS } from "../../src/utils/renewalConstants";
 import { test, expect } from "./fixtures";
 import { useIntroBilling, type IntroBillingOptions } from "./billingMocks";
 import { annualSubscriber } from "../../src/frontend/pages/basicIntroFixtures";
@@ -144,7 +145,7 @@ test("expired consent refreshes terms and requires another deliberate click", as
       action: {
         ...expired.state.action,
         quoteToken: "refreshed-consent",
-        expiresAt: Date.now() + 300000,
+        expiresAt: Date.now() + RENEWAL_QUOTE_TTL_MS,
         terms,
       },
     },

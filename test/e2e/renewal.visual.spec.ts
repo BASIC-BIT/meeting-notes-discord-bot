@@ -5,6 +5,7 @@ import { createRenewalFixture } from "../../src/frontend/pages/renewalFixtures";
 import { mockGuilds } from "./mockData";
 import { applyVisualDefaults, waitForVisualReady } from "./visualUtils";
 import type { RenewalView } from "../../src/types/renewal";
+const runVisual = process.env.PW_VISUAL === "true";
 const views = [
   { name: "desktop", width: 1280, height: 720 },
   { name: "intermediate", width: 768, height: 900 },
@@ -20,7 +21,8 @@ for (const viewport of views) {
     "terminal",
     "payment-attention",
   ] as const) {
-    test(`renewal ${state} at ${viewport.name}`, async ({ page }) => {
+    test(`renewal ${state} at ${viewport.name} @visual`, async ({ page }) => {
+      test.skip(!runVisual, "Visual regression disabled");
       await page.setViewportSize(viewport);
       await applyVisualDefaults(page);
       if (state === "terminal")

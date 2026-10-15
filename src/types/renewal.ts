@@ -1,3 +1,4 @@
+import { RENEWAL_QUOTE_TTL_MS } from "../utils/renewalConstants";
 import { z } from "zod";
 import { isDeepStrictEqual } from "node:util";
 const snowflake = z.string().regex(/^\d{17,20}$/);
@@ -39,7 +40,7 @@ export const renewalQuoteSchema = z
     expiresAt: z.number().int().nonnegative(),
   })
   .strict()
-  .refine((value) => value.expiresAt - value.issuedAt === 300000);
+  .refine((value) => value.expiresAt - value.issuedAt === RENEWAL_QUOTE_TTL_MS);
 export type RenewalQuote = z.infer<typeof renewalQuoteSchema>;
 export const renewalRequestSchema = z.discriminatedUnion("kind", [
   z

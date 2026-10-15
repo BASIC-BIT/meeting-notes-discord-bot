@@ -16,6 +16,7 @@ import type { MeetingStatus } from "../../../src/types/meetingLifecycle";
 import type { PaidPlan, BasicIntroOffer } from "../../../src/types/pricing";
 
 type QueryState<T> = {
+  dataUpdatedAt: number;
   data: T | null;
   isLoading: boolean;
   isFetching: boolean;
@@ -257,6 +258,7 @@ type AdminFeedbackData = {
 };
 
 const buildQueryState = <T>(data: T | null): QueryState<T> => ({
+  dataUpdatedAt: 0,
   data,
   isLoading: false,
   isFetching: false,
@@ -273,6 +275,7 @@ const buildMutationState = <TArgs extends unknown[], TResult>(
 });
 
 const resetQueryState = <T>(state: QueryState<T>, data: T | null) => {
+  state.dataUpdatedAt = 0;
   state.data = data;
   state.isLoading = false;
   state.isFetching = false;

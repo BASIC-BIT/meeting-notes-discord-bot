@@ -1,8 +1,41 @@
+import { useRef, useState } from "react";
 import { useRenewalAnalytics } from "./useRenewalAnalytics";
 import { notifications } from "@mantine/notifications";
 import { trpc } from "../services/trpc";
 import { isDoNotTrackEnabled } from "../services/analytics";
-import type { RenewalRequest } from "../../types/renewal";
+import type {
+  RenewalRequest,
+  RenewalResult,
+  RenewalState,
+  RenewalView,
+} from "../../types/renewal";
+function pendingView(
+  result: RenewalResult,
+  previous: RenewalView | undefined,
+): RenewalView | undefined {
+  if (
+    !previous ||
+    (result.kind !== "processing" && result.kind !== "needs_review")
+  )
+    return undefined;
+  const state = previous.state;
+  const endsAt =
+    state.kind === "off" || state.kind === "processing"
+      ? state.endsAt
+      : state.kind === "needs_review"
+        ? state.knownEndsAt
+        : null;
+  const pending: RenewalState =
+    result.kind === "processing" && endsAt
+      ? { kind: "processing", operationId: result.operationId, endsAt }
+      : {
+          kind: "needs_review",
+          operationId: result.operationId,
+          knownEndsAt: endsAt,
+        };
+  return { ...previous, state: pending };
+}
+
 export function useBillingRenewal({
   serverId,
   active,
@@ -16,14 +49,30 @@ export function useBillingRenewal({
     { serverId: serverId ?? "" },
     { enabled: active && Boolean(serverId), retry: false },
   );
+  const readVersion = useRef(query.dataUpdatedAt);
+  readVersion.current = query.dataUpdatedAt;
+  const [pending, setPending] = useState<{
+    serverId: string;
+    version: number;
+    view: RenewalView;
+  } | null>(null);
+  const view =
+    pending?.serverId === serverId && pending.version === query.dataUpdatedAt
+      ? pending.view
+      : query.data;
   const captureClick = useRenewalAnalytics({
-    view: query.data,
+    view,
     serverId,
     active,
   });
   const mutation = trpc.billing.reactivateRenewal.useMutation();
   const refresh = async () => {
-    await Promise.allSettled([query.refetch(), onBillingChanged()]);
+    const read = query.refetch({ throwOnError: true }).then(() => {
+      setPending((current) =>
+        current?.serverId === serverId ? null : current,
+      );
+    });
+    await Promise.allSettled([read, onBillingChanged()]);
   };
   const run = async (request: RenewalRequest) => {
     if (!serverId || !active || mutation.isPending) return;
@@ -33,6 +82,12 @@ export function useBillingRenewal({
         request,
         analyticsOptOut: isDoNotTrackEnabled(),
       });
+      const retained = pendingView(result, view);
+      setPending(
+        retained
+          ? { serverId, version: readVersion.current, view: retained }
+          : null,
+      );
       if (result.kind === "confirmed")
         notifications.show({
           color: "green",
@@ -57,7 +112,7 @@ export function useBillingRenewal({
     }
   };
   const onConfirm = async (quoteToken: string) => {
-    const state = query.data?.state;
+    const state = view?.state;
     if (
       state?.kind !== "off" ||
       state.action.kind !== "ready" ||
@@ -78,7 +133,7 @@ export function useBillingRenewal({
     await run({ kind: "confirm", quoteToken });
   };
   const onCheckStatus = async (operationId: string) => {
-    const state = query.data?.state;
+    const state = view?.state;
     if (
       (state?.kind !== "processing" && state?.kind !== "needs_review") ||
       state.operationId !== operationId
@@ -87,7 +142,7 @@ export function useBillingRenewal({
     await run({ kind: "recover", operationId });
   };
   return {
-    view: query.data,
+    view,
     busy: mutation.isPending || query.isFetching,
     onConfirm,
     onCheckStatus,

@@ -621,9 +621,12 @@ test.describe("visual regression", () => {
         const currentPlan = page.getByTestId("billing-current-plan");
         await expect(currentPlan).toContainText("Free");
         await expect(currentPlan).not.toContainText("Canceled");
-        await expect(
-          page.getByTestId("billing-subscription-history"),
-        ).toContainText("Previous subscription: Canceled");
+        await page
+          .getByRole("button", { name: "Payment history", exact: true })
+          .click();
+        await expect(page.getByTestId("billing-payment-history")).toContainText(
+          "Previous subscription: Canceled",
+        );
         await expectVisualScreenshot(
           page,
           `billing-canceled-subscription-${viewport.name}`,
@@ -653,7 +656,7 @@ test.describe("visual regression", () => {
         );
         const currentPlan = page.getByTestId("billing-current-plan");
         await expect(currentPlan).toContainText(
-          `Active, ends ${new Date(cancellationAt).toLocaleDateString()}`,
+          "Your Basic plan ends November 12, 2026.",
         );
         await expect(currentPlan).not.toContainText("next billing");
         await assertPageCanScroll(page);
@@ -682,9 +685,12 @@ test.describe("visual regression", () => {
         const currentPlan = page.getByTestId("billing-current-plan");
         await expect(currentPlan).toContainText("Free");
         await expect(currentPlan).not.toContainText("Canceled");
-        await expect(
-          page.getByTestId("billing-subscription-history"),
-        ).toContainText("Previous subscription: Canceled");
+        await page
+          .getByRole("button", { name: "Payment history", exact: true })
+          .click();
+        await expect(page.getByTestId("billing-payment-history")).toContainText(
+          "Previous subscription: Canceled",
+        );
         await expectVisualScreenshot(
           page,
           `billing-canceled-subscription-intro-${viewport.name}`,
@@ -709,11 +715,14 @@ test.describe("visual regression", () => {
         await expect(page.getByTestId("billing-current-plan")).toContainText(
           "Free",
         );
+        await page
+          .getByRole("button", { name: "Payment history", exact: true })
+          .click();
+        await expect(page.getByTestId("billing-payment-history")).toContainText(
+          "Previous subscription: Expired",
+        );
         await expect(
-          page.getByTestId("billing-subscription-history"),
-        ).toContainText("Previous subscription: Expired");
-        await expect(
-          page.getByRole("button", { name: "Upgrade to Basic" }),
+          page.getByRole("button", { name: "Get Basic again" }),
         ).toBeEnabled();
         await expect(
           page.getByRole("button", { name: "Upgrade to Pro" }),

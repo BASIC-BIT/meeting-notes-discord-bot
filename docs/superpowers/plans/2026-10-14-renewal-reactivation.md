@@ -10,9 +10,9 @@
 
 **Spec:** [Turn subscription renewal back on](../specs/2026-10-14-renewal-reactivation-design.md). Read it before executing. BASIC approved local implementation and separately authorized new owned Stripe Sandbox fixtures on October 14. Both new gates remain false. Deployment and activation are separate.
 
-## Implementation status (October 14)
+## Implementation status (October 15)
 
-Local consent/storage, protected renewal API, Billing UI and lifecycle producers are implemented. The final Jest result is 277 suites and 2,267 tests passed. The complete affected browser run passed 78 checks: 48 Billing, eight renewal and 22 responsive/scroll checks without baseline updates. Forty-two affected Storybook stories passed. Storybook captures and Playwright snapshots were visually reviewed, including the failed-payment state.
+Local consent/storage, protected renewal API, Billing UI and lifecycle producers are implemented. The latest full Jest result is 278 suites and 2,269 tests passed. The complete affected browser run passed 78 checks: 48 Billing, eight renewal and 22 responsive/scroll checks without baseline updates. Forty-two affected Storybook stories passed. Storybook captures and Playwright snapshots were visually reviewed, including the failed-payment state.
 
 Owned native proof passed 16 supported cases and one read-only portal check, with six expected direct-route exclusions and nine retained controller failures. Every created fixture was cleaned up. Manual inclusive/exclusive tax is covered; this is not nonzero automatic-tax acceptance.
 
@@ -85,7 +85,7 @@ acceptedUndo:
 - [x] **Step 4: Test only the minimal candidate.** Classic candidate: `cancel_at_period_end=false, proration_behavior=none`. Flexible candidate: `cancel_at='', proration_behavior=none`. Supply no items, price, discounts, anchor or payment parameters. If the pinned API requires a different request, record the mismatch and revise the spec before implementation.
 - [x] **Step 5: Verify native readback and legitimate renewal.** Compare complete before/after inventories. Replay the same request/key, cancel again and verify an old completed operation is not reissued. Advance an owned test clock to the real renewal, then verify its invoice and applicable discount. Exercise an externally changed price/date/schedule and record whether drift is detected. An unexpected immediate charge or changed anchor fails acceptance.
 - [x] **Step 6: Verify fallback and clean up.** Read the actual portal configuration and test the claimed general-management recovery without changing shared/default settings. Record cases requiring support rather than promising schedule editing. Clean up only owned fixtures, then reconcile every held resource. Preserve historical invoices and the previously cleaned parent subscription.
-- [ ] **Step 7: Save proof through the private repo policy.** The probe is executable research, so its reusable source uses a topic branch/PR there. Commit only intended files. Record pass, rejected and unverified cases separately. No activation follows from passing proof.
+- [x] **Step 7: Save proof through the private repo policy.** The probe is executable research, so its reusable source uses a topic branch/PR there. Commit only intended files. Record pass, rejected and unverified cases separately. No activation follows from passing proof.
 
 ## Task 2: Define consent and operation storage
 
@@ -289,7 +289,7 @@ Add exact maturity just before/at/after the known boundary, annual dates that di
 - [x] **Step 2: Update public and operator docs.** Explain renewal off, who may restore renewal, the date/rate shown before consent, payment-history access and terminal repurchase. Document the separate flag and recovery behavior. Do not publish private fixture identities or claim that all schedules are editable in Stripe.
 - [x] **Step 3: Run the appropriate full affected checks.** Jest for the new renewal, billing activation, consent/repository and existing billing/webhook suites; `PW_VISUAL=false` Billing browser tests; `PW_VISUAL=true` affected visuals; Storybook capture after Playwright finishes; root types, scoped lint/Prettier, docs build and full complexity check. Avoid racing the Storybook runner with Playwright report writes. New failures or changed code justify repeat checks; otherwise proceed to review.
 - [x] **Step 4: Review the actual branch, not only helper tests.** Inspect authorization, source association, inclusive-tax copy, quote replay after cancel-again, external-race behavior, unresolved operations, same-subscription invariants and default-false gate. Separate mock proof, native provider proof, signed-in app proof, PostHog received rows, saved query configuration, CI and runtime evidence.
-- [ ] **Step 5: Prepare the PR under the active authorization.** If publishing is authorized, use a concise problem/behavior description with relevant validation, attach the PR, and follow the repository's exact-head 30-minute gate plus all mutable review/check surfaces before calling it merge-ready. Every new commit restarts the window. Do not merge, deploy, enable the flag or perform production billing writes under design/planning authority.
+- [x] **Step 5: Prepare the PR under the active authorization.** If publishing is authorized, use a concise problem/behavior description with relevant validation, attach the PR, and follow the repository's exact-head 30-minute gate plus all mutable review/check surfaces before calling it merge-ready. Every new commit restarts the window. Do not merge, deploy, enable the flag or perform production billing writes under design/planning authority.
 
 ## Self-review and open gates
 
@@ -314,7 +314,7 @@ The implementation is committed through `29c44711ef453c995ec1eb3abb58b00ccb4b19c
 - Recovery now retains a newly stored subscription analytics opt-out before update, readback and confirmation. Suppression cannot clear.
 - A past-due or unpaid renewal without scheduled cancellation retains payment attention and the original payer's Manage billing action.
 
-The full suite and affected browser/Storybook checks passed after those fixes. Root source types, explicit SDK-test types, scoped lint, formatting, docs build and Markdown lint passed. Full complexity analysis ran without new suppressions. The recovery routine reports cyclomatic complexity 35. Refactoring that routine is deferred to avoid changing the tested payment operation during this fix pass.
+The full suite and affected browser/Storybook checks passed after those fixes. Root source types, explicit SDK-test types, scoped lint, formatting, docs build and Markdown lint passed. Full complexity analysis ran without new suppressions. The first local complexity run used Lizard 1.21.6. CI uses the locked 1.24.0 and identified seven over-threshold functions. PR follow-up split provider validation, operation recovery, Billing rendering and fixtures into focused helpers. The complete pinned check now passes without new suppressions.
 
 Local result files are `tmp/renewal-final-jest.json`, `tmp/renewal-final-browser.log`, `tmp/renewal-final-stories.log`, `tmp/renewal-review-types.log`, `tmp/renewal-review-test-types.log`, `tmp/renewal-review-lint.log`, `tmp/renewal-docs-build.log` and `tmp/renewal-docs-lint.log`. These are local verification artifacts, not CI or deployed acceptance.
 
@@ -344,4 +344,16 @@ These gates remain unchecked above. They do not prevent reviewing the completed 
 | Keep live encryption and deletion-fulfillment verification separate from source review.                                                       | Operator verification or configuration correction may be required.                   |
 | Treat public-copy review as engineering accuracy review, without jurisdiction-specific legal assurance.                                       | Qualified legal review and notice revisions may be required.                         |
 
-The deferred maintenance item is the recovery routine's complexity warning. No suppression was added. The final frontend and static Storybook builds passed after the review fixes. The existing local and tailnet preview both returned HTTP 200 and serve the `29c44711` UI build with simulated actions.
+The complexity maintenance item was resolved during PR iteration. No suppression was added. The final frontend and static Storybook builds passed after the review fixes. The existing local and tailnet preview both returned HTTP 200 and serve the `29c44711` UI build with simulated actions.
+
+### PR iteration (October 15)
+
+BASIC authorized publication and iteration until merge-ready. Product PR [#410](https://github.com/Chronote-gg/Chronote/pull/410) targets master; private native-proof PR #1 targets chronote-ops main. Both branches merge cleanly. No merge, deployment or activation is included in this instruction.
+
+The first CI cycle exposed seven complexity failures, missing visual-job routing, stale cancellation/history assertions and unfinished mock routes at browser teardown. The locked Lizard 1.24.0 check now passes for the entire source and test tree. Renewal screenshots use the existing visual gate and @visual selection; the short-height scroll assertion remains an ordinary functional test. Known billing fixture responses no longer fetch the real mock billing endpoint, and route teardown waits for active handlers.
+
+Greptile identified a pending-state bug: a successful mutation's operation ID disappeared from the card if its follow-up query failed. Two regression tests reproduced the failure before implementation. The hook now retains processing/review state for the same server, supports recovery with the returned operation ID and replaces it after a successful read. The five-minute consent lifetime is shared by creation, validation and fixtures in a browser-safe constants module.
+
+Claude reported no Important findings on the initial head. Codex and Copilot reviews were unavailable due to account review quotas. Those unavailable attempts are recorded separately from completed reviews. Current-head CI, all review pages and mutable summaries must be refreshed after the repository's 30-minute commit window before claiming merge readiness.
+
+The post-review full unit run passed 278 suites and 2,269 tests. Functional billing checks passed 57 cases at CI-like concurrency, with 21 screenshot cases correctly skipped outside visual mode. Source types, explicit SDK-test types, lint, format and the complete locked complexity check passed. The targeted visual capture passed 70 cases. The updated baselines and the complete visual matrix must pass without updates before merge readiness.

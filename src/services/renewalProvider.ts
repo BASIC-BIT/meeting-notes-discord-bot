@@ -34,15 +34,68 @@ export type RenewalSource =
       invariantFingerprint: string;
       stripeRequest: RenewalOperation["stripeRequest"];
     });
-export async function readRenewalSource({
-  stripe,
-  guildId,
-  subscriptionId,
-}: {
+type SourceInput = {
   stripe: StripeClient;
   guildId: string;
   subscriptionId: string;
-}): Promise<RenewalSource> {
+};
+
+export async function readRenewalSource(
+  input: SourceInput,
+): Promise<RenewalSource> {
+  const identity = await readRenewalIdentity(input);
+  const { subscription, customer } = identity;
+  if (
+    subscription.status === "canceled" ||
+    subscription.status === "incomplete_expired"
+  )
+    return { ...identity, kind: "terminal" };
+  const review = (reason: ReviewReason): RenewalSource => ({
+    ...identity,
+    kind: "review",
+    reason,
+  });
+  const reason = sourceReviewReason(identity);
+  if (reason) return review(reason);
+  const priceTerms = readPriceTerms(subscription);
+  if (!priceTerms) return review("unverified_terms");
+  const invoiceId = id(subscription.latest_invoice);
+  if (!invoiceId) return review("unverified_terms");
+  const invoice = await input.stripe.invoices
+    .retrieve(invoiceId)
+    .catch(() => undefined);
+  if (!invoice) return review("unverified_terms");
+  const item = subscription.items.data[0];
+  if (!isFundedPeriod(invoice, subscription, item.id, customer.id))
+    return review("payment_problem");
+  const paidLine = readPaidLine(invoice, identity);
+  if (!paidLine) return review("unverified_terms");
+  const stripeRequest: RenewalOperation["stripeRequest"] =
+    subscription.billing_mode.type === "classic"
+      ? { cancel_at_period_end: false, proration_behavior: "none" }
+      : { cancel_at: "", proration_behavior: "none" };
+  const preview = await input.stripe.invoices
+    .createPreview({
+      subscription: subscription.id,
+      subscription_details: stripeRequest,
+    })
+    .catch(() => undefined);
+  if (!preview) return review("unverified_terms");
+  const terms = previewTerms(
+    preview,
+    subscription,
+    priceTerms.tier,
+    paidLine.period.end,
+  );
+  if (!terms) return review("unverified_terms");
+  return verifiedSource(identity, invoice, terms, stripeRequest);
+}
+
+async function readRenewalIdentity({
+  stripe,
+  guildId,
+  subscriptionId,
+}: SourceInput): Promise<Identity> {
   const saved = await getSubscriptionRepository().get(guildId);
   const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
     expand: ["discounts.source.coupon", "latest_invoice"],
@@ -71,29 +124,28 @@ export async function readRenewalSource({
       "BAD_REQUEST",
       "Server billing information is unavailable",
     );
-  const identity: Identity = {
+  return {
     subscription,
     customer,
     cancellationAt: resolveSubscriptionCancellationAt(subscription),
   };
-  if (
-    subscription.status === "canceled" ||
-    subscription.status === "incomplete_expired"
-  )
-    return { ...identity, kind: "terminal" };
-  const review = (reason: ReviewReason): RenewalSource => ({
-    ...identity,
-    kind: "review",
-    reason,
-  });
-  if (subscription.status !== "active") return review("payment_problem");
-  const item = subscription.items.data[0];
+}
+
+function sourceReviewReason(identity: Identity): ReviewReason | undefined {
+  const { subscription } = identity;
+  if (subscription.status !== "active") return "payment_problem";
   if (
     identity.cancellationAt !== null &&
     !supportedCancellationShape(subscription)
   )
-    return review("unsupported_state");
-  if (
+    return "unsupported_state";
+  if (!simpleSubscription(subscription)) return "unsupported_state";
+  return undefined;
+}
+
+function simpleSubscription(subscription: StripeSubscription) {
+  const item = subscription.items.data[0];
+  return !(
     subscription.items.has_more ||
     subscription.items.data.length !== 1 ||
     !item ||
@@ -105,9 +157,24 @@ export async function readRenewalSource({
     subscription.trial_end ||
     subscription.pending_setup_intent ||
     subscription.collection_method !== "charge_automatically"
-  )
-    return review("unsupported_state");
-  const price = item.price;
+  );
+}
+
+function priceMatchesSubscription(
+  price: Stripe.Price,
+  subscription: StripeSubscription,
+) {
+  return (
+    price.billing_scheme === "per_unit" &&
+    price.currency === "usd" &&
+    price.currency === subscription.currency &&
+    price.livemode === subscription.livemode &&
+    (price.tax_behavior === "exclusive" || price.tax_behavior === "inclusive")
+  );
+}
+
+function readPriceTerms(subscription: StripeSubscription) {
+  const price = subscription.items.data[0].price;
   const recurring = price.recurring;
   const tier = resolveTierFromPrice({
     priceId: price.id,
@@ -119,54 +186,47 @@ export async function readRenewalSource({
     !["month", "year"].includes(recurring.interval) ||
     recurring.interval_count !== 1 ||
     recurring.usage_type !== "licensed" ||
-    price.billing_scheme !== "per_unit" ||
     price.unit_amount === null ||
     !Number.isSafeInteger(price.unit_amount) ||
     price.unit_amount < 0 ||
-    price.currency !== "usd" ||
-    price.currency !== subscription.currency ||
-    price.livemode !== subscription.livemode ||
-    (price.tax_behavior !== "exclusive" && price.tax_behavior !== "inclusive")
+    !priceMatchesSubscription(price, subscription)
   )
-    return review("unverified_terms");
-  const invoiceId = id(subscription.latest_invoice);
-  if (!invoiceId) return review("unverified_terms");
-  const invoice = await stripe.invoices
-    .retrieve(invoiceId)
-    .catch(() => undefined);
-  if (!invoice) return review("unverified_terms");
-  if (!isFundedPeriod(invoice, subscription, item.id, customer.id))
-    return review("payment_problem");
+    return undefined;
+  return { tier };
+}
+
+function readPaidLine(invoice: StripeInvoice, identity: Identity) {
+  const item = identity.subscription.items.data[0];
   const paidLine = invoice.lines.data.find(
     (line) =>
       line.parent?.type === "subscription_item_details" &&
       line.parent.subscription_item_details?.subscription_item === item.id &&
       !line.parent.subscription_item_details.proration &&
-      line.pricing?.price_details?.price === price.id,
+      line.pricing?.price_details?.price === item.price.id,
   );
   if (
     !paidLine ||
-    paidLine.amount !== price.unit_amount ||
+    paidLine.amount !== item.price.unit_amount ||
     paidLine.quantity !== 1 ||
     paidLine.period.start !== item.current_period_start ||
     paidLine.period.end !== item.current_period_end ||
     (identity.cancellationAt !== null &&
       identity.cancellationAt !== paidLine.period.end)
   )
-    return review("unverified_terms");
-  const stripeRequest: RenewalOperation["stripeRequest"] =
-    subscription.billing_mode.type === "classic"
-      ? { cancel_at_period_end: false, proration_behavior: "none" }
-      : { cancel_at: "", proration_behavior: "none" };
-  const preview = await stripe.invoices
-    .createPreview({
-      subscription: subscription.id,
-      subscription_details: stripeRequest,
-    })
-    .catch(() => undefined);
-  if (!preview) return review("unverified_terms");
-  const terms = previewTerms(preview, subscription, tier, paidLine.period.end);
-  if (!terms) return review("unverified_terms");
+    return undefined;
+  return paidLine;
+}
+
+function verifiedSource(
+  identity: Identity,
+  invoice: StripeInvoice,
+  terms: RenewalTerms,
+  stripeRequest: RenewalOperation["stripeRequest"],
+): RenewalSource {
+  const { subscription, customer } = identity;
+  const item = subscription.items.data[0];
+  const price = item.price;
+  const recurring = price.recurring;
   const invariant = {
     subscriptionId: subscription.id,
     customerId: customer.id,
@@ -266,21 +326,28 @@ function fundedInvoiceLineMatches(invoice: StripeInvoice, itemId: string) {
       ?.subscription_item === itemId
   );
 }
-function previewTerms(
+function previewMatchesSubscription(
   preview: StripeInvoice,
   subscription: StripeSubscription,
-  tier: RenewalTerms["tier"],
+) {
+  return (
+    preview.livemode === subscription.livemode &&
+    id(preview.customer) === id(subscription.customer) &&
+    preview.currency === subscription.items.data[0].price.currency &&
+    !preview.lines.has_more &&
+    preview.lines.data.length === 1
+  );
+}
+
+function readPreviewLine(
+  preview: StripeInvoice,
+  subscription: StripeSubscription,
   boundary: number,
-): RenewalTerms | undefined {
+) {
   const item = subscription.items.data[0];
   const line = preview.lines.data[0];
   const price = item.price;
   if (
-    preview.livemode !== subscription.livemode ||
-    id(preview.customer) !== id(subscription.customer) ||
-    preview.currency !== price.currency ||
-    preview.lines.has_more ||
-    preview.lines.data.length !== 1 ||
     !line ||
     line.parent?.type !== "subscription_item_details" ||
     line.parent.subscription_item_details?.subscription_item !== item.id ||
@@ -294,6 +361,15 @@ function previewTerms(
     return undefined;
   if (line.taxes?.some((tax) => tax.tax_behavior !== price.tax_behavior))
     return undefined;
+  return line;
+}
+
+function readPreviewDiscount(
+  line: Stripe.InvoiceLineItem,
+  subscription: StripeSubscription,
+  boundary: number,
+) {
+  const item = subscription.items.data[0];
   const discounts = line.discount_amounts ?? [];
   if (
     discounts.length > 1 ||
@@ -321,14 +397,29 @@ function previewTerms(
       regularUnitAmount: line.amount,
     };
   }
+  return { discount, discountAmount };
+}
+
+function previewTerms(
+  preview: StripeInvoice,
+  subscription: StripeSubscription,
+  tier: RenewalTerms["tier"],
+  boundary: number,
+): RenewalTerms | undefined {
+  if (!previewMatchesSubscription(preview, subscription)) return undefined;
+  const line = readPreviewLine(preview, subscription, boundary);
+  if (!line) return undefined;
+  const discount = readPreviewDiscount(line, subscription, boundary);
+  if (!discount) return undefined;
+  const price = subscription.items.data[0].price;
   const parsed = renewalTermsSchema.safeParse({
     tier,
     interval: price.recurring?.interval,
     currency: price.currency,
-    unitAmount: line.amount - discountAmount,
+    unitAmount: line.amount - discount.discountAmount,
     taxBehavior: price.tax_behavior,
     renewsAt: iso(boundary),
-    discount,
+    discount: discount.discount,
   });
   return parsed.success ? parsed.data : undefined;
 }

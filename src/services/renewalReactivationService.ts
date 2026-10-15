@@ -1,3 +1,4 @@
+import { RENEWAL_QUOTE_TTL_MS } from "../utils/renewalConstants";
 import { isPurchaseAnalyticsOptedOut } from "./purchaseReconciliation";
 import { captureRenewalOperationEvent } from "./billingLifecycleAnalytics";
 import {
@@ -174,7 +175,7 @@ export async function readRenewalState({
       sourceFingerprint: source.sourceFingerprint,
       terms: source.terms,
       issuedAt: now,
-      expiresAt: now + 300000,
+      expiresAt: now + RENEWAL_QUOTE_TTL_MS,
     };
     return view(
       {
@@ -310,175 +311,216 @@ export async function restoreRenewal({
   await captureRenewalOperationEvent({ operation, phase: "requested" });
   return recover({ stripe, guildId, payerId, now }, operation);
 }
+type RecoveryState =
+  | { state: "verifying" }
+  | { state: "succeeded"; verifiedTerms: RenewalTerms }
+  | { state: "needs_review"; reason: "terms_changed" | "retry_window_elapsed" };
+type VerifiedSource = Extract<RenewalSource, { kind: "verified" }>;
+type RecoveryAttempt =
+  | { kind: "source"; source: RenewalSource }
+  | { kind: "result"; result: RenewalResult };
+
 async function recover(
   context: Required<Context>,
   operation: RenewalOperation,
 ): Promise<RenewalResult> {
-  const { stripe, guildId, payerId, now } = context;
-  const repo = getRenewalReactivationRepository();
-  let privacySuppressed = operation.analyticsOptOut;
-  const next = (
-    result:
-      | { state: "verifying" }
-      | { state: "succeeded"; verifiedTerms: RenewalTerms }
-      | {
-          state: "needs_review";
-          reason: "terms_changed" | "retry_window_elapsed";
-        },
-  ) =>
-    renewalOperationSchema.parse({
-      ...renewalBindingSchema.parse(operation),
+  return new RenewalRecovery(context, operation).run();
+}
+
+class RenewalRecovery {
+  private privacySuppressed: boolean;
+  private readonly repo = getRenewalReactivationRepository();
+
+  constructor(
+    private readonly context: Required<Context>,
+    private operation: RenewalOperation,
+  ) {
+    this.privacySuppressed = operation.analyticsOptOut;
+  }
+
+  async run(): Promise<RenewalResult> {
+    try {
+      return await this.runChecked();
+    } catch (error) {
+      return this.handleError(error);
+    }
+  }
+
+  private next(result: RecoveryState): RenewalOperation {
+    return renewalOperationSchema.parse({
+      ...renewalBindingSchema.parse(this.operation),
       revision: randomUUID(),
-      analyticsOptOut: privacySuppressed,
+      analyticsOptOut: this.privacySuppressed,
       ...result,
     });
-  const save = async (next: RenewalOperation) => {
-    const accepted = await repo.compareAndWrite({
+  }
+
+  private async save(next: RenewalOperation) {
+    const accepted = await this.repo.compareAndWrite({
       next,
-      expectedRevision: operation.revision,
+      expectedRevision: this.operation.revision,
     });
     if (
       accepted &&
-      operation.state !== "needs_review" &&
+      this.operation.state !== "needs_review" &&
       ["succeeded", "rejected", "needs_review"].includes(next.state)
     )
       await captureRenewalOperationEvent({ operation: next, phase: "result" });
     return accepted;
-  };
-  const processing = (): RenewalResult => ({
-    kind: "processing",
-    operationId: operation.operationId,
-  });
-  try {
-    const saved = await getSubscriptionRepository().get(guildId);
-    if (saved?.stripeSubscriptionId !== operation.subscriptionId) {
-      if (operation.state === "succeeded") return { kind: "changed" };
-      privacySuppressed = true;
-      await save(next({ state: "needs_review", reason: "terms_changed" }));
-      return { kind: "needs_review", operationId: operation.operationId };
-    }
-    let source = await readRenewalSource({
-      stripe,
-      guildId,
-      subscriptionId: operation.subscriptionId,
+  }
+
+  private processing(): RenewalResult {
+    return { kind: "processing", operationId: this.operation.operationId };
+  }
+
+  private async needsReview(
+    reason: "terms_changed" | "retry_window_elapsed",
+  ): Promise<RenewalResult> {
+    await this.save(this.next({ state: "needs_review", reason }));
+    return { kind: "needs_review", operationId: this.operation.operationId };
+  }
+
+  private matches(source: RenewalSource): source is VerifiedSource {
+    return (
+      source.kind === "verified" &&
+      source.invariantFingerprint === this.operation.invariantFingerprint
+    );
+  }
+
+  private completed(source: RenewalSource): RenewalResult {
+    return this.matches(source) && source.cancellationAt === null
+      ? { kind: "confirmed", terms: source.terms }
+      : { kind: "changed" };
+  }
+
+  private readSource() {
+    return readRenewalSource({
+      stripe: this.context.stripe,
+      guildId: this.context.guildId,
+      subscriptionId: this.operation.subscriptionId,
     });
-    if (!isPayer(source, payerId))
+  }
+
+  private async retainOptOut(source: RenewalSource) {
+    this.privacySuppressed = await retainRenewalOptOut(
+      this.privacySuppressed,
+      this.context.guildId,
+      source,
+    );
+  }
+
+  private async runChecked(): Promise<RenewalResult> {
+    const saved = await getSubscriptionRepository().get(this.context.guildId);
+    if (saved?.stripeSubscriptionId !== this.operation.subscriptionId) {
+      if (this.operation.state === "succeeded") return { kind: "changed" };
+      this.privacySuppressed = true;
+      return this.needsReview("terms_changed");
+    }
+    let source = await this.readSource();
+    if (!isPayer(source, this.context.payerId))
       throw new BillingActionError(
         "FORBIDDEN",
         "Only the original payer can manage this server's Stripe billing",
       );
-    if (operation.state === "succeeded")
-      return source.kind === "verified" &&
-        source.cancellationAt === null &&
-        source.invariantFingerprint === operation.invariantFingerprint
-        ? { kind: "confirmed", terms: source.terms }
-        : { kind: "changed" };
-    privacySuppressed = await retainRenewalOptOut(
-      privacySuppressed,
-      guildId,
-      source,
-    );
-    if (
-      source.kind !== "verified" ||
-      source.invariantFingerprint !== operation.invariantFingerprint
-    ) {
-      await save(next({ state: "needs_review", reason: "terms_changed" }));
-      return { kind: "needs_review", operationId: operation.operationId };
-    }
+    if (this.operation.state === "succeeded") return this.completed(source);
+    await this.retainOptOut(source);
+    if (!this.matches(source)) return this.needsReview("terms_changed");
     if (source.cancellationAt !== null) {
-      if (source.sourceFingerprint !== operation.sourceFingerprint) {
-        await save(next({ state: "needs_review", reason: "terms_changed" }));
-        return { kind: "needs_review", operationId: operation.operationId };
-      }
-      if (now - operation.firstAttemptAt >= 23 * 60 * 60 * 1000) {
-        await save(
-          next({ state: "needs_review", reason: "retry_window_elapsed" }),
-        );
-        return { kind: "needs_review", operationId: operation.operationId };
-      }
-      if (
-        !config.stripe.renewalReactivationEnabled ||
-        operation.state === "needs_review"
-      )
-        return processing();
-      try {
-        await clearPendingCancellation({ stripe, operation });
-      } catch {
-        /* A transport failure can hide a successful update. Always read back. */
-      }
-      if (operation.state === "applying") {
-        const verifying = next({ state: "verifying" });
-        if (!(await save(verifying))) return processing();
-        operation = verifying;
-      }
-      source = await readRenewalSource({
-        stripe,
-        guildId,
-        subscriptionId: operation.subscriptionId,
-      });
-      privacySuppressed = await retainRenewalOptOut(
-        privacySuppressed,
-        guildId,
-        source,
-      );
+      const attempt = await this.applyCancellation(source);
+      if (attempt.kind === "result") return attempt.result;
+      source = attempt.source;
     }
+    if (!this.matches(source)) return this.needsReview("terms_changed");
+    if (source.cancellationAt !== null) return this.processing();
+    return this.confirm();
+  }
+
+  private async applyCancellation(
+    source: VerifiedSource,
+  ): Promise<RecoveryAttempt> {
+    if (source.sourceFingerprint !== this.operation.sourceFingerprint)
+      return {
+        kind: "result",
+        result: await this.needsReview("terms_changed"),
+      };
+    if (this.context.now - this.operation.firstAttemptAt >= 23 * 60 * 60 * 1000)
+      return {
+        kind: "result",
+        result: await this.needsReview("retry_window_elapsed"),
+      };
     if (
-      source.kind !== "verified" ||
-      source.invariantFingerprint !== operation.invariantFingerprint
-    ) {
-      await save(next({ state: "needs_review", reason: "terms_changed" }));
-      return { kind: "needs_review", operationId: operation.operationId };
+      !config.stripe.renewalReactivationEnabled ||
+      this.operation.state === "needs_review"
+    )
+      return { kind: "result", result: this.processing() };
+    try {
+      await clearPendingCancellation({
+        stripe: this.context.stripe,
+        operation: this.operation,
+      });
+    } catch {
+      /* A transport failure can hide a successful update. Always read back. */
     }
-    if (source.cancellationAt !== null) return processing();
+    if (this.operation.state === "applying") {
+      const verifying = this.next({ state: "verifying" });
+      if (!(await this.save(verifying)))
+        return { kind: "result", result: this.processing() };
+      this.operation = verifying;
+    }
+    const current = await this.readSource();
+    await this.retainOptOut(current);
+    return { kind: "source", source: current };
+  }
+
+  private async confirm(): Promise<RenewalResult> {
+    const { stripe, guildId, payerId } = this.context;
     await reconcileSubscription(
       stripe,
       guildId,
-      operation.subscriptionId,
+      this.operation.subscriptionId,
       undefined,
-      { userId: payerId, analyticsOptOut: privacySuppressed },
+      { userId: payerId, analyticsOptOut: this.privacySuppressed },
     );
     const persisted = await getSubscriptionRepository().get(guildId);
-    const confirmed = await readRenewalSource({
-      stripe,
-      guildId,
-      subscriptionId: operation.subscriptionId,
-    });
-    privacySuppressed = await retainRenewalOptOut(
-      privacySuppressed,
-      guildId,
-      confirmed,
-    );
+    const confirmed = await this.readSource();
+    await this.retainOptOut(confirmed);
     if (
-      confirmed.kind !== "verified" ||
+      !this.matches(confirmed) ||
       confirmed.cancellationAt !== null ||
-      confirmed.invariantFingerprint !== operation.invariantFingerprint ||
-      persisted?.stripeSubscriptionId !== operation.subscriptionId ||
+      persisted?.stripeSubscriptionId !== this.operation.subscriptionId ||
       persisted.cancellationAt
     )
-      return processing();
+      return this.processing();
     if (
-      !(await save(
-        next({ state: "succeeded", verifiedTerms: confirmed.terms }),
+      !(await this.save(
+        this.next({ state: "succeeded", verifiedTerms: confirmed.terms }),
       ))
     )
-      return processing();
+      return this.processing();
     return { kind: "confirmed", terms: confirmed.terms };
-  } catch (error) {
+  }
+
+  private async handleError(error: unknown): Promise<RenewalResult> {
     if (error instanceof BillingActionError && error.code === "FORBIDDEN")
       throw error;
     if (error instanceof BillingActionError && error.code === "BAD_REQUEST") {
-      if (operation.state === "succeeded") return { kind: "changed" };
-      privacySuppressed = true;
+      if (this.operation.state === "succeeded") return { kind: "changed" };
+      this.privacySuppressed = true;
       try {
         if (
-          await save(next({ state: "needs_review", reason: "terms_changed" }))
+          await this.save(
+            this.next({ state: "needs_review", reason: "terms_changed" }),
+          )
         )
-          return { kind: "needs_review", operationId: operation.operationId };
+          return {
+            kind: "needs_review",
+            operationId: this.operation.operationId,
+          };
       } catch {
         /* Keep the existing durable control if persistence is unavailable. */
       }
     }
-    return processing();
+    return this.processing();
   }
 }
 

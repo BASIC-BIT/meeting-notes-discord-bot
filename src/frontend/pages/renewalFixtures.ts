@@ -1,3 +1,4 @@
+import { RENEWAL_QUOTE_TTL_MS } from "../../utils/renewalConstants";
 import type { ProviderSubscriptionDetails } from "../../types/pricing";
 import type { RenewalView, RenewalTerms } from "../../types/renewal";
 
@@ -41,7 +42,7 @@ export function createRenewalFixture({
         ? {
             kind: "ready",
             quoteToken: "synthetic-renewal-consent",
-            expiresAt: Date.now() + 300000,
+            expiresAt: Date.now() + RENEWAL_QUOTE_TTL_MS,
             terms,
           }
         : { kind: "payer_required" };

@@ -271,6 +271,55 @@ const BillingFreePanel = ({ serverName, usage }: BillingBaseProps) => (
   </Surface>
 );
 
+const BillingPlanDescription = ({
+  data,
+  normalPrice,
+  statusLine,
+}: Pick<BillingPaidProps, "data" | "normalPrice" | "statusLine">) => {
+  const isComped = data.billingSource === "manual_comp";
+  const planName = formatStatusLabel(data.tier);
+  const showRenewal = Boolean(data.hasStripeBilling);
+  const expiryLine = data.activeGrant?.expiresAt
+    ? `Comp runs through ${new Date(data.activeGrant.expiresAt).toLocaleDateString()}.`
+    : "No payment required.";
+  return (
+    <>
+      {isComped ? (
+        <Stack gap={4}>
+          <Text c="var(--mantine-color-text)" size="sm">
+            Chronote has granted this server {planName} for free.{" "}
+            {normalPrice
+              ? `This is normally ${normalPrice}.`
+              : "Regular pricing is unavailable right now."}
+          </Text>
+          <Text c="dimmed" size="sm">
+            {expiryLine}
+          </Text>
+          {data.activeGrant?.publicNote ? (
+            <Text size="sm">{data.activeGrant.publicNote}</Text>
+          ) : null}
+        </Stack>
+      ) : !showRenewal && data.tier !== "free" ? (
+        <Text c="dimmed" size="sm">
+          {statusLine}
+        </Text>
+      ) : null}
+    </>
+  );
+};
+
+const BillingPlanPaymentStatus = ({ data }: Pick<BillingPaidProps, "data">) => {
+  const progress =
+    data.subscriptionDetails?.status === "available"
+      ? data.subscriptionDetails.paymentProgress
+      : undefined;
+  return data.billingSource !== "manual_comp" &&
+    progress &&
+    progress !== "not_pending" ? (
+    <SubscriptionDetails details={data.subscriptionDetails} />
+  ) : null;
+};
+
 const BillingPaidPanel = ({
   data,
   serverName,
@@ -293,15 +342,6 @@ const BillingPaidPanel = ({
           knownEndsAt: data.cancellationAt ?? null,
         } as const);
       const showRenewal = Boolean(data.hasStripeBilling);
-      const progress =
-        data.subscriptionDetails?.status === "available"
-          ? data.subscriptionDetails.paymentProgress
-          : undefined;
-      const expiryLine = data.activeGrant?.expiresAt
-        ? `Comp runs through ${new Date(
-            data.activeGrant.expiresAt,
-          ).toLocaleDateString()}.`
-        : "No payment required.";
       return (
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
           <Stack gap="md">
@@ -322,26 +362,11 @@ const BillingPaidPanel = ({
                   </Badge>
                 )}
               </Group>
-              {isComped ? (
-                <Stack gap={4}>
-                  <Text c="var(--mantine-color-text)" size="sm">
-                    Chronote has granted this server {planName} for free.{" "}
-                    {normalPrice
-                      ? `This is normally ${normalPrice}.`
-                      : "Regular pricing is unavailable right now."}
-                  </Text>
-                  <Text c="dimmed" size="sm">
-                    {expiryLine}
-                  </Text>
-                  {data.activeGrant?.publicNote ? (
-                    <Text size="sm">{data.activeGrant.publicNote}</Text>
-                  ) : null}
-                </Stack>
-              ) : !showRenewal && data.tier !== "free" ? (
-                <Text c="dimmed" size="sm">
-                  {statusLine}
-                </Text>
-              ) : null}
+              <BillingPlanDescription
+                data={data}
+                normalPrice={normalPrice}
+                statusLine={statusLine}
+              />
               <Text size="sm" c="dimmed">
                 Server: {serverName}
               </Text>
@@ -356,9 +381,7 @@ const BillingPaidPanel = ({
                   onPortal={onPortal}
                 />
               ) : null}
-              {!isComped && progress && progress !== "not_pending" ? (
-                <SubscriptionDetails details={data.subscriptionDetails} />
-              ) : null}
+              <BillingPlanPaymentStatus data={data} />
               <BillingUsageMeter usage={usage} />
             </Stack>
           </Stack>

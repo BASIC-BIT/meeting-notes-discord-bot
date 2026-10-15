@@ -841,7 +841,7 @@ test("scheduled cancellation remains visible when price details are unavailable"
   await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
   const current = page.getByTestId("billing-current-plan");
   await expect(current).toContainText(
-    "Your plan currently ends November 12, 2026.",
+    "Your Basic plan ends November 12, 2026.",
   );
   await expect(current).not.toContainText("next billing");
   await expect(

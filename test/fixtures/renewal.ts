@@ -1,3 +1,4 @@
+import { RENEWAL_QUOTE_TTL_MS } from "../../src/utils/renewalConstants";
 import type { RenewalOperation, RenewalQuote } from "../../src/types/renewal";
 import type { GuildSubscription } from "../../src/types/db";
 export const renewalGuildId = "111111111111111111";
@@ -11,7 +12,7 @@ export const renewalQuote: RenewalQuote = {
   sourceRevision: "source-revision",
   sourceFingerprint: "a".repeat(64),
   issuedAt: 1000000,
-  expiresAt: 1300000,
+  expiresAt: 1000000 + RENEWAL_QUOTE_TTL_MS,
   terms: {
     tier: "basic",
     interval: "year",

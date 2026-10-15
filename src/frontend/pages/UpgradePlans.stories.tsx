@@ -101,6 +101,13 @@ type UpgradePreviewProps = {
   terminalStatus?: TerminalSubscriptionStatus;
 };
 
+function previewIntroOffers(status: BasicIntroOffer["status"]) {
+  return {
+    introOffer: status === "available" ? monthlyIntroOffer : { status },
+    annualIntroOffer: status === "available" ? annualIntroOffer : { status },
+  };
+}
+
 function previewResponses({
   tier = "free",
   signedIn = true,
@@ -171,27 +178,13 @@ function previewResponses({
         : {}),
       subscriptionDetails,
       cancellationAt: cancellationAt ?? null,
-      introOffer:
-        introStatus === "available"
-          ? monthlyIntroOffer
-          : { status: introStatus ?? "inactive" },
-      annualIntroOffer:
-        introStatus === "available"
-          ? annualIntroOffer
-          : { status: introStatus ?? "inactive" },
+      ...previewIntroOffers(introStatus ?? "inactive"),
     },
   };
   if (introStatus)
     data["pricing.plans"] = {
       plans: introPlans,
-      introOffer:
-        introStatus === "available"
-          ? monthlyIntroOffer
-          : { status: introStatus },
-      annualIntroOffer:
-        introStatus === "available"
-          ? annualIntroOffer
-          : { status: introStatus },
+      ...previewIntroOffers(introStatus),
     };
   if (staleQuote)
     data["billing.me"] = {
