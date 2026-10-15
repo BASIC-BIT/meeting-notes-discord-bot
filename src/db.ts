@@ -1,3 +1,9 @@
+import {
+  renewalOperationKey,
+  renewalControlKey,
+  isRenewalComplete,
+  type RenewalOperation,
+} from "./types/renewal";
 import type { IntroOfferAuthority } from "./types/introOfferAuthority";
 import { validateBoundarySample } from "./types/historyWriterBoundary";
 import {
@@ -35,7 +41,7 @@ import {
   type ConditionCheck,
   DynamoDBClient,
   TransactWriteItemsCommand,
-  type TransactionCanceledException,
+  TransactionCanceledException,
   GetItemCommand,
   PutItemCommand,
   DeleteItemCommand,
@@ -3754,4 +3760,134 @@ function offerAuthorityFences(
       },
     },
   ];
+}
+
+export async function readRenewalRecord(
+  key: string,
+): Promise<Record<string, unknown> | undefined> {
+  const result = await dynamoDbClient.send(
+    new GetItemCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      Key: marshall({ guildId: key }),
+      ConsistentRead: true,
+    }),
+  );
+  return result.Item ? unmarshall(result.Item) : undefined;
+}
+
+async function transactRenewalRecords(
+  items: ConstructorParameters<
+    typeof TransactWriteItemsCommand
+  >[0]["TransactItems"],
+): Promise<boolean> {
+  try {
+    await dynamoDbClient.send(
+      new TransactWriteItemsCommand({ TransactItems: items }),
+    );
+    return true;
+  } catch (error) {
+    if (
+      error instanceof TransactionCanceledException &&
+      error.CancellationReasons?.some(
+        (reason) =>
+          reason.Code === "ConditionalCheckFailed" ||
+          reason.Code === "TransactionConflict",
+      ) &&
+      error.CancellationReasons.every(
+        (reason) =>
+          reason.Code === "None" ||
+          reason.Code === "ConditionalCheckFailed" ||
+          reason.Code === "TransactionConflict",
+      )
+    )
+      return false;
+    throw error;
+  }
+}
+
+export async function claimRenewalOperation(
+  operation: RenewalOperation,
+  expected: GuildSubscription,
+): Promise<boolean> {
+  const table = tableName("GuildSubscriptionTable");
+  const conditions = [
+    "attribute_exists(guildId)",
+    "#stripeSubscriptionId = :subscriptionId",
+  ];
+  const names: Record<string, string> = {
+    "#stripeSubscriptionId": "stripeSubscriptionId",
+    "#stripeSyncRevision": "stripeSyncRevision",
+  };
+  const values: Record<string, string> = {
+    ":subscriptionId": operation.subscriptionId,
+  };
+  if (expected.stripeSyncRevision === undefined)
+    conditions.push("attribute_not_exists(#stripeSyncRevision)");
+  else {
+    conditions.push("#stripeSyncRevision = :revision");
+    values[":revision"] = expected.stripeSyncRevision;
+  }
+  return transactRenewalRecords([
+    {
+      ConditionCheck: {
+        TableName: table,
+        Key: marshall({ guildId: operation.guildId }),
+        ConditionExpression: conditions.join(" AND "),
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: marshall(values),
+      },
+    },
+    {
+      Put: {
+        TableName: table,
+        Item: marshall({
+          ...operation,
+          guildId: renewalOperationKey(
+            operation.guildId,
+            operation.operationId,
+          ),
+        }),
+        ConditionExpression: "attribute_not_exists(guildId)",
+      },
+    },
+    {
+      Put: {
+        TableName: table,
+        Item: marshall({
+          guildId: renewalControlKey(operation.guildId),
+          operationId: operation.operationId,
+          revision: operation.revision,
+        }),
+        ConditionExpression: "attribute_not_exists(guildId)",
+      },
+    },
+  ]);
+}
+
+export async function writeRenewalOperation(
+  next: RenewalOperation,
+  expectedRevision: string,
+): Promise<boolean> {
+  const table = tableName("GuildSubscriptionTable");
+  const control = {
+    TableName: table,
+    Key: marshall({ guildId: renewalControlKey(next.guildId) }),
+    ConditionExpression: "operationId = :operationId",
+    ExpressionAttributeValues: marshall({ ":operationId": next.operationId }),
+  };
+  return transactRenewalRecords([
+    {
+      Put: {
+        TableName: table,
+        Item: marshall({
+          ...next,
+          guildId: renewalOperationKey(next.guildId, next.operationId),
+        }),
+        ConditionExpression: "#revision = :revision",
+        ExpressionAttributeNames: { "#revision": "revision" },
+        ExpressionAttributeValues: marshall({ ":revision": expectedRevision }),
+      },
+    },
+    isRenewalComplete(next) ? { Delete: control } : { ConditionCheck: control },
+  ]);
 }

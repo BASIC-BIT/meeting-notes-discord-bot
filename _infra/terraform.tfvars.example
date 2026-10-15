@@ -148,3 +148,6 @@ STRIPE_BASIC_ANNUAL_INTRO_COUPON_ID="" # Separate 40 percent once coupon; annual
 STRIPE_BASIC_INTRO_STARTS_AT=""
 STRIPE_BASIC_INTRO_ENROLLMENT_ENDS_AT="" # Optional; empty means open-ended once the offer is enabled.
 STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID=""
+
+# Off until same-subscription renewal restoration passes native acceptance.
+STRIPE_RENEWAL_REACTIVATION_ENABLED = false

@@ -370,6 +370,8 @@ class ConfigService {
       portalConfigurationId:
         process.env.STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID || "",
     },
+    renewalReactivationEnabled:
+      process.env.STRIPE_RENEWAL_REACTIVATION_ENABLED === "true",
     subscriptionTransitionsEnabled:
       process.env.STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED === "true",
     secretKey: process.env.STRIPE_SECRET_KEY || "",
