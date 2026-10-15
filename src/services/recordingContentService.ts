@@ -309,6 +309,53 @@ export function captureRecordingTranscriptScope(
     ),
   };
 }
+/** Preserve new late input beside the immutable pre-pass baseline while guarded. */
+function snapshotGuardedTranscription(
+  meeting: MeetingData,
+  baseline: Frozen["prePass"],
+  selected: ReturnType<typeof selectFile>[],
+  completedAt: string,
+) {
+  if (!baseline) return;
+  for (const item of selected) {
+    if (
+      !baseline.files.has(item.file) &&
+      !baseline.supplemental.has(item.file) &&
+      (item.text || (item.settled && item.correspondence))
+    )
+      baseline.supplemental.set(item.file, item);
+  }
+  if (!baseline.supplemental.size) return;
+  // Preserve sole late text without publishing mutable baseline final-pass output.
+  selected = [...baseline.supplemental.values()];
+  const entries = [
+    ...baseline.entries,
+    ...snapshotEntries(meeting, selected, completedAt),
+  ];
+  const lateOmitted = snapshotOmissions(selected);
+  const omitted =
+    baseline.omitted && lateOmitted
+      ? combineCorrespondence([baseline.omitted, lateOmitted])
+      : (baseline.omitted ?? lateOmitted);
+  return { selected, entries, omitted };
+}
+/** Supplemental evidence is sticky and never widens acknowledged aggregate scope. */
+function markSupplementalTranscriptEntries(
+  frozen: Frozen,
+  selected: ReturnType<typeof selectFile>[],
+) {
+  const aggregate = frozen.aggregate;
+  const supplemental =
+    aggregate &&
+    selected.some(
+      (item) =>
+        item.text &&
+        (!aggregate.files.has(item.file) ||
+          aggregate.files.get(item.file) !== item.text),
+    );
+  if (supplemental && frozen.processing)
+    frozen.processing.supplementalEntries = true;
+}
 export function checkpointCompletedTranscription(
   meeting: MeetingData,
   processing?: CompletedTranscriptionCheckpoint["processing"],
@@ -328,40 +375,16 @@ export function checkpointCompletedTranscription(
   let entries = snapshotEntries(meeting, selected, completedAt);
   let omitted = snapshotOmissions(selected);
   if (!processing && frozen.phase === "finalizing") {
-    const baseline = frozen.prePass;
-    if (!baseline) return;
-    for (const item of selected) {
-      if (
-        !baseline.files.has(item.file) &&
-        !baseline.supplemental.has(item.file) &&
-        (item.text || (item.settled && item.correspondence))
-      )
-        baseline.supplemental.set(item.file, item);
-    }
-    if (!baseline.supplemental.size) return;
-    // Preserve sole late text without publishing mutable baseline final-pass output.
-    selected = [...baseline.supplemental.values()];
-    entries = [
-      ...baseline.entries,
-      ...snapshotEntries(meeting, selected, completedAt),
-    ];
-    const lateOmitted = snapshotOmissions(selected);
-    omitted =
-      baseline.omitted && lateOmitted
-        ? combineCorrespondence([baseline.omitted, lateOmitted])
-        : (baseline.omitted ?? lateOmitted);
-  }
-  const aggregate = frozen.aggregate;
-  const supplemental =
-    aggregate &&
-    selected.some(
-      (item) =>
-        item.text &&
-        (!aggregate.files.has(item.file) ||
-          aggregate.files.get(item.file) !== item.text),
+    const guarded = snapshotGuardedTranscription(
+      meeting,
+      frozen.prePass,
+      selected,
+      completedAt,
     );
-  if (supplemental && frozen.processing)
-    frozen.processing.supplementalEntries = true;
+    if (!guarded) return;
+    ({ selected, entries, omitted } = guarded);
+  }
+  markSupplementalTranscriptEntries(frozen, selected);
   if (!entries.length && !omitted && !frozen.processing) return;
   const payload = completedTranscriptionSchema.parse({
     schemaVersion: 1,

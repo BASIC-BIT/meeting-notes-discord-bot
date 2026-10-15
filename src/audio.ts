@@ -46,6 +46,7 @@ import {
   AudioSnippet,
   SpeakerState,
   SpeakerTrackFile,
+  TranscriptVariant,
 } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType, VoiceConnectionStatus } from "@discordjs/voice";
@@ -673,6 +674,25 @@ export function updateSnippetsIfNecessary(
   }
 }
 
+/** Coalescing may only use fast candidates inside the finalized snippet input. */
+function validateFastCandidateCorrespondence(
+  inputCorrespondence: TranscriptCorrespondence | undefined,
+  fastCandidates: readonly TranscriptVariant[],
+): void {
+  if (
+    inputCorrespondence?.kind === "pcm" &&
+    fastCandidates.some(
+      (entry) =>
+        entry.correspondence?.kind === "pcm" &&
+        !containsPcmSpans(
+          inputCorrespondence.spans,
+          entry.correspondence.spans,
+        ),
+    )
+  )
+    throw new Error("Fast transcript input exceeds finalized snippet");
+}
+
 // Start processing a specific user's snippet
 export function startProcessingSnippet(
   meeting: MeetingData,
@@ -791,20 +811,10 @@ export function startProcessingSnippet(
                       correspondence: copyCorrespondence(entry.correspondence),
                     }),
                   );
-                  if (
-                    inputCorrespondence?.kind === "pcm" &&
-                    fastCandidates.some(
-                      (entry) =>
-                        entry.correspondence?.kind === "pcm" &&
-                        !containsPcmSpans(
-                          inputCorrespondence.spans,
-                          entry.correspondence.spans,
-                        ),
-                    )
-                  )
-                    throw new Error(
-                      "Fast transcript input exceeds finalized snippet",
-                    );
+                  validateFastCandidateCorrespondence(
+                    inputCorrespondence,
+                    fastCandidates,
+                  );
                   const coalesced = await coalesceTranscription(meeting, {
                     slowTranscript: transcription,
                     fastTranscripts: fastCandidates,

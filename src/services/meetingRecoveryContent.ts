@@ -430,15 +430,11 @@ async function recoverAudioIntervals(
   }
   return files;
 }
-export async function recoverTranscript(
+/** Validate every selected/omitted input before deciding whether recovery may dispatch. */
+function validateTranscriptDispositions(
   content: RecoveryContent,
-  reader: RecoveryReader,
-  signal: AbortSignal,
-  effect: TranscriptionContentInput["effect"],
-): Promise<{ text: string; segments: TranscriptSegment[] }> {
-  const audio = content.verified.filter((item) => item.kind === "audio");
-  const acknowledgedText = content.processing?.finalText;
-  const entries = content.entries ?? [];
+  entries: NonNullable<RecoveryContent["entries"]>,
+) {
   const represented = entries.flatMap((entry) =>
     correspondenceSpans(entry.correspondence, content, entry.sourceId),
   );
@@ -463,6 +459,21 @@ export async function recoverTranscript(
     )
       throw new InvalidRecoveryContent("Transcript input dispositions overlap");
   }
+  return { dispositions, aggregate };
+}
+export async function recoverTranscript(
+  content: RecoveryContent,
+  reader: RecoveryReader,
+  signal: AbortSignal,
+  effect: TranscriptionContentInput["effect"],
+): Promise<{ text: string; segments: TranscriptSegment[] }> {
+  const audio = content.verified.filter((item) => item.kind === "audio");
+  const acknowledgedText = content.processing?.finalText;
+  const entries = content.entries ?? [];
+  const { dispositions, aggregate } = validateTranscriptDispositions(
+    content,
+    entries,
+  );
   const savedSegments = entries.map((entry) => ({
     ...entry,
     startedAt: new Date(entry.timestamp).toISOString(),
