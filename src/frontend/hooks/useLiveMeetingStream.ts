@@ -12,9 +12,25 @@ import type { MeetingEvent } from "../../types/meetingTimeline";
 import { MEETING_STATUS } from "../../types/meetingLifecycle";
 
 type LiveStreamStatus =
-  "connecting" | "live" | "processing" | "complete" | "cancelled" | "error";
+  | "connecting"
+  | "live"
+  | "starting"
+  | "processing"
+  | "complete"
+  | "cancelled"
+  | "interrupted"
+  | "failed"
+  | "unavailable"
+  | "error";
 
-const toStreamStatus = (status: LiveMeetingStatus): LiveStreamStatus => {
+export const toStreamStatus = (status: LiveMeetingStatus): LiveStreamStatus => {
+  if (
+    status === "unavailable" ||
+    status === MEETING_STATUS.STARTING ||
+    status === MEETING_STATUS.INTERRUPTED ||
+    status === MEETING_STATUS.FAILED
+  )
+    return status;
   if (status === MEETING_STATUS.COMPLETE) return "complete";
   if (status === MEETING_STATUS.PROCESSING) return "processing";
   if (status === MEETING_STATUS.CANCELLED) return "cancelled";
@@ -63,6 +79,16 @@ export function useLiveMeetingStream({
       setAttendees(payload.meeting.attendees ?? []);
       seenRef.current = new Set(payload.events.map((entry) => entry.id));
       setStatus(toStreamStatus(payload.meeting.status));
+      if (
+        [
+          "complete",
+          "cancelled",
+          "interrupted",
+          "failed",
+          "unavailable",
+        ].includes(payload.meeting.status)
+      )
+        source.close();
     });
 
     source.addEventListener("events", (event) => {
@@ -84,16 +110,29 @@ export function useLiveMeetingStream({
 
     source.addEventListener("status", (event) => {
       const payload = JSON.parse(event.data) as LiveMeetingStatusPayload;
-      setMeeting((current) =>
-        current ? { ...current, status: payload.status } : current,
-      );
+      setMeeting((current) => (current ? { ...current, ...payload } : current));
       setStatus(toStreamStatus(payload.status));
+      if (
+        [
+          "complete",
+          "cancelled",
+          "interrupted",
+          "failed",
+          "unavailable",
+        ].includes(payload.status)
+      )
+        source.close();
     });
 
     source.onerror = () => {
       setStatus((current) =>
-        current === MEETING_STATUS.COMPLETE ||
-        current === MEETING_STATUS.CANCELLED
+        [
+          "complete",
+          "cancelled",
+          "interrupted",
+          "failed",
+          "unavailable",
+        ].includes(current)
           ? current
           : "error",
       );

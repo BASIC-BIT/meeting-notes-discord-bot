@@ -1,6 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { getPersonalMediaUploadRepository } from "../repositories/personalMediaUploadRepository";
-import type { PersonalMediaUploadJobRecord } from "../types/db";
+import type {
+  PersonalMediaUploadJobRecord,
+  PersonalMediaClaim,
+} from "../types/db";
 import type {
   PersonalRecordingSourceKind,
   PersonalRecordingSourceRecord,
@@ -317,6 +320,7 @@ const assertMatchingSegment = (
   input: PersonalRecordingSegmentUploadInput,
 ) => {
   if (
+    existing.ownerUserId !== input.userId ||
     existing.sourceId !== input.sourceId ||
     existing.sequence !== input.sequence ||
     existing.contentType !== input.contentType ||
@@ -413,6 +417,33 @@ const assertSourceLengthWithinCap = async (
   }
 };
 
+async function prepareRecordingSegment(
+  repository: ReturnType<typeof getPersonalRecordingSegmentRepository>,
+  segment: PersonalRecordingSegmentRecord,
+  existing: PersonalRecordingSegmentRecord | undefined,
+  input: PersonalRecordingSegmentUploadInput,
+): Promise<PersonalRecordingSegmentRecord | undefined> {
+  let current = existing;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const expectedStatus = current?.status;
+    if (
+      expectedStatus &&
+      expectedStatus !== "pending_upload" &&
+      expectedStatus !== "failed"
+    )
+      return current;
+    if (await repository.prepare(segment, expectedStatus)) return undefined;
+    current = await repository.get(input.uploadId, segment.segmentKey);
+    if (current) assertMatchingSegment(current, input);
+  }
+  if (current && !["pending_upload", "failed"].includes(current.status))
+    return current;
+  throw new PersonalMediaUploadError(
+    "Recording upload is already submitted.",
+    "invalid_state",
+  );
+}
+
 export async function createPersonalRecordingSegmentUploadIntent(
   input: PersonalRecordingSegmentUploadInput,
 ): Promise<PersonalRecordingSegmentUploadIntent> {
@@ -503,7 +534,13 @@ export async function createPersonalRecordingSegmentUploadIntent(
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
-  await repository.update(segment);
+  const concurrent = await prepareRecordingSegment(
+    repository,
+    segment,
+    existing,
+    input,
+  );
+  if (concurrent) return { segment: concurrent, uploadRequired: false };
   const { expiresAt, uploadToken } = createSegmentUploadToken({
     userId: input.userId,
     key,
@@ -525,6 +562,24 @@ export async function getPersonalMediaUploadJobForUser(options: {
     throw new PersonalMediaUploadError("Upload not found.", "forbidden");
   }
   return job;
+}
+
+async function submitUploadJob(
+  next: PersonalMediaUploadJobRecord,
+): Promise<PersonalMediaUploadJobRecord> {
+  const repository = getPersonalMediaUploadRepository();
+  if (await repository.submit(next)) return next;
+  const current = await repository.get(next.uploadId);
+  if (
+    !current ||
+    current.ownerUserId !== next.ownerUserId ||
+    current.status === "pending_upload"
+  )
+    throw new PersonalMediaUploadError(
+      "Upload submission changed. Please retry.",
+      "invalid_state",
+    );
+  return current;
 }
 
 export async function markPersonalMediaUploadComplete(options: {
@@ -598,8 +653,7 @@ export async function markPersonalMediaUploadComplete(options: {
     processingOwnerInstanceId: undefined,
     updatedAt: now,
   };
-  await getPersonalMediaUploadRepository().update(next);
-  return next;
+  return submitUploadJob(next);
 }
 
 export async function markPersonalRecordingSegmentUploadComplete(options: {
@@ -686,8 +740,18 @@ export async function markPersonalRecordingSegmentUploadComplete(options: {
     uploadedAt: now,
     updatedAt: now,
   };
-  await repository.update(next);
-  return next;
+  if (await repository.transition(next, "pending_upload")) return next;
+  const current = await repository.get(segment.uploadId, segment.segmentKey);
+  if (
+    !current ||
+    current.ownerUserId !== segment.ownerUserId ||
+    current.status === "pending_upload"
+  )
+    throw new PersonalMediaUploadError(
+      "Recording segment changed. Please retry.",
+      "invalid_state",
+    );
+  return current;
 }
 
 export async function submitPersonalRecordingUpload(options: {
@@ -723,12 +787,30 @@ export async function submitPersonalRecordingUpload(options: {
   const now = new Date().toISOString();
   for (const segment of segments) {
     if (segment.status !== "uploaded") continue;
-    await repository.update({
-      ...segment,
-      status: "submitted",
-      submittedAt: now,
-      updatedAt: now,
-    });
+    const submitted = await repository.transition(
+      {
+        ...segment,
+        status: "submitted",
+        submittedAt: now,
+        updatedAt: now,
+      },
+      "uploaded",
+    );
+    if (!submitted) {
+      const current = await repository.get(
+        segment.uploadId,
+        segment.segmentKey,
+      );
+      if (
+        !current ||
+        current.ownerUserId !== segment.ownerUserId ||
+        ["pending_upload", "uploaded"].includes(current.status)
+      )
+        throw new PersonalMediaUploadError(
+          "Recording segment changed. Please retry.",
+          "invalid_state",
+        );
+    }
   }
   const totalBytes = segments.reduce(
     (sum, segment) => sum + segment.fileSize,
@@ -752,8 +834,7 @@ export async function submitPersonalRecordingUpload(options: {
     processingOwnerInstanceId: undefined,
     updatedAt: now,
   };
-  await getPersonalMediaUploadRepository().update(next);
-  return next;
+  return submitUploadJob(next);
 }
 
 export async function listPersonalRecordingUploadSegments(uploadId: string) {
@@ -762,6 +843,7 @@ export async function listPersonalRecordingUploadSegments(uploadId: string) {
 
 export async function markPersonalRecordingUploadSegmentProcessing(
   segment: PersonalRecordingSegmentRecord,
+  claim: PersonalMediaClaim,
 ) {
   const now = new Date().toISOString();
   const next: PersonalRecordingSegmentRecord = {
@@ -770,13 +852,15 @@ export async function markPersonalRecordingUploadSegmentProcessing(
     errorMessage: undefined,
     updatedAt: now,
   };
-  await getPersonalRecordingSegmentRepository().update(next);
+  if (!(await getPersonalMediaUploadRepository().writeSegment(next, claim)))
+    throw new Error("Personal segment claim lost");
   return next;
 }
 
 export async function markPersonalRecordingUploadSegmentProcessed(
   segment: PersonalRecordingSegmentRecord,
   options: { transcriptS3Key?: string } = {},
+  claim: PersonalMediaClaim,
 ) {
   const now = new Date().toISOString();
   const next: PersonalRecordingSegmentRecord = {
@@ -787,13 +871,15 @@ export async function markPersonalRecordingUploadSegmentProcessed(
     transcriptS3Key: options.transcriptS3Key ?? segment.transcriptS3Key,
     updatedAt: now,
   };
-  await getPersonalRecordingSegmentRepository().update(next);
+  if (!(await getPersonalMediaUploadRepository().writeSegment(next, claim)))
+    throw new Error("Personal segment claim lost");
   return next;
 }
 
 export async function markPersonalRecordingUploadSegmentFailed(
   segment: PersonalRecordingSegmentRecord,
   error: unknown,
+  claim: PersonalMediaClaim,
 ) {
   const now = new Date().toISOString();
   const errorMessage =
@@ -804,29 +890,40 @@ export async function markPersonalRecordingUploadSegmentFailed(
     errorMessage,
     updatedAt: now,
   };
-  await getPersonalRecordingSegmentRepository().update(next);
+  if (!(await getPersonalMediaUploadRepository().writeSegment(next, claim)))
+    throw new Error("Personal segment claim lost");
   return next;
 }
 
 export async function markPersonalRecordingUploadSegmentsFailed(
   uploadId: string,
   error: unknown,
+  claim: PersonalMediaClaim,
+  signal?: AbortSignal,
 ) {
   const repository = getPersonalRecordingSegmentRepository();
   const now = new Date().toISOString();
   const errorMessage =
     error instanceof Error ? error.message : "Processing failed.";
   const segments = await repository.listByUpload(uploadId);
+  signal?.throwIfAborted();
   await Promise.all(
     segments
       .filter((segment) => segment.status === "processing")
       .map((segment) =>
-        repository.update({
-          ...segment,
-          status: "failed",
-          errorMessage,
-          updatedAt: now,
-        }),
+        getPersonalMediaUploadRepository()
+          .writeSegment(
+            {
+              ...segment,
+              status: "failed",
+              errorMessage,
+              updatedAt: now,
+            },
+            claim,
+          )
+          .then((written) => {
+            if (!written) throw new Error("Personal segment claim lost");
+          }),
       ),
   );
 }
@@ -851,6 +948,9 @@ export async function updateClaimedPersonalMediaUploadJobProgress(options: {
   uploadedSegmentCount: number;
   processedSegmentCount: number;
   updatedAt: string;
+  attempt: number;
+  claimId: string;
+  nowEpochSeconds: number;
 }) {
   return getPersonalMediaUploadRepository().updateProgress(options);
 }

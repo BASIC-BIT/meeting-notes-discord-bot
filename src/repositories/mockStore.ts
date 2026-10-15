@@ -3,9 +3,11 @@ import type { HistoryWriterBoundary } from "../types/historyWriterBoundary";
 import type { HistoricalOfferImport } from "../types/historicalOfferImport";
 import type { OfferUsage } from "../types/offerUsage";
 import type { PurchaseAttempt, PurchaseIncident } from "../types/purchase";
+import type { DeploymentControlRecord } from "../types/deploymentControl";
 import type { AuthedProfile } from "../trpc/context";
 import type {
   AutoRecordSettings,
+  ActiveMeetingLease,
   EntitlementGrant,
   GuildSubscription,
   ChannelContext,
@@ -42,6 +44,8 @@ import type {
 } from "./types";
 
 type MockStore = {
+  activeMeetingLeases: Map<string, ActiveMeetingLease>;
+  deploymentControlRecords: Map<string, DeploymentControlRecord>;
   renewalOperations: Map<string, RenewalOperation>;
   renewalControls: Map<string, RenewalControl>;
   purchaseAttempts: Map<string, PurchaseAttempt>;
@@ -934,6 +938,8 @@ function buildDefaultStore(): MockStore {
     renewalOperations: new Map(),
     renewalControls: new Map(),
     purchaseAttempts: new Map(),
+    deploymentControlRecords: new Map(),
+    activeMeetingLeases: new Map(),
     offerUsages: new Map(),
     historicalOfferImports: new Map(),
     historyWriterBoundaries: new Map(),

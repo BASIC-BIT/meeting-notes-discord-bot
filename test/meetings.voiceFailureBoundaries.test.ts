@@ -4,6 +4,13 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import vm from "node:vm";
 import ts from "typescript";
+import { DiscordAPIError } from "discord.js";
+import type { MeetingData } from "../src/types/meeting-data";
+import {
+  runMeetingNoticeMutation,
+  areMeetingNoticesSettled,
+  stopMeetingProcessing,
+} from "../src/services/meetingProcessingLifetime";
 
 function loadConnectionBoundary(send: () => Promise<void>) {
   const file = path.join(__dirname, "../src/meetings.ts");
@@ -31,11 +38,14 @@ function loadConnectionBoundary(send: () => Promise<void>) {
   const connection = new EventEmitter();
   const warn = jest.fn();
   const textChannel = { send: jest.fn(send) };
+  const meeting = { meetingId: "synthetic-meeting" } as MeetingData;
   const context = vm.createContext({
     connection,
     textChannel,
     isAutoRecording: false,
-    meeting: { meetingId: "synthetic-meeting" },
+    meeting,
+    runMeetingNoticeMutation,
+    DiscordAPIError,
     console: { warn, error: jest.fn() },
   });
   vm.runInContext(
@@ -44,7 +54,7 @@ function loadConnectionBoundary(send: () => Promise<void>) {
     }).outputText,
     context,
   );
-  return { connection, textChannel, warn };
+  return { connection, textChannel, warn, meeting };
 }
 
 test("a rejected connection-error notification is consumed once without another notification", async () => {
@@ -85,39 +95,99 @@ test("initial meeting setup still awaits and rejects a failed subscription", asy
   );
   const declaration = source.statements.find(
     (node) =>
-      ts.isFunctionDeclaration(node) && node.name?.text === "initializeMeeting",
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "initializeReservedMeeting",
   );
-  if (!declaration) throw new Error("Missing meeting initializer");
+  if (!declaration) throw new Error("Missing reserved meeting initializer");
   const failure = new Error("synthetic initial subscription failure");
-  const connection = new EventEmitter();
-  Object.assign(connection, { receiver: {} });
+  const connection = Object.assign(new EventEmitter(), { receiver: {} });
+  const signal = new AbortController().signal;
   const context = vm.createContext({
-    joinVoiceChannel: () => connection,
+    joinOwnedVoiceSession: async () => connection,
+    getReservationSignal: () => signal,
+    attachMeetingReservation: jest.fn(),
+    resolveMeetingRuntimeConfig: async () => undefined,
+    freezeCompletionPolicy: jest.fn(),
     config: { liveVoice: { mode: "off" } },
     MEETING_START_REASONS: { MANUAL_COMMAND: "manual" },
     DEFAULT_PREFIX_MODE: "none",
     uuidv4: () => "synthetic-meeting",
     openOutputFile: jest.fn(),
     buildParticipantSnapshot: async () => undefined,
+    runMeetingNoticeMutation,
+    DiscordAPIError,
     subscribeToUserVoice: async () => {
       throw failure;
     },
+    options: {
+      guild: { id: "synthetic-guild" },
+      creator: { id: "synthetic-user" },
+      textChannel: { id: "synthetic-text" },
+      voiceChannel: {
+        id: "synthetic-voice",
+        guild: {},
+        members: [{ user: { id: "synthetic-user" } }],
+      },
+      reservation: {
+        reservedAt: Date.now(),
+        ownerInstanceId: "synthetic-owner",
+      },
+      initialization: { cleanup: [] },
+    },
   });
   vm.runInContext(
-    ts.transpileModule(declaration.getText(source).replace(/^export /, ""), {
+    ts.transpileModule(declaration.getText(source), {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText,
     context,
   );
-  context.options = {
-    guild: { id: "synthetic-guild" },
-    textChannel: { id: "synthetic-text" },
-    voiceChannel: {
-      id: "synthetic-voice",
-      members: [{ user: { id: "synthetic-user" } }],
-    },
-  };
   await expect(
-    vm.runInContext("initializeMeeting(options)", context),
+    vm.runInContext("initializeReservedMeeting(options)", context),
   ).rejects.toBe(failure);
 });
+
+test.each(["acknowledged", "rejected", "unknown"] as const)(
+  "connection-error notification keeps its issued lifetime and %s outcome after fencing",
+  async (outcome) => {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((done, failed) => {
+      resolve = done;
+      reject = failed;
+    });
+    const { connection, textChannel, warn, meeting } = loadConnectionBoundary(
+      () => pending,
+    );
+    connection.emit("error", new Error("synthetic connection fault"));
+    expect(areMeetingNoticesSettled(meeting, meeting.reservation)).toBe(false);
+    let settled = false;
+    const stop = stopMeetingProcessing(meeting).then(() => {
+      settled = true;
+    });
+    await new Promise<void>((done) => setImmediate(done));
+    expect(settled).toBe(false);
+    if (outcome === "acknowledged") resolve();
+    else if (outcome === "rejected")
+      reject(
+        new DiscordAPIError(
+          { code: 50013, message: "Synthetic denied" },
+          50013,
+          403,
+          "POST",
+          "http://localhost",
+          { body: {}, files: [] },
+        ),
+      );
+    else reject(new Error("Synthetic lost notification ACK"));
+    await stop;
+    await new Promise<void>((done) => setImmediate(done));
+    expect(areMeetingNoticesSettled(meeting, meeting.reservation)).toBe(
+      outcome !== "unknown",
+    );
+    expect(textChannel.send).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(outcome === "acknowledged" ? 0 : 1);
+    connection.emit("error", new Error("synthetic late connection fault"));
+    await new Promise<void>((done) => setImmediate(done));
+    expect(textChannel.send).toHaveBeenCalledTimes(1);
+  },
+);

@@ -2,11 +2,11 @@ import { useCallback, useMemo } from "react";
 import { trpc } from "../../../services/trpc";
 import { useInvalidateMeetingLists } from "../../../hooks/useInvalidateMeetingLists";
 import {
-  deriveSummary,
+  deriveMeetingSummary,
   filterMeetingItems,
   formatChannelLabel,
   formatDateLabel,
-  formatDurationLabel,
+  formatMeetingDurationLabel,
   formatRelativeRecencyLabel,
   resolveMeetingTitle,
 } from "../../../utils/meetingLibrary";
@@ -76,17 +76,14 @@ export const useLibraryMeetings = (
         meetingRow.channelId,
       );
       const dateLabel = formatDateLabel(meetingRow.timestamp);
-      const durationLabel = formatDurationLabel(meetingRow.duration);
+      const durationLabel = formatMeetingDurationLabel(meetingRow);
       const title = resolveMeetingTitle({
         meetingName: meetingRow.meetingName,
         summaryLabel: meetingRow.summaryLabel,
         summarySentence: meetingRow.summarySentence,
         channelLabel,
       });
-      const summary = deriveSummary(
-        meetingRow.notes,
-        meetingRow.summarySentence,
-      );
+      const summary = deriveMeetingSummary(meetingRow);
       return {
         ...meetingRow,
         title,

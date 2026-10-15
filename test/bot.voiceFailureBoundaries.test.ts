@@ -43,6 +43,8 @@ function loadVoiceBoundary(rejectSubscription: () => Promise<void>) {
     Events: { ClientReady: "ready" },
     console: { log: jest.fn(), warn, error: jest.fn() },
     setDiscordClient: jest.fn(),
+    whenRuntimeServing: jest.fn(),
+    isRuntimeWarm: () => false,
     startMeetingControlCommandWorker: jest.fn(),
     setupApplicationCommands: jest.fn(),
     recordSuppressionVoiceState: jest.fn(),

@@ -22,6 +22,9 @@ if (fault === "fatal-startup") {
     "scheduleResubscribe",
     "subscribeToUserVoice",
     "isCaptureActive",
+    "isCaptureIntakeStopped",
+    "closeCaptureStream",
+    "ensureRecordingCheckpointCapture",
   ]);
   const declarations = source.statements.filter(
     (node) => ts.isFunctionDeclaration(node) && names.has(node.name?.text),
@@ -44,9 +47,22 @@ if (fault === "fatal-startup") {
       transpile(fs.readFileSync(helperPath, "utf8")),
     )(require, helperModule.exports);
   }
+  const lifetimeModule = { exports: {} };
+  new Function(
+    "exports",
+    transpile(
+      fs.readFileSync(
+        path.join(root, "src/services/meetingProcessingLifetime.ts"),
+        "utf8",
+      ),
+    ),
+  )(lifetimeModule.exports);
   const voiceSubscriptions = new WeakMap();
   const api = new Function(
     "voiceSubscriptions",
+    "captureStreamClosures",
+    "runMeetingProcessingEffect",
+    "getMeetingProcessingSignal",
     "disposeVoiceStream",
     "OpusDiagnosticDecoder",
     "VoiceConnectionStatus",
@@ -54,6 +70,9 @@ if (fault === "fatal-startup") {
     `${transpile("const RESUBSCRIBE_DELAY_MS = 250, RECORD_SAMPLE_RATE = 48000, CHANNELS = 2, FRAME_SIZE = 960;\n" + declarations.map((node) => node.getText(source).replace(/^export /, "")).join("\n"))}\nreturn { clearVoiceSubscription, subscribeToUserVoice };`,
   )(
     voiceSubscriptions,
+    new WeakMap(),
+    lifetimeModule.exports.runMeetingProcessingEffect,
+    lifetimeModule.exports.getMeetingProcessingSignal,
     helperModule.exports.disposeVoiceStream,
     class extends PassThrough {
       constructor() {

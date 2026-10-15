@@ -23,6 +23,7 @@
     "terraform:plan:staging": "terraform -chdir=_infra plan -var-file=terraform.staging.tfvars",
     "terraform:apply:staging": "terraform -chdir=_infra apply -var-file=terraform.staging.tfvars",
     "test": "jest",
+    "test:deployment:integration": "jest --config jest.deployment-integration.config.ts --runInBand --testTimeout=180000",
     "billing:history": "ts-node scripts/billing-history.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

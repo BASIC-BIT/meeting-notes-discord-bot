@@ -1553,6 +1553,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.stripe_webhook_event_table.arn,
           aws_dynamodb_table.interaction_receipt_table.arn,
           aws_dynamodb_table.active_meeting_table.arn,
+          aws_dynamodb_table.deployment_control_table.arn,
           aws_dynamodb_table.meeting_control_command_table.arn,
           "${aws_dynamodb_table.meeting_control_command_table.arn}/index/*",
           aws_dynamodb_table.access_logs_table.arn,
@@ -1683,11 +1684,12 @@ resource "aws_ecs_task_definition" "app_task" {
 
   container_definitions = jsonencode([
     {
-      name      = "${local.name_prefix}-bot"
-      image     = aws_ecr_repository.app_ecr_repo.repository_url
-      cpu       = 512
-      memory    = 1024
-      essential = true
+      name        = "${local.name_prefix}-bot"
+      image       = aws_ecr_repository.app_ecr_repo.repository_url
+      cpu         = 512
+      memory      = 1024
+      essential   = true
+      stopTimeout = 120
       portMappings = [
         {
           containerPort = 3001
@@ -2047,7 +2049,7 @@ resource "aws_ecs_service" "app_service" {
   # Deployments update the ECS service task definition outside Terraform.
   # Avoid Terraform reverting task definition revisions during infra applies.
   lifecycle {
-    ignore_changes = [task_definition]
+    ignore_changes = [task_definition, load_balancer]
   }
 
   enable_execute_command = true
@@ -2059,7 +2061,7 @@ resource "aws_ecs_service" "app_service" {
     type = "ECS"
   }
 
-  deployment_minimum_healthy_percent = 50
+  deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
 
   network_configuration {
@@ -2219,6 +2221,60 @@ resource "aws_dynamodb_table" "interaction_receipt_table" {
   tags = {
     Name = "InteractionReceiptTable"
   }
+}
+
+resource "aws_dynamodb_table" "deployment_control_table" {
+  name         = "${local.name_prefix}-DeploymentControlTable"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+  point_in_time_recovery {
+    enabled = true
+  }
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.app_general.arn
+  }
+  tags = {
+    Name = "DeploymentControlTable"
+  }
+}
+
+resource "aws_iam_role_policy" "deployment_control" {
+  name = "${local.name_prefix}-deployment-control"
+  role = aws_iam_role.ecs_task_app_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["dynamodb:ConditionCheckItem"]
+        Resource = [
+          aws_dynamodb_table.deployment_control_table.arn,
+          aws_dynamodb_table.active_meeting_table.arn,
+          aws_dynamodb_table.meeting_history_table.arn
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"]
+        Resource = ["arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task/${aws_ecs_cluster.main.name}/*"]
+      }
+    ]
+  })
 }
 
 resource "aws_dynamodb_table" "active_meeting_table" {

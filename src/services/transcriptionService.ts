@@ -1,14 +1,15 @@
+import { resolveChatParamsForRole } from "./openaiModelParams";
+import { withTranscriptionInput } from "./transcriptionInput";
+import {
+  getMeetingProcessingSignal,
+  runMeetingProcessingEffect,
+} from "./meetingProcessingLifetime";
 import type OpenAI from "openai";
 import type {
   Transcription,
   TranscriptionCreateParamsNonStreaming,
 } from "openai/resources/audio";
-import {
-  createReadStream,
-  existsSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import ffmpeg from "fluent-ffmpeg";
 import {
@@ -80,9 +81,23 @@ import {
   getTranscriptionCleanupPrompt,
   getTranscriptionCoalescePrompt,
 } from "./transcriptionPromptService";
-import { chat } from "./openaiChatService";
+import { chat, type ChatMeetingInput } from "./openaiChatService";
 import { getMeetingModelOverrides } from "./meetingModelOverrides";
 import { getTranscriptionTextQuality } from "../utils/transcriptionText";
+
+export type TranscriptionContentInput = {
+  meetingId: string;
+  creator: { id: string };
+  guild: { id: string };
+  voiceChannel: { id: string };
+  signal: AbortSignal;
+  runtimeConfig?: Pick<
+    NonNullable<MeetingData["runtimeConfig"]>,
+    "transcription" | "modelChoices"
+  >;
+  prompt(): ReturnType<typeof getTranscriptionPrompt>;
+  effect<T>(run: () => Promise<T>): Promise<T>;
+};
 
 const DEFAULT_NOISE_GATE_CONFIG = {
   enabled: NOISE_GATE_ENABLED,
@@ -99,13 +114,7 @@ let syllableCounterPromise: Promise<(value: string) => number> | null = null;
 const getSyllableCounter = async () => {
   if (!syllableCounterPromise) {
     syllableCounterPromise = import("syllable")
-      .then((module) => {
-        const counter = module.syllable ?? module.default ?? module;
-        if (typeof counter !== "function") {
-          throw new Error("Failed to load syllable counter.");
-        }
-        return counter;
-      })
+      .then((module) => module.syllable)
       .catch((error) => {
         syllableCounterPromise = null;
         throw error;
@@ -138,17 +147,17 @@ type TranscriptStats = {
   syllablesPerSecond?: number;
 };
 
-const resolvePromptEchoEnabled = (meeting: MeetingData) =>
+const resolvePromptEchoEnabled = (meeting: TranscriptionContentInput) =>
   meeting.runtimeConfig?.transcription.promptEchoEnabled ?? true;
 
-const resolveTranscriptionVoteEnabled = (meeting: MeetingData) =>
+const resolveTranscriptionVoteEnabled = (meeting: TranscriptionContentInput) =>
   meeting.runtimeConfig?.transcription.voteEnabled ?? true;
 
-const resolveHardSilenceDbfs = (meeting: MeetingData) =>
+const resolveHardSilenceDbfs = (meeting: TranscriptionContentInput) =>
   meeting.runtimeConfig?.transcription.suppressionHardSilenceDbfs ??
   TRANSCRIPTION_HARD_SILENCE_DBFS;
 
-const resolveRateConfig = (meeting: MeetingData) => {
+const resolveRateConfig = (meeting: TranscriptionContentInput) => {
   const transcriptionConfig = meeting.runtimeConfig?.transcription;
   return {
     rateMaxSeconds:
@@ -167,7 +176,7 @@ const resolveRateConfig = (meeting: MeetingData) => {
 };
 
 const resolveGuardConfig = (
-  meeting: MeetingData,
+  meeting: TranscriptionContentInput,
   context?: TranscriptionTraceContext,
 ): TranscriptionGuardConfig => {
   const rateConfig = resolveRateConfig(meeting);
@@ -239,11 +248,13 @@ type TranscriptionTraceContext = {
 };
 
 async function transcribeInternal(
-  meeting: MeetingData,
+  meeting: TranscriptionContentInput,
   file: string,
   context?: TranscriptionTraceContext,
 ): Promise<string> {
-  const { prompt, langfusePrompt } = await getTranscriptionPrompt(meeting);
+  meeting.signal.throwIfAborted();
+  const { prompt, langfusePrompt } = await meeting.prompt();
+  meeting.signal.throwIfAborted();
   const promptValue = prompt.trim();
   const resolvedPrompt = promptValue.length > 0 ? promptValue : undefined;
   const passMode = context?.noiseGateMode ?? "slow";
@@ -274,22 +285,29 @@ async function transcribeInternal(
     openAIClient: OpenAI,
     promptText?: string,
   ) => {
-    const request: TranscriptionCreateParamsNonStreaming<"json"> = {
-      file: createReadStream(file),
-      model: modelChoice.model,
-      language: "en",
-      temperature: 0,
-      response_format: "json",
-      include: ["logprobs"],
-      ...(promptText ? { prompt: promptText } : {}),
-    };
-    const transcription =
-      await openAIClient.audio.transcriptions.create(request);
-    return {
-      text: transcription.text ?? "",
-      logprobs: transcription.logprobs ?? [],
-      usage: transcription.usage,
-    };
+    const signal = meeting.signal;
+    signal.throwIfAborted();
+    return withTranscriptionInput(file, async (input) => {
+      const request: TranscriptionCreateParamsNonStreaming<"json"> = {
+        file: input,
+        model: modelChoice.model,
+        language: "en",
+        temperature: 0,
+        response_format: "json",
+        include: ["logprobs"],
+        ...(promptText ? { prompt: promptText } : {}),
+      };
+      const transcription = await openAIClient.audio.transcriptions.create(
+        request,
+        { signal },
+      );
+      signal.throwIfAborted();
+      return {
+        text: transcription.text ?? "",
+        logprobs: transcription.logprobs ?? [],
+        usage: transcription.usage,
+      };
+    });
   };
 
   const guardConfig = resolveGuardConfig(meeting, context);
@@ -545,30 +563,38 @@ async function transcribeInternal(
             { asType: "generation" },
           );
 
-          void langfuseAttachmentLimiter
-            .schedule(() => buildLangfuseTranscriptionAudioAttachment(file))
-            .then((audioAttachment) => {
-              if (!audioAttachment) return;
-              updateActiveObservation(
-                {
-                  input: {
-                    ...observationInput,
-                    audio: audioAttachment.media,
-                  },
-                  metadata: {
-                    audioAttachmentBytes: audioAttachment.byteLength,
-                    audioAttachmentContentType: audioAttachment.contentType,
-                  },
-                },
-                { asType: "generation" },
-              );
-            })
-            .catch((error) => {
-              console.warn(
-                "Failed to attach transcription audio to Langfuse.",
-                error,
-              );
-            });
+          await meeting
+            .effect(() =>
+              langfuseAttachmentLimiter
+                .schedule(() => {
+                  meeting.signal.throwIfAborted();
+                  return buildLangfuseTranscriptionAudioAttachment(file);
+                })
+                .then((audioAttachment) => {
+                  if (!audioAttachment || meeting.signal.aborted) return;
+                  updateActiveObservation(
+                    {
+                      input: {
+                        ...observationInput,
+                        audio: audioAttachment.media,
+                      },
+                      metadata: {
+                        audioAttachmentBytes: audioAttachment.byteLength,
+                        audioAttachmentContentType: audioAttachment.contentType,
+                      },
+                    },
+                    { asType: "generation" },
+                  );
+                })
+                .catch((error) => {
+                  if (meeting.signal.aborted) return;
+                  console.warn(
+                    "Failed to attach transcription audio to Langfuse.",
+                    error,
+                  );
+                }),
+            )
+            .catch(() => {});
 
           const openAIClient = createOpenAIClient({
             disableTracing: true,
@@ -711,13 +737,14 @@ const langfuseAttachmentLimiter = new Bottleneck({
 });
 
 async function transcribe(
-  meeting: MeetingData,
+  meeting: TranscriptionContentInput,
   file: string,
   context?: TranscriptionTraceContext,
 ): Promise<string> {
-  return await policies.execute(() =>
-    limiter.schedule(() => transcribeInternal(meeting, file, context)),
-  );
+  return await policies.execute(() => {
+    meeting.signal.throwIfAborted();
+    return limiter.schedule(() => transcribeInternal(meeting, file, context));
+  });
 }
 
 type TempSnippetFiles = {
@@ -726,7 +753,7 @@ type TempSnippetFiles = {
 };
 
 const buildSnippetTempFiles = (
-  meeting: MeetingData,
+  meeting: TranscriptionContentInput,
   snippet: AudioSnippet,
   suffix: string,
 ): TempSnippetFiles => {
@@ -751,13 +778,13 @@ const buildAudioStats = (buffer: Buffer) => {
 };
 
 const resolveSuppressionEnabled = (
-  meeting: MeetingData,
+  meeting: TranscriptionContentInput,
   override?: boolean,
 ): boolean =>
   override ?? meeting.runtimeConfig?.transcription.suppressionEnabled ?? true;
 
 const resolveNoiseGateContext = (input: {
-  meeting: MeetingData;
+  meeting: TranscriptionContentInput;
   buffer: Buffer;
   suppressionEnabled: boolean;
   noiseGateMode?: "fast" | "slow";
@@ -786,9 +813,20 @@ const resolveNoiseGateContext = (input: {
   return { noiseGateEnabled, noiseGateMetrics };
 };
 
-const convertPcmToWav = (inputFile: string, outputFile: string) =>
+const convertPcmToWav = (
+  inputFile: string,
+  outputFile: string,
+  signal: AbortSignal,
+) =>
   new Promise<void>((resolve, reject) => {
-    ffmpeg(inputFile)
+    signal.throwIfAborted();
+    const command = ffmpeg(inputFile);
+    const cancel = () => command.kill("SIGTERM");
+    signal.addEventListener("abort", cancel, { once: true });
+    command
+      .on("start", () => {
+        if (signal.aborted) cancel();
+      })
       .inputOptions([
         `-f s16le`,
         `-ar ${RECORD_SAMPLE_RATE}`,
@@ -800,9 +838,11 @@ const convertPcmToWav = (inputFile: string, outputFile: string) =>
         `-ar ${TRANSCRIBE_SAMPLE_RATE}`,
       ])
       .on("end", () => {
+        signal.removeEventListener("abort", cancel);
         resolve();
       })
       .on("error", (err) => {
+        signal.removeEventListener("abort", cancel);
         console.error(`Error converting PCM to WAV: ${err.message}`);
         reject(err);
       })
@@ -826,8 +866,8 @@ const cleanupTempFiles = (files: TempSnippetFiles) => {
   cleanupTempFile(files.wavFile, "wav");
 };
 
-export async function transcribeSnippet(
-  meeting: MeetingData,
+export async function transcribeContentSnippet(
+  meeting: TranscriptionContentInput,
   snippet: AudioSnippet,
   options: {
     tempSuffix?: string;
@@ -855,8 +895,11 @@ export async function transcribeSnippet(
 
   let stage: "conversion" | "transcription" = "conversion";
   try {
+    const signal = meeting.signal;
+    signal.throwIfAborted();
     writeFileSync(tempFiles.pcmFile, buffer);
-    await convertPcmToWav(tempFiles.pcmFile, tempFiles.wavFile);
+    await convertPcmToWav(tempFiles.pcmFile, tempFiles.wavFile, signal);
+    signal.throwIfAborted();
     stage = "transcription";
     const text = await transcribe(meeting, tempFiles.wavFile, {
       userId: snippet.userId,
@@ -895,6 +938,27 @@ export async function transcribeSnippet(
   }
 }
 
+export function transcribeSnippet(
+  meeting: MeetingData,
+  snippet: AudioSnippet,
+  options: Parameters<typeof transcribeContentSnippet>[2] = {},
+) {
+  return transcribeContentSnippet(
+    {
+      meetingId: meeting.meetingId,
+      creator: { id: meeting.creator.id },
+      guild: { id: meeting.guild.id },
+      voiceChannel: { id: meeting.voiceChannel.id },
+      signal: getMeetingProcessingSignal(meeting),
+      runtimeConfig: meeting.runtimeConfig,
+      prompt: () => getTranscriptionPrompt(meeting),
+      effect: (run) => runMeetingProcessingEffect(meeting, run),
+    },
+    snippet,
+    options,
+  );
+}
+
 type CoalesceInput = {
   slowTranscript: string;
   fastTranscripts: TranscriptVariant[];
@@ -912,21 +976,53 @@ export async function cleanupTranscription(
     "transcriptionCleanup",
     getMeetingModelOverrides(meeting),
   );
-  return await chat(
+  return cleanupContentTranscription(
     meeting,
+    { messages, langfusePrompt },
     {
-      messages: [...messages],
+      ...modelChoice,
+      params: resolveChatParamsForRole({
+        role: "transcriptionCleanup",
+        model: modelChoice.model,
+        config: meeting.runtimeConfig?.modelParams?.transcriptionCleanup,
+      }),
     },
+    meeting.langfuseParentSpanContext,
+  );
+}
+export async function cleanupContentTranscription(
+  content: ChatMeetingInput,
+  prompt: Pick<
+    Awaited<ReturnType<typeof getTranscriptionCleanupPrompt>>,
+    "messages" | "langfusePrompt"
+  >,
+  model: import("../types/recordingContent").SavedRecordingSettings["models"]["transcriptionCleanup"],
+  parentSpanContext?: MeetingData["langfuseParentSpanContext"],
+) {
+  return chat(
+    content,
+    { messages: [...prompt.messages] },
     {
-      model: modelChoice.model,
+      model: model.model,
+      frozenModel: model,
       traceName: "transcription-cleanup",
       generationName: "transcription-cleanup",
       tags: ["feature:transcription_cleanup"],
-      langfusePrompt,
-      parentSpanContext: meeting.langfuseParentSpanContext,
+      langfusePrompt: prompt.langfusePrompt,
+      parentSpanContext,
       modelParamRole: "transcriptionCleanup",
     },
   );
+}
+export function retainCleanupTranscript(
+  original: string,
+  cleaned: string,
+  minimumLineRatio: number,
+) {
+  return (cleaned || "").split("\n").length <
+    original.split("\n").length * minimumLineRatio
+    ? original
+    : cleaned;
 }
 
 export async function coalesceTranscription(

@@ -1,10 +1,8 @@
 /** @jest-environment node */
 import { beforeEach, afterEach, it, expect, jest } from "@jest/globals";
-import {
-  captureEvent,
-  shutdownAnalytics,
-} from "../../src/services/analyticsService";
-import { config } from "../../src/services/configService";
+let captureEvent: typeof import("../../src/services/analyticsService").captureEvent;
+let shutdownAnalytics: typeof import("../../src/services/analyticsService").shutdownAnalytics;
+let config: typeof import("../../src/services/configService").config;
 const mockCapture = jest.fn();
 jest.mock("posthog-node", () => ({
   PostHog: jest.fn(() => ({
@@ -12,15 +10,17 @@ jest.mock("posthog-node", () => ({
     shutdown: async () => undefined,
   })),
 }));
-const original = config.analytics.posthogKey;
 beforeEach(async () => {
-  await shutdownAnalytics();
+  // Shutdown is terminal, so each test needs a fresh module instance.
+  jest.resetModules();
+  ({ captureEvent, shutdownAnalytics } =
+    await import("../../src/services/analyticsService"));
+  ({ config } = await import("../../src/services/configService"));
   mockCapture.mockReset();
   config.analytics.posthogKey = "";
 });
 afterEach(async () => {
   await shutdownAnalytics();
-  config.analytics.posthogKey = original;
 });
 it("does not send without a key or usable identity", () => {
   captureEvent("example", { guildId: "fixture" });
@@ -54,4 +54,5 @@ it("never throws a client failure into billing", () => {
     throw Error("outage");
   });
   expect(() => captureEvent("example", { guildId: "fixture" })).not.toThrow();
+  expect(mockCapture).toHaveBeenCalledTimes(1);
 });

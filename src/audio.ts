@@ -1,3 +1,28 @@
+import type {
+  PcmSpan,
+  TranscriptCorrespondence,
+} from "./types/transcriptCorrespondence";
+import {
+  appendPcmSpan,
+  copyCorrespondence,
+  combineCorrespondence,
+  containsPcmSpans,
+} from "./utils/transcriptCorrespondence";
+import { renderMixedPcmTracks } from "./services/mixedPcmService";
+import { interruptOwnedMeeting } from "./services/ownedMeetingInterruption";
+import { finished } from "node:stream/promises";
+import {
+  getMeetingProcessingSignal,
+  runMeetingProcessingEffect,
+} from "./services/meetingProcessingLifetime";
+import {
+  startRecordingContentCheckpoint,
+  checkpointCompletedTranscription,
+  checkpointRecordingContext,
+  captureRecordingTranscriptScope,
+} from "./services/recordingContentService";
+import { createRecordingCheckpointCapture } from "./services/recordingCheckpointCapture";
+import { appendMeetingCheckpointArtifacts } from "./services/recordingCheckpointService";
 import {
   BYTES_PER_SAMPLE,
   CHANNELS,
@@ -21,6 +46,7 @@ import {
   AudioSnippet,
   SpeakerState,
   SpeakerTrackFile,
+  TranscriptVariant,
 } from "./types/audio";
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType, VoiceConnectionStatus } from "@discordjs/voice";
@@ -29,6 +55,7 @@ import { disposeVoiceStream } from "./utils/disposeVoiceStream";
 import { PassThrough, Readable } from "node:stream";
 import {
   cleanupTranscription,
+  retainCleanupTranscript,
   coalesceTranscription,
   transcribeSnippet,
 } from "./services/transcriptionService";
@@ -156,6 +183,32 @@ function resolveSpeakerLabel(meeting: MeetingData, userId: string): string {
   });
 }
 
+const captureStreamClosures = new WeakMap<MeetingData, Set<Promise<void>>>();
+export async function waitForCaptureStreamSettlement(
+  meeting: MeetingData,
+): Promise<void> {
+  const pending = captureStreamClosures.get(meeting);
+  while (pending?.size) await Promise.all([...pending]);
+}
+function closeCaptureStream(
+  meeting: MeetingData,
+  stream: Readable,
+  detachOwnedListeners: () => void,
+) {
+  if (!stream.closed) {
+    let pending = captureStreamClosures.get(meeting);
+    if (!pending) {
+      pending = new Set();
+      captureStreamClosures.set(meeting, pending);
+    }
+    const closed = new Promise<void>((resolve) =>
+      stream.once("close", resolve),
+    );
+    pending.add(closed);
+    void closed.then(() => pending.delete(closed));
+  }
+  disposeVoiceStream(stream, detachOwnedListeners);
+}
 function clearVoiceSubscription(
   meeting: MeetingData,
   userId: string,
@@ -182,7 +235,7 @@ function clearVoiceSubscription(
     existing.decoder,
     existing.decodedStream,
   ])) {
-    disposeVoiceStream(stream, () => {
+    closeCaptureStream(meeting, stream, () => {
       for (const detach of existing.ownedListenerCleanups.get(stream) ?? []) {
         detach();
       }
@@ -196,10 +249,7 @@ function scheduleResubscribe(
   userId: string,
   reason: string,
 ) {
-  if (meeting.finishing) return;
-  if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
-    return;
-  }
+  if (!isCaptureActive(meeting)) return;
   if (!meeting.voiceChannel.members.has(userId)) {
     return;
   }
@@ -217,13 +267,16 @@ function scheduleResubscribe(
     if (!existing || subscriptions.get(userId) !== existing) return;
     existing.resubscribeTimer = undefined;
     if (existing.suppressResubscribe) return;
-    if (meeting.finishing) return;
-    if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
-      return;
-    }
+    if (!isCaptureActive(meeting)) return;
     if (!meeting.voiceChannel.members.has(userId)) return;
-    void subscribeToUserVoice(meeting, userId).catch(() => {
-      if (subscriptions.has(userId)) return;
+    void runMeetingProcessingEffect(meeting, () =>
+      subscribeToUserVoice(meeting, userId),
+    ).catch(() => {
+      if (
+        getMeetingProcessingSignal(meeting).aborted ||
+        subscriptions.has(userId)
+      )
+        return;
       console.warn("Voice subscription replacement failed:", {
         meetingId: meeting.meetingId,
         stage: "resubscribe",
@@ -236,9 +289,16 @@ function scheduleResubscribe(
   }
 }
 
+function isCaptureIntakeStopped(meeting: MeetingData): boolean {
+  return (
+    meeting.finishing ||
+    meeting.captureAudio === false ||
+    meeting.ownershipSignal?.aborted === true
+  );
+}
 function isCaptureActive(meeting: MeetingData): boolean {
   return (
-    !meeting.finishing &&
+    !isCaptureIntakeStopped(meeting) &&
     meeting.connection.state.status !== VoiceConnectionStatus.Destroyed
   );
 }
@@ -341,6 +401,7 @@ function cloneSnippet(snippet: AudioSnippet): AudioSnippet {
   return {
     ...snippet,
     chunks: [...snippet.chunks],
+    pcmSpans: snippet.pcmSpans?.map((span) => ({ ...span })),
   };
 }
 
@@ -445,6 +506,11 @@ async function persistSnippetSpeakerTrack(
   const writeTask = async () => {
     await fs.promises.mkdir(getSpeakerTrackDir(meeting), { recursive: true });
     const outputStream = fs.createWriteStream(track.filePath, { flags: "a" });
+    const actualClose = new Promise<void>((resolve) =>
+      outputStream.once("close", resolve),
+    );
+    const closed = finished(outputStream, { cleanup: true });
+    void closed.catch(() => {});
     try {
       const gapMs = Math.max(0, offsetMs - track.lastEndMs);
       if (gapMs > 0) {
@@ -455,6 +521,7 @@ async function persistSnippetSpeakerTrack(
         outputStream.end(() => resolve());
         outputStream.on("error", (error) => reject(error));
       });
+      await closed;
       track.lastEndMs = Math.max(track.lastEndMs, offsetMs + durationMs);
     } catch (error) {
       console.error(
@@ -464,6 +531,9 @@ async function persistSnippetSpeakerTrack(
       outputStream.destroy();
       track.writeFailed = true;
       track.writeFailureCount = (track.writeFailureCount ?? 0) + 1;
+    } finally {
+      await closed.catch(() => {});
+      await actualClose;
     }
   };
 
@@ -477,6 +547,7 @@ async function persistSnippetSpeakerTrack(
     })
     .then(writeTask);
   track.writePromise = chained;
+  await chained;
 }
 
 function getOrCreateAudioFileData(
@@ -521,43 +592,61 @@ function runFastTranscription(meeting: MeetingData, snippet: AudioSnippet) {
   if (shouldSkipByNoiseGate(meeting, snapshot, "fast")) {
     return;
   }
-  void transcribeSnippet(meeting, snapshot, {
-    tempSuffix: `fast-${revision}`,
-    noiseGateMode: "fast",
-  })
-    .then((result) => {
-      if (snippet.fastRevision !== revision) return;
-      if (result.status === "failed") {
-        return;
-      }
-      const transcription = result.text;
-      if (!transcription.trim()) {
-        return;
-      }
-      const entry = {
-        revision,
-        text: transcription,
-        createdAt: nowIso(),
-      };
-      if (!audioFileData.fastTranscripts) {
-        audioFileData.fastTranscripts = [];
-      }
-      audioFileData.fastTranscripts.push(entry);
-      audioFileData.transcript = transcription;
-      snippet.fastTranscribed = true;
-      snippet.lastFastTranscriptBytes = snapshotBytes;
-      void maybeRespondLive(meeting, {
-        userId: snippet.userId,
-        text: transcription,
-        timestamp: snippet.timestamp,
-      });
+  void runMeetingProcessingEffect(meeting, () =>
+    transcribeSnippet(meeting, snapshot, {
+      tempSuffix: `fast-${revision}`,
+      noiseGateMode: "fast",
     })
-    .catch((error) => {
-      console.error(
-        `Failed to transcribe fast snippet for user ${snippet.userId}:`,
-        error,
-      );
-    });
+      .then((result) => {
+        if (
+          getMeetingProcessingSignal(meeting).aborted ||
+          snippet.fastRevision !== revision
+        )
+          return;
+        if (result.status === "failed") {
+          return;
+        }
+        const transcription = result.text;
+        if (!transcription.trim()) {
+          return;
+        }
+        const entry = {
+          revision,
+          text: transcription,
+          correspondence: snapshot.pcmSpans
+            ? {
+                kind: "pcm" as const,
+                spans: snapshot.pcmSpans.map((span) => ({ ...span })),
+              }
+            : undefined,
+          createdAt: nowIso(),
+        };
+        if (!audioFileData.fastTranscripts) {
+          audioFileData.fastTranscripts = [];
+        }
+        audioFileData.fastTranscripts.push(entry);
+        audioFileData.transcript = transcription;
+        audioFileData.transcriptCorrespondence = copyCorrespondence(
+          entry.correspondence,
+        );
+        checkpointCompletedTranscription(meeting);
+        snippet.fastTranscribed = true;
+        snippet.lastFastTranscriptBytes = snapshotBytes;
+        void runMeetingProcessingEffect(meeting, () =>
+          maybeRespondLive(meeting, {
+            userId: snippet.userId,
+            text: transcription,
+            timestamp: snippet.timestamp,
+          }),
+        ).catch(() => {});
+      })
+      .catch((error) => {
+        console.error(
+          `Failed to transcribe fast snippet for user ${snippet.userId}:`,
+          error,
+        );
+      }),
+  ).catch(() => {});
 }
 
 // Handle snippets based on the user speaking
@@ -585,6 +674,25 @@ export function updateSnippetsIfNecessary(
   }
 }
 
+/** Coalescing may only use fast candidates inside the finalized snippet input. */
+function validateFastCandidateCorrespondence(
+  inputCorrespondence: TranscriptCorrespondence | undefined,
+  fastCandidates: readonly TranscriptVariant[],
+): void {
+  if (
+    inputCorrespondence?.kind === "pcm" &&
+    fastCandidates.some(
+      (entry) =>
+        entry.correspondence?.kind === "pcm" &&
+        !containsPcmSpans(
+          inputCorrespondence.spans,
+          entry.correspondence.spans,
+        ),
+    )
+  )
+    throw new Error("Fast transcript input exceeds finalized snippet");
+}
+
 // Start processing a specific user's snippet
 export function startProcessingSnippet(
   meeting: MeetingData,
@@ -594,13 +702,20 @@ export function startProcessingSnippet(
   const snippet = meeting.audioData.currentSnippets.get(userId);
   if (!snippet) return;
 
-  void persistSnippetSpeakerTrack(meeting, snippet);
+  if (getMeetingProcessingSignal(meeting).aborted) return;
+  const speakerWrite = runMeetingProcessingEffect(meeting, () =>
+    persistSnippetSpeakerTrack(meeting, snippet),
+  );
   snippet.fastRevision = (snippet.fastRevision ?? 0) + 1;
 
   const audioFileData = getOrCreateAudioFileData(meeting, snippet);
   audioFileData.processing = true;
 
-  const promises: Promise<void>[] = [];
+  const promises: Promise<void>[] = [speakerWrite];
+  const inputCorrespondence: TranscriptCorrespondence | undefined =
+    snippet.pcmSpans
+      ? { kind: "pcm", spans: snippet.pcmSpans.map((span) => ({ ...span })) }
+      : undefined;
 
   const { minSnippetSeconds, fastFinalizationEnabled } =
     getTranscriptionTiming(meeting);
@@ -632,6 +747,9 @@ export function startProcessingSnippet(
     );
     audioFileData.transcriptionFailed = false;
     audioFileData.transcript = latestFastText;
+    audioFileData.transcriptCorrespondence = copyCorrespondence(
+      latestFastTranscript?.correspondence,
+    );
   } else if (
     hasAudio &&
     (duration > minSnippetSeconds || options.forceTranscribe)
@@ -641,73 +759,111 @@ export function startProcessingSnippet(
       !shouldSkipByNoiseGate(meeting, snippet, "slow")
     ) {
       promises.push(
-        transcribeSnippet(meeting, snippet, {
-          noiseGateMode: "slow",
-          noiseGateEnabledOverride: options.forceTranscribe ? false : undefined,
-          suppressionEnabledOverride: options.forceTranscribe
-            ? false
-            : undefined,
-        })
-          .then(async (result) => {
-            if (result.status === "failed") {
-              audioFileData.transcriptionFailed = true;
-              return;
-            }
-            const transcription = result.text;
-            audioFileData.transcriptionFailed = false;
-            audioFileData.slowTranscript = transcription;
-            audioFileData.transcript = transcription;
-            if (!options.skipLiveVoice) {
-              void maybeRespondLive(meeting, {
-                userId: snippet.userId,
-                text: transcription,
-                timestamp: snippet.timestamp,
-              });
-            }
-
-            const premium = meeting.runtimeConfig?.premiumTranscription;
-            if (
-              premium?.enabled &&
-              transcription.trim().length > 0 &&
-              audioFileData.fastTranscripts &&
-              audioFileData.fastTranscripts.length > 0
-            ) {
-              try {
-                const coalesced = await coalesceTranscription(meeting, {
-                  slowTranscript: transcription,
-                  fastTranscripts: audioFileData.fastTranscripts,
-                });
-                if (coalesced && coalesced.trim().length > 0) {
-                  audioFileData.coalescedTranscript = coalesced;
-                  audioFileData.coalesceMeta = {
-                    model: getModelChoice(
-                      "transcriptionCoalesce",
-                      buildModelOverrides(meeting.runtimeConfig?.modelChoices),
-                    ).model,
-                    usedFastRevisions: audioFileData.fastTranscripts.map(
-                      (entry) => entry.revision,
-                    ),
-                    createdAt: nowIso(),
-                  };
-                  audioFileData.transcript = coalesced;
-                }
-              } catch (error) {
-                console.error(
-                  `Failed to coalesce transcription for user ${snippet.userId}:`,
-                  error,
-                );
-              }
-            }
+        runMeetingProcessingEffect(meeting, () =>
+          transcribeSnippet(meeting, snippet, {
+            noiseGateMode: "slow",
+            noiseGateEnabledOverride: options.forceTranscribe
+              ? false
+              : undefined,
+            suppressionEnabledOverride: options.forceTranscribe
+              ? false
+              : undefined,
           })
-          .catch((error) => {
-            console.error(
-              `Failed to transcribe snippet for user ${snippet.userId}:`,
-              error,
-            );
-          }),
+            .then(async (result) => {
+              if (getMeetingProcessingSignal(meeting).aborted) return;
+              if (result.status === "failed") {
+                audioFileData.transcriptionFailed = true;
+                return;
+              }
+              const transcription = result.text;
+              audioFileData.transcriptionFailed = false;
+              audioFileData.slowTranscript = transcription;
+              audioFileData.slowCorrespondence =
+                copyCorrespondence(inputCorrespondence);
+              audioFileData.transcript = transcription;
+              audioFileData.transcriptCorrespondence =
+                copyCorrespondence(inputCorrespondence);
+              if (!transcription.trim())
+                audioFileData.terminalOmission =
+                  copyCorrespondence(inputCorrespondence);
+              checkpointCompletedTranscription(meeting);
+              if (!options.skipLiveVoice) {
+                void runMeetingProcessingEffect(meeting, () =>
+                  maybeRespondLive(meeting, {
+                    userId: snippet.userId,
+                    text: transcription,
+                    timestamp: snippet.timestamp,
+                  }),
+                ).catch(() => {});
+              }
+
+              const premium = meeting.runtimeConfig?.premiumTranscription;
+              if (
+                premium?.enabled &&
+                transcription.trim().length > 0 &&
+                audioFileData.fastTranscripts &&
+                audioFileData.fastTranscripts.length > 0
+              ) {
+                try {
+                  const fastCandidates = audioFileData.fastTranscripts.map(
+                    (entry) => ({
+                      ...entry,
+                      correspondence: copyCorrespondence(entry.correspondence),
+                    }),
+                  );
+                  validateFastCandidateCorrespondence(
+                    inputCorrespondence,
+                    fastCandidates,
+                  );
+                  const coalesced = await coalesceTranscription(meeting, {
+                    slowTranscript: transcription,
+                    fastTranscripts: fastCandidates,
+                  });
+                  if (getMeetingProcessingSignal(meeting).aborted) return;
+                  if (coalesced && coalesced.trim().length > 0) {
+                    audioFileData.coalescedTranscript = coalesced;
+                    audioFileData.coalescedCorrespondence =
+                      combineCorrespondence([
+                        inputCorrespondence,
+                        ...fastCandidates.map((entry) => entry.correspondence),
+                      ]);
+                    audioFileData.coalesceMeta = {
+                      model: getModelChoice(
+                        "transcriptionCoalesce",
+                        buildModelOverrides(
+                          meeting.runtimeConfig?.modelChoices,
+                        ),
+                      ).model,
+                      usedFastRevisions: audioFileData.fastTranscripts.map(
+                        (entry) => entry.revision,
+                      ),
+                      createdAt: nowIso(),
+                    };
+                    audioFileData.transcript = coalesced;
+                    audioFileData.transcriptCorrespondence = copyCorrespondence(
+                      audioFileData.coalescedCorrespondence,
+                    );
+                  }
+                } catch (error) {
+                  console.error(
+                    `Failed to coalesce transcription for user ${snippet.userId}:`,
+                    error,
+                  );
+                }
+              }
+            })
+            .catch((error) => {
+              console.error(
+                `Failed to transcribe snippet for user ${snippet.userId}:`,
+                error,
+              );
+            }),
+        ),
       );
-    }
+    } else
+      audioFileData.terminalOmission = copyCorrespondence(inputCorrespondence);
   } else {
+    audioFileData.terminalOmission = copyCorrespondence(inputCorrespondence);
     const participant = meeting.participants?.get(snippet.userId);
     const speakerLabel = participant
       ? formatParticipantLabel(participant, {
@@ -724,9 +880,13 @@ export function startProcessingSnippet(
   // Audio is now written immediately as it arrives, so we don't need to write it here
   // This prevents duplicate audio and memory buildup for long recordings
 
-  audioFileData.processingPromise = Promise.all(promises).then(() => {
-    audioFileData.processing = false;
-  });
+  audioFileData.processingPromise = runMeetingProcessingEffect(meeting, () =>
+    Promise.all(promises).then(() => {
+      audioFileData.processing = false;
+      if (!getMeetingProcessingSignal(meeting).aborted)
+        checkpointCompletedTranscription(meeting);
+    }),
+  );
 
   meeting.audioData.currentSnippets.delete(userId); // Remove snippet after processing
 }
@@ -825,10 +985,7 @@ export async function subscribeToUserVoice(
   meeting: MeetingData,
   userId: string,
 ) {
-  if (meeting.finishing) return;
-  if (meeting.connection.state.status === VoiceConnectionStatus.Destroyed) {
-    return;
-  }
+  if (!isCaptureActive(meeting)) return;
 
   clearVoiceSubscription(meeting, userId);
 
@@ -860,6 +1017,8 @@ export async function subscribeToUserVoice(
 
     subscriptions.set(userId, subscriptionState);
     createdState = subscriptionState;
+    meeting.captureStartedAt ??= new Date();
+    ensureRecordingCheckpointCapture(meeting);
 
     // Prevent decoder errors (often caused by malformed or partial packets) from crashing the process.
     const onDecoderError = (err: Error) => {
@@ -942,6 +1101,20 @@ export async function subscribeToUserVoice(
 
     const onPcmData = (chunk: Buffer) => {
       if (subscriptionState.suppressResubscribe) return;
+      if (!isCaptureActive(meeting) || meeting.ownershipSignal?.aborted) return;
+      let acceptedSpan: PcmSpan | undefined;
+      if (
+        meeting.recordingCapture &&
+        !meeting.recordingCapture.push(
+          `user:${userId}`,
+          chunk,
+          Date.now(),
+          (span) => {
+            acceptedSpan = span;
+          },
+        )
+      )
+        return;
       subscriptionState.lastPcmAt = Date.now();
       subscriptionState.consecutiveNoPcmEvents = 0;
       subscriptionState.lastNoPcmAt = undefined;
@@ -968,6 +1141,10 @@ export async function subscribeToUserVoice(
 
       const snippet = meeting.audioData.currentSnippets.get(userId);
       if (snippet) {
+        if (acceptedSpan) {
+          if (!snippet.chunks.length) snippet.pcmSpans = [];
+          if (snippet.pcmSpans) appendPcmSpan(snippet.pcmSpans, acceptedSpan);
+        } else snippet.pcmSpans = undefined;
         snippet.chunks.push(chunk);
         snippet.audioBytes = (snippet.audioBytes ?? 0) + chunk.length;
         maybeFinalizeSnippetsForInterjection(meeting, userId, snippet);
@@ -992,18 +1169,23 @@ export async function subscribeToUserVoice(
       ) {
         meeting.connection.receiver.subscriptions.delete(userId);
       }
-      disposeVoiceStream(createdOpusStream, () => {});
+      closeCaptureStream(meeting, createdOpusStream, () => {});
     }
     throw error;
   }
 }
 
 export function userStartTalking(meeting: MeetingData, userId: string) {
+  if (isCaptureIntakeStopped(meeting)) return;
   markSpeakerStart(meeting, userId);
   clearSnippetTimer(meeting, userId);
 }
 
 export function userStopTalking(meeting: MeetingData, userId: string) {
+  if (isCaptureIntakeStopped(meeting)) return;
+  finishSpeakerTurn(meeting, userId);
+}
+function finishSpeakerTurn(meeting: MeetingData, userId: string) {
   markSpeakerEnd(meeting, userId);
   const pending = meeting.liveVoiceCommandPending;
   if (pending && pending.expiresAt > Date.now() && pending.userId === userId) {
@@ -1078,9 +1260,16 @@ function getAudioDuration(audio: AudioSnippet): number {
 export async function compileTranscriptions(
   client: Client,
   meeting: MeetingData,
-  options: { includeCues?: boolean } = {},
+  options: {
+    includeCues?: boolean;
+    cleanupAcknowledged?: (
+      outcome: "acknowledged" | "fallback" | "disabled",
+    ) => void;
+  } = {},
 ): Promise<string> {
-  const segments = meeting.audioData.audioFiles
+  const inputFiles = [...meeting.audioData.audioFiles];
+  captureRecordingTranscriptScope(meeting, inputFiles);
+  const segments = inputFiles
     .map((fileData) => ({
       userId: fileData.userId,
       timestamp: fileData.timestamp,
@@ -1128,11 +1317,13 @@ export async function compileTranscriptions(
     .join("\n");
 
   if (transcription.length === 0) {
+    options.cleanupAcknowledged?.("disabled");
     return transcription;
   }
 
   const premiumConfig = meeting.runtimeConfig?.premiumTranscription;
   if (!premiumConfig?.enabled || !premiumConfig.cleanupEnabled) {
+    options.cleanupAcknowledged?.("disabled");
     return TRANSCRIPTION_HEADER + transcription;
   }
 
@@ -1142,26 +1333,24 @@ export async function compileTranscriptions(
       transcription,
     );
 
-    const originalLines = transcription.split("\n").length;
-    const cleanedLines = (cleanedUpTranscription || "").split("\n").length;
-    console.log(
-      `Transcription cleanup succeeded. Original lines: ${originalLines}, cleaned lines: ${cleanedLines}`,
+    const retained = retainCleanupTranscript(
+      transcription,
+      cleanedUpTranscription,
+      TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE,
     );
-
-    if (
-      cleanedLines <
-      originalLines * TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE
-    ) {
-      console.error("Transcription cleanup failed checks, returning original.");
-      return TRANSCRIPTION_HEADER + transcription;
-    }
-
-    return TRANSCRIPTION_HEADER + cleanedUpTranscription;
+    options.cleanupAcknowledged?.(
+      retained === cleanedUpTranscription ? "acknowledged" : "fallback",
+    );
+    return TRANSCRIPTION_HEADER + retained;
   } catch (error) {
+    options.cleanupAcknowledged?.("fallback");
     console.error("Transcription cleanup failed, returning original:", error);
     return TRANSCRIPTION_HEADER + transcription;
   }
 }
+
+type OutputCompletion = { kind: "closed" } | { kind: "failed"; error: Error };
+const outputCompletions = new WeakMap<MeetingData, Promise<OutputCompletion>>();
 
 export function openOutputFile(meeting: MeetingData) {
   const tempDir = ensureMeetingTempDirSync(meeting);
@@ -1170,39 +1359,74 @@ export function openOutputFile(meeting: MeetingData) {
 
   meeting.audioData.audioPassThrough = new PassThrough();
 
-  meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
-    .inputOptions([
-      "-f s16le", // PCM format
-      `-ar ${RECORD_SAMPLE_RATE}`, // Sample rate
-      `-ac ${CHANNELS}`, // Number of audio channels
-    ])
-    .audioCodec("libmp3lame") // Use LAME codec for MP3
-    .outputOptions([
-      `-b:a 128k`, // Bitrate for lossy compression
-      `-ac ${CHANNELS}`, // Ensure stereo output
-      `-ar ${RECORD_SAMPLE_RATE}`, // Ensure output sample rate
-    ])
-    .toFormat("mp3") // Output format as MP3
-    .on("error", (err) => {
-      console.error("ffmpeg error:", err);
-    })
-    .save(outputFileName);
+  let complete: (result: OutputCompletion) => void = () => {};
+  outputCompletions.set(
+    meeting,
+    new Promise((resolve) => {
+      complete = resolve;
+    }),
+  );
+  try {
+    meeting.audioData.ffmpegProcess = ffmpeg(meeting.audioData.audioPassThrough)
+      .inputOptions([
+        "-f s16le", // PCM format
+        `-ar ${RECORD_SAMPLE_RATE}`, // Sample rate
+        `-ac ${CHANNELS}`, // Number of audio channels
+      ])
+      .audioCodec("libmp3lame") // Use LAME codec for MP3
+      .outputOptions([
+        `-b:a 128k`, // Bitrate for lossy compression
+        `-ac ${CHANNELS}`, // Ensure stereo output
+        `-ar ${RECORD_SAMPLE_RATE}`, // Ensure output sample rate
+      ])
+      .toFormat("mp3") // Output format as MP3
+      .on("error", (err) => {
+        complete({ kind: "failed", error: err });
+        console.error("ffmpeg error:", err);
+      })
+      .on("end", () => complete({ kind: "closed" }));
+    meeting.audioData.ffmpegProcess.save(outputFileName);
+  } catch (error) {
+    complete({ kind: "failed", error: error as Error });
+    throw error;
+  }
 }
 
-export function closeOutputFile(meeting: MeetingData): Promise<void> {
-  return new Promise((resolve) => {
-    if (meeting.audioData.audioPassThrough) {
-      meeting.audioData.audioPassThrough.end(); // End the PassThrough stream
-    }
-    if (meeting.audioData.ffmpegProcess) {
-      meeting.audioData.ffmpegProcess.on("end", () => {
-        console.log(
-          `Final MP3 file created as ${meeting.audioData.outputFileName}`,
-        );
-        resolve();
-      });
-    }
-  });
+export function getMeetingOutputCompletion(meeting: MeetingData) {
+  return outputCompletions.get(meeting);
+}
+
+function finishOutput(meeting: MeetingData): Promise<OutputCompletion> {
+  // Terminal listeners were installed before save, including synchronous setup errors.
+  const completion = outputCompletions.get(meeting);
+  meeting.audioData.audioPassThrough?.end();
+  if (completion) return completion;
+  if (!meeting.audioData.ffmpegProcess)
+    return Promise.resolve({ kind: "closed" });
+  // An untracked encoder is not evidence that cleanup finished.
+  return new Promise(() => {});
+}
+
+export async function closeOutputFile(meeting: MeetingData): Promise<void> {
+  const result = await finishOutput(meeting);
+  if (result.kind === "failed") throw result.error;
+}
+
+/** Partial startup cleanup is bounded; false retains owned work for later reconciliation. */
+export async function closeFailedInitializationOutput(
+  meeting: MeetingData,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      finishOutput(meeting).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), 5_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function waitForSpeakerTrackWrites(meeting: MeetingData) {
@@ -1215,14 +1439,25 @@ async function waitForSpeakerTrackWrites(meeting: MeetingData) {
   await Promise.all(writes);
 }
 
-export async function buildMixedAudio(
+export function buildMixedAudio(
   meeting: MeetingData,
 ): Promise<string | undefined> {
+  return runMeetingProcessingEffect(meeting, () =>
+    buildOwnedMixedAudio(meeting),
+  );
+}
+async function buildOwnedMixedAudio(
+  meeting: MeetingData,
+): Promise<string | undefined> {
+  const signal = getMeetingProcessingSignal(meeting);
+  signal.throwIfAborted();
   const tracks = Array.from(meeting.audioData.speakerTracks?.values() ?? []);
   if (tracks.length === 0) return undefined;
 
   await ensureMeetingTempDir(meeting);
+  signal.throwIfAborted();
   await waitForSpeakerTrackWrites(meeting);
+  signal.throwIfAborted();
 
   const usable = tracks.filter((track) => {
     if (track.writeFailed) return false;
@@ -1236,71 +1471,11 @@ export async function buildMixedAudio(
   });
   if (usable.length === 0) return undefined;
 
-  const outputFileName = path.join(
-    getMeetingTempDir(meeting),
-    "recording_mixed.mp3",
+  return renderMixedPcmTracks(
+    usable,
+    path.join(getMeetingTempDir(meeting), "recording_mixed.mp3"),
+    signal,
   );
-
-  if (usable.length === 1) {
-    return await new Promise<string | undefined>((resolve) => {
-      ffmpeg(usable[0].filePath)
-        .inputOptions([
-          "-f s16le",
-          `-ar ${RECORD_SAMPLE_RATE}`,
-          `-ac ${CHANNELS}`,
-        ])
-        .audioCodec("libmp3lame")
-        .outputOptions([
-          `-b:a 128k`,
-          `-ac ${CHANNELS}`,
-          `-ar ${RECORD_SAMPLE_RATE}`,
-        ])
-        .toFormat("mp3")
-        .on("error", (err) => {
-          console.error("Failed to render single-speaker audio:", err);
-          resolve(undefined);
-        })
-        .on("end", () => {
-          resolve(outputFileName);
-        })
-        .save(outputFileName);
-    });
-  }
-
-  return await new Promise<string | undefined>((resolve) => {
-    const command = ffmpeg();
-
-    usable.forEach((track) => {
-      command
-        .input(track.filePath)
-        .inputOptions([
-          "-f s16le",
-          `-ar ${RECORD_SAMPLE_RATE}`,
-          `-ac ${CHANNELS}`,
-        ]);
-    });
-
-    const mixInputs = usable.map((_track, index) => `[${index}:a]`).join("");
-    const filter = `${mixInputs}amix=inputs=${usable.length}:dropout_transition=0:normalize=0[mixed]`;
-
-    command
-      .complexFilter(filter)
-      .outputOptions([
-        "-map [mixed]",
-        `-b:a 128k`,
-        `-ac ${CHANNELS}`,
-        `-ar ${RECORD_SAMPLE_RATE}`,
-      ])
-      .audioCodec("libmp3lame")
-      .on("error", (err) => {
-        console.error("Failed to render mixed audio:", err);
-        resolve(undefined);
-      })
-      .on("end", () => {
-        resolve(outputFileName);
-      })
-      .save(outputFileName);
-  });
 }
 
 export async function cleanupSpeakerTracks(
@@ -1320,4 +1495,136 @@ export function unsubscribeToVoiceUponLeaving(
   userId: string,
 ) {
   clearVoiceSubscription(meeting, userId);
+}
+
+function notifyCapturePreservationFailure(meeting: MeetingData): void {
+  let complete!: () => void;
+  const notification: NonNullable<
+    MeetingData["recordingPreservationNotification"]
+  > = {
+    promise: new Promise<void>((resolve) => {
+      complete = resolve;
+    }),
+    outcome: "pending",
+  };
+  meeting.recordingPreservationNotification = notification;
+  try {
+    void meeting.textChannel
+      .send(
+        "Recording stopped because audio could not be safely saved. Some recent audio may be unavailable.",
+      )
+      .then(
+        () => {
+          notification.outcome = "acknowledged";
+          complete();
+        },
+        () => {
+          notification.outcome = "unknown";
+          complete();
+        },
+      );
+  } catch {
+    notification.outcome = "unknown";
+    complete();
+  }
+}
+
+/** Called only after actual receiver attachment, never from reservation time. */
+export function ensureRecordingCheckpointCapture(meeting: MeetingData): void {
+  if (
+    meeting.recordingCapture ||
+    !meeting.captureStartedAt ||
+    !meeting.reservation ||
+    meeting.reservation.sessionMode !== "meeting" ||
+    !meeting.ownershipSignal ||
+    meeting.ownershipSignal.aborted
+  )
+    return;
+  meeting.recordingCaptureState = {
+    kind: "capturing",
+    startedAt: meeting.captureStartedAt.toISOString(),
+  };
+  meeting.recordingCapture = createRecordingCheckpointCapture({
+    directory: path.join(ensureMeetingTempDirSync(meeting), "checkpoints"),
+    startedAt: meeting.captureStartedAt.getTime(),
+    signal: meeting.ownershipSignal,
+    commit: async (artifacts, signal) => {
+      if (artifacts.some((artifact) => artifact.kind === "audio"))
+        checkpointRecordingContext(meeting);
+      return (
+        (await appendMeetingCheckpointArtifacts(meeting, artifacts, signal))
+          .kind === "committed"
+      );
+    },
+    stopCapture: (reason) => {
+      stopRecordingCapture(meeting, "interrupted");
+      const state = meeting.recordingCaptureState;
+      const stoppedAt =
+        (state?.kind === "complete" || state?.kind === "interrupted"
+          ? state.endedAt
+          : null) ?? new Date().toISOString();
+      const handoff: NonNullable<MeetingData["recordingPreservationFailure"]> =
+        {
+          reason,
+          stoppedAt,
+          preservation: "pending",
+          lastConfirmedCheckpoint: meeting.recordingCheckpoint,
+        };
+      meeting.recordingPreservationFailure = handoff;
+      meeting.recordingPreservationTask = Promise.resolve()
+        .then(async () => {
+          await meeting.recordingCapture?.settled();
+          const signal = AbortSignal.any([
+            meeting.ownershipSignal!,
+            AbortSignal.timeout(5000),
+          ]);
+          const result = await appendMeetingCheckpointArtifacts(
+            meeting,
+            meeting.recordingCapture?.pending().map((item) => item.artifact) ??
+              [],
+            signal,
+          );
+          handoff.coverage = result.coverage;
+          handoff.preservation =
+            result.kind === "committed" ? "confirmed" : "unconfirmed";
+          return result.kind === "committed";
+        })
+        .catch(() => {
+          handoff.preservation = "unconfirmed";
+          return false;
+        });
+      if (reason === "storage_preservation")
+        notifyCapturePreservationFailure(meeting);
+      void interruptOwnedMeeting(meeting, {
+        reason: "capture_failure",
+        deadline: Date.now() + 100_000,
+      });
+    },
+  });
+  startRecordingContentCheckpoint(meeting);
+}
+
+/** Synchronous receiver detachment precedes messaging, storage and expensive finalization. */
+export function stopRecordingCapture(
+  meeting: MeetingData,
+  disposition: "complete" | "interrupted" = "complete",
+) {
+  meeting.captureAudio = false;
+  meeting.recordBotAudio = false;
+  for (const id of getVoiceSubscriptions(meeting).keys())
+    clearVoiceSubscription(meeting, id);
+  meeting.ttsQueue?.stopAndClear();
+  if (
+    meeting.recordingCaptureState?.kind === "complete" ||
+    meeting.recordingCaptureState?.kind === "interrupted"
+  )
+    return;
+  const endedAt = new Date().toISOString();
+  const startedAt = meeting.captureStartedAt?.toISOString() ?? null;
+  meeting.recordingCaptureState =
+    disposition === "complete" && startedAt
+      ? { kind: "complete", startedAt, endedAt }
+      : disposition === "complete"
+        ? { kind: "not_started" }
+        : { kind: "interrupted", startedAt, endedAt, detectedAt: endedAt };
 }

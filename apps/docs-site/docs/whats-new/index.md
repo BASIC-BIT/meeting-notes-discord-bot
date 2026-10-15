@@ -7,6 +7,17 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Recording continuity during service handoffs
+
+- A ready replacement can accept new recordings while the previous runtime finishes its existing work. A start caught at the handoff can ask you to retry; active recordings keep their original owner.
+- Interrupted results retain their saved-coverage warnings. Unconfirmed recording or delivery state stays unavailable or needs review instead of appearing complete. See [Discord meeting notes](/discord-meeting-notes/#updates-and-interrupted-recordings).
+
+### Clearer interrupted recording outcomes
+
+- Chronote can recover saved conversation after an interrupted recording while respecting the original transcription and notes settings. It does not rejoin the voice channel or fill missing conversation with invented content.
+- Partial notes retain an **Interrupted** status and a coverage warning across Discord, the library, shared meetings, copies, downloads, Remote MCP, and Notion exports. Editing or correcting the notes keeps the warning.
+- Live pages distinguish known interruption from unavailable recording status. The library shows recovery progress and outcomes that need review. Unknown recording end times remain unknown. See [Meeting lifecycle](/core-concepts/meeting-lifecycle#interrupted-recordings).
+
 ### Renewal status and lifecycle analytics notice (October 14)
 
 - Billing separates the current renewal date and rate from payment history. For supported subscriptions, the original payer can turn renewal back on at the displayed terms. A pending result stays visible while Chronote checks it. Subscriptions that need review link to Stripe; a subscription that has ended can be purchased again.

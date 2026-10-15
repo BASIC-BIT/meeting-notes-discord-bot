@@ -1,9 +1,13 @@
+import {
+  completionSnapshot,
+  freezeCompletionPolicy,
+} from "./meetingCompletionPolicyService";
 import { waitForFinishProcessing } from "../audio";
 import type { MeetingData } from "../types/meeting-data";
 import { createOpenAIClient } from "./openaiClient";
 import { buildModelOverrides, getModelChoice } from "./modelFactory";
-import { config } from "./configService";
 import { resolveChatParamsForRole } from "./openaiModelParams";
+import { assertMeetingProcessingSucceeded } from "../utils/meetingProcessing";
 import { countWords } from "../utils/text";
 
 type CancellationDecision = {
@@ -11,19 +15,8 @@ type CancellationDecision = {
   reason?: string;
 };
 
-const MAX_DURATION_SECONDS = 90;
-const MAX_TRANSCRIPT_WORDS = 50;
-const MAX_CHAT_MESSAGES = 1;
 const MAX_TRANSCRIPT_CHARS = 1200;
 const MAX_CHAT_LINES = 3;
-
-const isAutoCancelEnabled = (meeting: MeetingData) => {
-  if (config.mock.enabled) return false;
-  if (meeting.runtimeConfig?.autoRecordCancellation?.enabled === false) {
-    return false;
-  }
-  return true;
-};
 
 const collectTranscriptText = (meeting: MeetingData) =>
   meeting.audioData.audioFiles
@@ -56,36 +49,44 @@ export async function evaluateAutoRecordCancellation(
   meeting: MeetingData,
 ): Promise<CancellationDecision> {
   if (!meeting.isAutoRecording) return { cancel: false };
-  if (!isAutoCancelEnabled(meeting)) return { cancel: false };
+  const snapshot = completionSnapshot(meeting);
+  const policy = snapshot?.policy ?? freezeCompletionPolicy(meeting);
+  if (!policy.enabled) return { cancel: false };
+  if (meeting.reservation && snapshot?.elapsedMilliseconds === undefined)
+    throw new Error("Original auto-record duration is unavailable");
 
-  const durationSeconds = meeting.endTime
-    ? Math.max(
-        0,
-        Math.floor(
-          (meeting.endTime.getTime() - meeting.startTime.getTime()) / 1000,
-        ),
-      )
-    : 0;
+  const durationSeconds =
+    snapshot?.elapsedMilliseconds !== undefined
+      ? Math.floor(snapshot.elapsedMilliseconds / 1000)
+      : meeting.endTime
+        ? Math.max(
+            0,
+            Math.floor(
+              (meeting.endTime.getTime() - meeting.startTime.getTime()) / 1000,
+            ),
+          )
+        : 0;
   const chatMessageCount = meeting.chatLog.filter(
     (entry) => entry.type === "message",
   ).length;
 
   if (
-    durationSeconds > MAX_DURATION_SECONDS ||
-    chatMessageCount > MAX_CHAT_MESSAGES
+    durationSeconds > policy.maximumSeconds ||
+    chatMessageCount > policy.maximumChatMessages
   ) {
     return { cancel: false };
   }
 
   await waitForFinishProcessing(meeting);
+  assertMeetingProcessingSucceeded(meeting);
   const transcriptText = collectTranscriptText(meeting);
   const transcriptWords = countWords(transcriptText);
   const chatLines = collectChatLines(meeting);
 
   const isHeuristicMatch =
-    durationSeconds <= MAX_DURATION_SECONDS &&
-    transcriptWords <= MAX_TRANSCRIPT_WORDS &&
-    chatMessageCount <= MAX_CHAT_MESSAGES;
+    durationSeconds <= policy.maximumSeconds &&
+    transcriptWords <= policy.maximumWords &&
+    chatMessageCount <= policy.maximumChatMessages;
 
   if (!isHeuristicMatch) {
     return { cancel: false };
@@ -160,6 +161,6 @@ export async function evaluateAutoRecordCancellation(
     };
   } catch (error) {
     console.error("Auto-record cancellation check failed:", error);
-    return { cancel: false };
+    throw error;
   }
 }

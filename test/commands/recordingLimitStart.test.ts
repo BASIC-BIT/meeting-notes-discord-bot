@@ -7,6 +7,14 @@ jest.mock("../../src/meetings", () => ({
 jest.mock("../../src/commands/endMeeting", () => ({
   handleEndMeetingOther: jest.fn(),
 }));
+jest.mock("../../src/services/meetingVoiceSettingsService", () => ({
+  resolveMeetingVoiceSettings: jest.fn(async () => ({})),
+}));
+jest.mock("../../src/services/meetingArtifactAccessService", () => ({
+  resolveServerMeetingArtifactAccess: jest.fn(async () => ({
+    transcriptAccessEnabled: false,
+  })),
+}));
 jest.mock("../../src/services/activeMeetingLeaseService", () => ({
   getActiveMeetingLeaseForGuild: jest.fn(async () => undefined),
 }));
@@ -54,6 +62,7 @@ import type {
 } from "discord.js";
 const guild = {
   id: "guild-1",
+  client: { user: { id: "bot-1" } },
   members: { cache: new Map([["bot-1", { id: "bot-1" }]]) },
 } as unknown as Guild;
 const textChannel = { send: jest.fn() } as unknown as TextChannel;
@@ -121,6 +130,46 @@ test.each(["manual_command", "mcp"] as const)(
     expect(initializeMeeting).not.toHaveBeenCalled();
   },
 );
+test("a control fenced during held limits cannot enter meeting initialization", async () => {
+  let release!: () => void;
+  let enter!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const limits = await getGuildLimits(guild.id);
+  jest.mocked(getGuildLimits).mockImplementationOnce(async () => {
+    enter();
+    await held;
+    return {
+      ...limits,
+      limits: { ...limits.limits, maxMeetingMinutesRolling: 0 },
+    };
+  });
+  jest
+    .mocked(initializeMeeting)
+    .mockResolvedValue({ guildId: guild.id, meetingId: "synthetic" } as never);
+  const controller = new AbortController();
+  const starting = startManualMeetingFromChannels({
+    client,
+    guild,
+    textChannel,
+    voiceChannel,
+    creator,
+    startTriggeredByUserId: creator.id,
+    startSignal: controller.signal,
+    assertStartAllowed: async () => controller.signal.throwIfAborted(),
+  });
+  await started;
+  controller.abort(new Error("control claim lost"));
+  release();
+  await expect(starting).rejects.toThrow("control claim lost");
+  expect(initializeMeeting).not.toHaveBeenCalled();
+  expect(textChannel.send).not.toHaveBeenCalled();
+});
+
 test("auto refusal passes a real trigger to the shared delivery policy", async () => {
   await expect(
     handleAutoStartMeeting(client, voiceChannel, textChannel, {

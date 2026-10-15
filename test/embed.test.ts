@@ -1,3 +1,9 @@
+jest.mock("../src/services/recordingDeliveryService", () => ({
+  beginRecordingDelivery: jest.fn(async () => {}),
+  acknowledgeRecordingDeliveryMessage: jest.fn(async () => {}),
+  finishRecordingDeliveryMutations: jest.fn(),
+  acknowledgeRecordingDeliveryHistory: jest.fn(async () => {}),
+}));
 jest.mock("../src/services/configService", () => ({
   config: { frontend: { siteUrl: "https://chronote.test" } },
 }));
@@ -78,6 +84,18 @@ describe("updateMeetingSummaryMessage", () => {
       { json: { secret: "PRIVATE REQUEST" }, files: [] },
     );
 
+  it("finalization does not resend after an unknown existing-message edit", async () => {
+    const value = fixture();
+    const message = await value.textChannel.messages.fetch("start");
+    message.edit.mockRejectedValueOnce(new Error("synthetic lost edit ACK"));
+    value.textChannel.send.mockResolvedValue({ id: "duplicate" });
+    await expect(
+      updateMeetingSummaryMessage(value as unknown as MeetingData, {
+        finalization: true,
+      }),
+    ).rejects.toThrow();
+    expect(value.textChannel.send).not.toHaveBeenCalled();
+  });
   it("adds the value proposition and Upgrade beside Open in Chronote", async () => {
     const value = fixture();
     const url =

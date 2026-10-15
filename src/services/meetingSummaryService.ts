@@ -1,3 +1,5 @@
+import { compileSavedChatPrompt } from "./savedRecordingPrompt";
+import type { MeetingNotesInput } from "../types/meeting-data";
 import { config } from "./configService";
 import type { SpanContext } from "@opentelemetry/api";
 import { formatLongDate } from "../utils/time";
@@ -14,6 +16,12 @@ export type MeetingSummaries = {
 };
 
 type MeetingSummaryInput = {
+  savedPrompt?: MeetingNotesInput["savedSummary"];
+  frozenModel?: NonNullable<
+    MeetingNotesInput["frozenModels"]
+  >["meetingSummary"];
+  captureNotice?: string;
+  signal?: AbortSignal;
   guildId?: string;
   notes: string;
   serverName: string;
@@ -80,35 +88,49 @@ export function parseMeetingSummaryResponse(
  * Generates AI-based summaries for a meeting from notes and context.
  * Returns an empty object when the model response is missing or invalid.
  */
-export async function generateMeetingSummaries(
-  input: MeetingSummaryInput,
-): Promise<MeetingSummaries> {
+async function prepareSummaryPrompt(input: MeetingSummaryInput) {
   const now = input.now ?? new Date();
   const tagLine = input.tags?.length ? input.tags.join(", ") : "None";
   const previousSentence = input.previousSummarySentence?.trim();
   const previousLabel = input.previousSummaryLabel?.trim();
-  const recentMeetingNames = await listRecentMeetingNamesForPrompt({
-    guildId: input.guildId,
-    excludeMeetingId: input.meetingId,
-  });
+  const recentMeetingNames =
+    input.savedPrompt?.recentMeetingNames ??
+    (await listRecentMeetingNamesForPrompt({
+      guildId: input.guildId,
+      excludeMeetingId: input.meetingId,
+      signal: input.signal,
+    }));
 
   const previousSummaryBlock =
     previousSentence || previousLabel
       ? `Previous summary sentence: ${previousSentence || "(none)"}\nPrevious summary label: ${previousLabel || "(none)"}`
       : "Previous summaries: (none)";
 
-  const { messages, langfusePrompt } = await getLangfuseChatPrompt({
-    name: config.langfuse.meetingSummaryPromptName,
-    variables: {
-      todayLabel: formatLongDate(now),
-      serverName: input.serverName,
-      channelName: input.channelName,
-      tagLine,
-      recentMeetingNames,
-      previousSummaryBlock,
-      notes: input.notes,
-    },
-  });
+  const variables = {
+    todayLabel: formatLongDate(now),
+    serverName: input.serverName,
+    channelName: input.channelName,
+    tagLine,
+    recentMeetingNames,
+    previousSummaryBlock,
+    notes: input.notes,
+  };
+  const { messages, langfusePrompt } = input.savedPrompt
+    ? compileSavedChatPrompt(input.savedPrompt.prompt, variables)
+    : await getLangfuseChatPrompt({
+        name: config.langfuse.meetingSummaryPromptName,
+        variables,
+      });
+  if (input.captureNotice)
+    messages.push({ role: "system", content: input.captureNotice });
+
+  return { messages, langfusePrompt };
+}
+export async function generateMeetingSummaries(
+  input: MeetingSummaryInput,
+): Promise<MeetingSummaries> {
+  input.signal?.throwIfAborted();
+  const { messages, langfusePrompt } = await prepareSummaryPrompt(input);
 
   try {
     const overrides = input.modelOverride
@@ -119,12 +141,15 @@ export async function generateMeetingSummaries(
           },
         }
       : undefined;
-    const modelChoice = getModelChoice("meetingSummary", overrides);
-    const chatParams = resolveChatParamsForRole({
-      role: "meetingSummary",
-      model: modelChoice.model,
-      config: input.modelParams,
-    });
+    const modelChoice =
+      input.frozenModel ?? getModelChoice("meetingSummary", overrides);
+    const chatParams =
+      input.frozenModel?.params ??
+      resolveChatParamsForRole({
+        role: "meetingSummary",
+        model: modelChoice.model,
+        config: input.modelParams,
+      });
     const openAIClient = createOpenAIClient({
       traceName: "meeting-summary",
       generationName: "meeting-summary",
@@ -136,16 +161,22 @@ export async function generateMeetingSummaries(
       langfusePrompt,
       parentSpanContext: input.parentSpanContext,
     });
-    const completion = await openAIClient.chat.completions.create({
-      model: modelChoice.model,
-      messages,
-      ...chatParams,
-      response_format: { type: "json_object" },
-      max_completion_tokens: 160,
-    });
+    input.signal?.throwIfAborted();
+    const completion = await openAIClient.chat.completions.create(
+      {
+        model: modelChoice.model,
+        messages,
+        ...chatParams,
+        response_format: { type: "json_object" },
+        max_completion_tokens: 160,
+      },
+      input.signal ? { signal: input.signal } : undefined,
+    );
+    input.signal?.throwIfAborted();
     const content = completion.choices[0]?.message?.content ?? "";
     return parseMeetingSummaryResponse(content) ?? {};
   } catch (error) {
+    input.signal?.throwIfAborted();
     console.error("Failed to generate meeting summaries:", error);
     return {};
   }

@@ -225,3 +225,59 @@ describe("imageCaptionService", () => {
     expect(meeting.chatLog[0].attachments?.[0].aiCaptionedAt).toBeUndefined();
   });
 });
+
+test("interruption holds actual caption SDK and fences late attachment writes", async () => {
+  const { module, completionCreate } = await loadModule("{}");
+  const { stopMeetingProcessing } =
+    await import("../../src/services/meetingProcessingLifetime");
+  const attachment = {
+    id: "synthetic-image",
+    name: "image.png",
+    url: "https://example.invalid/image.png",
+    size: 1,
+    contentType: "image/png",
+  };
+  const meeting = buildMeeting([
+    {
+      type: "message",
+      user: buildParticipant(),
+      channelId: "synthetic",
+      content: "",
+      messageId: "synthetic",
+      timestamp: new Date(0).toISOString(),
+      attachments: [attachment],
+    },
+  ]);
+  let release!: (value: unknown) => void;
+  completionCreate.mockReturnValueOnce(
+    new Promise((done) => {
+      release = done;
+    }),
+  );
+  const actual = module.captionMeetingImages(meeting);
+  const outcome = actual.then(
+    () => "success",
+    () => "cancelled",
+  );
+  let drained = false;
+  const drain = stopMeetingProcessing(meeting).then(() => {
+    drained = true;
+  });
+  await Promise.resolve();
+  const heldBeforeRelease = !drained;
+  const signal = completionCreate.mock.calls[0][1].signal as AbortSignal;
+  release({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({ caption: "late", visibleText: "" }),
+        },
+      },
+    ],
+  });
+  await drain;
+  expect(await outcome).toBe("cancelled");
+  expect(heldBeforeRelease).toBe(true);
+  expect(signal.aborted).toBe(true);
+  expect(attachment).not.toHaveProperty("aiCaption");
+});

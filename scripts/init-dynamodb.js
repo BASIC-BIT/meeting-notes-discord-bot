@@ -32,6 +32,18 @@ const feedbackIndexDefinition = {
 
 const tables = [
   {
+    TableName: "DeploymentControlTable",
+    KeySchema: [
+      { AttributeName: "pk", KeyType: "HASH" },
+      { AttributeName: "sk", KeyType: "RANGE" },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "pk", AttributeType: "S" },
+      { AttributeName: "sk", AttributeType: "S" },
+    ],
+    BillingMode: "PAY_PER_REQUEST",
+  },
+  {
     TableName: "PaymentTransactionTable",
     KeySchema: [{ AttributeName: "TransactionID", KeyType: "HASH" }],
     AttributeDefinitions: [
@@ -453,6 +465,7 @@ async function createTables() {
   }
 
   await ensureTableTtlEnabled("MeetingControlCommandTable");
+  await ensureTableTtlEnabled("DeploymentControlTable");
   await ensureTableTtlEnabled("ChatTtsUsageTable");
 
   console.log("\nDynamoDB initialization complete!");

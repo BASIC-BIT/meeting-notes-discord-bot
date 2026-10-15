@@ -24,15 +24,19 @@ jest.mock("../configService", () => ({
   },
 }));
 
-import { captureEvent, shutdownAnalytics } from "../analyticsService";
+let captureEvent: typeof import("../analyticsService").captureEvent;
+let shutdownAnalytics: typeof import("../analyticsService").shutdownAnalytics;
 
 describe("analyticsService", () => {
-  beforeEach(async () => {
-    // Drops any client cached by a previous test, so each case starts from an
-    // unconfigured service the way a fresh process would.
-    await shutdownAnalytics();
+  beforeEach(() => {
     jest.clearAllMocks();
     analyticsConfig.posthogKey = "";
+    // Shutdown permanently seals a process. Each case needs a fresh module.
+    jest.isolateModules(() => {
+      ({ captureEvent, shutdownAnalytics } = jest.requireActual<
+        typeof import("../analyticsService")
+      >("../analyticsService"));
+    });
   });
 
   it("does not construct a client or capture when no key is configured", () => {
@@ -92,14 +96,20 @@ describe("analyticsService", () => {
     ).not.toThrow();
   });
 
-  it("flushes on shutdown only when a client was created", async () => {
+  it("does not flush when no client was created", async () => {
     await shutdownAnalytics();
     expect(shutdown).not.toHaveBeenCalled();
+  });
 
+  it("flushes the created client exactly once and seals later capture", async () => {
     analyticsConfig.posthogKey = "phc_test";
     captureEvent("meeting_started", { userId: "user-1" });
     await shutdownAnalytics();
 
+    await shutdownAnalytics();
+    captureEvent("late", { userId: "user-1" });
     expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(constructPostHog).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledTimes(1);
   });
 });
