@@ -18,6 +18,12 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 - Partial notes retain an **Interrupted** status and a coverage warning across Discord, the library, shared meetings, copies, downloads, Remote MCP, and Notion exports. Editing or correcting the notes keeps the warning.
 - Live pages distinguish known interruption from unavailable recording status. The library shows recovery progress and outcomes that need review. Unknown recording end times remain unknown. See [Meeting lifecycle](/core-concepts/meeting-lifecycle#interrupted-recordings).
 
+### Renewal status and lifecycle analytics notice (October 14)
+
+- Billing separates the current renewal date and rate from payment history. For supported subscriptions, the original payer can turn renewal back on at the displayed terms. A pending result stays visible while Chronote checks it. Subscriptions that need review link to Stripe; a subscription that has ended can be purchased again.
+- We are adding content-free renewal-off views, restoration clicks and outcomes, subscription endings, same-invoice payment recovery and settled-renewal categories. Turning renewal off is separate from the end of paid service. A later settled renewal is separate from a new purchase or cash payment.
+- These events use server identity and the acting account when known, fixed categories and a bounded interval until a scheduled end. They exclude provider IDs, prices, payment amounts, cancellation text and meeting content. Browser Do Not Track also suppresses analytics about an existing subscription’s restoration request and associated result, without changing its original purchase attribution or later automatic billing opt-out. See the [Privacy Policy](/legal/privacy/).
+
 ### Basic introductory terms and analytics notice (October 12)
 
 - When Basic introductory pricing is available for an eligible server's first paid subscription, monthly billing is $6/month for three months, then $10/month. Annual billing is $60 for the first year, then $100/year. The offer applies automatically when shown, cannot be combined with another promotion and does not change Pro pricing. See [Server plans](/features/#basic-introductory-pricing) for eligibility and billing management.

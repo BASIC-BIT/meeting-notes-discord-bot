@@ -621,12 +621,49 @@ test.describe("visual regression", () => {
         const currentPlan = page.getByTestId("billing-current-plan");
         await expect(currentPlan).toContainText("Free");
         await expect(currentPlan).not.toContainText("Canceled");
-        await expect(
-          page.getByTestId("billing-subscription-history"),
-        ).toContainText("Previous subscription: Canceled");
+        await page
+          .getByRole("button", { name: "Payment history", exact: true })
+          .click();
+        await expect(page.getByTestId("billing-payment-history")).toContainText(
+          "Previous subscription: Canceled",
+        );
         await expectVisualScreenshot(
           page,
           `billing-canceled-subscription-${viewport.name}`,
+          mode,
+        );
+      }
+    });
+  }
+
+  for (const viewport of marketingViewports.filter(
+    (item) => item.name === "desktop" || item.name === "mobile",
+  )) {
+    test(`billing scheduled cancellation ${viewport.name} @visual`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      const cancellationAt = "2026-11-12T12:00:00.000Z";
+      await useIntroBilling(page, {
+        status: "ineligible",
+        details: { status: "unavailable" },
+        cancellationAt,
+        nextBillingDate: cancellationAt,
+      });
+      for (const mode of visualModes) {
+        await page.goto(
+          withVisualMode(`/portal/server/${mockGuilds.ddm.id}/billing`, mode),
+        );
+        const currentPlan = page.getByTestId("billing-current-plan");
+        await expect(currentPlan).toContainText(
+          "Your Basic plan ends November 12, 2026.",
+        );
+        await expect(currentPlan).not.toContainText("next billing");
+        await assertPageCanScroll(page);
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await expectVisualScreenshot(
+          page,
+          `billing-scheduled-cancellation-${viewport.name}`,
           mode,
         );
       }
@@ -648,9 +685,12 @@ test.describe("visual regression", () => {
         const currentPlan = page.getByTestId("billing-current-plan");
         await expect(currentPlan).toContainText("Free");
         await expect(currentPlan).not.toContainText("Canceled");
-        await expect(
-          page.getByTestId("billing-subscription-history"),
-        ).toContainText("Previous subscription: Canceled");
+        await page
+          .getByRole("button", { name: "Payment history", exact: true })
+          .click();
+        await expect(page.getByTestId("billing-payment-history")).toContainText(
+          "Previous subscription: Canceled",
+        );
         await expectVisualScreenshot(
           page,
           `billing-canceled-subscription-intro-${viewport.name}`,
@@ -675,11 +715,14 @@ test.describe("visual regression", () => {
         await expect(page.getByTestId("billing-current-plan")).toContainText(
           "Free",
         );
+        await page
+          .getByRole("button", { name: "Payment history", exact: true })
+          .click();
+        await expect(page.getByTestId("billing-payment-history")).toContainText(
+          "Previous subscription: Expired",
+        );
         await expect(
-          page.getByTestId("billing-subscription-history"),
-        ).toContainText("Previous subscription: Expired");
-        await expect(
-          page.getByRole("button", { name: "Upgrade to Basic" }),
+          page.getByRole("button", { name: "Get Basic again" }),
         ).toBeEnabled();
         await expect(
           page.getByRole("button", { name: "Upgrade to Pro" }),

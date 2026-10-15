@@ -1,4 +1,6 @@
-import type { Page } from "@playwright/test";
+import type { RenewalView } from "../../src/types/renewal";
+import { createRenewalFixture } from "../../src/frontend/pages/renewalFixtures";
+import type { Page, Route } from "@playwright/test";
 import type {
   BasicIntroOffer,
   ProviderSubscriptionDetails,
@@ -9,22 +11,37 @@ import {
   annualIntroOffer,
 } from "../../src/frontend/pages/basicIntroFixtures";
 
-type IntroBillingOptions = {
+export type IntroBillingOptions = {
+  renewal?: RenewalView;
+  stripeStatus?: "past_due" | "unpaid";
   status?: BasicIntroOffer["status"];
   details?: ProviderSubscriptionDetails;
+  cancellationAt?: string | null;
+  nextBillingDate?: string | null;
   legacy?: boolean;
   terminalStatus?: "canceled" | "incomplete_expired";
 };
+
+function introBillingStatus(options: IntroBillingOptions) {
+  return (
+    options.stripeStatus ??
+    options.terminalStatus ??
+    (options.details ? "active" : "free")
+  );
+}
+function introBillingUsage(options: IntroBillingOptions) {
+  if (options.terminalStatus)
+    return { usedMinutes: 45, limitMinutes: 240, remainingMinutes: 195 };
+  return options.details
+    ? { usedMinutes: 45, limitMinutes: 1200, remainingMinutes: 1155 }
+    : null;
+}
 
 function introBillingData(options: IntroBillingOptions) {
   return {
     tier: options.details ? "basic" : "free",
     billingSource: options.details || options.legacy ? "stripe" : "free",
-    status: options.terminalStatus
-      ? options.terminalStatus
-      : options.details
-        ? "active"
-        : "free",
+    status: introBillingStatus(options),
     billingEnabled: true,
     hasStripeBilling: Boolean(
       options.details || options.legacy || options.terminalStatus,
@@ -32,15 +49,39 @@ function introBillingData(options: IntroBillingOptions) {
     canManageBillingPortal: Boolean(
       options.details || options.legacy || options.terminalStatus,
     ),
-    usage: options.terminalStatus
-      ? {
-          usedMinutes: 45,
-          limitMinutes: 240,
-          remainingMinutes: 195,
-        }
-      : null,
+    usage: introBillingUsage(options),
     subscriptionDetails: options.details,
+    cancellationAt: options.cancellationAt ?? null,
+    nextBillingDate: options.nextBillingDate ?? null,
   };
+}
+
+async function replaceBillingResponses(
+  route: Route,
+  values: Record<string, unknown>,
+) {
+  const url = new URL(route.request().url());
+  const paths = decodeURIComponent(url.pathname.split("/trpc/")[1]).split(",");
+  const replaced = (path: string) => Object.hasOwn(values, path);
+  const entry = (path: string) => ({ result: { data: values[path] } });
+  if (!paths.some(replaced)) return route.continue();
+  if (paths.every(replaced)) {
+    const entries = paths.map(entry);
+    return route.fulfill({
+      status: 200,
+      json: url.searchParams.get("batch") === "1" ? entries : entries[0],
+    });
+  }
+  const response = await route.fetch();
+  const body = await response.json();
+  const entries = Array.isArray(body) ? body : [body];
+  const next = entries.map((original, index) =>
+    replaced(paths[index]) ? entry(paths[index]) : original,
+  );
+  return route.fulfill({
+    response,
+    json: Array.isArray(body) ? next : next[0],
+  });
 }
 
 export async function useIntroBilling(
@@ -49,37 +90,14 @@ export async function useIntroBilling(
 ) {
   await page.route("**/trpc/**", async (route) => {
     const status = options.status ?? "available";
-    const paths = decodeURIComponent(
-      new URL(route.request().url()).pathname.split("/trpc/")[1],
-    ).split(",");
-    if (
-      !paths.some((path) => path === "billing.me" || path === "pricing.plans")
-    )
-      return route.continue();
-    const response = await route.fetch();
-    const body = await response.json();
-    const entries = Array.isArray(body) ? body : [body];
     const offers = {
       introOffer: status === "available" ? monthlyIntroOffer : { status },
       annualIntroOffer: status === "available" ? annualIntroOffer : { status },
     };
-    const next = entries.map((entry, index) =>
-      paths[index] === "pricing.plans"
-        ? { result: { data: { plans: introPlans, ...offers } } }
-        : paths[index] === "billing.me"
-          ? {
-              result: {
-                data: {
-                  ...introBillingData(options),
-                  ...offers,
-                },
-              },
-            }
-          : entry,
-    );
-    await route.fulfill({
-      response,
-      json: Array.isArray(body) ? next : next[0],
+    return replaceBillingResponses(route, {
+      "pricing.plans": { plans: introPlans, ...offers },
+      "billing.renewal": options.renewal ?? createRenewalFixture(options),
+      "billing.me": { ...introBillingData(options), ...offers },
     });
   });
 }
@@ -104,36 +122,24 @@ export async function useFreeBilling(
         remainingMinutes: limitMinutes === null ? null : limitMinutes - 45,
       }
     : null;
-  await page.route("**/trpc/**", async (route) => {
-    const paths = decodeURIComponent(
-      new URL(route.request().url()).pathname.split("/trpc/")[1],
-    ).split(",");
-    if (!paths.includes("billing.me")) return route.continue();
-    const response = await route.fetch();
-    const body = await response.json();
-    const entries = Array.isArray(body) ? body : [body];
-    const next = entries.map((entry, index) =>
-      paths[index] === "billing.me"
-        ? {
-            result: {
-              data: {
-                tier: grantTier ?? "free",
-                billingSource: grantTier ? "manual_comp" : "free",
-                grantTier: grantTier ?? null,
-                status: grantTier ? "comped" : (terminalStatus ?? "free"),
-                stripeStatus: terminalStatus ?? null,
-                billingEnabled: true,
-                hasStripeBilling: Boolean(terminalStatus),
-                canManageBillingPortal: Boolean(terminalStatus),
-                usage,
-              },
-            },
-          }
-        : entry,
-    );
-    await route.fulfill({
-      response,
-      json: Array.isArray(body) ? next : next[0],
-    });
-  });
+  const billingData = {
+    tier: grantTier ?? "free",
+    billingSource: grantTier ? "manual_comp" : "free",
+    grantTier: grantTier ?? null,
+    status: grantTier ? "comped" : (terminalStatus ?? "free"),
+    stripeStatus: terminalStatus ?? null,
+    billingEnabled: true,
+    hasStripeBilling: Boolean(terminalStatus),
+    canManageBillingPortal: Boolean(terminalStatus),
+    usage,
+  };
+  await page.route("**/trpc/**", (route) =>
+    replaceBillingResponses(route, {
+      "billing.renewal": createRenewalFixture({
+        terminalStatus,
+        canManageBilling: Boolean(terminalStatus),
+      }),
+      "billing.me": billingData,
+    }),
+  );
 }

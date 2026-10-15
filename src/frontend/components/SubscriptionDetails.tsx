@@ -24,15 +24,10 @@ function currentPeriodPayment({
       {firstYear?.status === "available" ? (
         <>
           <Text size="sm" c="var(--mantine-color-text)">
-            First year paid:{" "}
-            {formatCurrency(firstYear.amountPaid, firstYear.currency)},
-            including any tax.
+            {formatCurrency(firstYear.amountPaid, firstYear.currency)} paid
           </Text>
           <Text size="xs" c="var(--mantine-color-text)">
-            First-year subtotal:{" "}
-            {formatCurrency(firstYear.discountedSubtotal, firstYear.currency)}.
-            Covers {date(firstYear.periodStartsAt)} to{" "}
-            {date(firstYear.periodEndsAt)}.
+            {date(firstYear.periodStartsAt)} to {date(firstYear.periodEndsAt)}
           </Text>
         </>
       ) : firstYear?.status === "unavailable" ? (

@@ -27,6 +27,7 @@ type AnalyticsProperties = Record<
 >;
 
 type CaptureArgs = {
+  timestamp?: Date;
   /** Discord user id of whoever took the action, when there is one. */
   userId?: string;
   /** Always set this when the action belongs to a guild. */
@@ -63,7 +64,7 @@ function resolveDistinctId(userId?: string, guildId?: string): string | null {
 
 export function captureEvent(
   event: string,
-  { userId, guildId, properties }: CaptureArgs = {},
+  { userId, guildId, properties, timestamp }: CaptureArgs = {},
 ): void {
   // Everything, including client construction, stays inside the guard:
   // analytics must never take down a meeting, and building the client reads
@@ -78,6 +79,7 @@ export function captureEvent(
     posthog.capture({
       distinctId,
       event,
+      ...(timestamp ? { timestamp } : {}),
       properties: {
         ...properties,
         guild_id: guildId,

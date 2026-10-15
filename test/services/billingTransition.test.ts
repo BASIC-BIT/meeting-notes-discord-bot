@@ -227,6 +227,20 @@ describe("existing server subscription checkout", () => {
     expect(captureEvent).toHaveBeenCalledTimes(1);
   });
 
+  it("returns general billing management to the selected server Billing page", async () => {
+    const { stripe, client } = fixture();
+    await createPortalSession({ stripe: client, user, guildId });
+    expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: "cus_existing",
+        return_url: new URL(
+          `/portal/server/${guildId}/billing`,
+          config.frontend.siteUrl,
+        ).toString(),
+      }),
+    );
+  });
+
   it("retains payer-checked general management while transitions are disabled", async () => {
     config.stripe.subscriptionTransitionsEnabled = false;
     const { stripe, client } = fixture();

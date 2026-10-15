@@ -510,3 +510,11 @@ terraform -chdir=_infra import aws_dynamodb_table.meeting_control_command_table 
 
 After importing, run the Terraform Plan workflow with the real environment
 tfvars and verify the repaired resource is no longer shown as drift.
+
+## Renewal and lifecycle rollout
+
+STRIPE_RENEWAL_REACTIVATION_ENABLED and BILLING_LIFECYCLE_ANALYTICS_ENABLED both default to false and are independent of STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED. Keep them in environment-scoped TFVAR_ variables, apply a reviewed plan, then deploy the backend to use its task definition. A merge alone does not activate them.
+
+Turning the renewal-action flag off stops new provider writes, including retries. Existing operations can still be checked and reconciled. Do not delete their control records or create replacement Checkout to escape uncertainty. Resolve source or price drift through support; do not recancel a successfully restored subscription.
+
+Publish the updated Privacy Policy and What's New notice before lifecycle capture is enabled. Baseline reconciliation and private invoice receipts run independently of capture. A first observation is not a historical cancellation. Invoice deduplication markers are eligible for deletion after 400 days; event capture is best effort, not a financial audit trail. Verify actual Sandbox event rows before production rollout, and keep saved insight configuration separate from code verification.

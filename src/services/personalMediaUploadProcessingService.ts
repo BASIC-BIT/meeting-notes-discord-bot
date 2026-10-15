@@ -1349,6 +1349,31 @@ const readTerminalSegmentCounts = async (job: PersonalMediaUploadJobRecord) => {
   }
 };
 
+const buildFailedUploadTerminalFacts = async (
+  job: PersonalMediaUploadJobRecord,
+  resolvedError: unknown,
+  result: PersonalUploadProcessingResult | undefined,
+): Promise<PersonalUploadTerminalFacts> => {
+  const progress = await readTerminalSegmentCounts(job);
+  return {
+    processing:
+      resolvedError instanceof PersonalUploadProcessingError
+        ? resolvedError.processing
+        : {
+            notes: "skipped",
+            summary: "skipped",
+          },
+    failedChunks:
+      resolvedError instanceof PersonalUploadProcessingError
+        ? resolvedError.failedChunks
+        : 0,
+    processedSegmentCount:
+      result?.processedSegmentCount ?? progress.processedSegmentCount,
+    segmentCount: result?.segmentCount ?? progress.segmentCount,
+    jobStatus: "failed",
+  };
+};
+
 export async function processPersonalMediaUpload(
   job: PersonalMediaUploadJobRecord,
   instanceId: string,
@@ -1442,24 +1467,11 @@ export async function processPersonalMediaUpload(
       if (
         (job.attempts ?? 1) >= PERSONAL_MEDIA_UPLOAD_MAX_PROCESSING_ATTEMPTS
       ) {
-        const progress = await readTerminalSegmentCounts(job);
-        terminalFacts = {
-          processing:
-            resolvedError instanceof PersonalUploadProcessingError
-              ? resolvedError.processing
-              : {
-                  notes: "skipped",
-                  summary: "skipped",
-                },
-          failedChunks:
-            resolvedError instanceof PersonalUploadProcessingError
-              ? resolvedError.failedChunks
-              : 0,
-          processedSegmentCount:
-            result?.processedSegmentCount ?? progress.processedSegmentCount,
-          segmentCount: result?.segmentCount ?? progress.segmentCount,
-          jobStatus: "failed",
-        };
+        terminalFacts = await buildFailedUploadTerminalFacts(
+          job,
+          resolvedError,
+          result,
+        );
       }
     } finally {
       if (terminalFacts) {

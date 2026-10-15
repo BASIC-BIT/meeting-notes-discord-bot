@@ -388,6 +388,18 @@ variable "STRIPE_MODE" {
   default     = "test"
 }
 
+variable "BILLING_LIFECYCLE_ANALYTICS_ENABLED" {
+  description = "Enable noticed subscription lifecycle capture after event acceptance"
+  type        = bool
+  default     = false
+}
+
+variable "STRIPE_RENEWAL_REACTIVATION_ENABLED" {
+  description = "Enable same-subscription renewal restoration only after native acceptance"
+  type        = bool
+  default     = false
+}
+
 variable "STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED" {
   description = "Enable hosted subscription transitions only after billing validation"
   type        = bool
@@ -1896,6 +1908,14 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "STRIPE_MODE"
           value = var.STRIPE_MODE
+        },
+        {
+          name  = "BILLING_LIFECYCLE_ANALYTICS_ENABLED"
+          value = tostring(var.BILLING_LIFECYCLE_ANALYTICS_ENABLED)
+        },
+        {
+          name  = "STRIPE_RENEWAL_REACTIVATION_ENABLED"
+          value = tostring(var.STRIPE_RENEWAL_REACTIVATION_ENABLED)
         },
         {
           name  = "STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED"

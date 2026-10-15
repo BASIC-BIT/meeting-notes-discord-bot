@@ -211,6 +211,8 @@ class ConfigService {
   // The frontend points at a reverse proxy so ad blockers cannot drop events;
   // server-side traffic has no such problem, so it goes to PostHog directly.
   readonly analytics = {
+    billingLifecycleEnabled:
+      process.env.BILLING_LIFECYCLE_ANALYTICS_ENABLED === "true",
     posthogKey: process.env.POSTHOG_KEY || "",
     posthogHost: process.env.POSTHOG_HOST || "https://us.i.posthog.com",
   };
@@ -381,6 +383,8 @@ class ConfigService {
       portalConfigurationId:
         process.env.STRIPE_BASIC_INTRO_PORTAL_CONFIGURATION_ID || "",
     },
+    renewalReactivationEnabled:
+      process.env.STRIPE_RENEWAL_REACTIVATION_ENABLED === "true",
     subscriptionTransitionsEnabled:
       process.env.STRIPE_SUBSCRIPTION_TRANSITIONS_ENABLED === "true",
     secretKey: process.env.STRIPE_SECRET_KEY || "",

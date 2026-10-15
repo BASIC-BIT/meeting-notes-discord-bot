@@ -66,7 +66,7 @@ describe.each([
   {
     name: "Billing",
     Page: Billing,
-    basic: "Upgrade to Basic",
+    basic: "Get Basic again",
     pro: "Upgrade to Pro",
   },
   {
@@ -99,7 +99,11 @@ describe.each([
     (status) => {
       prepare(status);
       renderWithMantine(<Page />);
-      expect(screen.getByRole("button", { name: basic })).toBeDisabled();
+      expect(
+        screen.getByRole("button", {
+          name: Page === Billing ? "Upgrade to Basic" : basic,
+        }),
+      ).toBeDisabled();
       expect(screen.getByRole("button", { name: pro })).toBeDisabled();
       expect(billingCheckoutMutation.mutateAsync).not.toHaveBeenCalled();
     },
@@ -113,12 +117,12 @@ describe("Expired subscription history copy", () => {
     expect(screen.getByTestId("billing-current-plan")).toHaveTextContent(
       "Free",
     );
-    expect(
-      screen.getByTestId("billing-subscription-history"),
-    ).toHaveTextContent("Previous subscription: Expired");
-    expect(
-      screen.getByTestId("billing-subscription-history"),
-    ).not.toHaveTextContent("paid");
+    expect(screen.getByTestId("billing-payment-history")).toHaveTextContent(
+      "Previous subscription: Expired",
+    );
+    expect(screen.getByTestId("billing-payment-history")).not.toHaveTextContent(
+      "paid",
+    );
   });
 });
 

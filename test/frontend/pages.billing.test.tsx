@@ -8,6 +8,7 @@ import {
 } from "./testUtils";
 import { guildState } from "./testUtils";
 import {
+  billingRenewalQuery,
   setBillingQuery,
   setPricingQuery,
   billingCheckoutMutation,
@@ -20,6 +21,11 @@ describe("Billing page", () => {
     resetFrontendMocks();
     setRouteParams({ serverId: "g1" });
     setPricingQuery({ data: { plans: [] } });
+    billingRenewalQuery.data = {
+      state: { kind: "terminal" },
+      canManageBilling: true,
+      lifecycleAnalyticsEnabled: false,
+    };
   });
 
   test("renders no server state when nothing is selected", () => {
@@ -45,13 +51,15 @@ describe("Billing page", () => {
       },
     });
     renderWithMantine(<Billing />);
-    expect(screen.getByTestId("billing-manage")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "View invoices and receipts" }),
+    ).toBeVisible();
     expect(screen.getByTestId("billing-current-plan")).not.toHaveTextContent(
       "Canceled",
     );
-    expect(
-      screen.getByTestId("billing-subscription-history"),
-    ).toHaveTextContent("Previous subscription: Canceled");
+    expect(screen.getByTestId("billing-payment-history")).toHaveTextContent(
+      "Previous subscription: Canceled",
+    );
     expect(
       screen.queryByText("No subscription needed"),
     ).not.toBeInTheDocument();
@@ -102,16 +110,16 @@ describe("Billing page", () => {
       );
       renderWithMantine(<Billing />);
       const button = screen.getByRole("button", {
-        name: tier === "basic" ? "Upgrade to Basic" : "Upgrade to Pro",
+        name: tier === "basic" ? "Get Basic again" : "Upgrade to Pro",
       });
       expect(button).toBeEnabled();
       await userEvent.click(button);
       expect(billingCheckoutMutation.mutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({ serverId: "g1", tier, interval: "month" }),
       );
-      expect(
-        screen.getByTestId("billing-subscription-history"),
-      ).toHaveTextContent("Canceled");
+      expect(screen.getByTestId("billing-payment-history")).toHaveTextContent(
+        "Canceled",
+      );
     },
   );
 
