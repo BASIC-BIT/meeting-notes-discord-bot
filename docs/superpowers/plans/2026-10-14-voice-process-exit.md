@@ -52,7 +52,7 @@
 
 **Files:** [Task 2 file map](#task-2-file-map) in the appendix.
 
-**Interfaces:** Keep subscribeToUserVoice(meeting: MeetingData, userId: string): Promise<void> and handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState): Promise<void>. Consume their rejections at registered callback/timer boundaries. Notification send remains a best-effort Promise owned by its connection error callback.
+**Interfaces:** Keep `subscribeToUserVoice(meeting: MeetingData, userId: string): Promise<void>` and `handleVoiceStateUpdate(oldState: VoiceState, newState: VoiceState): Promise<void>`. Consume their rejections at registered callback/timer boundaries. Notification send remains a best-effort Promise owned by its connection error callback.
 
 - [ ] Write failing cases for receiver.subscribe throwing, decoder construction throwing after a receiver stream exists, pipe setup throwing, a rejected voice-state subscription and a rejected textChannel.send. Assert partial resources close, active capture is marked incomplete where applicable, exactly one sanitized failure marker appears, and no unhandled rejection remains.
 - [ ] Add stale timer cases for departure, finishing, destroyed connection and replacement by a newer subscription. Assert the old timer makes no new subscription and its cleanup never deletes the new one. Pin the unchanged 250 ms timing and absence of an added automatic retry loop after construction failure.
