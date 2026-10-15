@@ -703,9 +703,16 @@ test("generated checkpoint publication and orphan upload are both covered by sta
     const review = {
       scope: "generated-local",
       prefix: fixturePrefix,
+      fixture: {
+        guildId: f.row.guildId,
+        channelId: f.row.channelId,
+        meetingId: f.row.meetingId,
+        reservedAt: f.row.timestamp,
+      },
       history: {
         owner,
         status: saved.status,
+        checkpoint: { artifactFolder: saved.checkpoint!.artifactFolder },
         receipt: "generated-terminal-readback",
       },
       capture: settled,
@@ -720,6 +727,16 @@ test("generated checkpoint publication and orphan upload are both covered by sta
     expect(() => planGeneratedDescendantRemoval(review)).toThrow();
     const count = f.objects.size;
     expect(count).toBeGreaterThan(3);
+    const siblingKey = `${fixturePrefix}${f.row.guildId}/other-channel_other-meeting_2026-10-14T12-00-00.000Z/keep.pcm`;
+    f.objects.set(siblingKey, Buffer.from("generated sibling meeting"));
+    expect(() =>
+      planGeneratedDescendantRemoval({
+        ...review,
+        currentWork: settled,
+        enumeration: { ...review.enumeration, keys: [...f.objects.keys()] },
+      }),
+    ).toThrow("exact generated fixture folder");
+    expect(f.objects.size).toBe(count + 1);
     // Synthetic independent settlement receipts authorize only this in-memory fixture operation.
     const plan = planGeneratedDescendantRemoval({
       ...review,
@@ -730,7 +747,7 @@ test("generated checkpoint publication and orphan upload are both covered by sta
       expect.arrayContaining([saved.checkpoint!.manifest.key, ...orphanKeys]),
     );
     for (const key of plan.keys) f.objects.delete(key);
-    expect(f.objects.size).toBe(0);
+    expect([...f.objects.keys()]).toEqual([siblingKey]);
     expect((await f.readHistory()).checkpoint).toEqual(saved.checkpoint);
     expect(await getActiveMeetingLease(f.row.guildId)).toBeDefined();
   } finally {

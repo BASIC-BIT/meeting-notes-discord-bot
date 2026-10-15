@@ -1,5 +1,21 @@
 # Interrupted recording recovery implementation plan
 
+## Approved outcome and current decision status
+
+The approved change keeps existing recordings on their original owner while a ready replacement accepts new work. Verified saved material can produce clearly partial notes after interruption. The user authorized implementation and subagent review in one PR through merge readiness. H1-H6 and R1-R6 have passed task review; H7 combines their contracts and operational introduction artifacts. Whole-branch review and exact-head PR readiness remain required.
+
+No new product decision is requested by this reconciliation. Hosted Sandbox acceptance, first activation, compatible live rollback and historical repair remain separate. This task does not authorize deployment even where a standing Sandbox permission exists. The private introduction packet retains UNKNOWN identities until an authorized refresh. Completed-object cleanup still lacks a live operating route.
+
+Read [Recording handoff and recovery](../../deployment-handoff.md) for the participant journey, final contracts and evidence limits. The task checklists below preserve the original verification obligations; they are not a claim that every named command ran on the final head. Task reports and the final PR audit provide that evidence.
+
+## Participant experience after interruption
+
+Participants can return to the meeting in Discord or the Library and see that capture was interrupted. When verified saved speech and the original settings permit it, Chronote generates clearly partial notes. With no usable saved speech, it gives a truthful notice and skips notes. Without a first checkpoint, coverage remains UNKNOWN or unavailable. Recovery never rejoins voice automatically.
+
+Existing access rules still govern direct links, the Library and MCP reads. An uncertain delivery requires reconciliation instead of an automatic resend. See the [participant journey](../../deployment-handoff.md) for entry paths and the original cancellation and recovery rules.
+
+## Implementation reference
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Preserve verified recording segments during capture and automatically deliver truthful partial notes after interruption without publishing stale-owner output or guessing missing audio.
@@ -9,14 +25,6 @@
 **Tech Stack:** Node.js 24.15.0, TypeScript, existing audio/ffmpeg and AWS SDK v3 storage, DynamoDB, Jest, Storybook and Playwright.
 
 **Spec:** [Approved deployment and interruption design](../specs/2026-10-12-deployment-drain-and-interruption-design.md).
-
-## Approved outcome and current decision status
-
-The approved change keeps existing recordings on their original owner while a ready replacement accepts new work. Verified saved material can produce clearly partial notes after interruption. The user authorized implementation and subagent review in one PR through merge readiness. H1-H6 and R1-R6 have passed task review; H7 combines their contracts and operational introduction artifacts. Whole-branch review and exact-head PR readiness remain required.
-
-No new product decision is requested by this reconciliation. Hosted Sandbox acceptance, first activation, compatible live rollback and historical repair remain separate. This task does not authorize deployment even where a standing Sandbox permission exists. The private introduction packet retains UNKNOWN identities until an authorized refresh. Completed-object cleanup still lacks a live operating route.
-
-Read [Recording handoff and recovery](../../deployment-handoff.md) for the participant journey, final contracts and evidence limits. The task checklists below preserve the original verification obligations; they are not a claim that every named command ran on the final head. Task reports and the final PR audit provide that evidence.
 
 ## Global constraints
 

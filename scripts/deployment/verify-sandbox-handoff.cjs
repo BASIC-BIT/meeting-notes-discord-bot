@@ -92,14 +92,24 @@ const owner = z
 const proof = z
   .object({ owner, outcome: z.literal("verified_settled"), receipt: identity })
   .strict();
+const pathIdentity = identity.regex(/^[A-Za-z0-9-]+$/);
 const cleanupSchema = z
   .object({
     scope: z.literal("generated-local"),
     prefix: z.string().regex(/^generated\/handoff\/[a-f0-9-]{36}\/$/),
+    fixture: z
+      .object({
+        guildId: pathIdentity,
+        channelId: pathIdentity,
+        meetingId: pathIdentity,
+        reservedAt: z.string().datetime(),
+      })
+      .strict(),
     history: z
       .object({
         owner,
         status: z.enum(["complete", "cancelled", "interrupted", "failed"]),
+        checkpoint: z.object({ artifactFolder: identity }).strict(),
         receipt: identity,
       })
       .strict(),
@@ -117,6 +127,17 @@ const cleanupSchema = z
   .strict();
 function planGeneratedDescendantRemoval(input) {
   const parsed = cleanupSchema.parse(input);
+  // Match getRecordingArtifactFolder; the integration case uses its real checkpoint output.
+  const { guildId, channelId, meetingId, reservedAt } = parsed.fixture;
+  const timestamp = new Date(reservedAt).toISOString().replace(/:/g, "-");
+  const artifactFolder = `${parsed.prefix}${guildId}/${channelId}_${meetingId}_${timestamp}/`;
+  if (
+    parsed.history.owner.meetingId !== meetingId ||
+    parsed.history.checkpoint.artifactFolder !== artifactFolder
+  )
+    throw new Error(
+      "Terminal checkpoint folder must match the exact reviewed meeting fixture",
+    );
   const expected = JSON.stringify(parsed.history.owner);
   for (const item of [parsed.capture, parsed.recovery, parsed.currentWork])
     if (JSON.stringify(item.owner) !== expected)
@@ -125,8 +146,8 @@ function planGeneratedDescendantRemoval(input) {
   if (
     keys.some(
       (key) =>
-        !key.startsWith(parsed.prefix) ||
-        key === parsed.prefix ||
+        !key.startsWith(artifactFolder) ||
+        key === artifactFolder ||
         key.split("/").some((part) => part === "." || part === "..") ||
         key.includes("\\"),
     )

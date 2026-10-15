@@ -77,21 +77,34 @@ function cleanupFixture() {
     ownerInstanceId: "generated-runtime",
     executionVersion: 1,
   };
+  const meetingFixture = {
+    guildId: "generated-guild",
+    channelId: "generated-voice",
+    meetingId: owner.meetingId,
+    reservedAt: "2026-10-14T12:00:00.000Z",
+  };
+  const artifactFolder = `${prefix}${meetingFixture.guildId}/${meetingFixture.channelId}_${meetingFixture.meetingId}_2026-10-14T12-00-00.000Z/`;
   const settled = {
     owner,
     outcome: "verified_settled",
     receipt: "generated-ack",
   };
   const keys = [
-    `${prefix}checkpoints/v1/1-owner/manifest.json`,
-    `${prefix}checkpoints/v1/1-owner/completed.pcm`,
-    `${prefix}checkpoints/v1/1-owner/orphan.pcm`,
-    `${prefix}notes.txt`,
+    `${artifactFolder}checkpoints/v1/1-owner/manifest.json`,
+    `${artifactFolder}checkpoints/v1/1-owner/completed.pcm`,
+    `${artifactFolder}checkpoints/v1/1-owner/orphan.pcm`,
+    `${artifactFolder}notes.txt`,
   ];
   return {
     scope: "generated-local",
     prefix,
-    history: { owner, status: "complete", receipt: "generated-history-ack" },
+    fixture: meetingFixture,
+    history: {
+      owner,
+      status: "complete",
+      checkpoint: { artifactFolder },
+      receipt: "generated-history-ack",
+    },
     capture: settled,
     recovery: settled,
     currentWork: settled,
@@ -123,13 +136,20 @@ test.each(["capture", "recovery", "currentWork"] as const)(
 );
 test("generated completed and orphan descendants are covered only after independent settlement receipts", () => {
   const input = cleanupFixture();
-  const unrelated = "generated/other/keep.pcm";
+  const unrelated = `${input.prefix}${input.fixture.guildId}/generated-voice_sibling-meeting_2026-10-14T12-00-00.000Z/keep.pcm`;
   const objects = new Map(
     [...input.enumeration.keys, unrelated].map((key) => [
       key,
       Buffer.from("generated"),
     ]),
   );
+  expect(() =>
+    planGeneratedDescendantRemoval({
+      ...input,
+      enumeration: { ...input.enumeration, keys: [...objects.keys()] },
+    }),
+  ).toThrow("exact generated fixture folder");
+  expect(objects.size).toBe(5);
   const plan = planGeneratedDescendantRemoval(input);
   expect(plan).toMatchObject({
     liveDeletionAuthorized: false,
@@ -150,7 +170,9 @@ test("refuses incomplete enumeration, foreign keys, wrong history attempt and no
   for (const key of [
     "other/file",
     `${input.prefix}../escape`,
-    `${input.prefix}folder\\escape`,
+    `${input.history.checkpoint.artifactFolder}folder\\escape`,
+    `${input.history.checkpoint.artifactFolder}../escape`,
+    input.history.checkpoint.artifactFolder,
   ])
     expect(() =>
       planGeneratedDescendantRemoval({
@@ -171,6 +193,49 @@ test("refuses incomplete enumeration, foreign keys, wrong history attempt and no
     planGeneratedDescendantRemoval({
       ...input,
       history: { ...input.history, status: "processing" },
+    }),
+  ).toThrow();
+});
+
+test("binds the canonical checkpoint folder to the reviewed meeting identity", () => {
+  const input = cleanupFixture();
+  for (const fixture of [
+    { ...input.fixture, meetingId: "sibling-meeting" },
+    { ...input.fixture, guildId: "other-guild" },
+    { ...input.fixture, channelId: "other-channel" },
+    { ...input.fixture, reservedAt: "2026-10-14T12:01:00.000Z" },
+    { ...input.fixture, guildId: "../escape" },
+  ])
+    expect(() =>
+      planGeneratedDescendantRemoval({ ...input, fixture }),
+    ).toThrow();
+  const siblingFolder = input.history.checkpoint.artifactFolder.replace(
+    "generated-meeting",
+    "sibling-meeting",
+  );
+  expect(() =>
+    planGeneratedDescendantRemoval({
+      ...input,
+      history: {
+        ...input.history,
+        checkpoint: { artifactFolder: siblingFolder },
+      },
+      enumeration: {
+        ...input.enumeration,
+        keys: [`${siblingFolder}completed.pcm`],
+      },
+    }),
+  ).toThrow("exact reviewed meeting fixture");
+  expect(() =>
+    planGeneratedDescendantRemoval({
+      ...input,
+      history: { ...input.history, checkpoint: undefined },
+    }),
+  ).toThrow();
+  expect(() =>
+    planGeneratedDescendantRemoval({
+      ...input,
+      prefix: "production/",
     }),
   ).toThrow();
 });
