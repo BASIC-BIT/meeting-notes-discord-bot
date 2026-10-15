@@ -157,7 +157,7 @@ function assertOperationScope(next: OfferUsage, input: OfferUsageWrite) {
   )
     throw new Error("Offer operation scope mismatch");
 }
-function assertUsageTransition(
+export function assertUsageTransition(
   next: OfferUsage,
   expected: OfferUsage | undefined,
 ) {
@@ -179,7 +179,10 @@ function assertUsageTransition(
     throw new Error("Invalid offer usage transition");
   }
 }
-function assertSettlement(next: OfferUsage, expected: OfferUsage | undefined) {
+export function assertSettlement(
+  next: OfferUsage,
+  expected: OfferUsage | undefined,
+) {
   if (next.state === "unused") return;
   if (
     next.terms.interval !==

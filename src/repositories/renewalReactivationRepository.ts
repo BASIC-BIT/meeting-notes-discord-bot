@@ -1,3 +1,4 @@
+import { billingChangeControlKey } from "../types/billingChange";
 import { config } from "../services/configService";
 import { getMockStore } from "./mockStore";
 import {
@@ -75,6 +76,9 @@ export function getRenewalReactivationRepository() {
         pointer.stripeSyncRevision !==
           expectedSubscription.stripeSyncRevision ||
         store.renewalControls.has(controlKey) ||
+        store.billingChangeControls.has(
+          billingChangeControlKey(next.guildId),
+        ) ||
         store.renewalOperations.has(operationKey)
       )
         return false;

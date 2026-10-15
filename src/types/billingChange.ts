@@ -1,4 +1,12 @@
 import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
+import type { GuildSubscription } from "./db";
+import {
+  offerUsageSchema,
+  assertUsageTransition,
+  assertSettlement,
+  type OfferUsageMutation,
+} from "./offerUsage";
 import { introOfferAuthoritySchema } from "./introOfferAuthority";
 import { offerTermsSchema } from "./offerUsage";
 import { introOfferIdSchema } from "./basicIntroOffers";
@@ -165,3 +173,111 @@ export const billingChangeControlKey = (guildId: string) =>
   `CHANGE_CONTROL#${guildId}`;
 export const isBillingChangeComplete = (operation: BillingChangeOperation) =>
   operation.state === "succeeded" || operation.state === "canceled";
+
+export type BillingChangeClaim = {
+  operation: BillingChangeOperation;
+  expectedSubscription: GuildSubscription;
+  usage?: OfferUsageMutation;
+};
+export type BillingChangeWrite = {
+  next: BillingChangeOperation;
+  expectedRevision: string;
+  usage?: OfferUsageMutation;
+};
+export const billingChangeBase = (operation: BillingChangeOperation) =>
+  base.parse(operation);
+const transitions: Record<
+  BillingChangeOperation["state"],
+  BillingChangeOperation["state"][]
+> = {
+  preparing: ["preparing", "review", "canceling"],
+  review: ["accepted", "canceling"],
+  accepted: ["applying", "scheduled", "canceling"],
+  applying: ["applying", "succeeded", "canceling"],
+  scheduled: ["scheduled", "succeeded", "canceling"],
+  canceling: ["canceling", "canceled"],
+  succeeded: [],
+  canceled: [],
+};
+export function assertBillingChangeTransition(
+  next: BillingChangeOperation,
+  previous: BillingChangeOperation,
+) {
+  if (
+    !transitions[previous.state].includes(next.state) ||
+    next.revision === previous.revision
+  )
+    throw new Error("Invalid plan change state transition");
+  const {
+    revision: oldRevision,
+    quote: oldQuote,
+    ...oldBase
+  } = base.parse(previous);
+  const {
+    revision: newRevision,
+    quote: newQuote,
+    ...newBase
+  } = base.parse(next);
+  if (
+    !isDeepStrictEqual(oldBase, newBase) ||
+    (previous.state !== "preparing" && !isDeepStrictEqual(oldQuote, newQuote))
+  )
+    throw new Error("Frozen plan change terms cannot change");
+  void oldRevision;
+  void newRevision;
+  if (
+    "funding" in previous &&
+    "funding" in next &&
+    !isDeepStrictEqual(previous.funding, next.funding)
+  )
+    throw new Error("Bound plan change invoice cannot change");
+  if (
+    "consent" in previous &&
+    previous.consent &&
+    "consent" in next &&
+    !isDeepStrictEqual(previous.consent, next.consent)
+  )
+    throw new Error("Plan change consent cannot change");
+}
+
+export function parseChangeUsage(
+  operation: BillingChangeOperation,
+  mutation: OfferUsageMutation,
+) {
+  const next = offerUsageSchema.parse(mutation.next);
+  const expected =
+    mutation.expected === undefined
+      ? undefined
+      : offerUsageSchema.parse(mutation.expected);
+  const owner =
+    next.state === "unused" ? next.released.operationId : next.operationId;
+  if (
+    !operation.target.offer ||
+    next.guildId !== operation.guildId ||
+    next.mode !== operation.mode ||
+    next.offerId !== operation.target.offer.id ||
+    owner !== operation.operationId
+  )
+    throw new Error("Plan change offer scope mismatch");
+  assertUsageTransition(next, expected);
+  assertSettlement(next, expected);
+  if (
+    next.state !== "unused" &&
+    !isDeepStrictEqual(next.terms, operation.target.offer.terms)
+  )
+    throw new Error("Plan change reservation terms mismatch");
+  if (
+    mutation.authority &&
+    !isDeepStrictEqual(mutation.authority, operation.target.offer.authority)
+  )
+    throw new Error("Plan change history authority mismatch");
+  if (
+    (next.state === "reserved" && operation.state !== "preparing") ||
+    (next.state === "used" && operation.state !== "succeeded") ||
+    (next.state === "unused" && operation.state !== "canceled")
+  )
+    throw new Error("Offer result does not match plan change");
+  if (next.state === "reserved" && !mutation.authority)
+    throw new Error("Fresh plan change offer requires history authority");
+  return { next, expected, authority: mutation.authority };
+}

@@ -1,4 +1,12 @@
 import {
+  billingChangeControlKey,
+  billingChangeOperationKey,
+  isBillingChangeComplete,
+  type BillingChangeClaim,
+  type BillingChangeWrite,
+  parseChangeUsage,
+} from "./types/billingChange";
+import {
   renewalOperationKey,
   renewalControlKey,
   isRenewalComplete,
@@ -4185,6 +4193,12 @@ export async function claimRenewalOperation(
       },
     },
     {
+      ConditionCheck: historicalRevisionFence(
+        billingChangeControlKey(operation.guildId),
+        undefined,
+      ),
+    },
+    {
       Put: {
         TableName: table,
         Item: marshall({
@@ -4236,5 +4250,87 @@ export async function writeRenewalOperation(
       },
     },
     isRenewalComplete(next) ? { Delete: control } : { ConditionCheck: control },
+  ]);
+}
+
+export async function claimBillingChangeOperation(
+  input: BillingChangeClaim,
+): Promise<boolean> {
+  const operation = input.operation;
+  const usage = input.usage && parseChangeUsage(operation, input.usage);
+  return transactRenewalRecords([
+    {
+      ConditionCheck: subscriptionRevisionFence(
+        operation.guildId,
+        input.expectedSubscription,
+      ),
+    },
+    {
+      ConditionCheck: historicalRevisionFence(
+        renewalControlKey(operation.guildId),
+        undefined,
+      ),
+    },
+    {
+      Put: {
+        TableName: tableName("GuildSubscriptionTable"),
+        Item: marshall({
+          ...operation,
+          guildId: billingChangeOperationKey(
+            operation.guildId,
+            operation.operationId,
+          ),
+        }),
+        ConditionExpression: "attribute_not_exists(guildId)",
+      },
+    },
+    {
+      Put: {
+        TableName: tableName("GuildSubscriptionTable"),
+        Item: marshall({
+          guildId: billingChangeControlKey(operation.guildId),
+          operationId: operation.operationId,
+        }),
+        ConditionExpression: "attribute_not_exists(guildId)",
+      },
+    },
+    ...(usage
+      ? [
+          { Put: offerUsagePut(usage.next, usage.expected) },
+          ...offerAuthorityFences(usage.authority),
+        ]
+      : []),
+  ]);
+}
+export async function writeBillingChangeOperation(
+  input: BillingChangeWrite,
+): Promise<boolean> {
+  const next = input.next;
+  const usage = input.usage && parseChangeUsage(next, input.usage);
+  const control = {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId: billingChangeControlKey(next.guildId) }),
+    ConditionExpression: "operationId = :operationId",
+    ExpressionAttributeValues: marshall({ ":operationId": next.operationId }),
+  };
+  return transactRenewalRecords([
+    {
+      Put: {
+        TableName: tableName("GuildSubscriptionTable"),
+        Item: marshall({
+          ...next,
+          guildId: billingChangeOperationKey(next.guildId, next.operationId),
+        }),
+        ConditionExpression: "#revision = :revision",
+        ExpressionAttributeNames: { "#revision": "revision" },
+        ExpressionAttributeValues: marshall({
+          ":revision": input.expectedRevision,
+        }),
+      },
+    },
+    isBillingChangeComplete(next)
+      ? { Delete: control }
+      : { ConditionCheck: control },
+    ...(usage ? [{ Put: offerUsagePut(usage.next, usage.expected) }] : []),
   ]);
 }
