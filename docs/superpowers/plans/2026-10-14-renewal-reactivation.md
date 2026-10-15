@@ -12,7 +12,7 @@
 
 ## Implementation status (October 14)
 
-Local consent/storage, protected renewal API, Billing UI and lifecycle producers are implemented. The full Jest result is 277 suites and 2,259 tests passed. Renewal browser flows passed 4 checks; affected Billing tests passed 52 across the first run and focused correction run. Responsive snapshots and scrolling passed 19 checks with a no-update comparison. Forty affected Storybook stories passed and captures were visually reviewed.
+Local consent/storage, protected renewal API, Billing UI and lifecycle producers are implemented. The final Jest result is 277 suites and 2,267 tests passed. The complete affected browser run passed 78 checks: 48 Billing, eight renewal and 22 responsive/scroll checks without baseline updates. Forty-two affected Storybook stories passed. Storybook captures and Playwright snapshots were visually reviewed, including the failed-payment state.
 
 Owned native proof passed 16 supported cases and one read-only portal check, with six expected direct-route exclusions and nine retained controller failures. Every created fixture was cleaned up. Manual inclusive/exclusive tax is covered; this is not nonzero automatic-tax acceptance.
 
@@ -131,12 +131,13 @@ type RenewalState =
   | { kind: "on"; terms: RenewalTerms }
   | { kind: "processing"; operationId: string; endsAt: string }
   | { kind: "needs_review"; operationId: string; knownEndsAt: string | null }
+  | { kind: "payment_problem" }
   | { kind: "terminal" }
   | { kind: "not_applicable" }
   | { kind: "unavailable"; knownEndsAt: string | null };
 ```
 
-Derive `PaidTier` and `BillingInterval` from existing pricing types. An unresolved payment uses the off/provider-review branch only when a future cancellation is known; otherwise it remains the existing payment-status view. Do not reinterpret unavailable state as terminal or Free.
+Derive `PaidTier` and `BillingInterval` from existing pricing types. An unresolved payment uses the off/provider-review branch only when a future cancellation is known; otherwise payment_problem preserves payment attention and the original payer's Manage billing action. Do not reinterpret unavailable state as terminal or Free.
 
 - [x] **Step 1: Write failing quote/repository/config tests.** Pin the five-minute lifetime, purpose and actor binding. Reject altered payloads, wrong purpose, another server/payer, expired new consent and unsupported terms. Assert that two claims on one source allow one winner, another server remains independent, and subscription/purchase/offer rows are untouched.
 
@@ -270,7 +271,7 @@ Add exact maturity just before/at/after the known boundary, annual dates that di
 - [x] **Step 5: Add the independent rollout switch and notices.** Add exact-true `config.analytics.billingLifecycleEnabled` from BILLING_LIFECYCLE_ANALYTICS_ENABLED, default false, with matching Terraform/example wiring and activation tests. Keep state baselines and financial reconciliation independent from capture. Return lifecycleAnalyticsEnabled in RenewalView so the new browser captures cannot run while their server-side rollout switch is off. The privacy-policy analytics detail, provider table, last-updated date and What's New notice must describe lifecycle/payment-recovery categories before enabling capture. Verify DNT wording for existing subscriptions and new operation outcomes; do not quietly broaden it.
 - [ ] **Step 6: Verify received Sandbox rows separately.** Under the implementation's execution authority, verify the Chronote PostHog project before querying. Read the actual events table because schema definitions can lag ingestion. Confirm environment, guild continuity, actual or absent actor, categories, duplicate suppression, opt-out absence and no forbidden payload fields. Do not query customer content or mix Sandbox into production metrics. Source code tests are not ingestion proof.
 - [ ] **Step 7: Validate the three funnel definitions before publishing saved views.** Inspect existing onboarding/purchase insights and private reporting owner notes. Keep the existing seven-day purchase definitions; review the proposed onboarding and win-back windows. Use same-server ordered cohorts without assuming native groups are configured. Report cancellation cohorts only after their paid boundary matures, and keep voluntary loss, payment-failure loss, save attempts and later settled renewal distinct. Show baseline counts, unknown cause, DNT/capture gaps and small samples. Prefer updating the existing reporting/daily health summary over creating duplicate dashboards. Saved insight/configuration changes need their own explicit execution scope.
-- [ ] **Step 8: Run the focused suites, docs checks, lint and formatting, then commit.** Suggested message: `Measure subscription loss and renewal recovery`. Analytics remains best effort, never a billing audit ledger. Reconcile bounded aggregate state counts; do not invent missing event timestamps. Both new action and telemetry gates stay false.
+- [x] **Step 8: Run the focused suites, docs checks, lint and formatting, then commit.** Suggested message: `Measure subscription loss and renewal recovery`. Analytics remains best effort, never a billing audit ledger. Reconcile bounded aggregate state counts; do not invent missing event timestamps. Both new action and telemetry gates stay false.
 
 ## Task 6: Integrate, document and prepare review
 
@@ -285,9 +286,9 @@ Add exact maturity just before/at/after the known boundary, annual dates that di
 - Existing initial Checkout, provider management, current-state webhooks and offer ledger remain unchanged outside the named integration.
 
 - [ ] **Step 1: Trace the complete same-subscription journey.** Run the UI through quote, click, native update, current-state reconciliation and confirmed card in signed-in Sandbox only after execution authorization. Verify receipts, return server context, nonpayer denial and terminal repurchase separately. Never restore the cleaned parent fixture.
-- [ ] **Step 2: Update public and operator docs.** Explain renewal off, who may restore renewal, the date/rate shown before consent, payment-history access and terminal repurchase. Document the separate flag and recovery behavior. Do not publish private fixture identities or claim that all schedules are editable in Stripe.
-- [ ] **Step 3: Run the appropriate full affected checks.** Jest for the new renewal, billing activation, consent/repository and existing billing/webhook suites; `PW_VISUAL=false` Billing browser tests; `PW_VISUAL=true` affected visuals; Storybook capture after Playwright finishes; root types, scoped lint/Prettier, docs build and full complexity check. Avoid racing the Storybook runner with Playwright report writes. New failures or changed code justify repeat checks; otherwise proceed to review.
-- [ ] **Step 4: Review the actual branch, not only helper tests.** Inspect authorization, source association, inclusive-tax copy, quote replay after cancel-again, external-race behavior, unresolved operations, same-subscription invariants and default-false gate. Separate mock proof, native provider proof, signed-in app proof, PostHog received rows, saved query configuration, CI and runtime evidence.
+- [x] **Step 2: Update public and operator docs.** Explain renewal off, who may restore renewal, the date/rate shown before consent, payment-history access and terminal repurchase. Document the separate flag and recovery behavior. Do not publish private fixture identities or claim that all schedules are editable in Stripe.
+- [x] **Step 3: Run the appropriate full affected checks.** Jest for the new renewal, billing activation, consent/repository and existing billing/webhook suites; `PW_VISUAL=false` Billing browser tests; `PW_VISUAL=true` affected visuals; Storybook capture after Playwright finishes; root types, scoped lint/Prettier, docs build and full complexity check. Avoid racing the Storybook runner with Playwright report writes. New failures or changed code justify repeat checks; otherwise proceed to review.
+- [x] **Step 4: Review the actual branch, not only helper tests.** Inspect authorization, source association, inclusive-tax copy, quote replay after cancel-again, external-race behavior, unresolved operations, same-subscription invariants and default-false gate. Separate mock proof, native provider proof, signed-in app proof, PostHog received rows, saved query configuration, CI and runtime evidence.
 - [ ] **Step 5: Prepare the PR under the active authorization.** If publishing is authorized, use a concise problem/behavior description with relevant validation, attach the PR, and follow the repository's exact-head 30-minute gate plus all mutable review/check surfaces before calling it merge-ready. Every new commit restarts the window. Do not merge, deploy, enable the flag or perform production billing writes under design/planning authority.
 
 ## Self-review and open gates
@@ -305,3 +306,42 @@ Planning source: local branch `codex/plan-switching` at `20b038b8d6d40fe0a198ff0
 Current stories are under `src/frontend/pages/UpgradePlans.stories.tsx`; the baseline reference is `pages-upgradeplans--intro-subscriber-canceled`. Current static preview uses localhost:6106. Existing provider/production evidence is separately owned and is not acceptance for the new action.
 
 Builder check on the design: a fresh software-engineering reviewer reported **nothing important left**. This plan then received the writing-plans self-review and an unslop pass. Local implementation and owned provider proof have since been executed.
+
+### Final local verification and review
+
+The implementation is committed through `29c44711ef453c995ec1eb3abb58b00ccb4b19cc` on `codex/plan-switching`. A fresh whole-branch review covered `3e3981968955a82e06f2d4544b3c3dec6a8b76a2..390ece47e2555a3eaa7bb6ad6d4db45261ddd1bf`. Its two Important findings were reproduced with failing tests and fixed in one pass:
+
+- Recovery now retains a newly stored subscription analytics opt-out before update, readback and confirmation. Suppression cannot clear.
+- A past-due or unpaid renewal without scheduled cancellation retains payment attention and the original payer's Manage billing action.
+
+The full suite and affected browser/Storybook checks passed after those fixes. Root source types, explicit SDK-test types, scoped lint, formatting, docs build and Markdown lint passed. Full complexity analysis ran without new suppressions. The recovery routine reports cyclomatic complexity 35. Refactoring that routine is deferred to avoid changing the tested payment operation during this fix pass.
+
+Local result files are `tmp/renewal-final-jest.json`, `tmp/renewal-final-browser.log`, `tmp/renewal-final-stories.log`, `tmp/renewal-review-types.log`, `tmp/renewal-review-test-types.log`, `tmp/renewal-review-lint.log`, `tmp/renewal-docs-build.log` and `tmp/renewal-docs-lint.log`. These are local verification artifacts, not CI or deployed acceptance.
+
+Private native proof is committed as `e46a22d` on `codex/renewal-reactivation-proof` in chronote-ops. Its receipt index reports 17 accepted checks, six exclusions, nine retained controller failures and zero unresolved owned resources. The source branch contains only synthetic SDK fixtures.
+
+### Remaining release and publication gates
+
+- The native provider packet and mock browser journey are separate proof. A signed-in deployed Sandbox journey has not been accepted. Both action and telemetry gates remain false.
+- No new lifecycle event rows were received in the verified PostHog project. Notice publication and separately authorized activation precede ingestion acceptance. Existing saved insight identities were found; their full definitions and new loss views have not been validated or changed.
+- Neither branch has been published in this implementation slice. CI, exact-head review readiness, merge, deployment and production behavior remain unverified.
+- Source configuration was reviewed for encryption and privacy boundaries. Live infrastructure encryption, operational deletion fulfillment and jurisdiction-specific legal sufficiency are not certified by source review.
+
+These gates remain unchecked above. They do not prevent reviewing the completed local implementation and owned native proof.
+
+### Implementation decisions retained from the execution ledger
+
+| Decision                                                                                                                                      | Cost if wrong                                                                        |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Use seven-day onboarding/purchase and 30-day win-back reporting defaults; saved-view writes remain separate.                                  | Revise the reporting windows.                                                        |
+| Use the existing `_infra/terraform.tfvars.example`; the plan's earlier `_infra/tfvars.example` path did not exist.                            | Correct the path.                                                                    |
+| A local FORCE_TIER fixture has no Stripe pointer, so it retains complimentary access without a payment action.                                | Add a separate paid mock fixture.                                                    |
+| Keep private invoice deduplication markers for 400 days rather than 30 days.                                                                  | Revise private retention and replay coverage.                                        |
+| Let unresolved-operation analytics suppression widen, never clear; financial consent remains immutable.                                       | Fewer analytics rows, with no billing change.                                        |
+| Keep capture off until notice publication and separately authorized activation; do not synthesize acceptance events.                          | Received-event and signed-in release acceptance remain pending.                      |
+| Accept the retained private native receipt/cleanup packet as bounded owned Sandbox proof; the branch reviewer did not repeat provider writes. | Repeat an affected owned case before activation if its evidence proves insufficient. |
+| Do not infer deployed-app acceptance, ingestion, complete saved-query validation, CI or merge readiness from local checks.                    | Obtain missing release proof before making those claims.                             |
+| Keep live encryption and deletion-fulfillment verification separate from source review.                                                       | Operator verification or configuration correction may be required.                   |
+| Treat public-copy review as engineering accuracy review, without jurisdiction-specific legal assurance.                                       | Qualified legal review and notice revisions may be required.                         |
+
+The deferred maintenance item is the recovery routine's complexity warning. No suppression was added. The final frontend and static Storybook builds passed after the review fixes. The existing local and tailnet preview both returned HTTP 200 and serve the `29c44711` UI build with simulated actions.
