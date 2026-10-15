@@ -55,7 +55,7 @@ for (const viewport of views) {
         await page
           .getByRole("button", { name: "Payment history", exact: true })
           .click();
-        await expect(page.getByText(/First year paid:/)).toBeVisible();
+        await expect(page.getByText(/\$64.20 paid/)).toBeVisible();
       }
       await waitForVisualReady(page);
       expect(
@@ -112,7 +112,7 @@ test("short billing page scrolls to its history and comparison actions", async (
   await page
     .getByRole("button", { name: "Payment history", exact: true })
     .click();
-  await expect(page.getByText(/First year paid:/)).toBeVisible();
+  await expect(page.getByText(/\$64.20 paid/)).toBeVisible();
   await page
     .getByRole("button", { name: "View invoices and receipts" })
     .scrollIntoViewIfNeeded();

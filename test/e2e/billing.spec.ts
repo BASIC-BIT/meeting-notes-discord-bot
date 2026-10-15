@@ -405,7 +405,7 @@ for (const scheme of ["light", "dark"] as const) {
       .getByRole("button", { name: "Payment history", exact: true })
       .click();
     await expect(page.getByTestId("billing-payment-history")).toContainText(
-      "First year paid: $64.20",
+      "$64.20 paid",
     );
     await expectReadableText(
       page.getByTestId("billing-payment-history").locator("p"),
@@ -798,7 +798,7 @@ test("basic intro Billing uses actual taxed annual invoice without account-wide 
     .getByRole("button", { name: "Payment history", exact: true })
     .click();
   await expect(page.getByTestId("billing-payment-history")).toContainText(
-    "First year paid: $64.20",
+    "$64.20 paid",
   );
   await expect(page.getByTestId("billing-current-plan")).toContainText(
     "$100/year before tax",

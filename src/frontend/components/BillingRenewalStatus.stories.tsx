@@ -98,7 +98,7 @@ export const RenewalOff: Story = {
     await expect(
       c.getByRole("button", { name: "Turn renewal back on" }),
     ).toBeEnabled();
-    await expect(c.getByText(/First year paid/)).not.toBeVisible();
+    await expect(c.getByText(/\$64.20 paid/)).not.toBeVisible();
   },
 };
 export const RenewalOn: Story = {
@@ -157,9 +157,7 @@ export const HistoryOpen: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     await userEvent.click(c.getByRole("button", { name: "Payment history" }));
-    await waitFor(() =>
-      expect(c.getByText(/First year paid: \$64.20/)).toBeVisible(),
-    );
+    await waitFor(() => expect(c.getByText(/\$64.20 paid/)).toBeVisible());
   },
 };
 export const InclusiveRemainingDiscount: Story = {

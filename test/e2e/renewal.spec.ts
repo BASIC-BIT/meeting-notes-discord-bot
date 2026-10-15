@@ -24,7 +24,7 @@ test("renewal off has one clear action and separate payment history", async ({
   await expect(current.getByText("ACTIVE", { exact: true })).toHaveCount(0);
   await expect(current).toContainText("Your Basic plan ends October 12, 2027.");
   await expect(current).toContainText("$100/year before tax");
-  await expect(current).not.toContainText("First year paid");
+  await expect(current).not.toContainText("$64.20 paid");
   const history = page.getByTestId("billing-payment-history");
   await history.getByRole("button", { name: "Payment history" }).click();
   await expect(history).toContainText("$64.20");

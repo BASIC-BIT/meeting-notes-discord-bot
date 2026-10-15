@@ -39,25 +39,16 @@ export default function BillingPaymentHistory({
               ) : null}
               {firstYearPayment?.status === "available" ? (
                 <>
-                  <Text size="sm">
-                    First year paid:{" "}
+                  <Text size="sm" fw={600}>
                     {formatCurrency(
                       firstYearPayment.amountPaid,
                       firstYearPayment.currency,
-                    )}
-                    , including any tax.
-                  </Text>
-                  <Text size="sm">
-                    First-year subtotal:{" "}
-                    {formatCurrency(
-                      firstYearPayment.discountedSubtotal,
-                      firstYearPayment.currency,
-                    )}
-                    .
+                    )}{" "}
+                    paid
                   </Text>
                   <Text size="sm" c="var(--mantine-color-text)">
-                    Covers {date(firstYearPayment.periodStartsAt)} to{" "}
-                    {date(firstYearPayment.periodEndsAt)}.
+                    {date(firstYearPayment.periodStartsAt)} to{" "}
+                    {date(firstYearPayment.periodEndsAt)}
                   </Text>
                 </>
               ) : (
