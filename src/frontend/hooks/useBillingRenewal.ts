@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRenewalAnalytics } from "./useRenewalAnalytics";
 import { notifications } from "@mantine/notifications";
 import { trpc } from "../services/trpc";
@@ -49,17 +49,29 @@ export function useBillingRenewal({
     { serverId: serverId ?? "" },
     { enabled: active && Boolean(serverId), retry: false },
   );
-  const readVersion = useRef(query.dataUpdatedAt);
-  readVersion.current = query.dataUpdatedAt;
-  const [pending, setPending] = useState<{
-    serverId: string;
-    version: number;
-    view: RenewalView;
-  } | null>(null);
+  const readVersions = useRef(new Map<string | null, number>());
+  readVersions.current.set(serverId, query.dataUpdatedAt);
+  const currentServer = useRef(serverId);
+  currentServer.current = serverId;
+  const [pendingByServer, setPendingByServer] = useState(
+    new Map<string | null, { version: number; view: RenewalView }>(),
+  );
+  const pending = pendingByServer.get(serverId);
   const view =
-    pending?.serverId === serverId && pending.version === query.dataUpdatedAt
+    pending &&
+    (query.dataUpdatedAt === 0 || pending.version === query.dataUpdatedAt)
       ? pending.view
       : query.data;
+  useEffect(() => {
+    if (query.dataUpdatedAt === 0) return;
+    setPendingByServer((current) => {
+      const previous = current.get(serverId);
+      if (!previous || previous.version === query.dataUpdatedAt) return current;
+      const updated = new Map(current);
+      updated.delete(serverId);
+      return updated;
+    });
+  }, [serverId, query.dataUpdatedAt]);
   const captureClick = useRenewalAnalytics({
     view,
     serverId,
@@ -67,10 +79,14 @@ export function useBillingRenewal({
   });
   const mutation = trpc.billing.reactivateRenewal.useMutation();
   const refresh = async () => {
+    if (currentServer.current !== serverId) return;
     const read = query.refetch({ throwOnError: true }).then(() => {
-      setPending((current) =>
-        current?.serverId === serverId ? null : current,
-      );
+      if (currentServer.current !== serverId) return;
+      setPendingByServer((current) => {
+        const updated = new Map(current);
+        updated.delete(serverId);
+        return updated;
+      });
     });
     await Promise.allSettled([read, onBillingChanged()]);
   };
@@ -83,11 +99,17 @@ export function useBillingRenewal({
         analyticsOptOut: isDoNotTrackEnabled(),
       });
       const retained = pendingView(result, view);
-      setPending(
-        retained
-          ? { serverId, version: readVersion.current, view: retained }
-          : null,
-      );
+      setPendingByServer((current) => {
+        const updated = new Map(current);
+        if (retained)
+          updated.set(serverId, {
+            version: readVersions.current.get(serverId) ?? query.dataUpdatedAt,
+            view: retained,
+          });
+        else updated.delete(serverId);
+        return updated;
+      });
+      if (currentServer.current !== serverId) return;
       if (result.kind === "confirmed")
         notifications.show({
           color: "green",

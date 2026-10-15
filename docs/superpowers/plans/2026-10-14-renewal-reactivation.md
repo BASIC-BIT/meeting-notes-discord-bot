@@ -12,7 +12,7 @@
 
 ## Implementation status (October 15)
 
-Local consent/storage, protected renewal API, Billing UI and lifecycle producers are implemented. The latest full Jest result is 278 suites and 2,269 tests passed. The complete affected browser run passed 78 checks: 48 Billing, eight renewal and 22 responsive/scroll checks without baseline updates. Forty-two affected Storybook stories passed. Storybook captures and Playwright snapshots were visually reviewed, including the failed-payment state.
+Local consent/storage, protected renewal API, Billing UI and lifecycle producers are implemented. The latest full Jest result is 278 suites and 2,271 tests passed. The complete affected browser run passed 78 checks: 48 Billing, eight renewal and 22 responsive/scroll checks without baseline updates. Forty-two affected Storybook stories passed. Storybook captures and Playwright snapshots were visually reviewed, including the failed-payment state.
 
 Owned native proof passed 16 supported cases and one read-only portal check, with six expected direct-route exclusions and nine retained controller failures. Every created fixture was cleaned up. Manual inclusive/exclusive tax is covered; this is not nonzero automatic-tax acceptance.
 
@@ -357,3 +357,11 @@ Greptile identified a pending-state bug: a successful mutation's operation ID di
 Claude reported no Important findings on the initial head. Codex and Copilot reviews were unavailable due to account review quotas. Those unavailable attempts are recorded separately from completed reviews. Current-head CI, all review pages and mutable summaries must be refreshed after the repository's 30-minute commit window before claiming merge readiness.
 
 The post-review full unit run passed 278 suites and 2,269 tests. Functional billing checks passed 57 cases at CI-like concurrency, with 21 screenshot cases correctly skipped outside visual mode. Source types, explicit SDK-test types, lint, format and the complete locked complexity check passed. The targeted visual capture passed 70 cases. The updated baselines and the complete visual matrix must pass without updates before merge readiness.
+
+### In-flight server navigation follow-up
+
+A later isolation check found that a mutation finishing after navigation could refresh the newly selected server and lose the original operation's local state. A single pending-state slot could also overwrite another server's unresolved operation. Two new regression tests reproduced these failures before the fix, including a missing query cache on return.
+
+Pending records and read versions are now kept separately per server. Refreshes and notices are ignored after leaving the request's server. A missing cache is not treated as a successful read, and returning to the original server preserves its operation ID until authoritative data replaces it. This changes no provider request, financial consent or authorization rule.
+
+The full suite after this follow-up passed 278 suites and 2,271 tests. Source typing, lint and the pinned complexity check passed. The next push restarts the exact-head 30-minute readiness window; previous green checks remain evidence for their earlier head only.
