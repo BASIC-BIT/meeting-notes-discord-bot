@@ -31,7 +31,13 @@ async function awsCli(service, operation, input) {
       "json",
       "--no-cli-pager",
     ],
-    { maxBuffer: 4 * 1024 * 1024 },
+    {
+      maxBuffer: 4 * 1024 * 1024,
+      // A hidden retry can outlive this call and invalidate the submitted fence.
+      ...(service === "elbv2" && operation === "modify-listener"
+        ? { env: { ...process.env, AWS_MAX_ATTEMPTS: "1" } }
+        : {}),
+    },
   );
   return stdout.trim() ? JSON.parse(stdout) : {};
 }
@@ -909,6 +915,53 @@ function createCoordinator(options = {}) {
       "Retirement/convergence incomplete; preserve tasks and request recovery",
     );
   }
+  async function rollbackReady(ctl, authorizedGeneration) {
+    const d = ctl.deployment;
+    const old = await runtime(d.outgoing);
+    if (
+      old.role !== "serving" ||
+      old.authorizedGeneration !== authorizedGeneration ||
+      old.retirementRequest ||
+      old.retirementAcknowledgment ||
+      !ready(old, ctl, d.outgoing, d.runtimeMode)
+    )
+      return false;
+    const source = await runtime(d.candidate);
+    if (
+      source.expiresAt !== undefined ||
+      source.role !== "serving" ||
+      source.authorizedGeneration !== d.originalGeneration + 1 ||
+      source.retirementRequest ||
+      source.retirementAcknowledgment
+    )
+      throw new CoordinatorFailure(
+        "identity_unconfirmed",
+        "Rollback source ownership changed",
+      );
+    await protectedTask(d.outgoing);
+    await protectedTask(d.candidate);
+    await routing.validateRollback(ctl, await service());
+    return true;
+  }
+  async function completeRollback(ctl) {
+    if (!(await rollbackReady(ctl, ctl.deployment.originalGeneration + 2)))
+      return {
+        kind: "recovery_required",
+        reason: "no_ready_pre_retirement_rollback_target",
+      };
+    ctl = await routing.switchTraffic(
+      ctl,
+      false,
+      persistRouting,
+      routingAuthority,
+    );
+    await phase(ctl, "rolled_back");
+    return {
+      kind: "rolled_back",
+      candidatePreserved: true,
+      recoveryRequired: true,
+    };
+  }
   async function reconcile() {
     let ctl = await renew(await control());
     const d = ctl.deployment;
@@ -930,37 +983,13 @@ function createCoordinator(options = {}) {
       ctl = await completePromotion(ctl, d.candidate);
     if (!["promoted", "rollback_promoting"].includes(ctl.deployment.phase))
       return { kind: "recovery_required", phase: ctl.deployment.phase };
-    if (
-      promotionObserved(ctl, d.outgoing, d.originalGeneration + 2, retained)
-    ) {
-      ctl = await routing.switchTraffic(
-        ctl,
-        false,
-        persistRouting,
-        routingAuthority,
-      );
-      await phase(ctl, "rolled_back");
-      return {
-        kind: "rolled_back",
-        candidatePreserved: true,
-        recoveryRequired: true,
-      };
-    }
-    const old = await runtime(d.outgoing);
-    if (
-      old.role !== "serving" ||
-      old.authorizedGeneration !== d.originalGeneration ||
-      old.retirementRequest ||
-      old.retirementAcknowledgment ||
-      !ready(old, ctl, d.outgoing, d.runtimeMode)
-    )
+    if (promotionObserved(ctl, d.outgoing, d.originalGeneration + 2, retained))
+      return completeRollback(ctl);
+    if (!(await rollbackReady(ctl, d.originalGeneration)))
       return {
         kind: "recovery_required",
         reason: "no_ready_pre_retirement_rollback_target",
       };
-    await protectedTask(d.outgoing);
-    await protectedTask(d.candidate);
-    await routing.validate(ctl, await service(), d.candidate);
     if (d.routing) await routing.assertAction(d.routing, true);
     ctl = await phase(ctl, "rollback_promoting");
     ctl = await transactPromotion(
@@ -970,19 +999,9 @@ function createCoordinator(options = {}) {
       d.originalGeneration + 2,
       retained,
     );
-    ctl = await routing.switchTraffic(
-      ctl,
-      false,
-      persistRouting,
-      routingAuthority,
-    );
-    await phase(ctl, "rolled_back");
-    return {
-      kind: "rolled_back",
-      candidatePreserved: true,
-      recoveryRequired: true,
-    };
+    return completeRollback(ctl);
   }
+
   return { prepare, promote, retire, reconcile };
 }
 async function runCli(requestedPhase, options = {}, output = console) {

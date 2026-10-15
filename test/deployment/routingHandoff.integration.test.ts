@@ -76,8 +76,24 @@ test("real requests stay on old application through initial healthy candidate, h
   const syncProofs = async () => {
     f.state.ctl = (await read()) as typeof f.state.ctl;
     f.refreshProofs();
-    await put(f.state.rows.old);
-    await put(f.state.rows.new);
+    for (const row of Object.values(f.state.rows)) {
+      const updated = await client.send(
+        new UpdateItemCommand({
+          TableName: table,
+          Key: marshall({ pk: "ENV", sk: row.sk }),
+          UpdateExpression:
+            "SET readiness = :readiness, protection = :protection",
+          ExpressionAttributeValues: marshall({
+            ":readiness": row.readiness,
+            ":protection": row.protection,
+          }),
+          ReturnValues: "ALL_NEW",
+        }),
+      );
+      f.state.rows[row.identity.instanceId] = unmarshall(
+        updated.Attributes!,
+      ) as typeof row;
+    }
   };
   let protection;
   try {
@@ -179,6 +195,10 @@ test("real requests stay on old application through initial healthy candidate, h
     expect(f.state.rows.old.retirementRequest).toBeUndefined();
     expect((await fetch(`${origin(old)}/auth/discord`)).status).toBe(200);
     await syncProofs();
+    expect(f.state.rows.new).toMatchObject({
+      role: "serving",
+      authorizedGeneration: 2,
+    });
     expect(await coordinator.reconcile()).toMatchObject({
       kind: "rolled_back",
       candidatePreserved: true,

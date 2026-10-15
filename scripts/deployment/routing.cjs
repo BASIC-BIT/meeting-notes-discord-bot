@@ -162,7 +162,7 @@ function createRouting({ aws, config, env, failure }) {
         .TargetHealthDescriptions ?? []
     );
   }
-  async function target(routing, group, identity, definition) {
+  async function taskAddress(routing, identity, definition) {
     const result = await aws("ecs", "describe-tasks", {
       cluster: config.cluster,
       tasks: [identity.taskArn],
@@ -185,14 +185,25 @@ function createRouting({ aws, config, env, failure }) {
       !ips[0]
     )
       fail("Exact target task address unavailable");
+    return ips[0];
+  }
+  async function target(
+    routing,
+    group,
+    identity,
+    definition,
+    requireHealthy = true,
+  ) {
+    const address = await taskAddress(routing, identity, definition);
     const members = await targets(group);
     if (
       members.length !== 1 ||
-      members[0].Target.Id !== ips[0] ||
-      members[0].Target.Port !== routing.containerPort ||
-      members[0].TargetHealth.State !== "healthy"
+      members[0].Target.Id !== address ||
+      members[0].Target.Port !== routing.containerPort
     )
-      fail("Target group does not contain the exact healthy owner only");
+      fail("Target group does not contain the exact owner only");
+    if (requireHealthy && members[0].TargetHealth.State !== "healthy")
+      fail("Routing destination target is not healthy");
   }
   async function revisionArns() {
     const arns = new Set();
@@ -283,7 +294,7 @@ function createRouting({ aws, config, env, failure }) {
       fail("Spare target group is occupied, draining or unresolved");
     return routing;
   }
-  async function validate(ctl, svc, candidate) {
+  async function validate(ctl, svc, candidate, candidateHealthy = true) {
     const d = ctl.deployment;
     const r = d.routing;
     if (!r) {
@@ -298,9 +309,17 @@ function createRouting({ aws, config, env, failure }) {
       r.sourceRevision,
     );
     await target(r, r.sourceGroup, d.outgoing, d.previousTaskDefinition);
-    await target(r, r.candidateGroup, candidate, d.taskDefinition);
+    await target(
+      r,
+      r.candidateGroup,
+      candidate,
+      d.taskDefinition,
+      candidateHealthy,
+    );
     return revision(d.taskDefinition, binding(r, true), r.candidateRevision);
   }
+  const validateRollback = (ctl, svc) =>
+    validate(ctl, svc, ctl.deployment.candidate, false);
   async function switchTraffic(ctl, candidate, persist, assertAuthority) {
     const r = ctl.deployment.routing;
     if (!r) return ctl;
@@ -353,6 +372,7 @@ function createRouting({ aws, config, env, failure }) {
     observe,
     assertInputs,
     validate,
+    validateRollback,
     binding,
     assertBinding,
     assertAction,
