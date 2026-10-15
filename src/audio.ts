@@ -25,6 +25,7 @@ import {
 import { MeetingData } from "./types/meeting-data";
 import { EndBehaviorType, VoiceConnectionStatus } from "@discordjs/voice";
 import { OpusDiagnosticDecoder } from "./utils/opusDiagnosticDecoder";
+import { disposeVoiceStream } from "./utils/disposeVoiceStream";
 import { PassThrough, Readable } from "node:stream";
 import {
   cleanupTranscription,
@@ -87,6 +88,7 @@ type VoiceSubscriptionState = {
   opusStream: Readable;
   decoder: OpusDecoder;
   decodedStream: Readable;
+  ownedListenerCleanups: Map<Readable, (() => void)[]>;
   lastPcmAt?: number;
   decoderErrorCount: number;
   consecutiveNoPcmEvents: number;
@@ -157,31 +159,32 @@ function resolveSpeakerLabel(meeting: MeetingData, userId: string): string {
 function clearVoiceSubscription(meeting: MeetingData, userId: string) {
   const subscriptions = getVoiceSubscriptions(meeting);
   const existing = subscriptions.get(userId);
-  if (existing?.resubscribeTimer) {
-    clearTimeout(existing.resubscribeTimer);
-  }
-  if (existing) {
-    existing.suppressResubscribe = true;
-  }
-  if (existing?.decodedStream) {
-    existing.decodedStream.removeAllListeners();
-  }
-  if (existing?.decoder) {
-    existing.decoder.removeAllListeners();
-    existing.decoder.destroy();
-  }
-  if (existing?.opusStream) {
-    existing.opusStream.removeAllListeners();
-    existing.opusStream.destroy();
-  }
+  if (!existing) return;
+
+  existing.suppressResubscribe = true;
+  if (existing.resubscribeTimer) clearTimeout(existing.resubscribeTimer);
+  existing.resubscribeTimer = undefined;
   subscriptions.delete(userId);
 
-  const receiverStream = meeting.connection.receiver.subscriptions.get(userId);
-  if (receiverStream) {
-    receiverStream.removeAllListeners();
-    receiverStream.destroy();
+  if (
+    meeting.connection.receiver.subscriptions.get(userId) ===
+    existing.opusStream
+  ) {
     meeting.connection.receiver.subscriptions.delete(userId);
   }
+
+  for (const stream of new Set([
+    existing.opusStream,
+    existing.decoder,
+    existing.decodedStream,
+  ])) {
+    disposeVoiceStream(stream, () => {
+      for (const detach of existing.ownedListenerCleanups.get(stream) ?? []) {
+        detach();
+      }
+    });
+  }
+  existing.ownedListenerCleanups.clear();
 }
 
 function scheduleResubscribe(
@@ -836,6 +839,7 @@ export async function subscribeToUserVoice(
     opusStream,
     decoder: opusDecoder,
     decodedStream: opusStream,
+    ownedListenerCleanups: new Map(),
     decoderErrorCount: 0,
     consecutiveNoPcmEvents: 0,
   };
@@ -843,7 +847,7 @@ export async function subscribeToUserVoice(
   subscriptions.set(userId, subscriptionState);
 
   // Prevent decoder errors (often caused by malformed or partial packets) from crashing the process.
-  opusDecoder.on("error", (err: Error) => {
+  const onDecoderError = (err: Error) => {
     if (subscriptionState.suppressResubscribe) return;
     if (isCaptureActive(meeting)) {
       meeting.audioData.captureIncomplete = true;
@@ -853,10 +857,14 @@ export async function subscribeToUserVoice(
       `Opus decoder error: meetingId=${meeting.meetingId} message=${err.message} errors=${subscriptionState.decoderErrorCount} ${opusDecoder.formatFailureDiagnostics()}`,
     );
     scheduleResubscribe(meeting, userId, "decoder-error");
-  });
+  };
+  opusDecoder.on("error", onDecoderError);
+  subscriptionState.ownedListenerCleanups.set(opusDecoder, [
+    () => opusDecoder.removeListener("error", onDecoderError),
+  ]);
 
   // Prism's Opus stream can also emit errors; guard those too.
-  opusStream.on("error", (err: Error) => {
+  const onOpusError = (err: Error) => {
     if (subscriptionState.suppressResubscribe) return;
     if (isCaptureActive(meeting)) {
       meeting.audioData.captureIncomplete = true;
@@ -865,12 +873,17 @@ export async function subscribeToUserVoice(
       `Opus stream error: meetingId=${meeting.meetingId} message=${err.message}`,
     );
     scheduleResubscribe(meeting, userId, "opus-stream-error");
-  });
+  };
+  opusStream.on("error", onOpusError);
+  const opusListenerCleanups = [
+    () => opusStream.removeListener("error", onOpusError),
+  ];
+  subscriptionState.ownedListenerCleanups.set(opusStream, opusListenerCleanups);
 
   const decodedStream = opusStream.pipe(opusDecoder);
   subscriptionState.decodedStream = decodedStream;
 
-  decodedStream.on("error", (err: Error) => {
+  const onDecodedError = (err: Error) => {
     if (subscriptionState.suppressResubscribe) return;
     if (isCaptureActive(meeting)) {
       meeting.audioData.captureIncomplete = true;
@@ -879,19 +892,36 @@ export async function subscribeToUserVoice(
       `Decoded stream error: meetingId=${meeting.meetingId} message=${err.message}`,
     );
     scheduleResubscribe(meeting, userId, "decoded-stream-error");
-  });
+  };
+  decodedStream.on("error", onDecodedError);
+  const decodedListenerCleanups =
+    subscriptionState.ownedListenerCleanups.get(decodedStream) ?? [];
+  decodedListenerCleanups.push(() =>
+    decodedStream.removeListener("error", onDecodedError),
+  );
+  subscriptionState.ownedListenerCleanups.set(
+    decodedStream,
+    decodedListenerCleanups,
+  );
 
-  opusStream.on("close", () => {
+  const onOpusClose = () => {
     if (subscriptionState.suppressResubscribe) return;
     scheduleResubscribe(meeting, userId, "opus-stream-close");
-  });
+  };
+  opusStream.on("close", onOpusClose);
+  opusListenerCleanups.push(() =>
+    opusStream.removeListener("close", onOpusClose),
+  );
 
-  opusStream.on("end", () => {
+  const onOpusEnd = () => {
     if (subscriptionState.suppressResubscribe) return;
     scheduleResubscribe(meeting, userId, "opus-stream-end");
-  });
+  };
+  opusStream.on("end", onOpusEnd);
+  opusListenerCleanups.push(() => opusStream.removeListener("end", onOpusEnd));
 
-  decodedStream.on("data", (chunk) => {
+  const onPcmData = (chunk: Buffer) => {
+    if (subscriptionState.suppressResubscribe) return;
     subscriptionState.lastPcmAt = Date.now();
     subscriptionState.consecutiveNoPcmEvents = 0;
     subscriptionState.lastNoPcmAt = undefined;
@@ -919,7 +949,11 @@ export async function subscribeToUserVoice(
       snippet.audioBytes = (snippet.audioBytes ?? 0) + chunk.length;
       maybeFinalizeSnippetsForInterjection(meeting, userId, snippet);
     }
-  });
+  };
+  decodedStream.on("data", onPcmData);
+  decodedListenerCleanups.push(() =>
+    decodedStream.removeListener("data", onPcmData),
+  );
 }
 
 export function userStartTalking(meeting: MeetingData, userId: string) {

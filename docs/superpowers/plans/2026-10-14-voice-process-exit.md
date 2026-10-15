@@ -33,7 +33,7 @@
 
 - [ ] After approval, inspect attached worktrees and current remote master. Use a suitable clean managed worktree with the using-git-worktrees skill; do not restore the removed checkout or change another chat's worktree.
 - [ ] Copy this plan and its spec into the execution worktree. Read its current AGENTS.md and relevant directory instructions. Check the recovery work for overlap before changing shared voice code. Preserve that chat's ownership and messaging approval requirements.
-- [ ] Reconfirm the reproduced boundaries against the new base. Carry forward the accepted DAVE probe and voice patch unchanged.
+- [ ] Reconfirm the reproduced boundaries against the new base. Carry forward the accepted DAVE probe and decrypt/control patch hunks. The only additional library change is the Task 1 receiver-close identity guard.
 
 ## Task 1: Make subscription disposal safe
 
@@ -106,6 +106,7 @@ This task can run independently of Tasks 1-2. It produces test evidence, not a p
 - Create src/utils/disposeVoiceStream.ts and test/utils/disposeVoiceStream.test.ts.
 - Modify src/audio.ts and test/audio/voiceSubscriptions.test.ts.
 - Create test/audio/fixtures/voiceCaptureExit.cjs and test/audio/processExit.test.ts.
+- Add the minimal close-listener identity guard to patches/@discordjs+voice+0.19.2.patch in both CJS and ESM, with test/audio/voiceReceiverOwnership.test.js using the real receiver.
 
 ### Task 2 file map
 

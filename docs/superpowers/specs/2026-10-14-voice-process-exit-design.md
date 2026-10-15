@@ -28,7 +28,7 @@ Before disposing a subscription, suppress its recovery callbacks and cancel its 
 
 Keep an error consumer attached throughout destruction, including an error already queued by destroy(error). Remove the teardown guard after close. If a stream does not emit close, the guard may remain on that unreachable stream until garbage collection. It must not keep the stream in a strong global registry. Never use removeAllListeners to remove other owners' handlers.
 
-Late events must neither schedule another subscription nor write PCM into a replacement capture. Repeated cleanup is harmless. Receiver-map deletion must affect only the stream being disposed, never a newer stream for the same participant.
+Late events must neither schedule another subscription nor write PCM into a replacement capture. Repeated cleanup is harmless. Receiver-map deletion must affect only the stream being disposed, never a newer stream for the same participant. The pinned library currently removes entries by key alone on close. Add the minimal identity guard to that listener in both runtime distributions so its retained callback cannot delete a replacement.
 
 ### Contain recoverable async failures
 
@@ -86,7 +86,7 @@ PR readiness follows the current exact-head checks, comments, reviews, threads a
 
 ## Engineering reference and evidence
 
-Expected production changes: src/audio.ts, src/bot.ts, src/meetings.ts and a small stream-disposal helper. Conditional DAVE changes: src/utils/opusDiagnosticDecoder.ts and a pure protocol-frame classifier. Tests belong beside the existing audio suites; use subprocess cases for process survival. No public decoder API, production dependency or voice patch change is proposed.
+Expected production changes: src/audio.ts, src/bot.ts, src/meetings.ts and a small stream-disposal helper. Conditional DAVE changes: src/utils/opusDiagnosticDecoder.ts and a pure protocol-frame classifier. Tests belong beside the existing audio suites; use subprocess cases for process survival. No public decoder API or production dependency change is proposed. The only voice patch addition is the receiver-close identity guard required for safe teardown; it does not change MLS or decrypt behavior.
 
 The plan uses existing TypeScript, Node streams, Jest and the pinned voice/Davey integrations. Existing processing must keep generating notes from usable partial transcripts with its current notice. Do not reset captureIncomplete after recovery.
 

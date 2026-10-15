@@ -2,6 +2,7 @@ import { PassThrough, TransformCallback } from "node:stream";
 import { VoiceConnectionStatus } from "@discordjs/voice";
 import {
   subscribeToUserVoice,
+  unsubscribeToVoiceUponLeaving,
   userStartTalking,
   userStopTalking,
 } from "../../src/audio";
@@ -85,6 +86,89 @@ describe("voice subscriptions", () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  test("disposes each distinct stream once and preserves external listeners", async () => {
+    const streams: PassThrough[] = [];
+    const { meeting, receiver } = createMeeting(streams);
+    await subscribeToUserVoice(meeting, "user-1");
+    const opus = streams[0];
+    const decoder = mockDecoders[0];
+    const opusDestroy = jest.spyOn(opus, "destroy");
+    const decoderDestroy = jest.spyOn(decoder, "destroy");
+    const externalEnd = jest.fn();
+    const externalData = jest.fn();
+    opus.on("end", externalEnd);
+    decoder.on("data", externalData);
+
+    unsubscribeToVoiceUponLeaving(meeting, "user-1");
+    unsubscribeToVoiceUponLeaving(meeting, "user-1");
+
+    expect(opusDestroy).toHaveBeenCalledTimes(1);
+    expect(decoderDestroy).toHaveBeenCalledTimes(1);
+    expect(opus.listeners("end")).toContain(externalEnd);
+    expect(decoder.listeners("data")).toContain(externalData);
+    expect(receiver.subscriptions.has("user-1")).toBe(false);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test("retains a receiver replacement when the old subscription is cleared", async () => {
+    const streams: PassThrough[] = [];
+    const { meeting, receiver } = createMeeting(streams);
+    await subscribeToUserVoice(meeting, "user-1");
+    const replacement = new PassThrough();
+    receiver.subscriptions.set("user-1", replacement);
+
+    unsubscribeToVoiceUponLeaving(meeting, "user-1");
+
+    expect(receiver.subscriptions.get("user-1")).toBe(replacement);
+    expect(replacement.destroyed).toBe(false);
+    replacement.destroy();
+  });
+
+  test("cancels recovery and ignores already queued PCM, end and error callbacks", async () => {
+    const streams: PassThrough[] = [];
+    const { meeting, receiver } = createMeeting(streams);
+    const output = new PassThrough();
+    meeting.audioData.audioPassThrough = output;
+    const write = jest.spyOn(output, "write");
+    await subscribeToUserVoice(meeting, "user-1");
+    const stalePcmCallbacks = mockDecoders[0].listeners("data");
+    const staleEndCallbacks = streams[0].listeners("end");
+    const staleErrorCallbacks = mockDecoders[0].listeners("error");
+    streams[0].emit("error", new Error("synthetic recovery trigger"));
+    expect(jest.getTimerCount()).toBe(1);
+
+    unsubscribeToVoiceUponLeaving(meeting, "user-1");
+    for (const callback of stalePcmCallbacks) callback(Buffer.alloc(8));
+    for (const callback of staleEndCallbacks) callback();
+    for (const callback of staleErrorCallbacks)
+      callback(new Error("synthetic late error"));
+    await jest.advanceTimersByTimeAsync(1_000);
+
+    expect(write).not.toHaveBeenCalled();
+    expect(meeting.audioData.currentSnippets.size).toBe(0);
+    expect(jest.getTimerCount()).toBe(0);
+    expect(receiver.subscribe).toHaveBeenCalledTimes(1);
+    expect(meeting.audioData.captureIncomplete).toBe(true);
+    output.destroy();
+  });
+
+  test("returns streams and recovery timers to baseline across repeated disposal", async () => {
+    const streams: PassThrough[] = [];
+    const { meeting, receiver } = createMeeting(streams);
+    for (let cycle = 0; cycle < 20; cycle += 1) {
+      await subscribeToUserVoice(meeting, "user-1");
+      streams[cycle].emit("error", new Error("synthetic recovery trigger"));
+      unsubscribeToVoiceUponLeaving(meeting, "user-1");
+      await jest.advanceTimersByTimeAsync(0);
+      expect(receiver.subscriptions.size).toBe(0);
+      expect(jest.getTimerCount()).toBe(0);
+      expect(streams[cycle].destroyed).toBe(true);
+      expect(mockDecoders[cycle].destroyed).toBe(true);
+      expect(streams[cycle].listenerCount("error")).toBe(0);
+      expect(mockDecoders[cycle].listenerCount("error")).toBe(0);
+    }
   });
 
   test("reports the failing queued input, not the most recently received packet", async () => {
