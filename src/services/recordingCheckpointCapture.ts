@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { CheckpointArtifactInput } from "../types/recordingCheckpoint";
+import type {
+  CheckpointArtifactInput,
+  RecordingCoverage,
+} from "../types/recordingCheckpoint";
 
 const RATE = 48000 * 2 * 2;
 const SEGMENT_MS = 30_000;
@@ -27,7 +30,7 @@ export function releaseCheckpointPcm(bytes: number): void {
 type Piece = {
   sourceId: string;
   sequence: number;
-  at: number;
+  intervals: Extract<RecordingCoverage, { kind: "known" }>["intervals"];
   receivedAt: number;
   bytes: number;
   chunks: Buffer[];
@@ -94,13 +97,7 @@ export function createRecordingCheckpointCapture(input: Input) {
       checksumSha256: createHash("sha256").update(bytes).digest("hex"),
       coverage: {
         kind: "known",
-        intervals: [
-          {
-            sourceId,
-            startOffsetMs: piece.at - input.startedAt,
-            durationMs: (piece.bytes * 1000) / RATE,
-          },
-        ],
+        intervals: piece.intervals,
       },
     };
     closed.push({ artifact, receivedAt: piece.receivedAt, file, attempts: 0 });
@@ -219,11 +216,7 @@ export function createRecordingCheckpointCapture(input: Input) {
     }
     const sampleAt = Math.max(at, sampleEnds.get(sourceId) ?? input.startedAt);
     let piece = open.get(sourceId);
-    if (
-      piece &&
-      (sampleAt > piece.at + (piece.bytes * 1000) / RATE ||
-        piece.bytes + chunk.length > RATE * 30)
-    ) {
+    if (piece && piece.bytes + chunk.length > RATE * 30) {
       close(sourceId);
       piece = undefined;
       if (stopped) {
@@ -237,7 +230,7 @@ export function createRecordingCheckpointCapture(input: Input) {
       piece = {
         sourceId,
         sequence,
-        at: sampleAt,
+        intervals: [],
         observedFirstOffsetMs: at - input.startedAt,
         observedLastOffsetMs: at - input.startedAt,
         maxCursorAdjustmentMs: 0,
@@ -254,7 +247,13 @@ export function createRecordingCheckpointCapture(input: Input) {
     );
     piece.chunks.push(Buffer.from(chunk));
     piece.bytes += chunk.length;
-    sampleEnds.set(sourceId, piece.at + (piece.bytes * 1000) / RATE);
+    const durationMs = (chunk.length * 1000) / RATE;
+    const last = piece.intervals.at(-1);
+    const startOffsetMs = sampleAt - input.startedAt;
+    if (last && last.startOffsetMs + last.durationMs === startOffsetMs)
+      last.durationMs += durationMs;
+    else piece.intervals.push({ sourceId, startOffsetMs, durationMs });
+    sampleEnds.set(sourceId, sampleAt + durationMs);
     queuedBytes += chunk.length;
     if (piece.bytes >= RATE * 30 || reservedBytes >= PRESSURE) closeAll();
     startWorker();

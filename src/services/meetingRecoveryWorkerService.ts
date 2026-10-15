@@ -23,7 +23,7 @@ import {
 } from "./meetingNotesService";
 import { uploadObjectToS3 } from "./storageService";
 import { createDiscordMessage } from "./discordMessageService";
-import { maybeAutoExportCompletedMeeting } from "./notionAutomationService";
+import { autoExportRecoveredMeeting } from "./notionAutomationService";
 
 type WorkerDependencies = {
   repository: DeploymentControlRepository;
@@ -39,7 +39,7 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let pending: Promise<void> | undefined;
-  const handlers = new Set<Promise<void>>();
+  const handlers = new Set<Promise<boolean>>();
   let unresolvedCursor:
     { id: string; work: RuntimeWorkClaim; expected: ControlRecord } | undefined;
   let transientCursor: HistoryKey | undefined;
@@ -137,18 +137,18 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
         `recovery:${key.guildId}:${key.channelId_timestamp}`,
       );
     } catch {
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
     const handler = work.trackPromise(async () => {
       let renewal: ReturnType<typeof setInterval> | undefined;
       let renewing: Promise<void> | undefined;
       let submitted = false;
       try {
-        if (stopped) return;
+        if (stopped) return false;
         const claim = await claimKey(key, work, () => {
           submitted = true;
         });
-        if (!claim) return;
+        if (!claim) return true;
         register(claim, work);
         work.claimed();
         renewal = setInterval(() => {
@@ -183,8 +183,10 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
           throw new Error("Recovery disposition remains unresolved");
         await release(claim, work);
         work.acknowledgeTerminal();
+        return true;
       } catch {
         work.fence();
+        return false;
       } finally {
         clearInterval(renewal);
         await renewing;
@@ -206,7 +208,7 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
     const expected = { ...control, recoveryScanCursor: next };
     let submitted = false;
     try {
-      await work.trackEffect(() => {
+      const saved = await work.trackEffect(() => {
         submitted = true;
         return deps.repository.saveRecoveryCursor(
           context,
@@ -214,59 +216,80 @@ export function createMeetingRecoveryWorker(deps: WorkerDependencies) {
           next,
         );
       });
-      return true;
+      return saved ? "saved" : "rejected";
     } catch {
-      if (!submitted) return true;
+      if (!submitted) return "rejected";
       try {
         const current = await work.trackEffect(() =>
           deps.repository.getRecord("ENV", "CONTROL"),
         );
-        if (sameControl(current, expected)) return true;
+        if (sameControl(current, expected)) return "saved";
       } catch {
         /* The original cursor mutation remains owned when readback is unavailable. */
       }
       unresolvedCursor = { id, work, expected };
       transientCursor = next;
-      return false;
+      return "unknown";
     }
+  }
+  async function visitPage(keys: HistoryKey[], deadline: number) {
+    for (const key of keys) {
+      if (stopped || deps.now() >= deadline || !(await process(key)))
+        return false;
+    }
+    return !stopped;
+  }
+  async function scanPage(
+    work: RuntimeWorkClaim,
+    id: string,
+    deadline: number,
+  ) {
+    const authority = await work.authority();
+    if (authority.kind !== "serving" || stopped) return "end";
+    const control = await work.trackEffect(() =>
+      deps.repository.getRecord("ENV", "CONTROL"),
+    );
+    if (control?.recordType !== "control" || stopped) return "end";
+    if (unresolvedCursor && sameControl(control, unresolvedCursor.expected)) {
+      unresolvedCursor.work.acknowledgeReadOnlyRecoveryPoll();
+      releaseAcknowledgedRuntimeWork(unresolvedCursor.id);
+      unresolvedCursor = undefined;
+      transientCursor = undefined;
+    }
+    const page = await work.trackEffect(() =>
+      deps.repository.discoverRecordingRecoveries(
+        unresolvedCursor ? transientCursor : control.recoveryScanCursor,
+      ),
+    );
+    if (!(await visitPage(page.keys, deadline))) return "end";
+    const latest = await work.authority();
+    if (latest.kind !== "serving") return "end";
+    if (unresolvedCursor) transientCursor = page.cursor;
+    else {
+      const saved = await saveCursor(
+        work,
+        id,
+        control,
+        { ...latest.context, now: deps.now() },
+        page.cursor,
+      );
+      if (saved !== "saved") {
+        work.fence();
+        return saved === "unknown" ? "unknown" : "end";
+      }
+    }
+    return page.cursor ? "more" : "end";
   }
   async function runPoll(work: RuntimeWorkClaim, id: string) {
     let cursorKnown = true;
     try {
-      const authority = await work.authority();
-      if (authority.kind !== "serving") return;
-      const control = await work.trackEffect(() =>
-        deps.repository.getRecord("ENV", "CONTROL"),
-      );
-      if (control?.recordType !== "control" || stopped) return;
-      if (unresolvedCursor && sameControl(control, unresolvedCursor.expected)) {
-        unresolvedCursor.work.acknowledgeReadOnlyRecoveryPoll();
-        releaseAcknowledgedRuntimeWork(unresolvedCursor.id);
-        unresolvedCursor = undefined;
-        transientCursor = undefined;
+      // Scheduling bounds, never a timeout for an already-owned effect.
+      const deadline = deps.now() + 10;
+      for (let count = 0; count < 20 && deps.now() < deadline; count++) {
+        const result = await scanPage(work, id, deadline);
+        cursorKnown = result !== "unknown";
+        if (result !== "more") return;
       }
-      const page = await work.trackEffect(() =>
-        deps.repository.discoverRecordingRecoveries(
-          unresolvedCursor ? transientCursor : control.recoveryScanCursor,
-        ),
-      );
-      for (const key of page.keys) {
-        if (stopped) break;
-        await process(key);
-      }
-      if (stopped) return;
-      if (unresolvedCursor) {
-        transientCursor = page.cursor;
-        return;
-      }
-      cursorKnown = await saveCursor(
-        work,
-        id,
-        control,
-        { ...authority.context, now: deps.now() },
-        page.cursor,
-      );
-      if (!cursorKnown) work.fence();
     } catch {
       work.fence();
     } finally {
@@ -329,7 +352,7 @@ export function startMeetingRecoveryWorker() {
       transcript: recoverTranscript,
       upload: uploadObjectToS3,
       send: createDiscordMessage,
-      autoExport: maybeAutoExportCompletedMeeting,
+      autoExport: autoExportRecoveredMeeting,
     },
   });
   worker.start();

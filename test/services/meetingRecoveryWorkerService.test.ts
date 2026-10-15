@@ -22,71 +22,163 @@ function barrier() {
   });
   return { promise, resolve };
 }
+function scanWorker(
+  f: Awaited<ReturnType<typeof recoveryFixture>>,
+  now = () => Math.floor(Date.now() / 1000),
+  begin = beginRuntimeWorkClaim,
+) {
+  return createMeetingRecoveryWorker({
+    repository: f.repository,
+    begin,
+    recover: recoverMeeting,
+    now,
+    content: {
+      autoExport: async () => "skipped",
+      reader: f.reader,
+      upload: f.upload,
+      transcript: recoverTranscript,
+      notes: async () => undefined,
+      summaries: async () => ({}),
+      send: async () => {
+        throw new Error("Unexpected scan delivery");
+      },
+    },
+  });
+}
 async function verifyNewWorkerCursorContinuation(
   f: Awaited<ReturnType<typeof recoveryFixture>>,
 ) {
   const original = f.histories.get("guild")!;
-  f.histories.set(
-    "guild",
-    Array.from({ length: 11 }, (_, index) => ({
-      ...original[0],
-      channelId_timestamp: `channel#${String(index).padStart(2, "0")}`,
-      status: "processing" as const,
-      recovery: undefined,
-    })),
-  );
-  // A row may disappear between discovery and its per-key claim read. Each key
-  // still has to be visited before the durable continuation can move past it.
+  const rows = Array.from({ length: 2101 }, (_, index) => ({
+    ...original[0],
+    channelId_timestamp: `scan#${String(index).padStart(4, "0")}`,
+    status: index === 2100 ? ("processing" as const) : ("complete" as const),
+    recovery: undefined,
+  }));
+  f.histories.set("guild", rows);
   const reads = jest
     .spyOn(f.repository, "getMeetingHistory")
     .mockResolvedValue(undefined);
-  const makeWorker = () =>
-    createMeetingRecoveryWorker({
-      repository: f.repository,
-      begin: beginRuntimeWorkClaim,
-      recover: recoverMeeting,
-      now: () => Math.floor(Date.now() / 1000),
-      content: {
-        autoExport: async () => {},
-        reader: f.reader,
-        upload: f.upload,
-        transcript: recoverTranscript,
-        notes: async () => undefined,
-        summaries: async () => ({}),
-        send: async () => {
-          throw new Error("Unexpected delivery");
+  const pages = jest.spyOn(f.repository, "discoverRecordingRecoveries");
+  const first = scanWorker(f);
+  await first.poll();
+  await first.stop();
+  expect(pages).toHaveBeenCalledTimes(20);
+  expect(reads).not.toHaveBeenCalled();
+  expect(await f.repository.getRecord("ENV", "CONTROL")).toMatchObject({
+    recoveryScanCursor: { channelId_timestamp: "scan#1999" },
+  });
+  const restarted = scanWorker(f);
+  await restarted.poll();
+  await restarted.stop();
+  expect(pages).toHaveBeenCalledTimes(22);
+  expect(reads).toHaveBeenCalledWith(
+    { guildId: "guild", channelId_timestamp: "scan#2100" },
+    expect.any(AbortSignal),
+  );
+  expect(await f.repository.getRecord("ENV", "CONTROL")).not.toHaveProperty(
+    "recoveryScanCursor",
+    expect.anything(),
+  );
+  pages.mockRestore();
+  reads.mockRestore();
+  f.histories.set("guild", original);
+}
+async function verifyScanSchedulingBounds(
+  f: Awaited<ReturnType<typeof recoveryFixture>>,
+) {
+  const original = f.histories.get("guild")!;
+  const initial = structuredClone(
+    f.records.get(JSON.stringify(["ENV", "CONTROL"])),
+  );
+  f.histories.set(
+    "guild",
+    Array.from({ length: 301 }, (_, index) => ({
+      ...original[0],
+      channelId_timestamp: `budget#${String(index).padStart(3, "0")}`,
+      status: "complete" as const,
+      recovery: undefined,
+    })),
+  );
+  const discover = f.repository.discoverRecordingRecoveries.bind(f.repository);
+  let clock = f.now;
+  const pages = jest
+    .spyOn(f.repository, "discoverRecordingRecoveries")
+    .mockImplementation(async (cursor) => {
+      const page = await discover(cursor);
+      clock += 5;
+      return page;
+    });
+  const first = scanWorker(f, () => clock);
+  await first.poll();
+  await first.stop();
+  expect(pages).toHaveBeenCalledTimes(2);
+  expect(await f.repository.getRecord("ENV", "CONTROL")).toMatchObject({
+    recoveryScanCursor: { channelId_timestamp: "budget#199" },
+  });
+  const second = scanWorker(f, () => clock);
+  await second.poll();
+  await second.stop();
+  expect(pages).toHaveBeenCalledTimes(4);
+  pages.mockRestore();
+  f.records.set(JSON.stringify(["ENV", "CONTROL"]), structuredClone(initial));
+  const writes = jest
+    .spyOn(f.repository, "saveRecoveryCursor")
+    .mockResolvedValueOnce(false);
+  const rejectedPages = jest.spyOn(f.repository, "discoverRecordingRecoveries");
+  const rejected = scanWorker(f);
+  await rejected.poll();
+  await rejected.stop();
+  expect(rejectedPages).toHaveBeenCalledTimes(1);
+  expect(writes).toHaveBeenCalledTimes(1);
+  expect(await f.repository.getRecord("ENV", "CONTROL")).toEqual(initial);
+  writes.mockRestore();
+  rejectedPages.mockRestore();
+  const stopped = scanWorker(f);
+  const stoppingPages = jest
+    .spyOn(f.repository, "discoverRecordingRecoveries")
+    .mockImplementationOnce(async (cursor) => {
+      const page = await discover(cursor);
+      void stopped.stop();
+      return page;
+    });
+  await stopped.poll();
+  await stopped.stop();
+  expect(stoppingPages).toHaveBeenCalledTimes(1);
+  expect(await f.repository.getRecord("ENV", "CONTROL")).toEqual(initial);
+  stoppingPages.mockRestore();
+  let lost = false;
+  const losing = scanWorker(
+    f,
+    () => f.now,
+    (...args) => {
+      const work = beginRuntimeWorkClaim(...args);
+      return {
+        ...work,
+        authority: async () => {
+          if (lost) throw new Error("serving admission lost");
+          return work.authority();
         },
-      },
+      };
+    },
+  );
+  const lostPages = jest
+    .spyOn(f.repository, "discoverRecordingRecoveries")
+    .mockImplementationOnce(async (cursor) => {
+      const page = await discover(cursor);
+      lost = true;
+      return page;
     });
-  try {
-    const first = makeWorker();
-    await first.poll();
-    await first.stop();
-    expect(reads).toHaveBeenCalledTimes(5);
-    const state = await f.repository.getRecord("ENV", "CONTROL");
-    expect(state).toMatchObject({
-      recoveryScanCursor: {
-        guildId: "guild",
-        channelId_timestamp: "channel#04",
-      },
-    });
-    const restarted = makeWorker();
-    await restarted.poll();
-    expect(reads).toHaveBeenCalledTimes(10);
-    await restarted.poll();
-    await restarted.stop();
-    expect(
-      new Set(reads.mock.calls.map(([key]) => key.channelId_timestamp)).size,
-    ).toBe(11);
-    expect(reads).toHaveBeenCalledTimes(11);
-    const finished = await f.repository.getRecord("ENV", "CONTROL");
-    expect(
-      finished?.recordType === "control" && finished.recoveryScanCursor,
-    ).toBeUndefined();
-  } finally {
-    reads.mockRestore();
-    f.histories.set("guild", original);
-  }
+  await losing.poll();
+  await losing.stop();
+  expect(lostPages).toHaveBeenCalledTimes(1);
+  expect(await f.repository.getRecord("ENV", "CONTROL")).not.toHaveProperty(
+    "recoveryScanCursor",
+    expect.anything(),
+  );
+  lostPages.mockRestore();
+  f.histories.set("guild", original);
+  f.records.set(JSON.stringify(["ENV", "CONTROL"]), initial);
 }
 
 async function verifyCursorFailurePolling(
@@ -100,9 +192,9 @@ async function verifyCursorFailurePolling(
   const baseline = lifecycle.getWorkCounts().pending_admission;
   f.histories.set(
     "guild",
-    Array.from({ length: 11 }, (_, index) => ({
+    Array.from({ length: 211 }, (_, index) => ({
       ...original[0],
-      channelId_timestamp: `cursor-${mode}#${String(index).padStart(2, "0")}`,
+      channelId_timestamp: `cursor-${mode}#${String(index).padStart(3, "0")}`,
       status: "processing" as const,
       recovery: undefined,
     })),
@@ -111,64 +203,35 @@ async function verifyCursorFailurePolling(
     .spyOn(f.repository, "getMeetingHistory")
     .mockResolvedValue(undefined);
   if (mode === "read")
-    reads.mockRejectedValueOnce(new Error("read failed before any mutation"));
-  const get = f.repository.getRecord.bind(f.repository);
+    reads.mockRejectedValueOnce(new Error("read failed before mutation"));
   const readback = jest.spyOn(f.repository, "getRecord");
   const save = f.repository.saveRecoveryCursor.bind(f.repository);
   const writes = jest.spyOn(f.repository, "saveRecoveryCursor");
   if (mode !== "read")
     writes.mockImplementationOnce(async (...args) => {
-      const result = await save(...args);
-      expect(result).toBe(true);
+      expect(await save(...args)).toBe(true);
       if (mode === "unavailable")
-        readback.mockRejectedValueOnce(new Error("readback unavailable"));
-      if (mode === "different") {
-        const current = f.records.get(JSON.stringify(["ENV", "CONTROL"]));
-        current.coordinatorToken = "later-coordinator";
-      }
-      throw new Error("cursor committed but response lost");
+        readback.mockRejectedValueOnce(new Error("unavailable"));
+      if (mode === "different")
+        f.records.get(JSON.stringify(["ENV", "CONTROL"])).coordinatorToken =
+          "later";
+      throw new Error("cursor committed but ACK lost");
     });
-  const worker = createMeetingRecoveryWorker({
-    repository: f.repository,
-    begin: beginRuntimeWorkClaim,
-    recover: recoverMeeting,
-    now: () => Math.floor(Date.now() / 1000),
-    content: {
-      autoExport: async () => {},
-      reader: f.reader,
-      upload: f.upload,
-      transcript: recoverTranscript,
-      notes: async () => undefined,
-      summaries: async () => ({}),
-      send: async () => {
-        throw new Error("Unexpected send");
-      },
-    },
-  });
+  const worker = scanWorker(f);
   try {
     await worker.poll();
-    expect(reads).toHaveBeenCalledTimes(5);
-    expect(lifecycle.getWorkCounts().pending_admission).toBe(
-      baseline + (mode === "unavailable" || mode === "different" ? 1 : 0),
+    expect(reads).toHaveBeenCalledTimes(
+      mode === "exact" ? 211 : mode === "read" ? 1 : 100,
     );
-    await worker.poll();
-    expect(reads).toHaveBeenCalledTimes(10);
-    await worker.poll();
+    expect(lifecycle.getWorkCounts().pending_admission).toBe(
+      baseline + (["unavailable", "different"].includes(mode) ? 1 : 0),
+    );
+    if (mode !== "exact") await worker.poll();
     expect(
       new Set(reads.mock.calls.map(([key]) => key.channelId_timestamp)).size,
-    ).toBe(11);
-    if (mode === "different") {
-      expect(writes).toHaveBeenCalledTimes(1);
-      expect(lifecycle.getWorkCounts().pending_admission).toBe(baseline + 1);
-    } else expect(lifecycle.getWorkCounts().pending_admission).toBe(baseline);
-    if (mode === "read") {
-      await worker.poll();
-      expect(
-        reads.mock.calls.filter(([key]) =>
-          key.channelId_timestamp.endsWith("#00"),
-        ),
-      ).toHaveLength(2);
-    }
+    ).toBe(211);
+    if (mode === "read") expect(reads).toHaveBeenCalledTimes(212);
+    if (mode === "different") expect(writes).toHaveBeenCalledTimes(1);
   } finally {
     await worker.stop();
     reads.mockRestore();
@@ -176,7 +239,6 @@ async function verifyCursorFailurePolling(
     readback.mockRestore();
     f.histories.set("guild", original);
     f.records.set(JSON.stringify(["ENV", "CONTROL"]), control);
-    expect(await get("ENV", "CONTROL")).toEqual(control);
   }
 }
 
@@ -260,6 +322,7 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
   installRuntimeLifecycle(lifecycle);
   await lifecycle.start();
   await verifyNewWorkerCursorContinuation(f);
+  await verifyScanSchedulingBounds(f);
   expect(
     (await lifecycle.getRuntimeAdmissionContext()).authorizedGeneration,
   ).toBe(8);
@@ -288,7 +351,7 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
     recover: recoverMeeting,
     now: () => Math.floor(Date.now() / 1000),
     content: {
-      autoExport: async () => {},
+      autoExport: async () => "skipped",
       reader: f.reader,
       upload: f.upload,
       transcript: recoverTranscript,

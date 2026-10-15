@@ -23,12 +23,14 @@ import type {
 import { buildRuntimeAdmissionChecks } from "../services/deploymentControlTransactions";
 import {
   recoveryDispositionSchema,
+  recoveryExportSchema,
   captureCoverageSummarySchema,
   recordingCaptureStateSchema,
   checkpointObjectSchema,
 } from "../types/recordingCheckpoint";
 
 const LEASE_SECONDS = 30;
+const SCAN_PAGE_SIZE = 100;
 const OBSERVED_FIELDS = [
   "meetingId",
   "ownerInstanceId",
@@ -42,6 +44,7 @@ const OBSERVED_FIELDS = [
   "delivery",
   "transcriptS3Key",
   "recoveryTranscript",
+  "recoveryExport",
   "updatedAt",
   "completionPolicy",
   "cancellationReason",
@@ -96,6 +99,15 @@ function hasRecoveryWork(row: MeetingHistory) {
     )
   );
 }
+function exportAcknowledged(row: MeetingHistory) {
+  return (
+    row.recovery?.stage === "export" &&
+    ["acknowledged", "skipped"].includes(row.recoveryExport?.state ?? "")
+  );
+}
+function reconcilesWithoutAnotherAttempt(row: MeetingHistory) {
+  return row.recovery?.stage === "delivery" || exportAcknowledged(row);
+}
 export function isRecordingRecoveryCandidate(
   row: MeetingHistory,
   now: number,
@@ -109,9 +121,10 @@ export function isRecordingRecoveryCandidate(
     return false;
   const recovery = row.recovery;
   if (recovery?.disposition === "needs_reconciliation")
-    return recovery.reason === "delivery_uncertain";
-  if (recovery?.disposition === "done" || (recovery?.attempt ?? 0) >= 4)
-    return false;
+    return recovery.reason === "delivery_uncertain" || exportAcknowledged(row);
+  if (recovery?.disposition === "done") return false;
+  if (exportAcknowledged(row)) return true;
+  if ((recovery?.attempt ?? 0) >= 4) return false;
   if (
     recovery?.retry.nextAttemptAt &&
     Date.parse(recovery.retry.nextAttemptAt) > now * 1000
@@ -141,10 +154,9 @@ export function prepareRecoveryClaim(
       ? { disposition: "needs_reconciliation", reason: "delivery_uncertain" }
       : { disposition: "claimed" }),
     executionVersion: version,
-    attempt:
-      history.recovery?.stage === "delivery"
-        ? history.recovery.attempt
-        : (history.recovery?.attempt ?? 0) + 1,
+    attempt: reconcilesWithoutAnotherAttempt(history)
+      ? history.recovery!.attempt
+      : (history.recovery?.attempt ?? 0) + 1,
     stage: history.recovery?.stage ?? "verification",
     retry: { maxAttempts: 4, nextAttemptAt: null },
   });
@@ -217,7 +229,7 @@ function updateHistory(
 type RecoveryPatch = Parameters<
   RecoveryRepository["updateRecordingRecovery"]
 >[1];
-const stages = ["verification", "transcription", "notes", "delivery"];
+const stages = ["verification", "transcription", "notes", "delivery", "export"];
 function validateRecoveryPatch(claim: RecoveryClaim, patch: RecoveryPatch) {
   if (patch.captureCoverage)
     captureCoverageSummarySchema.parse(patch.captureCoverage);
@@ -243,11 +255,28 @@ function validateRecoveryPatch(claim: RecoveryClaim, patch: RecoveryPatch) {
       throw new Error("Terminal capture cannot be relabeled");
   }
   validateRecoveryTranscriptReceipt(claim, patch);
+  validateRecoveryExportReceipt(claim, patch);
   if (
     patch.status &&
     !["processing", "complete", "interrupted"].includes(patch.status)
   )
     throw new Error("Invalid recovery status transition");
+}
+function validateRecoveryExportReceipt(
+  claim: RecoveryClaim,
+  patch: RecoveryPatch,
+) {
+  if (patch.recoveryExport) {
+    const receipt = recoveryExportSchema.parse(patch.recoveryExport);
+    const prior = claim.history.recoveryExport;
+    if (
+      receipt.checkpointRevision !== claim.history.checkpoint?.revision ||
+      receipt.intentExecutionVersion !==
+        (prior?.intentExecutionVersion ?? claim.lease.executionVersion) ||
+      (prior && receipt.state === "pending" && prior.state !== "pending")
+    )
+      throw new Error("Recovery export identity or submission fence changed");
+  }
 }
 function validateRecoveryTranscriptReceipt(
   claim: RecoveryClaim,
@@ -314,10 +343,10 @@ export function createDynamoRecoveryRepository(
       const page = await client.send(
         new ScanCommand({
           TableName: tables.meetingHistory,
-          Limit: 5,
+          Limit: SCAN_PAGE_SIZE,
           ExclusiveStartKey: cursor ? marshall(cursor) : undefined,
           ProjectionExpression:
-            "guildId, channelId_timestamp, meetingId, ownerInstanceId, executionVersion, #status, checkpoint, recovery, completionPolicy",
+            "guildId, channelId_timestamp, meetingId, ownerInstanceId, executionVersion, #status, checkpoint, recovery, recoveryExport, completionPolicy",
           ExpressionAttributeNames: { "#status": "status" },
           ConsistentRead: true,
         }),
@@ -526,7 +555,7 @@ export function createMockRecoveryRepository(
       const index = cursor
         ? rows.findIndex((row) => same(historyKey(row), cursor)) + 1
         : 0;
-      const page = rows.slice(index, index + 5);
+      const page = rows.slice(index, index + SCAN_PAGE_SIZE);
       return {
         keys: page
           .filter((row) =>
@@ -534,7 +563,7 @@ export function createMockRecoveryRepository(
           )
           .map(historyKey),
         cursor:
-          index + 5 < rows.length
+          index + SCAN_PAGE_SIZE < rows.length
             ? historyKey(page[page.length - 1])
             : undefined,
       };

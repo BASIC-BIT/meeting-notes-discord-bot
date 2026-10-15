@@ -272,3 +272,32 @@ test("backward observed clock is retained honestly without overlapping PCM", asy
   });
   f.capture.releaseSettledBuffers();
 });
+
+test("normal 21ms cadence batches storage while preserving every byte interval and speech gap", async () => {
+  const f = fixture();
+  for (let i = 0; i < 1000; i++) {
+    expect(f.capture.push("user:123", Buffer.alloc(3840, i % 251))).toBe(true);
+    await jest.advanceTimersByTimeAsync(21);
+  }
+  await jest.advanceTimersByTimeAsync(5000);
+  f.capture.push("user:123", Buffer.alloc(3840, 252));
+  expect(await f.capture.finish()).toBe(true);
+  const artifacts = f.commit.mock.calls.flatMap(([items]) => items);
+  expect(artifacts).toHaveLength(1);
+  const artifact = artifacts[0];
+  if (artifact.coverage.kind !== "known") throw new Error("coverage missing");
+  expect(artifact.coverage.intervals).toHaveLength(1001);
+  expect(artifact.coverage.intervals.at(-1)).toMatchObject({
+    startOffsetMs: 26000,
+    durationMs: 20,
+  });
+  artifact.coverage.intervals.forEach((interval, i) => {
+    expect(interval.durationMs).toBe(20);
+    expect(
+      Buffer.from(artifact.bytes.subarray(i * 3840, (i + 1) * 3840)),
+    ).toEqual(Buffer.alloc(3840, i === 1000 ? 252 : i % 251));
+  });
+  expect(f.stopped).not.toHaveBeenCalled();
+  expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+  f.capture.releaseSettledBuffers();
+});

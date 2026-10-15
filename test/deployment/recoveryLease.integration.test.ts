@@ -313,3 +313,75 @@ test("coordinator renewal preserves a cursor acknowledged between its read and w
     coordinatorExpiresAt: 280,
   });
 });
+
+test("bounded Dynamo scan advances through irrelevant history pages without losing candidates", async () => {
+  const row = await fixture();
+  for (let batch = 0; batch < 4; batch++) {
+    await Promise.all(
+      Array.from({ length: 60 }, (_, index) =>
+        put(tables.meetingHistory, {
+          ...row,
+          guildId: `irrelevant-${batch}-${index}`,
+          status: "complete",
+          recovery: undefined,
+        }),
+      ),
+    );
+  }
+  const pages = [];
+  let cursor;
+  do {
+    const page = await repository.discoverRecordingRecoveries(cursor);
+    pages.push(page);
+    cursor = page.cursor;
+  } while (cursor && pages.length < 10);
+  expect(cursor).toBeUndefined();
+  expect(pages.length).toBeGreaterThanOrEqual(3);
+  expect(pages.length).toBeLessThanOrEqual(4);
+  expect(pages.flatMap((page) => page.keys)).toContainEqual({
+    guildId: row.guildId,
+    channelId_timestamp: row.channelId_timestamp,
+  });
+});
+
+test("actual Dynamo discovery includes export receipts and never selects submitted unknown", async () => {
+  for (const state of [
+    "pending",
+    "submitted",
+    "acknowledged",
+    "skipped",
+  ] as const) {
+    const row = await fixture();
+    const recovery =
+      state === "submitted" || state === "acknowledged"
+        ? {
+            disposition: "needs_reconciliation" as const,
+            reason: "export_uncertain" as const,
+          }
+        : { disposition: "pending" as const };
+    await put(tables.meetingHistory, {
+      ...row,
+      recovery: {
+        ...recovery,
+        stage: "export",
+        attempt: state === "pending" ? 1 : 4,
+        executionVersion: 1,
+        retry: { maxAttempts: 4, nextAttemptAt: null },
+      },
+      recoveryExport: {
+        state,
+        checkpointRevision: 1,
+        intentExecutionVersion: 1,
+      },
+    });
+    const keys = [];
+    let cursor;
+    do {
+      const page = await repository.discoverRecordingRecoveries(cursor);
+      keys.push(...page.keys);
+      cursor = page.cursor;
+    } while (cursor);
+    const found = keys.some((key) => key.guildId === row.guildId);
+    expect(found).toBe(state !== "submitted");
+  }
+});

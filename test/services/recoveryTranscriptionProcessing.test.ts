@@ -7,6 +7,11 @@ jest.mock("../../src/services/transcriptionService", () => ({
     text: "New verified interval.",
   })),
 }));
+import {
+  getCheckpointPcmBudget,
+  reserveCheckpointPcm,
+  releaseCheckpointPcm,
+} from "../../src/services/recordingCheckpointCapture";
 import { transcribeContentSnippet } from "../../src/services/transcriptionService";
 jest.mock("../../src/services/transcriptionFinalPassService", () => ({
   runContentTranscriptionFinalPass: jest.fn(async () => ({
@@ -123,7 +128,7 @@ test("partial capture uses frozen cleanup and explicitly skips finalized-only st
   const f = await fixture();
   expect(
     await recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
-  ).toBe("Original saved cleanup result.");
+  ).toMatchObject({ text: "Original saved cleanup result." });
   expect(f.content.processing).toMatchObject({
     finalPass: "not_applicable",
     cleanup: "acknowledged",
@@ -161,7 +166,7 @@ test("missing original processing inputs reconcile while a verified processed tr
   };
   expect(
     await recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
-  ).toBe("Verified processed text");
+  ).toMatchObject({ text: "Verified processed text" });
   expect(createOpenAIClient).not.toHaveBeenCalled();
 });
 test("known missing coverage never masquerades as a full finalized recording", async () => {
@@ -185,7 +190,191 @@ test("processed transcript without exact audio coverage cannot bypass newer PCM"
   const text = await recoverTranscript(f.content, f.reader, f.signal, (run) =>
     run(),
   );
-  expect(text).toContain("Previously acknowledged processed text.");
-  expect(text).toContain("New verified interval.");
+  expect(text.text).toContain("Previously acknowledged processed text.");
+  expect(text.text).toContain("New verified interval.");
   expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
 });
+
+function addIntervalAudio(
+  f: Awaited<ReturnType<typeof fixture>>,
+  intervals: { startOffsetMs: number; durationMs: number }[],
+) {
+  if (f.content.context.settings.availability !== "available")
+    throw new Error("settings");
+  f.content.context.settings.value.transcription.finalPassEnabled = false;
+  f.content.context.settings.value.premiumTranscription.enabled = false;
+  f.content.entries = [];
+  const bytes = Buffer.concat(
+    intervals.map((interval, index) =>
+      Buffer.alloc(Math.round(interval.durationMs * 192), (index % 250) + 1),
+    ),
+  );
+  const object = {
+    key: "generated-intervals",
+    byteLength: bytes.length,
+    checksumSha256: createHash("sha256").update(bytes).digest("hex"),
+  };
+  f.objects.set(object.key, bytes);
+  const audio = {
+    kind: "audio" as const,
+    sourceId: "user:123",
+    sequence: 0,
+    contentType: "audio/pcm",
+    object,
+    format: { encoding: "pcm_s16le" as const, sampleRate: 48000, channels: 2 },
+    coverage: {
+      kind: "known" as const,
+      intervals: intervals.map((interval) => ({
+        sourceId: "user:123",
+        ...interval,
+      })),
+    },
+  };
+  f.content.verified.push(audio);
+  return audio;
+}
+
+test("1001 jittered packets use one accounted ASR chunk with exact source bytes and ephemeral gap silence", async () => {
+  const f = await fixture();
+  const intervals = Array.from({ length: 1001 }, (_, i) => ({
+    startOffsetMs: i * 21,
+    durationMs: 20,
+  }));
+  const audio = addIntervalAudio(f, intervals);
+  const coverage = structuredClone(audio.coverage);
+  jest
+    .mocked(transcribeContentSnippet)
+    .mockImplementationOnce(async (_input, snippet) => {
+      const buffer = snippet.chunks[0];
+      expect(buffer.length).toBe(21020 * 192);
+      expect(getCheckpointPcmBudget().reservedBytes).toBe(buffer.length * 4);
+      for (let i = 0; i < 1001; i++) {
+        expect(buffer.subarray(i * 21 * 192, (i * 21 + 20) * 192)).toEqual(
+          Buffer.alloc(3840, (i % 250) + 1),
+        );
+        if (i < 1000)
+          expect(
+            buffer.subarray((i * 21 + 20) * 192, (i + 1) * 21 * 192),
+          ).toEqual(Buffer.alloc(192));
+      }
+      return { status: "succeeded", text: "Grouped real conversation." };
+    });
+  const result = await recoverTranscript(f.content, f.reader, f.signal, (run) =>
+    run(),
+  );
+  expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
+  expect(result.segments).toHaveLength(1);
+  expect(audio.coverage).toEqual(coverage);
+  expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+});
+
+test("long intervals and long gaps split into at most 30s scratch with an exact final tail", async () => {
+  const f = await fixture();
+  addIntervalAudio(f, [
+    { startOffsetMs: 0, durationMs: 31000 },
+    { startOffsetMs: 90000, durationMs: 20 },
+  ]);
+  await recoverTranscript(f.content, f.reader, f.signal, (run) => run());
+  const calls = jest.mocked(transcribeContentSnippet).mock.calls;
+  expect(calls.map(([, snippet]) => snippet.chunks[0].length)).toEqual([
+    30000 * 192,
+    1000 * 192,
+    20 * 192,
+  ]);
+  expect(
+    calls.map(
+      ([, snippet]) =>
+        snippet.timestamp - Date.parse(f.claim.history.timestamp),
+    ),
+  ).toEqual([0, 30000, 90000]);
+  expect(calls.at(-1)![1].chunks[0]).toEqual(Buffer.alloc(3840, 2));
+  expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+});
+
+test("scratch ownership remains charged until an aborted actual call settles", async () => {
+  const f = await fixture();
+  addIntervalAudio(f, [
+    { startOffsetMs: 0, durationMs: 20 },
+    { startOffsetMs: 90000, durationMs: 20 },
+  ]);
+  const controller = new AbortController();
+  let settle!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  jest.mocked(transcribeContentSnippet).mockImplementationOnce(async () => {
+    entered();
+    await pending;
+    return { status: "succeeded", text: "Owned operation settled." };
+  });
+  const work = recoverTranscript(
+    f.content,
+    f.reader,
+    controller.signal,
+    (run) => run(),
+  );
+  const rejection = expect(work).rejects.toThrow("stopped");
+  await started;
+  controller.abort(new Error("stopped"));
+  expect(getCheckpointPcmBudget().reservedBytes).toBe(3840 * 4);
+  settle();
+  await rejection;
+  expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+  expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
+});
+
+test("provider failure releases scratch and cannot start the later group", async () => {
+  const f = await fixture();
+  addIntervalAudio(f, [
+    { startOffsetMs: 0, durationMs: 20 },
+    { startOffsetMs: 90000, durationMs: 20 },
+  ]);
+  jest
+    .mocked(transcribeContentSnippet)
+    .mockRejectedValueOnce(new Error("provider failed"));
+  await expect(
+    recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
+  ).rejects.toThrow("provider failed");
+  expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+  expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
+});
+
+test("an exhausted shared PCM budget refuses allocation and transcription", async () => {
+  const f = await fixture();
+  addIntervalAudio(f, [{ startOffsetMs: 0, durationMs: 20 }]);
+  const bytes = getCheckpointPcmBudget().limitBytes / 4;
+  expect(reserveCheckpointPcm(bytes)).toBe(true);
+  try {
+    await expect(
+      recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
+    ).rejects.toThrow("budget unavailable");
+    expect(transcribeContentSnippet).not.toHaveBeenCalled();
+    expect(getCheckpointPcmBudget().reservedBytes).toBe(bytes * 4);
+  } finally {
+    releaseCheckpointPcm(bytes);
+  }
+  expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+});
+
+test.each(["alignment", "bytes", "overlap"])(
+  "invalid %s mapping refuses transcription without allocating scratch",
+  async (kind) => {
+    const f = await fixture();
+    const audio = addIntervalAudio(f, [
+      { startOffsetMs: 0, durationMs: 20 },
+      { startOffsetMs: 21, durationMs: 20 },
+    ]);
+    if (kind === "alignment") audio.coverage.intervals[0].startOffsetMs = 0.001;
+    if (kind === "bytes") audio.coverage.intervals[0].durationMs = 19;
+    if (kind === "overlap") audio.coverage.intervals[1].startOffsetMs = 19;
+    await expect(
+      recoverTranscript(f.content, f.reader, f.signal, (run) => run()),
+    ).rejects.toThrow("PCM");
+    expect(transcribeContentSnippet).not.toHaveBeenCalled();
+    expect(getCheckpointPcmBudget().reservedBytes).toBe(0);
+  },
+);

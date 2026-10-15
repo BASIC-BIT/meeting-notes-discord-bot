@@ -171,7 +171,7 @@ export async function recoveryFaultFixture(
     input.summarySentence = "Generated summary.";
     return { summarySentence: input.summarySentence };
   };
-  const autoExport = jest.fn(async () => {});
+  const autoExport = jest.fn(async (): Promise<"skipped"> => "skipped");
   const deps: RecoveryDependencies = {
     repository: db.repository,
     reader,

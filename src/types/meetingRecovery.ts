@@ -31,6 +31,7 @@ export type RecoveryRepository = {
     patch: Partial<
       Pick<
         MeetingHistory,
+        | "recoveryExport"
         | "recoveryTranscript"
         | "delivery"
         | "status"

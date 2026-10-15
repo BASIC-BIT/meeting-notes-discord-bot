@@ -27,7 +27,7 @@ import { resolveCompletionPolicy } from "./meetingCompletionPolicyService";
 import { createDiscordMessage } from "./discordMessageService";
 import { uploadObjectToS3 } from "./storageService";
 import type { TranscriptionContentInput } from "./transcriptionService";
-import { maybeAutoExportCompletedMeeting } from "./notionAutomationService";
+import { autoExportRecoveredMeeting } from "./notionAutomationService";
 import { registerNotionMutationTracker } from "./notionOperationLifetime";
 
 type RecoveryPatch = Parameters<
@@ -48,7 +48,7 @@ export type RecoveryDependencies = {
   transcript: typeof recoverTranscript;
   upload: typeof uploadObjectToS3;
   send: typeof createDiscordMessage;
-  autoExport: typeof maybeAutoExportCompletedMeeting;
+  autoExport: typeof autoExportRecoveredMeeting;
 };
 export async function persistRecovery(
   claim: RecoveryClaim,
@@ -208,6 +208,10 @@ async function deliver(claim: RecoveryClaim, deps: RecoveryDependencies) {
     await persistRecovery(
       claim,
       {
+        status:
+          claim.history.capture?.kind === "complete"
+            ? "complete"
+            : "interrupted",
         delivery: {
           ...claim.history.delivery,
           summary: { outcome: "complete", intended: 1, sent: 1, errors: [] },
@@ -221,7 +225,6 @@ async function deliver(claim: RecoveryClaim, deps: RecoveryDependencies) {
       },
       deps,
     );
-    await finish(claim, "completed", deps);
   } catch (error) {
     throw new RecoveryMutationUnknown(
       "Final delivery acknowledgment is unknown",
@@ -330,10 +333,9 @@ async function recoveryTranscript(
       );
     return parsed.text;
   }
-  const text = await deps.effect(() =>
+  const { text, segments } = await deps.effect(() =>
     deps.transcript(content, deps.reader, deps.signal, deps.effect),
   );
-  if (!text.trim()) return text;
   const key = `${claim.history.checkpoint!.artifactFolder}recovery/${claim.lease.executionVersion}/transcript.json`;
   const bytes = Buffer.from(
     JSON.stringify({
@@ -343,11 +345,9 @@ async function recoveryTranscript(
       meetingId: claim.history.meetingId,
       text,
       processing: content.processing,
-      segments:
-        content.entries?.map((entry) => ({
-          ...entry,
-          startedAt: new Date(entry.timestamp).toISOString(),
-        })) ?? [],
+      segments,
+      timingBasis: "sample_cursor_with_observed_gaps",
+      coverage: content.coverage,
     }),
   );
   const object = {
@@ -529,16 +529,94 @@ async function recoverFailure(
     deps,
   );
 }
+async function completeRecoveryExport(
+  claim: RecoveryClaim,
+  deps: RecoveryDependencies,
+) {
+  if (!terminalDeliveryAcknowledged(claim.history))
+    throw new RecoveryMutationUnknown(
+      "Recovered terminal content is not acknowledged",
+    );
+  if (!claim.history.recoveryExport) {
+    await persistRecovery(
+      claim,
+      {
+        recovery: {
+          attempt: claim.history.recovery!.attempt,
+          executionVersion: claim.lease.executionVersion,
+          stage: "export",
+          disposition: "pending",
+          retry: { maxAttempts: 4, nextAttemptAt: null },
+        },
+        recoveryExport: {
+          checkpointRevision: claim.history.checkpoint!.revision,
+          intentExecutionVersion: claim.lease.executionVersion,
+          state: "pending",
+        },
+      },
+      deps,
+    );
+  }
+  const receipt = claim.history.recoveryExport!;
+  if (receipt.state === "submitted")
+    throw new RecoveryMutationUnknown(
+      "Submitted export requires reconciliation",
+    );
+  if (receipt.state === "pending") {
+    const unregister = registerNotionMutationTracker(
+      deps.signal,
+      async (run) => {
+        if (claim.history.recoveryExport!.state === "pending")
+          await persistRecovery(
+            claim,
+            {
+              recoveryExport: { ...receipt, state: "submitted" },
+              recovery: {
+                ...claim.history.recovery!,
+                stage: "export",
+                disposition: "needs_reconciliation",
+                reason: "export_uncertain",
+                retry: { maxAttempts: 4, nextAttemptAt: null },
+              },
+            },
+            deps,
+          );
+        deps.signal.throwIfAborted();
+        return deps.effect(run);
+      },
+    );
+    try {
+      const state = await deps.effect(() =>
+        deps.autoExport(claim.history, deps.signal),
+      );
+      deps.signal.throwIfAborted();
+      await persistRecovery(
+        claim,
+        { recoveryExport: { ...receipt, state } },
+        deps,
+      );
+    } finally {
+      unregister();
+    }
+  }
+  await finish(claim, "completed", deps, true);
+}
+
 export async function recoverMeeting(
   claim: RecoveryClaim,
   deps: RecoveryDependencies,
 ): Promise<void> {
-  // Reconciliation consumes existing acknowledgments and never sends.
+  if (claim.history.recovery?.disposition === "done") return;
+  if (claim.history.recovery?.stage === "export") {
+    await completeRecoveryExport(claim, deps);
+    return;
+  }
+  // Delivery reconciliation never resends Discord. A never-submitted export may follow.
   if (claim.history.recovery?.stage === "delivery") {
     if (noSpeechNoticeAcknowledged(claim.history))
       await finish(claim, "no_usable_speech", deps);
     else if (terminalDeliveryAcknowledged(claim.history))
-      await finish(claim, "completed", deps, true);
+      await completeRecoveryExport(claim, deps);
     return;
   }
   try {
@@ -605,16 +683,5 @@ export async function recoverMeeting(
     await recoverFailure(claim, error, deps);
     return;
   }
-  deps.signal.throwIfAborted();
-  if (!terminalDeliveryAcknowledged(claim.history))
-    throw new RecoveryMutationUnknown(
-      "Recovered terminal content is not acknowledged",
-    );
-  const unregister = registerNotionMutationTracker(deps.signal, deps.effect);
-  try {
-    await deps.effect(() => deps.autoExport(claim.history, deps.signal));
-    deps.signal.throwIfAborted();
-  } finally {
-    unregister();
-  }
+  await completeRecoveryExport(claim, deps);
 }

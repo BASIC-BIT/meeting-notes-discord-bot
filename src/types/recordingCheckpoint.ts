@@ -63,7 +63,13 @@ export const recordingCaptureStateSchema = z.discriminatedUnion("kind", [
 const recoveryBase = z.object({
   attempt: ordinal,
   executionVersion: z.number().int().positive(),
-  stage: z.enum(["verification", "transcription", "notes", "delivery"]),
+  stage: z.enum([
+    "verification",
+    "transcription",
+    "notes",
+    "delivery",
+    "export",
+  ]),
   retry: z
     .object({
       maxAttempts: z.number().int().positive(),
@@ -93,6 +99,7 @@ export const recoveryDispositionSchema = z
         reason: z.enum([
           "ownership_uncertain",
           "delivery_uncertain",
+          "export_uncertain",
           "invalid_checkpoint",
           "invalid_payload",
           "retry_exhausted",
@@ -244,3 +251,12 @@ export type CheckpointAppendResult =
     }
   | { kind: "stale_owner"; coverage: CaptureCoverage }
   | { kind: "preservation_failed"; coverage: CaptureCoverage };
+
+export const recoveryExportSchema = z
+  .object({
+    checkpointRevision: z.number().int().positive(),
+    intentExecutionVersion: z.number().int().positive(),
+    state: z.enum(["pending", "submitted", "acknowledged", "skipped"]),
+  })
+  .strict();
+export type RecoveryExport = z.infer<typeof recoveryExportSchema>;

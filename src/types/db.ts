@@ -454,6 +454,7 @@ export interface OnboardingState {
 // Meeting History Type
 export interface MeetingHistory {
   completionPolicy?: import("./meetingCompletionPolicy").CompletionPolicy;
+  recoveryExport?: import("./recordingCheckpoint").RecoveryExport;
   recoveryTranscript?: {
     checkpointRevision: number;
     object: import("./recordingCheckpoint").CheckpointObject;

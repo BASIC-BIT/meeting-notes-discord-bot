@@ -116,9 +116,9 @@ test("recovery preserves terminal capture and refuses a foreign stage version", 
 });
 test("durable cursor resumes across worker repositories and wraps for fair discovery", async () => {
   const records = new Map();
-  const rows = Array.from({ length: 11 }, (_, i) => ({
+  const rows = Array.from({ length: 201 }, (_, i) => ({
     ...history,
-    channelId_timestamp: `channel#${String(i).padStart(2, "0")}`,
+    channelId_timestamp: `channel#${String(i).padStart(3, "0")}`,
     status: "processing" as const,
     recovery: {
       disposition: "pending" as const,
@@ -138,7 +138,7 @@ test("durable cursor resumes across worker repositories and wraps for fair disco
   await first.initializeControl(structuredClone(control));
   await first.writeRuntime(runtime("old"));
   const page = await first.discoverRecordingRecoveries();
-  expect(page.keys).toHaveLength(5);
+  expect(page.keys).toHaveLength(100);
   expect(await first.saveRecoveryCursor(context, undefined, page.cursor)).toBe(
     true,
   );
@@ -152,7 +152,7 @@ test("durable cursor resumes across worker repositories and wraps for fair disco
   const next = await restarted.discoverRecordingRecoveries(
     state.recoveryScanCursor,
   );
-  expect(next.keys).toHaveLength(5);
+  expect(next.keys).toHaveLength(100);
   expect(next.keys[0]).not.toEqual(page.keys[0]);
   expect(
     await restarted.saveRecoveryCursor(context, undefined, next.cursor),

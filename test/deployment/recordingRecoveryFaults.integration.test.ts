@@ -184,9 +184,13 @@ test.each([
     });
   } else if (fault === "ancillary_unknown") {
     f.autoExport.mockImplementationOnce(async () => {
-      entered.release();
-      await tail.promise;
-      throw new Error("Generated Notion acknowledgment lost");
+      const { runNotionMutation } =
+        await import("../../src/services/notionOperationLifetime");
+      return runNotionMutation(f.deps.signal, async () => {
+        entered.release();
+        await tail.promise;
+        throw new Error("Generated Notion acknowledgment lost");
+      });
     });
   } else {
     const update = db.repository.updateRecordingRecovery.bind(db.repository);
@@ -208,9 +212,11 @@ test.each([
   await entered.promise;
   const before = await f.readHistory();
   expect(before.recovery?.disposition).toBe(
-    ["ancillary_unknown", "terminal_metadata_lost_response"].includes(fault)
+    fault === "terminal_metadata_lost_response"
       ? "done"
-      : "needs_reconciliation",
+      : fault === "terminal_metadata_unknown"
+        ? "pending"
+        : "needs_reconciliation",
   );
   tail.release();
   expect(await result).toBe(
@@ -227,21 +233,24 @@ test.each([
   expect(after.status).toBe("interrupted");
   if (fault === "partial_send")
     expect(after.summaryMessageId).toBe("known-summary");
-  if (
-    ["unknown_send", "partial_send", "terminal_metadata_unknown"].includes(
-      fault,
-    )
-  )
+  if (["unknown_send", "partial_send"].includes(fault))
     expect(after.recovery).toMatchObject({
       disposition: "needs_reconciliation",
       stage: "delivery",
       reason: "delivery_uncertain",
     });
-  if (
-    fault !== "ancillary_unknown" &&
-    fault !== "terminal_metadata_lost_response"
-  )
+  if (["unknown_send", "partial_send"].includes(fault))
     expect(f.autoExport).not.toHaveBeenCalled();
+  else expect(f.autoExport).toHaveBeenCalledTimes(1);
+  if (fault === "ancillary_unknown") {
+    expect(after.recoveryExport?.state).toBe("submitted");
+    await expect(recoverMeeting(claim, f.deps)).rejects.toThrow(
+      "requires reconciliation",
+    );
+    expect(f.autoExport).toHaveBeenCalledTimes(1);
+  }
+  if (fault === "terminal_metadata_unknown")
+    expect(after.recoveryExport?.state).toBe("skipped");
 });
 
 test.each([true, false])(

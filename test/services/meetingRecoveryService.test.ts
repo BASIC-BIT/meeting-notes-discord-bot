@@ -53,6 +53,7 @@ import {
   ensureMeetingSummaries,
 } from "../../src/services/meetingNotesService";
 import { createOpenAIClient } from "../../src/services/openaiClient";
+import { buildMeetingTimelineEventsFromHistory } from "../../src/services/meetingTimelineService";
 import { recoveryFixture } from "./meetingRecoveryFixtures";
 async function fixture(
   text?: string,
@@ -62,7 +63,9 @@ async function fixture(
   let messages = 0;
   const send = jest.fn(async () => ({ id: `message-${++messages}` }));
   const notes = jest.fn(ensureMeetingNotes);
-  const autoExport = jest.fn(async () => {});
+  const autoExport = jest.fn(
+    async (): Promise<"skipped" | "acknowledged"> => "skipped",
+  );
   const deps: RecoveryDependencies = {
     repository: f.repository,
     reader: f.reader,
@@ -97,7 +100,12 @@ test("partialSpeechGeneratesNotesWithoutVoiceJoin and verifiedTranscriptRecovers
   const f = await fixture();
   await readRecoveryContent(f.claim.history, f.reader, f.deps.signal);
   await recoverMeeting(f.claim, f.deps);
-  expect(f.autoExport).toHaveBeenCalledWith(f.claim.history, f.deps.signal);
+  expect(f.autoExport).toHaveBeenCalledWith(
+    expect.objectContaining({
+      recoveryExport: expect.objectContaining({ state: "pending" }),
+    }),
+    f.deps.signal,
+  );
   expect(f.claim.history.status).toBe("interrupted");
   expect(f.claim.history.recovery).toMatchObject({
     disposition: "done",
@@ -308,13 +316,13 @@ test("restart resumes acknowledged notes and verified transcript, retrying only 
   expect(f.notes.mock.calls[0][0].notesText).toBeTruthy();
 });
 
-test.each(["Earlier acknowledged discussion.", "Thanks."])(
+test.each(["Earlier acknowledged discussion.", "Thanks.", ""])(
   "opportunistic transcript %s does not suppress later PCM intervals",
   async (text) => {
     const bytes = Buffer.alloc(384000);
     const f = await fixture(text, {
       transcript: (saved) => {
-        saved.entries[0].revision = 2;
+        if (saved.entries[0]) saved.entries[0].revision = 2;
       },
       context: (saved) => {
         saved.prompts.transcription = {
@@ -348,14 +356,44 @@ test.each(["Earlier acknowledged discussion.", "Thanks."])(
       ],
     });
     await recoverMeeting(f.claim, f.deps);
-    expect(transcribeContentSnippet).toHaveBeenCalledTimes(2);
+    const artifact = JSON.parse(
+      f.objects.get(f.claim.history.transcriptS3Key!)!.toString(),
+    );
+    expect(
+      artifact.segments.filter(
+        (segment: { userId: string }) => segment.userId === "456",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        userId: "456",
+        text: "Later verified discussion.",
+        startedAt: new Date(
+          Date.parse(f.claim.history.timestamp) + 5000,
+        ).toISOString(),
+      }),
+    ]);
+    const timeline = buildMeetingTimelineEventsFromHistory({
+      history: f.claim.history,
+      transcriptPayload: artifact,
+    });
+    expect(
+      timeline
+        .filter((event) => event.text === "Later verified discussion.")
+        .map((event) => event.time),
+    ).toEqual(["0:05"]);
+    expect(artifact.coverage.intervals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ startOffsetMs: 5000, durationMs: 1000 }),
+        expect.objectContaining({ startOffsetMs: 15000, durationMs: 1000 }),
+      ]),
+    );
+    expect(transcribeContentSnippet).toHaveBeenCalledTimes(1);
     const calls = jest.mocked(transcribeContentSnippet).mock.calls;
     expect(calls.map(([, snippet]) => snippet.timestamp)).toEqual([
       Date.parse(f.claim.history.timestamp) + 5000,
-      Date.parse(f.claim.history.timestamp) + 15000,
     ]);
     expect(calls.map(([, snippet]) => snippet.chunks[0].length)).toEqual([
-      192000, 192000,
+      2112000,
     ]);
     expect(f.notes.mock.calls[0][0].finalTranscript).toContain(
       "Later verified discussion.",
@@ -471,4 +509,139 @@ test("no-speech acknowledgment readback and restart finish without another notic
   await recoverMeeting(f.claim, f.deps);
   expect(f.send).toHaveBeenCalledTimes(1);
   expect(f.autoExport).not.toHaveBeenCalled();
+});
+
+test("actual empty transcript receipt survives crash after notice ACK before done", async () => {
+  const f = await fixture("");
+  const update = f.repository.updateRecordingRecovery;
+  f.repository.updateRecordingRecovery = async (claim, patch, now) => {
+    if (patch.recovery?.disposition === "done")
+      throw new Error("crash before done");
+    return update(claim, patch, now);
+  };
+  await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow(
+    "acknowledgment is unknown",
+  );
+  expect(f.claim.history.recoveryTranscript).toBeDefined();
+  f.repository.updateRecordingRecovery = update;
+  f.claim.history = structuredClone(f.histories.get("guild")![0]);
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.claim.history.recovery).toMatchObject({
+    disposition: "done",
+    outcome: "no_usable_speech",
+  });
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(f.notes).not.toHaveBeenCalled();
+  expect(f.autoExport).not.toHaveBeenCalled();
+});
+
+test.each(["delivery", "pending"])(
+  "crash at %s resumes only never-submitted export",
+  async (crash) => {
+    const f = await fixture();
+    const update = f.repository.updateRecordingRecovery;
+    f.repository.updateRecordingRecovery = async (claim, patch, now) => {
+      if (patch.recovery?.stage === "export" && crash === "delivery")
+        throw new Error("crash before export intent");
+      return update(claim, patch, now);
+    };
+    f.autoExport.mockImplementationOnce(async () => {
+      throw new Error("crash before submission");
+    });
+    await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow();
+    expect(f.claim.history.recovery?.disposition).not.toBe("done");
+    f.repository.updateRecordingRecovery = update;
+    f.autoExport.mockReset();
+    f.autoExport.mockResolvedValue("skipped");
+    f.leases.clear(); // Generated process-loss boundary; the next claim must pass real repository fencing.
+    const restarted = await f.repository.claimRecordingRecovery({
+      history: structuredClone(f.histories.get("guild")![0]),
+      lease: undefined,
+      context: f.context,
+      attemptId: "restart-export",
+    });
+    expect(restarted).toBeDefined();
+    await recoverMeeting(restarted!, f.deps);
+    f.claim.history = restarted!.history;
+    expect(f.autoExport).toHaveBeenCalledTimes(1);
+    expect(f.claim.history.recovery?.disposition).toBe("done");
+    expect(f.send).toHaveBeenCalledTimes(2);
+    expect(mockCompletionBodies).toHaveLength(2);
+  },
+);
+
+test.each(["acknowledged", "skipped"] as const)(
+  "%s export crash before done is claimable at final attempt without replay",
+  async (outcome) => {
+    const f = await fixture();
+    f.claim.history.recovery!.attempt = 4;
+    f.histories.get("guild")![0].recovery!.attempt = 4;
+    const { runNotionMutation } =
+      await import("../../src/services/notionOperationLifetime");
+    const provider = jest.fn(async () => {});
+    f.autoExport.mockImplementationOnce(async () => {
+      if (outcome === "acknowledged")
+        await runNotionMutation(f.deps.signal, provider);
+      return outcome;
+    });
+    const update = f.repository.updateRecordingRecovery;
+    f.repository.updateRecordingRecovery = async (claim, patch, now) => {
+      if (patch.recovery?.disposition === "done")
+        throw new Error("crash after export receipt");
+      return update(claim, patch, now);
+    };
+    await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow();
+    expect(f.claim.history.recoveryExport?.state).toBe(outcome);
+    f.repository.updateRecordingRecovery = update;
+    f.leases.clear();
+    const restarted = await f.repository.claimRecordingRecovery({
+      history: structuredClone(f.histories.get("guild")![0]),
+      lease: undefined,
+      context: f.context,
+      attemptId: "restart-ack",
+    });
+    expect(restarted).toBeDefined();
+    await recoverMeeting(restarted!, f.deps);
+    expect(restarted!.history.recovery?.disposition).toBe("done");
+    expect(f.autoExport).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledTimes(2);
+  },
+);
+
+test("complete capture delivery receipt and status survive crash before export intent", async () => {
+  const f = await fixture();
+  f.claim.history.completionPolicy = {
+    decision: "proceed",
+    isAutoRecording: false,
+    chatMessageCount: 0,
+    dismissed: false,
+    policy: {
+      enabled: true,
+      maximumSeconds: 90,
+      maximumWords: 50,
+      maximumChatMessages: 1,
+      dismissedMinimumMilliseconds: 600000,
+      dismissedMinimumChatMessages: 2,
+    },
+  };
+  f.claim.history.capture = {
+    kind: "complete",
+    startedAt: f.claim.history.timestamp,
+    endedAt: f.claim.history.timestamp,
+  };
+  Object.assign(f.histories.get("guild")![0], structuredClone(f.claim.history));
+  const update = f.repository.updateRecordingRecovery;
+  f.repository.updateRecordingRecovery = async (claim, patch, now) => {
+    if (patch.recovery?.stage === "export")
+      throw new Error("crash before intent");
+    return update(claim, patch, now);
+  };
+  await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow();
+  expect(f.claim.history.status).toBe("complete");
+  expect(f.claim.history.delivery?.notes?.outcome).toBe("complete");
+  f.repository.updateRecordingRecovery = update;
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.claim.history.recovery?.disposition).toBe("done");
+  expect(f.autoExport).toHaveBeenCalledTimes(1);
+  expect(f.send).toHaveBeenCalledTimes(2);
 });

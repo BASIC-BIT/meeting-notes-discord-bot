@@ -1,4 +1,10 @@
+import {
+  reserveCheckpointPcm,
+  releaseCheckpointPcm,
+} from "./recordingCheckpointCapture";
 import { processRecoveryTranscript } from "./recoveryTranscriptionProcessing";
+import type { TranscriptSegment } from "../types/transcript";
+import { resolveAudioFileText } from "../utils/audioTranscript";
 import type { AudioFileData } from "../types/audio";
 import { isDeepStrictEqual } from "node:util";
 import type { MeetingHistory } from "../types/db";
@@ -192,6 +198,105 @@ export function transcriptionInput(
     }),
   };
 }
+const RECOVERY_CHUNK_FRAMES = 48000 * 30;
+type RecoveryAudioSlice = {
+  startFrame: number;
+  frames: number;
+  byteOffset: number;
+};
+type RecoveryAudioGroup = {
+  startFrame: number;
+  endFrame: number;
+  slices: RecoveryAudioSlice[];
+};
+function alignedFrame(milliseconds: number) {
+  const frames = milliseconds * 48;
+  const rounded = Math.round(frames);
+  if (
+    !Number.isSafeInteger(rounded) ||
+    rounded < 0 ||
+    Math.abs(frames - rounded) > 0.000001
+  )
+    throw new InvalidRecoveryContent("PCM coverage is not frame aligned");
+  return rounded;
+}
+function audioGroups(
+  item: Extract<CheckpointArtifact, { kind: "audio" }>,
+  byteLength: number,
+) {
+  if (item.coverage.kind !== "known")
+    throw new InvalidRecoveryContent("PCM coverage unavailable");
+  const groups: RecoveryAudioGroup[] = [];
+  let group: RecoveryAudioGroup | undefined;
+  let byteOffset = 0;
+  let lastEnd = 0;
+  for (const interval of item.coverage.intervals) {
+    let startFrame = alignedFrame(interval.startOffsetMs);
+    let remaining = alignedFrame(interval.durationMs);
+    if (
+      interval.sourceId !== item.sourceId ||
+      remaining === 0 ||
+      startFrame < lastEnd
+    )
+      throw new InvalidRecoveryContent(
+        "PCM interval coverage is invalid or overlapping",
+      );
+    lastEnd = startFrame + remaining;
+    while (remaining > 0) {
+      if (!group || startFrame >= group.startFrame + RECOVERY_CHUNK_FRAMES) {
+        group = { startFrame, endFrame: startFrame, slices: [] };
+        groups.push(group);
+      }
+      const frames = Math.min(
+        remaining,
+        group.startFrame + RECOVERY_CHUNK_FRAMES - startFrame,
+      );
+      group.slices.push({ startFrame, frames, byteOffset });
+      group.endFrame = startFrame + frames;
+      byteOffset += frames * 4;
+      startFrame += frames;
+      remaining -= frames;
+    }
+  }
+  if (byteOffset !== byteLength)
+    throw new InvalidRecoveryContent(
+      "PCM interval coverage differs from saved bytes",
+    );
+  return groups;
+}
+async function transcribeAudioGroup(
+  group: RecoveryAudioGroup,
+  bytes: Uint8Array,
+  input: TranscriptionContentInput,
+  userId: string,
+  timestamp: number,
+) {
+  input.signal.throwIfAborted();
+  const length = (group.endFrame - group.startFrame) * 4;
+  if (!reserveCheckpointPcm(length))
+    throw new Error("Recovery PCM budget unavailable");
+  try {
+    // Silence is temporary alignment scratch, never newly claimed capture coverage.
+    const buffer = Buffer.alloc(length);
+    for (const slice of group.slices)
+      buffer.set(
+        bytes.subarray(slice.byteOffset, slice.byteOffset + slice.frames * 4),
+        (slice.startFrame - group.startFrame) * 4,
+      );
+    const result = await transcribeContentSnippet(
+      input,
+      { userId, timestamp, chunks: [buffer] },
+      { tempSuffix: "recovery" },
+    );
+    input.signal.throwIfAborted();
+    if (result.status !== "succeeded")
+      throw new Error("Recovery transcription failed");
+    return result.text;
+  } finally {
+    // Awaited conversion/provider lifetime has settled, including cancellation/error.
+    releaseCheckpointPcm(length);
+  }
+}
 async function recoverAudioIntervals(
   item: Extract<CheckpointArtifact, { kind: "audio" }>,
   reader: RecoveryReader,
@@ -212,43 +317,21 @@ async function recoverAudioIntervals(
   const userId = item.sourceId.split(":").slice(1).join(":");
   if (!/^[a-zA-Z0-9_-]+$/.test(userId))
     throw new InvalidRecoveryContent("Invalid saved source identity");
-  const intervals = item.coverage.intervals.map((interval) => ({
-    ...interval,
-    length: Math.round(interval.durationMs * 192),
-  }));
-  if (
-    intervals.some(
-      (interval) => interval.sourceId !== item.sourceId || interval.length <= 0,
-    ) ||
-    intervals.reduce((length, interval) => length + interval.length, 0) !==
-      bytes.byteLength
-  )
-    throw new InvalidRecoveryContent(
-      "PCM interval coverage differs from saved bytes",
-    );
   const files: AudioFileData[] = [];
-  let cursor = 0;
-  for (const interval of intervals) {
-    signal.throwIfAborted();
-    const timestamp = startedAt + interval.startOffsetMs;
-    const result = await transcribeContentSnippet(
+  for (const group of audioGroups(item, bytes.byteLength)) {
+    const timestamp = startedAt + group.startFrame / 48;
+    const text = await transcribeAudioGroup(
+      group,
+      bytes,
       input,
-      {
-        userId,
-        timestamp,
-        chunks: [Buffer.from(bytes.subarray(cursor, cursor + interval.length))],
-      },
-      { tempSuffix: "recovery" },
+      userId,
+      timestamp,
     );
-    cursor += interval.length;
-    signal.throwIfAborted();
-    if (result.status !== "succeeded")
-      throw new Error("Recovery transcription failed");
-    if (!getTranscriptionTextQuality(result.text).trivial)
+    if (!getTranscriptionTextQuality(text).trivial)
       files.push({
         userId,
         timestamp,
-        transcript: result.text,
+        transcript: text,
         source: item.sourceId.startsWith("bot:") ? "bot" : "voice",
         processing: false,
         audioOnlyProcessing: false,
@@ -261,12 +344,17 @@ export async function recoverTranscript(
   reader: RecoveryReader,
   signal: AbortSignal,
   effect: TranscriptionContentInput["effect"],
-): Promise<string> {
+): Promise<{ text: string; segments: TranscriptSegment[] }> {
   const audio = content.verified.filter((item) => item.kind === "audio");
   // Opportunistic entries and final text have no exact audio-object coverage receipt.
   // Preserve them, but never let them hide verified PCM that remains unproved.
   const acknowledgedText = content.processing?.finalText;
-  if (acknowledgedText !== undefined && !audio.length) return acknowledgedText;
+  const savedSegments = (content.entries ?? []).map((entry) => ({
+    ...entry,
+    startedAt: new Date(entry.timestamp).toISOString(),
+  }));
+  if (acknowledgedText !== undefined && !audio.length)
+    return { text: acknowledgedText, segments: savedSegments };
   const files: AudioFileData[] =
     acknowledgedText === undefined
       ? (content.entries ?? []).map((entry) => ({
@@ -290,7 +378,7 @@ export async function recoverTranscript(
         ...(await recoverAudioIntervals(item, reader, input, startedAt)),
       );
   }
-  return processRecoveryTranscript(
+  const text = await processRecoveryTranscript(
     content,
     reader,
     files,
@@ -298,6 +386,29 @@ export async function recoverTranscript(
     effect,
     acknowledgedText,
   );
+  // Final-pass corrections mutate these files. Cleanup can alter aggregate text,
+  // but cannot invent a more precise speaker/time alignment for a segment.
+  const segments = files.map((file): TranscriptSegment => {
+    const participant = content.context.participants.find(
+      (p) => p.id === file.userId,
+    );
+    return {
+      userId: file.userId,
+      username: participant?.username,
+      displayName: participant?.displayName,
+      serverNickname: participant?.serverNickname,
+      startedAt: new Date(file.timestamp).toISOString(),
+      text: resolveAudioFileText(file),
+      source: file.source,
+    };
+  });
+  return {
+    text,
+    segments: [
+      ...(acknowledgedText === undefined ? [] : savedSegments),
+      ...segments,
+    ].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt)),
+  };
 }
 export function recoveryNotesInput(
   history: MeetingHistory,
