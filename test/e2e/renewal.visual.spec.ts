@@ -18,6 +18,7 @@ for (const viewport of views) {
     "failure",
     "history-open",
     "terminal",
+    "payment-attention",
   ] as const) {
     test(`renewal ${state} at ${viewport.name}`, async ({ page }) => {
       await page.setViewportSize(viewport);
@@ -35,6 +36,8 @@ for (const viewport of views) {
             operationId: "00000000-0000-4000-8000-000000000001",
             endsAt: annualSubscriber.renewalAt!,
           };
+        if (state === "payment-attention")
+          renewal.state = { kind: "payment_problem" };
         if (state === "failure")
           renewal.state = {
             kind: "unavailable",

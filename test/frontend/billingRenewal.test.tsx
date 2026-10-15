@@ -213,3 +213,27 @@ it("keeps review-operation status checks available without receipt access", () =
   expect(callbacks.onCheckStatus).toHaveBeenCalledWith("existing-operation");
   expect(screen.queryByRole("button", { name: "Manage billing" })).toBeNull();
 });
+it.each([true, false])(
+  "keeps a known payment problem visible with payer permission %s",
+  (canManageBilling) => {
+    const callbacks = actions();
+    renderWithMantine(
+      <BillingRenewalStatus
+        {...callbacks}
+        canManageBilling={canManageBilling}
+        state={{ kind: "payment_problem" }}
+      />,
+    );
+    expect(screen.getByText("Payment needs attention")).toBeVisible();
+    if (canManageBilling) {
+      fireEvent.click(screen.getByRole("button", { name: "Manage billing" }));
+      expect(callbacks.onPortal).toHaveBeenCalledTimes(1);
+    } else
+      expect(
+        screen.queryByRole("button", { name: "Manage billing" }),
+      ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Turn renewal back on" }),
+    ).toBeNull();
+  },
+);

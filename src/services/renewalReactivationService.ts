@@ -108,6 +108,11 @@ export async function readRenewalState({
         ),
         payer,
       );
+    if (
+      source.cancellationAt === null &&
+      ["past_due", "unpaid"].includes(source.subscription.status)
+    )
+      return view({ kind: "payment_problem" }, payer);
     if (source.cancellationAt === null)
       return source.kind === "verified"
         ? view({ kind: "on", terms: source.terms }, payer)
@@ -311,6 +316,7 @@ async function recover(
 ): Promise<RenewalResult> {
   const { stripe, guildId, payerId, now } = context;
   const repo = getRenewalReactivationRepository();
+  let privacySuppressed = operation.analyticsOptOut;
   const next = (
     result:
       | { state: "verifying" }
@@ -323,6 +329,7 @@ async function recover(
     renewalOperationSchema.parse({
       ...renewalBindingSchema.parse(operation),
       revision: randomUUID(),
+      analyticsOptOut: privacySuppressed,
       ...result,
     });
   const save = async (next: RenewalOperation) => {
@@ -346,6 +353,7 @@ async function recover(
     const saved = await getSubscriptionRepository().get(guildId);
     if (saved?.stripeSubscriptionId !== operation.subscriptionId) {
       if (operation.state === "succeeded") return { kind: "changed" };
+      privacySuppressed = true;
       await save(next({ state: "needs_review", reason: "terms_changed" }));
       return { kind: "needs_review", operationId: operation.operationId };
     }
@@ -365,6 +373,11 @@ async function recover(
         source.invariantFingerprint === operation.invariantFingerprint
         ? { kind: "confirmed", terms: source.terms }
         : { kind: "changed" };
+    privacySuppressed = await retainRenewalOptOut(
+      privacySuppressed,
+      guildId,
+      source,
+    );
     if (
       source.kind !== "verified" ||
       source.invariantFingerprint !== operation.invariantFingerprint
@@ -403,6 +416,11 @@ async function recover(
         guildId,
         subscriptionId: operation.subscriptionId,
       });
+      privacySuppressed = await retainRenewalOptOut(
+        privacySuppressed,
+        guildId,
+        source,
+      );
     }
     if (
       source.kind !== "verified" ||
@@ -417,7 +435,7 @@ async function recover(
       guildId,
       operation.subscriptionId,
       undefined,
-      { userId: payerId, analyticsOptOut: operation.analyticsOptOut },
+      { userId: payerId, analyticsOptOut: privacySuppressed },
     );
     const persisted = await getSubscriptionRepository().get(guildId);
     const confirmed = await readRenewalSource({
@@ -425,6 +443,11 @@ async function recover(
       guildId,
       subscriptionId: operation.subscriptionId,
     });
+    privacySuppressed = await retainRenewalOptOut(
+      privacySuppressed,
+      guildId,
+      confirmed,
+    );
     if (
       confirmed.kind !== "verified" ||
       confirmed.cancellationAt !== null ||
@@ -445,6 +468,7 @@ async function recover(
       throw error;
     if (error instanceof BillingActionError && error.code === "BAD_REQUEST") {
       if (operation.state === "succeeded") return { kind: "changed" };
+      privacySuppressed = true;
       try {
         if (
           await save(next({ state: "needs_review", reason: "terms_changed" }))
@@ -456,4 +480,17 @@ async function recover(
     }
     return processing();
   }
+}
+
+async function retainRenewalOptOut(
+  suppressed: boolean,
+  guildId: string,
+  source: RenewalSource,
+): Promise<boolean> {
+  return (
+    suppressed ||
+    (await isPurchaseAnalyticsOptedOut(guildId, source.subscription).catch(
+      () => true,
+    ))
+  );
 }

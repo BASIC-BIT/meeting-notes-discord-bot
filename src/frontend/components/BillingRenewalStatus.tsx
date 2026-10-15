@@ -37,6 +37,27 @@ export default function BillingRenewalStatus(props: BillingRenewalProps) {
           ) : null}
         </Stack>
       );
+    case "payment_problem":
+      return (
+        <Stack gap="sm" data-testid="billing-payment-attention">
+          <Text fw={600}>Payment needs attention</Text>
+          <Text size="sm">
+            {canManageBilling
+              ? "Review your payment in Stripe."
+              : "The original payer can review this subscription's payment in Stripe."}
+          </Text>
+          {canManageBilling ? (
+            <Button
+              variant="light"
+              w="fit-content"
+              disabled={busy}
+              onClick={onPortal}
+            >
+              Manage billing
+            </Button>
+          ) : null}
+        </Stack>
+      );
     case "processing":
       return (
         <Stack gap="sm" role="status">

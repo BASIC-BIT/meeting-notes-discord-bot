@@ -13,6 +13,7 @@ import {
 
 export type IntroBillingOptions = {
   renewal?: RenewalView;
+  stripeStatus?: "past_due" | "unpaid";
   status?: BasicIntroOffer["status"];
   details?: ProviderSubscriptionDetails;
   cancellationAt?: string | null;
@@ -25,11 +26,13 @@ function introBillingData(options: IntroBillingOptions) {
   return {
     tier: options.details ? "basic" : "free",
     billingSource: options.details || options.legacy ? "stripe" : "free",
-    status: options.terminalStatus
-      ? options.terminalStatus
-      : options.details
-        ? "active"
-        : "free",
+    status:
+      options.stripeStatus ??
+      (options.terminalStatus
+        ? options.terminalStatus
+        : options.details
+          ? "active"
+          : "free"),
     billingEnabled: true,
     hasStripeBilling: Boolean(
       options.details || options.legacy || options.terminalStatus,

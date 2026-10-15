@@ -186,3 +186,40 @@ test("expired consent refreshes terms and requires another deliberate click", as
     "0": { request: { kind: "confirm", quoteToken: "refreshed-consent" } },
   });
 });
+for (const stripeStatus of ["past_due", "unpaid"] as const) {
+  for (const payer of [true, false]) {
+    test(`${stripeStatus} without cancellation retains payment attention for ${payer ? "payer" : "another manager"}`, async ({
+      page,
+    }) => {
+      await useIntroBilling(page, {
+        details: annualSubscriber,
+        stripeStatus,
+        renewal: {
+          state: { kind: "payment_problem" },
+          canManageBilling: payer,
+          lifecycleAnalyticsEnabled: false,
+        },
+      });
+      await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+      const current = page.getByTestId("billing-current-plan");
+      await expect(current).toContainText("Basic");
+      await expect(current).toContainText("Payment needs attention");
+      await expect(current).not.toContainText(
+        "Renewal details aren't available",
+      );
+      await expect(
+        current.getByRole("button", { name: "Turn renewal back on" }),
+      ).toHaveCount(0);
+      if (payer)
+        await expect(
+          current.getByRole("button", { name: "Manage billing", exact: true }),
+        ).toBeEnabled();
+      else {
+        await expect(current).toContainText("original payer");
+        await expect(
+          current.getByRole("button", { name: "Manage billing", exact: true }),
+        ).toHaveCount(0);
+      }
+    });
+  }
+}

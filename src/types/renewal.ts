@@ -172,6 +172,7 @@ export type RenewalAction =
   | { kind: "payer_required" }
   | { kind: "unavailable" };
 export type RenewalState =
+  | { kind: "payment_problem" }
   | {
       kind: "off";
       tier: RenewalTerms["tier"];

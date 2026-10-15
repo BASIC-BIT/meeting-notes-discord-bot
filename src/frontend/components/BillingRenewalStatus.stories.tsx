@@ -184,3 +184,9 @@ export const InclusiveRemainingDiscount: Story = {
     },
   },
 };
+export const FailedRenewal: Story = {
+  args: { initialState: { kind: "payment_problem" } },
+};
+export const FailedRenewalNonpayer: Story = {
+  args: { initialState: { kind: "payment_problem" }, canManageBilling: false },
+};
