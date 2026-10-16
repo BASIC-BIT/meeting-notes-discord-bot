@@ -741,3 +741,91 @@ test.each(["INACTIVE", "DELETE_IN_PROGRESS", undefined])(
     );
   },
 );
+
+test("initialization accepts only the exact acknowledged introduction receipt", async () => {
+  const f = await fixture();
+  await client.send(
+    new PutItemCommand({
+      TableName: f.table,
+      Item: marshall({
+        pk: "ENV",
+        sk: "INTRODUCTION",
+        operationId: f.manifest.operationId,
+        manifestSha256: f.hash,
+        principalArn: f.manifest.principalArn,
+        stage: "routing_acknowledged",
+      }),
+    }),
+  );
+  await f.bootstrap.initialize();
+  expect(await f.get("CONTROL")).toMatchObject({
+    coordinatorToken: f.manifest.operationId,
+  });
+  expect(await f.get("INTRODUCTION")).toMatchObject({
+    stage: "routing_acknowledged",
+  });
+});
+test.each(["routing_submitted", "foreign_owner"])(
+  "refuses an unconfirmed or foreign introduction: %s",
+  async (kind) => {
+    const f = await fixture();
+    await client.send(
+      new PutItemCommand({
+        TableName: f.table,
+        Item: marshall({
+          pk: "ENV",
+          sk: "INTRODUCTION",
+          operationId:
+            kind === "foreign_owner" ? randomUUID() : f.manifest.operationId,
+          manifestSha256: f.hash,
+          principalArn: f.manifest.principalArn,
+          stage: kind === "routing_submitted" ? kind : "routing_acknowledged",
+        }),
+      }),
+    );
+    await expect(f.bootstrap.initialize()).rejects.toThrow();
+    expect(await f.get("CONTROL")).toBeUndefined();
+  },
+);
+
+// Execute the introduction runner's projection against DynamoDB's real parser.
+// AWS stubs in the introduction unit suite do not validate reserved words.
+test("introduction readiness projection is accepted by native DynamoDB", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(
+    "scripts/deployment/introduce-sandbox.cjs",
+    "utf8",
+  );
+  const readiness = source.slice(
+    source.indexOf("async function runtimeReady("),
+  );
+  const projection = readiness.match(/ProjectionExpression: "([^"]+)"/);
+  const aliases = readiness.match(/ExpressionAttributeNames: (\{[^}]+\})/);
+  expect(projection).not.toBeNull();
+  expect(aliases).not.toBeNull();
+  const names = Object.fromEntries(
+    [...aliases![1].matchAll(/"([^"]+)": "([^"]+)"/g)].map((match) => [
+      match[1],
+      match[2],
+    ]),
+  );
+  const f = await fixture();
+  await f.bootstrap.initialize();
+  await f.bootstrap.launch();
+  const result = await client.send(
+    new ScanCommand({
+      TableName: f.table,
+      ProjectionExpression: projection![1],
+      ExpressionAttributeNames: names,
+      ConsistentRead: true,
+    }),
+  );
+  expect(result.Items?.map((item) => unmarshall(item))).toContainEqual(
+    expect.objectContaining({
+      recordType: "runtime",
+      identity: expect.objectContaining({
+        candidateId: f.manifest.operationId,
+      }),
+    }),
+  );
+});

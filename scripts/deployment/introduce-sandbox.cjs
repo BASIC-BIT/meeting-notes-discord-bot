@@ -1,0 +1,531 @@
+"use strict";
+const assert = require("node:assert/strict");
+const { isDeepStrictEqual: same } = require("node:util");
+const { setTimeout: pause } = require("node:timers/promises");
+const { readFileSync, writeFileSync, appendFileSync } = require("node:fs");
+const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb");
+const { z } = require("zod");
+const { parseManifest, awsCaller } = require("./sandbox-manifest.cjs");
+const { action, canonical } = require("./routing.cjs");
+const { candidateDefinition, runtimeMode } = require("./coordinator.cjs");
+const uuid = z.string().uuid();
+function sessionName(operationId) {
+  uuid.parse(operationId);
+  return (
+    "chronote-sandbox-" + BigInt("0x" + operationId.replaceAll("-", "")) + "-1"
+  );
+}
+function bindJob(env) {
+  assert.equal(
+    env.GITHUB_RUN_ATTEMPT,
+    "1",
+    "Reruns require explicit reconciliation",
+  );
+  assert.match(env.GITHUB_SHA, /^[a-f0-9]{40}$/);
+  assert.match(env.EXPECTED_ACCOUNT_ID, /^\d{12}$/);
+  const rolePrefix = "arn:aws:iam::" + env.EXPECTED_ACCOUNT_ID + ":role/";
+  assert(env.EXPECTED_ROLE_ARN.startsWith(rolePrefix));
+  const role = env.EXPECTED_ROLE_ARN.slice(rolePrefix.length);
+  assert.match(role, /^[a-z0-9-]*sandbox[a-z0-9-]*-github-deploy$/);
+  if (env.BOOTSTRAP_PHASE === "prepare") {
+    uuid.parse(env.BOOTSTRAP_OPERATION_ID);
+    assert.match(env.GITHUB_RUN_ID, /^\d+$/);
+    return { sessionName: "chronote-sandbox-" + env.GITHUB_RUN_ID + "-1" };
+  }
+  assert.equal(env.BOOTSTRAP_PHASE, "activate");
+  const manifest = parseManifest(
+    JSON.parse(env.BOOTSTRAP_MANIFEST_JSON),
+    env.BOOTSTRAP_MANIFEST_SHA256,
+  );
+  assert.equal(manifest.operationId, env.BOOTSTRAP_OPERATION_ID);
+  const name = sessionName(manifest.operationId);
+  assert.equal(manifest.sourceCommit, env.GITHUB_SHA);
+  assert.equal(manifest.accountId, env.EXPECTED_ACCOUNT_ID);
+  assert.equal(
+    manifest.principalArn,
+    "arn:aws:sts::" + manifest.accountId + ":assumed-role/" + role + "/" + name,
+  );
+  return {
+    sessionName: name,
+    manifest: JSON.parse(env.BOOTSTRAP_MANIFEST_JSON),
+  };
+}
+async function prepare(env, aws = awsCaller(env.AWS_REGION)) {
+  const binding = bindJob({ ...env, BOOTSTRAP_PHASE: "prepare" });
+  const actor = await aws("sts", "get-caller-identity", {});
+  const expected =
+    env.EXPECTED_ROLE_ARN.replace(":iam::", ":sts::").replace(
+      ":role/",
+      ":assumed-role/",
+    ) +
+    "/" +
+    binding.sessionName;
+  assert.equal(actor.Arn, expected);
+  assert.equal(actor.Account, env.EXPECTED_ACCOUNT_ID);
+  for (const value of [
+    env.ECS_CLUSTER,
+    env.ECS_SERVICE,
+    env.ECS_TASK_FAMILY,
+    env.SECRETS_PREFIX,
+  ]) {
+    assert.match(value, /^[a-z0-9-]*sandbox[a-z0-9-]*$/);
+  }
+  const config = {
+    image: env.CANDIDATE_IMAGE,
+    candidateId: env.BOOTSTRAP_OPERATION_ID,
+    tablePrefix: env.SECRETS_PREFIX + "-",
+  };
+  assert.match(
+    config.image,
+    new RegExp(
+      "^" +
+        env.EXPECTED_ACCOUNT_ID +
+        "\\.dkr\\.ecr\\." +
+        env.AWS_REGION +
+        "\\.amazonaws\\.com/[a-z0-9-]*sandbox[a-z0-9-]*@sha256:[a-f0-9]{64}$",
+    ),
+  );
+  assert.match(env.AWS_REGION, /^[a-z]{2}-[a-z]+-[0-9]$/);
+  const repository = config.image.split("/")[1].split("@")[0];
+  const image = await aws("ecr", "describe-images", {
+    repositoryName: repository,
+    imageIds: [{ imageTag: env.GITHUB_SHA }],
+  });
+  assert.equal(image.imageDetails.length, 1);
+  assert.equal(image.imageDetails[0].imageDigest, config.image.split("@")[1]);
+  assert(image.imageDetails[0].imageTags.includes(env.GITHUB_SHA));
+  let nextToken,
+    count = 0;
+  do {
+    const page = await aws("ecs", "list-task-definitions", {
+      familyPrefix: env.ECS_TASK_FAMILY,
+      status: "ACTIVE",
+      maxResults: 100,
+      ...(nextToken ? { nextToken } : {}),
+    });
+    for (const arn of page.taskDefinitionArns) {
+      assert(++count <= 1000);
+      const d = (
+        await aws("ecs", "describe-task-definition", { taskDefinition: arn })
+      ).taskDefinition;
+      assert.equal(d.family, env.ECS_TASK_FAMILY);
+      assert(
+        !d.containerDefinitions.some((c) =>
+          c.environment?.some(
+            (e) =>
+              e.name === "DEPLOYMENT_CANDIDATE_ID" &&
+              e.value === config.candidateId,
+          ),
+        ),
+        "Candidate already registered; reconcile it",
+      );
+    }
+    nextToken = page.nextToken;
+  } while (nextToken);
+  const definition = (
+    await aws("ecs", "describe-task-definition", {
+      taskDefinition: env.ECS_TASK_FAMILY,
+    })
+  ).taskDefinition;
+  assert.equal(definition.family, env.ECS_TASK_FAMILY);
+  const next = candidateDefinition(definition, config);
+  const container = next.containerDefinitions.find((c) =>
+    c.environment?.some((e) => e.name === "DDB_TABLE_PREFIX"),
+  );
+  assert.equal(runtimeMode(container), "all");
+  assert(
+    !container.secrets?.some((e) =>
+      [
+        "DDB_TABLE_PREFIX",
+        "TRANSCRIPTS_BUCKET",
+        "DEPLOYMENT_CANDIDATE_ID",
+      ].includes(e.name),
+    ),
+  );
+  const roleBase =
+    "arn:aws:iam::" + env.EXPECTED_ACCOUNT_ID + ":role/" + env.SECRETS_PREFIX;
+  assert.equal(next.taskRoleArn, roleBase + "-ecs-task-app-role");
+  assert.equal(next.executionRoleArn, roleBase + "-ecs-task-exec-role");
+  for (const secret of container.secrets ?? []) {
+    assert(
+      secret.valueFrom.startsWith(
+        "arn:aws:secretsmanager:" +
+          env.AWS_REGION +
+          ":" +
+          env.EXPECTED_ACCOUNT_ID +
+          ":secret:" +
+          env.SECRETS_PREFIX +
+          "/",
+      ),
+    );
+  }
+  container.command = ["node", "dist/index.js"];
+  // Registration is attempted once; an unknown acknowledgment requires operator reconciliation.
+  const registered = await aws("ecs", "register-task-definition", next);
+  assert.equal(registered.taskDefinition.family, env.ECS_TASK_FAMILY);
+  assert.equal(registered.taskDefinition.status, "ACTIVE");
+  assert(
+    registered.taskDefinition.containerDefinitions.some(
+      (c) => c.image === config.image,
+    ),
+  );
+  return { kind: "prepared" };
+}
+function createIntroduction(options) {
+  const m = parseManifest(options.manifest, options.expectedSha256);
+  const aws = options.aws ?? awsCaller(m.region);
+  const now = options.now ?? (() => Math.floor(Date.now() / 1000));
+  const sleep = options.pause ?? (() => pause(5000));
+  const table = m.tablePrefix + "DeploymentControlTable";
+  const key = marshall({ pk: "ENV", sk: "INTRODUCTION" });
+  const bootstrap =
+    options.bootstrap ??
+    require("./bootstrap-sandbox.cjs").createBootstrap(options);
+  const routing = {
+    sourceGroup: m.targetGroupA,
+    candidateGroup: m.targetGroupB,
+  };
+  async function read() {
+    const result = await aws("dynamodb", "get-item", {
+      TableName: table,
+      Key: key,
+      ConsistentRead: true,
+    });
+    return result.Item ? unmarshall(result.Item) : undefined;
+  }
+  async function stage(from, to) {
+    await aws("dynamodb", "update-item", {
+      TableName: table,
+      Key: key,
+      ConditionExpression:
+        "operationId = :op AND manifestSha256 = :hash AND #stage = :from",
+      UpdateExpression: "SET #stage = :next",
+      ExpressionAttributeNames: { "#stage": "stage" },
+      ExpressionAttributeValues: marshall({
+        ":op": m.operationId,
+        ":hash": options.expectedSha256,
+        ":from": from,
+        ":next": to,
+      }),
+    });
+  }
+  async function count(TableName, extra = {}) {
+    let ExclusiveStartKey,
+      total = 0;
+    do {
+      const page = await aws("dynamodb", "scan", {
+        TableName,
+        ConsistentRead: true,
+        Select: "COUNT",
+        ...extra,
+        ...(ExclusiveStartKey ? { ExclusiveStartKey } : {}),
+      });
+      total += page.Count;
+      ExclusiveStartKey = page.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+    return total;
+  }
+  async function workSettled() {
+    // shortcut: first activation requires empty work tables, add terminal-job handling before reusing it with retained jobs.
+    for (const name of [
+      "ActiveMeetingTable",
+      "MeetingControlCommandTable",
+      "PersonalMediaUploadJobTable",
+    ]) {
+      assert.equal(await count(m.tablePrefix + name), 0, "Work remains");
+    }
+    assert.equal(
+      await count(m.tablePrefix + "MeetingHistoryTable", {
+        FilterExpression:
+          "attribute_not_exists(#s) OR NOT (#s IN (:complete,:cancelled))",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: marshall({
+          ":complete": "complete",
+          ":cancelled": "cancelled",
+        }),
+      }),
+      0,
+      "Unknown or nonterminal history remains",
+    );
+  }
+  async function service() {
+    const result = await aws("ecs", "describe-services", {
+      cluster: m.cluster,
+      services: [m.service],
+    });
+    assert.deepEqual(result.failures, []);
+    assert.equal(result.services.length, 1);
+    const value = result.services[0];
+    assert.equal(value.serviceName, m.service);
+    assert.deepEqual(value.loadBalancers, [
+      {
+        targetGroupArn: m.targetGroupA,
+        containerName: m.containerName,
+        containerPort: m.containerPort,
+      },
+    ]);
+    return value;
+  }
+  async function listener() {
+    const result = await aws("elbv2", "describe-listeners", {
+      ListenerArns: [m.listenerArn],
+    });
+    assert.equal(result.Listeners.length, 1);
+    const value = result.Listeners[0];
+    assert.equal(value.ListenerArn, m.listenerArn);
+    assert.equal(value.Protocol, "HTTPS");
+    const rules = await aws("elbv2", "describe-rules", {
+      ListenerArn: m.listenerArn,
+    });
+    assert(!rules.NextMarker);
+    assert.equal(rules.Rules.length, 1);
+    assert.equal(rules.Rules[0].IsDefault, true);
+    return value;
+  }
+  async function targets(group) {
+    return (
+      await aws("elbv2", "describe-target-health", { TargetGroupArn: group })
+    ).TargetHealthDescriptions;
+  }
+  async function noLiveTasks() {
+    const arns = new Set();
+    for (const desiredStatus of ["RUNNING", "STOPPED"]) {
+      let nextToken;
+      do {
+        const page = await aws("ecs", "list-tasks", {
+          cluster: m.cluster,
+          serviceName: m.service,
+          desiredStatus,
+          ...(nextToken ? { nextToken } : {}),
+        });
+        page.taskArns.forEach((arn) => arns.add(arn));
+        assert(arns.size <= 1000);
+        nextToken = page.nextToken;
+      } while (nextToken);
+    }
+    const all = [...arns];
+    for (let i = 0; i < all.length; i += 100) {
+      const batch = all.slice(i, i + 100);
+      const response = await aws("ecs", "describe-tasks", {
+        cluster: m.cluster,
+        tasks: batch,
+      });
+      assert.deepEqual(response.failures, []);
+      assert.equal(response.tasks.length, batch.length);
+      if (response.tasks.some((task) => task.lastStatus !== "STOPPED"))
+        return false;
+    }
+    return true;
+  }
+  async function wait(check) {
+    for (let i = 0; i < 180; i++) {
+      if (await check()) return;
+      await sleep();
+    }
+    throw new Error("Bounded wait expired; preserve operation");
+  }
+  async function runtimeReady(serving) {
+    let ExclusiveStartKey,
+      matches = [];
+    do {
+      const page = await aws("dynamodb", "scan", {
+        TableName: table,
+        ConsistentRead: true,
+        ProjectionExpression: "#recordType, #identity, #role, #readiness",
+        ExpressionAttributeNames: {
+          "#recordType": "recordType",
+          "#identity": "identity",
+          "#role": "role",
+          "#readiness": "readiness",
+        },
+        ...(ExclusiveStartKey ? { ExclusiveStartKey } : {}),
+      });
+      matches.push(
+        ...(page.Items ?? [])
+          .map(unmarshall)
+          .filter(
+            (row) =>
+              row.recordType === "runtime" &&
+              row.identity?.candidateId === m.operationId,
+          ),
+      );
+      ExclusiveStartKey = page.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+    assert(matches.length <= 1);
+    const row = matches[0],
+      proof = row?.readiness;
+    return (
+      row?.role === (serving ? "serving" : "candidate") &&
+      proof?.cacheReady &&
+      proof.dependenciesReady &&
+      (m.runtimeMode === "api" || proof.gatewayReady) &&
+      proof.observedGeneration === (serving ? 1 : 0) &&
+      proof.provenAt <= now() &&
+      proof.expiresAt > now()
+    );
+  }
+  async function activate() {
+    const actor = await aws("sts", "get-caller-identity", {});
+    assert.equal(actor.Account, m.accountId);
+    assert.equal(actor.Arn, m.principalArn);
+    assert(!(await read()), "Introduction cannot be replayed");
+    assert(
+      now() >= Date.parse(m.maintenance.confirmedAt) / 1000 &&
+        now() - Date.parse(m.maintenance.confirmedAt) / 1000 <= 900,
+    );
+    assert.equal(await count(table), 0, "Existing ownership cannot be adopted");
+    const original = await service();
+    assert.equal(original.desiredCount, 1);
+    assert.equal(original.runningCount, 1);
+    assert.equal(original.pendingCount, 0);
+    assert.equal(original.taskDefinition, m.legacyTaskDefinition);
+    await workSettled();
+    require("./bootstrap-sandbox.cjs").assertPreparedCandidate(
+      m,
+      (
+        await aws("ecs", "describe-task-definition", {
+          taskDefinition: m.taskDefinition,
+        })
+      ).taskDefinition,
+    );
+    const before = await listener();
+    const actions = before.DefaultActions;
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].Type, "forward");
+    assert.equal(actions[0].TargetGroupArn, m.targetGroupA);
+    assert(
+      Object.keys(actions[0]).every((k) =>
+        ["Type", "Order", "TargetGroupArn", "ForwardConfig"].includes(k),
+      ),
+    );
+    assert.deepEqual(actions[0].ForwardConfig.TargetGroups, [
+      { TargetGroupArn: m.targetGroupA, Weight: 1 },
+    ]);
+    assert.equal(
+      actions[0].ForwardConfig.TargetGroupStickinessConfig.Enabled,
+      false,
+    );
+    assert.equal((await targets(m.targetGroupB)).length, 0);
+    await aws("dynamodb", "transact-write-items", {
+      TransactItems: [
+        {
+          ConditionCheck: {
+            TableName: table,
+            Key: marshall({ pk: "ENV", sk: "CONTROL" }),
+            ConditionExpression: "attribute_not_exists(pk)",
+          },
+        },
+        {
+          Put: {
+            TableName: table,
+            Item: marshall({
+              pk: "ENV",
+              sk: "INTRODUCTION",
+              operationId: m.operationId,
+              manifestSha256: options.expectedSha256,
+              principalArn: m.principalArn,
+              stage: "reserved",
+            }),
+            ConditionExpression: "attribute_not_exists(pk)",
+          },
+        },
+      ],
+    });
+    await stage("reserved", "stop_submitted");
+    const stopped = (
+      await aws("ecs", "update-service", {
+        cluster: m.cluster,
+        service: m.service,
+        desiredCount: 0,
+      })
+    ).service;
+    assert.equal(stopped.serviceName, m.service);
+    assert.equal(stopped.taskDefinition, m.legacyTaskDefinition);
+    assert.equal(stopped.desiredCount, 0);
+    await stage("stop_submitted", "stop_acknowledged");
+    await wait(async () => {
+      const current = await service();
+      assert.equal(current.taskDefinition, m.legacyTaskDefinition);
+      assert.equal(current.desiredCount, 0);
+      return (
+        current.runningCount === 0 &&
+        current.pendingCount === 0 &&
+        (await noLiveTasks()) &&
+        (await targets(m.targetGroupA)).length === 0 &&
+        (await targets(m.targetGroupB)).length === 0
+      );
+    });
+    await workSettled();
+    assert(
+      same((await listener()).DefaultActions, before.DefaultActions),
+      "Listener writer changed",
+    );
+    await stage("stop_acknowledged", "routing_submitted");
+    const changed = await aws("elbv2", "modify-listener", {
+      ListenerArn: m.listenerArn,
+      DefaultActions: action(routing, false),
+    });
+    assert.equal(changed.Listeners.length, 1);
+    assert.equal(changed.Listeners[0].ListenerArn, m.listenerArn);
+    assert.deepEqual(
+      canonical(changed.Listeners[0].DefaultActions),
+      canonical(action(routing, false)),
+    );
+    assert.deepEqual(
+      canonical((await listener()).DefaultActions),
+      canonical(action(routing, false)),
+    );
+    await stage("routing_submitted", "routing_acknowledged");
+    await bootstrap.initialize();
+    await bootstrap.launch();
+    await wait(() => runtimeReady(false));
+    const result = await bootstrap.promote();
+    await wait(() => runtimeReady(true));
+    await stage("routing_acknowledged", "complete");
+    return result;
+  }
+  return { activate };
+}
+async function runCli(phase, env = process.env) {
+  try {
+    const binding = bindJob(env);
+    if (phase === "bind") {
+      appendFileSync(
+        env.GITHUB_OUTPUT,
+        "session_name=" + binding.sessionName + "\n",
+      );
+      if (binding.manifest)
+        writeFileSync(
+          "bootstrap-manifest.json",
+          JSON.stringify(binding.manifest),
+          { mode: 0o600 },
+        );
+      return 0;
+    }
+    assert.equal(phase, env.BOOTSTRAP_PHASE);
+    const result =
+      phase === "prepare"
+        ? await prepare(env)
+        : await createIntroduction({
+            manifest: JSON.parse(
+              readFileSync("bootstrap-manifest.json", "utf8"),
+            ),
+            expectedSha256: env.BOOTSTRAP_MANIFEST_SHA256,
+          }).activate();
+    console.log(JSON.stringify(result));
+    return 0;
+  } catch {
+    console.error(
+      JSON.stringify({
+        kind: "introduction_refused",
+        action: "preserve_state_and_reconcile",
+      }),
+    );
+    return 1;
+  }
+}
+module.exports = { bindJob, prepare, createIntroduction, runCli };
+if (require.main === module)
+  runCli(process.argv[2]).then((code) => {
+    process.exitCode = code;
+  });

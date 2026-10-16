@@ -8,6 +8,45 @@ const {
   awsCaller,
   readArguments,
 } = require("./sandbox-manifest.cjs");
+function assertPreparedCandidate(m, d) {
+  const container = d.containerDefinitions.find(
+    (v) => v.name === m.containerName,
+  );
+  const commands = {
+    all: ["node", "dist/index.js"],
+    bot: ["node", "dist/apps/bot/main.js"],
+    api: ["node", "dist/apps/api/main.js"],
+  };
+  if (
+    d.taskDefinitionArn !== m.taskDefinition ||
+    d.status !== "ACTIVE" ||
+    !container ||
+    !container.image.endsWith("@" + m.imageDigest) ||
+    container.stopTimeout !== 120 ||
+    container.environment.filter((v) => v.name === "TRANSCRIPTS_BUCKET")
+      .length !== 1 ||
+    container.environment.find((v) => v.name === "TRANSCRIPTS_BUCKET")
+      ?.value !== m.bucket ||
+    container.secrets?.some((v) =>
+      [
+        "TRANSCRIPTS_BUCKET",
+        "DDB_TABLE_PREFIX",
+        "DEPLOYMENT_CANDIDATE_ID",
+      ].includes(v.name),
+    ) ||
+    container.entryPoint?.length ||
+    !same(container.command, commands[m.runtimeMode]) ||
+    container.environment.filter((v) => v.name === "DDB_TABLE_PREFIX")
+      .length !== 1 ||
+    container.environment.find((v) => v.name === "DDB_TABLE_PREFIX")?.value !==
+      m.tablePrefix ||
+    container.environment.filter((v) => v.name === "DEPLOYMENT_CANDIDATE_ID")
+      .length !== 1 ||
+    container.environment.find((v) => v.name === "DEPLOYMENT_CANDIDATE_ID")
+      ?.value !== m.operationId
+  )
+    throw new Error("Prepared candidate definition mismatch");
+}
 function createBootstrap(options) {
   const m = parseManifest(options.manifest, options.expectedSha256);
   const aws = options.aws ?? awsCaller(m.region);
@@ -317,8 +356,24 @@ function createBootstrap(options) {
       )
     )
       fail("Unsettled lease remains");
-    if ((await scan(table, "pk, sk")).length)
-      fail("Control table has existing ownership");
+    const existing = await scan(table, "pk, sk");
+    let introduction;
+    if (existing.length) {
+      if (
+        existing.length !== 1 ||
+        existing[0].pk !== "ENV" ||
+        existing[0].sk !== "INTRODUCTION"
+      )
+        fail("Control table has existing ownership");
+      introduction = await read("INTRODUCTION");
+      if (
+        introduction.operationId !== m.operationId ||
+        introduction.manifestSha256 !== options.expectedSha256 ||
+        introduction.principalArn !== m.principalArn ||
+        introduction.stage !== "routing_acknowledged"
+      )
+        fail("Introduction ownership is unconfirmed");
+    }
     await topology(true);
     const ctl = types.controlRecordSchema.parse(initialControl());
     const receipt = {
@@ -329,13 +384,34 @@ function createBootstrap(options) {
       stage: "initialized",
     };
     await write(
-      [ctl, receipt].map((row) => ({
-        Put: {
-          TableName: table,
-          Item: marshall(row),
-          ConditionExpression: "attribute_not_exists(pk)",
-        },
-      })),
+      [
+        ...[ctl, receipt].map((row) => ({
+          Put: {
+            TableName: table,
+            Item: marshall(row),
+            ConditionExpression: "attribute_not_exists(pk)",
+          },
+        })),
+        ...(introduction
+          ? [
+              {
+                ConditionCheck: {
+                  TableName: table,
+                  Key: key("INTRODUCTION"),
+                  ConditionExpression:
+                    "operationId = :op AND manifestSha256 = :hash AND principalArn = :principal AND #stage = :stage",
+                  ExpressionAttributeNames: { "#stage": "stage" },
+                  ExpressionAttributeValues: marshall({
+                    ":op": m.operationId,
+                    ":hash": options.expectedSha256,
+                    ":principal": m.principalArn,
+                    ":stage": "routing_acknowledged",
+                  }),
+                },
+              },
+            ]
+          : []),
+      ],
       async () => {
         const [c, r] = await state();
         return same(c, ctl) && same(r, receipt);
@@ -364,43 +440,7 @@ function createBootstrap(options) {
         taskDefinition: m.taskDefinition,
       })
     ).taskDefinition;
-    const container = d.containerDefinitions.find(
-      (v) => v.name === m.containerName,
-    );
-    const commands = {
-      all: ["node", "dist/index.js"],
-      bot: ["node", "dist/apps/bot/main.js"],
-      api: ["node", "dist/apps/api/main.js"],
-    };
-    if (
-      d.taskDefinitionArn !== m.taskDefinition ||
-      d.status !== "ACTIVE" ||
-      !container ||
-      !container.image.endsWith("@" + m.imageDigest) ||
-      container.stopTimeout !== 120 ||
-      container.environment.filter((v) => v.name === "TRANSCRIPTS_BUCKET")
-        .length !== 1 ||
-      container.environment.find((v) => v.name === "TRANSCRIPTS_BUCKET")
-        ?.value !== m.bucket ||
-      container.secrets?.some((v) =>
-        [
-          "TRANSCRIPTS_BUCKET",
-          "DDB_TABLE_PREFIX",
-          "DEPLOYMENT_CANDIDATE_ID",
-        ].includes(v.name),
-      ) ||
-      container.entryPoint?.length ||
-      !same(container.command, commands[m.runtimeMode]) ||
-      container.environment.filter((v) => v.name === "DDB_TABLE_PREFIX")
-        .length !== 1 ||
-      container.environment.find((v) => v.name === "DDB_TABLE_PREFIX")
-        ?.value !== m.tablePrefix ||
-      container.environment.filter((v) => v.name === "DEPLOYMENT_CANDIDATE_ID")
-        .length !== 1 ||
-      container.environment.find((v) => v.name === "DEPLOYMENT_CANDIDATE_ID")
-        ?.value !== m.operationId
-    )
-      fail("Prepared candidate definition mismatch");
+    assertPreparedCandidate(m, d);
     const launchAttemptId = randomUUID();
     await write(
       [
@@ -598,7 +638,7 @@ async function runCli(args = process.argv.slice(2), output = console) {
     return 1;
   }
 }
-module.exports = { createBootstrap, runCli };
+module.exports = { createBootstrap, assertPreparedCandidate, runCli };
 if (require.main === module)
   runCli().then((code) => {
     process.exitCode = code;
