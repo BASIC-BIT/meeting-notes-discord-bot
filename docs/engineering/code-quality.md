@@ -16,11 +16,11 @@ Use `yarn check:duplication`, `yarn check:complexity`, or `yarn check:file-size`
 
 All authored JavaScript/TypeScript files are included, including tests, fixtures, mocks, stories, scripts, and root configuration. Module variants `.mjs`, `.cjs`, `.mts`, and `.cts` are included.
 
-Dependencies, generated declarations/code, build output, coverage, Tauri generated/target output, Git metadata, and nested worktrees are excluded. Rust, Terraform, CSS, shell, and prose are outside this initial scope. External directory symlinks are not followed.
+Dependencies, generated declarations/code, build output, coverage, Tauri generated/target output, Git metadata, and nested worktrees are excluded. Rust, Terraform, CSS, shell, and prose are outside this initial scope. External directory symlinks are not followed. Tracked source remains eligible even when it matches `.gitignore`; ignored untracked scratch files do not participate in duplication scans.
 
 Exit codes are 0 for clean, 1 for a regression, and 2 for an operational failure. The combined command runs all three scanners. An unavailable scanner, parser error, missing baseline, or malformed report is not clean.
 
-Function matching uses names and callback ordinals within a file. Renaming a complex function or inserting callbacks can make it appear new. Recognized file renames retain their baseline. Consider these limits when interpreting a finding.
+Function matching uses lexical owners, names, and callback ordinals within a file. If the count of indistinguishable same-name functions changes, touched offenders are conservatively treated as new. Renaming a complex function or inserting callbacks can make it appear new. Recognized file renames retain their baseline. Consider these limits when interpreting a finding.
 
 ## PR exceptions
 

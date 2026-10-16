@@ -468,3 +468,31 @@ test(
     assert.equal(JSON.parse(result.stdout).findings.length, 4);
   }),
 );
+
+test(
+  "new nested names do not inherit another lexical owner's debt",
+  withRepo((dir) => {
+    const owner = (name) =>
+      `export function ${name}() {\n` +
+      heavy("handler", 20).replace("export ", "") +
+      "return handler;\n}\n";
+    write(dir, "src/nested.ts", owner("oldOwner"));
+    commit(dir, "legacy nested function");
+    write(dir, "src/nested.ts", owner("newOwner") + owner("oldOwner"));
+    const result = run(dir);
+    assert.equal(result.code, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /NEW\s+newOwner\/handler/);
+  }),
+);
+
+test(
+  "adding an ambiguous same-name occurrence cannot reuse legacy debt",
+  withRepo((dir) => {
+    write(dir, "src/handlers.ts", anonHandler(20));
+    commit(dir, "legacy handler");
+    write(dir, "src/handlers.ts", anonHandler(20) + anonHandler(20));
+    const result = run(dir);
+    assert.equal(result.code, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /NEW\s+handler/);
+  }),
+);

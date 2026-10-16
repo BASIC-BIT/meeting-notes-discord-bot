@@ -54,6 +54,7 @@ jobs:
           git -c user.name=chronote-ci -c user.email=chronote-ci@users.noreply.github.com merge --no-commit --no-ff "$base_sha"
           tree_sha=$(git write-tree)
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "tree_sha=$tree_sha" >> "$GITHUB_OUTPUT"
           node --input-type=module -e 'import {writeFileSync} from "node:fs"; const [headSha,baseRef,baseSha,treeSha]=process.argv.slice(1); writeFileSync("quality-evidence.json",JSON.stringify({scanned:{headSha,baseRef,baseSha,treeSha}},null,2));' "$HEAD_SHA" "$BASE_REF" "$base_sha" "$tree_sha"
 
       - name: Install dependencies
@@ -71,12 +72,21 @@ jobs:
         shell: bash
         env:
           BASE_SHA: ${{ steps.prepare.outputs.base_sha }}
+          TREE_SHA: ${{ steps.prepare.outputs.tree_sha }}
         run: |
+          verify_prepared_tree() {
+            if ! git diff --quiet --no-ext-diff --no-textconv "$TREE_SHA" --; then
+              echo "::error::Tracked files changed after merge preparation."
+              return 2
+            fi
+          }
+          verify_prepared_tree || exit 2
           if node scripts/check-quality.mjs --base "$BASE_SHA" --json > quality-results.json; then
             echo "exit_code=0" >> "$GITHUB_OUTPUT"
           else
             echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           fi
+          verify_prepared_tree || exit 2
 
       - name: Apply current PR exception policy
         id: policy
@@ -87,6 +97,7 @@ jobs:
           INSTALLED: ${{ steps.install.outcome }}
           CHECKER_TESTS: ${{ steps.checker-tests.outcome }}
           SCAN_EXIT: ${{ steps.scan.outputs.exit_code }}
+          SCANNED: ${{ steps.scan.outcome }}
         with:
           script: |
             const fs = require("node:fs");
@@ -96,8 +107,8 @@ jobs:
             let evidence = {}, report = null, current = null, versions = {};
             let result = { exitCode: 2, outcome: "error", rationale: null, message: "Quality workflow did not complete." };
             try {
-              if (process.env.PREPARED !== "success" || process.env.INSTALLED !== "success") {
-                throw new Error("Merge preparation or dependency installation failed.");
+              if (process.env.PREPARED !== "success" || process.env.INSTALLED !== "success" || process.env.SCANNED !== "success") {
+                throw new Error("Merge preparation, dependency installation, or scanner step failed.");
               }
               evidence = JSON.parse(fs.readFileSync(path.join(root, "quality-evidence.json"), "utf8"));
               report = JSON.parse(fs.readFileSync(path.join(root, "quality-results.json"), "utf8"));
