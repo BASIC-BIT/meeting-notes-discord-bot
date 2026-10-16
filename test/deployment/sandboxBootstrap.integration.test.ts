@@ -952,6 +952,12 @@ async function repairFixture() {
     lateTopology: "",
     raceCompletion: false,
     oldTask: "none",
+    containerStatus: "STOPPED",
+    desiredTaskStatus: "STOPPED",
+    targetState: "",
+    missingContainers: false,
+    holdTaskAfterStop: false,
+    waits: 0,
     seconds: 1000,
   };
   async function providerRead(
@@ -1015,9 +1021,9 @@ async function repairFixture() {
   > = {
     "ecs.list-tasks": async (input) => ({
       taskArns:
-        !state.stopped &&
+        (!state.stopped || state.holdTaskAfterStop) &&
         state.oldTask !== "none" &&
-        (state.oldTask === "stopped") === (input.desiredStatus === "STOPPED")
+        (state.oldTask !== "live") === (input.desiredStatus === "STOPPED")
           ? [oldArn]
           : [],
     }),
@@ -1027,13 +1033,26 @@ async function repairFixture() {
         {
           taskArn: oldArn,
           taskDefinitionArn: previous.taskDefinition,
-          lastStatus: state.oldTask === "stopped" ? "STOPPED" : "RUNNING",
-          containers: [
-            {
-              name: f.manifest.containerName,
-              networkInterfaces: [{ privateIpv4Address: "10.0.0.9" }],
-            },
-          ],
+          lastStatus:
+            state.oldTask === "stopped"
+              ? "STOPPED"
+              : state.oldTask === "deprovisioning"
+                ? "DEPROVISIONING"
+                : "RUNNING",
+          desiredStatus:
+            state.oldTask === "live" ? "RUNNING" : state.desiredTaskStatus,
+          containers: state.missingContainers
+            ? []
+            : [
+                {
+                  name: f.manifest.containerName,
+                  lastStatus:
+                    state.oldTask === "live"
+                      ? "RUNNING"
+                      : state.containerStatus,
+                  networkInterfaces: [{ privateIpv4Address: "10.0.0.9" }],
+                },
+              ],
         },
       ],
     }),
@@ -1047,7 +1066,10 @@ async function repairFixture() {
       ],
     }),
     "elbv2.describe-target-health": async (input) => {
-      if (state.stopped || input.TargetGroupArn !== f.manifest.targetGroupA)
+      if (
+        (state.stopped && !state.holdTaskAfterStop) ||
+        input.TargetGroupArn !== f.manifest.targetGroupA
+      )
         return providerRead("elbv2", "describe-target-health", input);
       return {
         TargetHealthDescriptions:
@@ -1059,7 +1081,9 @@ async function repairFixture() {
                     Port: 3001,
                   },
                   TargetHealth: {
-                    State: state.oldTask === "stopped" ? "draining" : "healthy",
+                    State:
+                      state.targetState ||
+                      (state.oldTask !== "live" ? "draining" : "healthy"),
                   },
                 },
               ]
@@ -1156,6 +1180,10 @@ async function repairFixture() {
   };
   const bootstrap = {
     ...f.bootstrap,
+    launch: async () => {
+      expect(state.holdTaskAfterStop).toBe(false);
+      return f.bootstrap.launch();
+    },
     promote: async () => {
       const out = await f.bootstrap.promote();
       const row = await f.get("RUNTIME#runtime");
@@ -1172,7 +1200,10 @@ async function repairFixture() {
     aws,
     bootstrap,
     now: () => state.seconds,
-    pause: async () => undefined,
+    pause: async () => {
+      state.waits++;
+      state.holdTaskAfterStop = false;
+    },
   });
   return {
     ...f,
@@ -1411,4 +1442,45 @@ test("repair completion conditions preserve both receipts when ownership changes
     stage: "foreign",
   });
   expect(await f.get("CONTROL")).toMatchObject({ servingGeneration: 1 });
+});
+
+test("repair permits native cleanup only after all containers have stopped", async () => {
+  const f = await repairFixture();
+  f.repairState.oldTask = "deprovisioning";
+  f.repairState.protectedTask = true;
+  await expect(
+    f.intro.repair(f.previous, f.previousHash),
+  ).resolves.toMatchObject({ kind: "complete", generation: 1 });
+});
+
+test.each([
+  "running-container",
+  "unknown-desired",
+  "missing-containers",
+  "healthy-target",
+])("repair refuses inconsistent cleanup %s before writes", async (kind) => {
+  const f = await repairFixture();
+  f.repairState.oldTask = "deprovisioning";
+  f.repairState.protectedTask = true;
+  if (kind === "running-container") f.repairState.containerStatus = "RUNNING";
+  if (kind === "unknown-desired") f.repairState.desiredTaskStatus = "RUNNING";
+  if (kind === "missing-containers") f.repairState.missingContainers = true;
+  if (kind === "healthy-target") f.repairState.targetState = "healthy";
+  await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  expect(
+    f.calls.some((c) =>
+      ["transact-write-items", "update-service"].includes(c.operation),
+    ),
+  ).toBe(false);
+});
+
+test("repair waits for exited task cleanup before launching the replacement", async () => {
+  const f = await repairFixture();
+  f.repairState.oldTask = "deprovisioning";
+  f.repairState.protectedTask = true;
+  f.repairState.holdTaskAfterStop = true;
+  await expect(
+    f.intro.repair(f.previous, f.previousHash),
+  ).resolves.toMatchObject({ kind: "complete", generation: 1 });
+  expect(f.repairState.waits).toBe(1);
 });

@@ -372,6 +372,13 @@ function createIntroduction(options) {
       (task) => task.lastStatus !== "STOPPED",
     )) {
       assert.equal(task.taskDefinitionArn, m.legacyTaskDefinition);
+      if (task.lastStatus === "DEPROVISIONING") {
+        // ECS can retain protection while cleaning up a task whose containers exited.
+        assert.equal(task.desiredStatus, "STOPPED");
+        assert(task.containers.length > 0);
+        assert(task.containers.every((c) => c.lastStatus === "STOPPED"));
+        continue;
+      }
       const protection = await aws("ecs", "get-task-protection", {
         cluster: m.cluster,
         tasks: [task.taskArn],
@@ -389,7 +396,7 @@ function createIntroduction(options) {
         inventory.some(
           (task) =>
             task.taskDefinitionArn === m.legacyTaskDefinition &&
-            (task.lastStatus !== "STOPPED" ||
+            (!["STOPPED", "DEPROVISIONING"].includes(task.lastStatus) ||
               target.TargetHealth.State === "draining") &&
             task.containers.some(
               (container) =>
