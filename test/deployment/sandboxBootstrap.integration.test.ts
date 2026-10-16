@@ -947,6 +947,9 @@ async function repairFixture() {
     raceReservation: false,
     slowIntent: false,
     slowTransfer: false,
+    protectedTask: false,
+    foreignTarget: false,
+    oldTask: "none",
     seconds: 1000,
   };
   async function providerRead(
@@ -1001,6 +1004,75 @@ async function repairFixture() {
       };
     return f.aws(service, operation, input);
   }
+
+  const oldArn =
+    "arn:aws:ecs:us-east-1:123456789012:task/test-sandbox-cluster/repair-old";
+  const topologyHandlers: Record<
+    string,
+    (input: Record<string, never>) => Promise<unknown>
+  > = {
+    "ecs.list-tasks": async (input) => ({
+      taskArns:
+        !state.stopped &&
+        state.oldTask !== "none" &&
+        (state.oldTask === "stopped") === (input.desiredStatus === "STOPPED")
+          ? [oldArn]
+          : [],
+    }),
+    "ecs.describe-tasks": async () => ({
+      failures: [],
+      tasks: [
+        {
+          taskArn: oldArn,
+          taskDefinitionArn: previous.taskDefinition,
+          lastStatus: state.oldTask === "stopped" ? "STOPPED" : "RUNNING",
+          containers: [
+            {
+              name: f.manifest.containerName,
+              networkInterfaces: [{ privateIpv4Address: "10.0.0.9" }],
+            },
+          ],
+        },
+      ],
+    }),
+    "ecs.get-task-protection": async () => ({
+      failures: [],
+      protectedTasks: [
+        {
+          taskArn: oldArn.replace("task/test-sandbox-cluster/", "task/"),
+          protectionEnabled: state.protectedTask,
+        },
+      ],
+    }),
+    "elbv2.describe-target-health": async (input) => {
+      if (state.stopped || input.TargetGroupArn !== f.manifest.targetGroupA)
+        return providerRead("elbv2", "describe-target-health", input);
+      return {
+        TargetHealthDescriptions:
+          state.foreignTarget || state.oldTask !== "none"
+            ? [
+                {
+                  Target: {
+                    Id: state.foreignTarget ? "10.0.0.99" : "10.0.0.9",
+                    Port: 3001,
+                  },
+                  TargetHealth: {
+                    State: state.oldTask === "stopped" ? "draining" : "healthy",
+                  },
+                },
+              ]
+            : [],
+      };
+    },
+  };
+  function provider(
+    service: string,
+    operation: string,
+    input: Record<string, never>,
+  ) {
+    const handler = topologyHandlers[service + "." + operation];
+    return handler ? handler(input) : providerRead(service, operation, input);
+  }
   async function transact(input: Record<string, never>) {
     if (state.raceReservation && !state.stopped) {
       const control = await f.get("CONTROL");
@@ -1048,7 +1120,7 @@ async function repairFixture() {
       if (state.lostStop) throw new Error("stop acknowledgment lost");
       return { service: { serviceName: f.manifest.service, desiredCount: 0 } };
     }
-    return providerRead(service, operation, input);
+    return provider(service, operation, input);
   };
   const bootstrap = {
     ...f.bootstrap,
@@ -1252,3 +1324,31 @@ test("promotion refuses a deadline crossed during final native protection revali
     stage: "launched",
   });
 });
+
+test.each(["protected", "foreign-target"])(
+  "repair refuses %s before reservation and shutdown",
+  async (kind) => {
+    const f = await repairFixture();
+    f.repairState.oldTask = "live";
+    f.repairState.protectedTask = kind === "protected";
+    f.repairState.foreignTarget = kind === "foreign-target";
+    await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+    expect(
+      f.calls.some((c) =>
+        ["transact-write-items", "update-service"].includes(c.operation),
+      ),
+    ).toBe(false);
+    expect(await f.get("REPAIR#" + f.manifest.operationId)).toBeUndefined();
+  },
+);
+
+test.each(["live", "stopped"])(
+  "repair accounts for exact owned %s task targets",
+  async (kind) => {
+    const f = await repairFixture();
+    f.repairState.oldTask = kind;
+    await expect(
+      f.intro.repair(f.previous, f.previousHash),
+    ).resolves.toMatchObject({ kind: "complete", generation: 1 });
+  },
+);

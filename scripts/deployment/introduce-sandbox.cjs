@@ -328,7 +328,7 @@ function createIntroduction(options) {
       await aws("elbv2", "describe-target-health", { TargetGroupArn: group })
     ).TargetHealthDescriptions;
   }
-  async function liveTasks() {
+  async function taskInventory() {
     const arns = new Set();
     for (const desiredStatus of ["RUNNING", "STOPPED"]) {
       let nextToken;
@@ -345,7 +345,7 @@ function createIntroduction(options) {
       } while (nextToken);
     }
     const all = [...arns];
-    const live = [];
+    const inventory = [];
     for (let i = 0; i < all.length; i += 100) {
       const batch = all.slice(i, i + 100);
       const response = await aws("ecs", "describe-tasks", {
@@ -354,11 +354,51 @@ function createIntroduction(options) {
       });
       assert.deepEqual(response.failures, []);
       assert.equal(response.tasks.length, batch.length);
-      live.push(
-        ...response.tasks.filter((task) => task.lastStatus !== "STOPPED"),
+      inventory.push(...response.tasks);
+    }
+    return inventory;
+  }
+  async function liveTasks() {
+    return (await taskInventory()).filter(
+      (task) => task.lastStatus !== "STOPPED",
+    );
+  }
+  async function assertRepairTargets() {
+    const inventory = await taskInventory();
+    for (const task of inventory.filter(
+      (task) => task.lastStatus !== "STOPPED",
+    )) {
+      assert.equal(task.taskDefinitionArn, m.legacyTaskDefinition);
+      const protection = await aws("ecs", "get-task-protection", {
+        cluster: m.cluster,
+        tasks: [task.taskArn],
+      });
+      assert.deepEqual(protection.failures, []);
+      assert.equal(protection.protectedTasks.length, 1);
+      assert(
+        sameEcsTaskArn(protection.protectedTasks[0].taskArn, task.taskArn),
+      );
+      assert.equal(protection.protectedTasks[0].protectionEnabled, false);
+    }
+    for (const target of await targets(m.targetGroupA)) {
+      assert.equal(target.Target.Port, m.containerPort);
+      assert(
+        inventory.some(
+          (task) =>
+            task.taskDefinitionArn === m.legacyTaskDefinition &&
+            (task.lastStatus !== "STOPPED" ||
+              target.TargetHealth.State === "draining") &&
+            task.containers.some(
+              (container) =>
+                container.name === m.containerName &&
+                container.networkInterfaces?.length === 1 &&
+                container.networkInterfaces[0].privateIpv4Address ===
+                  target.Target.Id,
+            ),
+        ),
+        "Group A contains an unowned target",
       );
     }
-    return live;
   }
   async function assertLegacyTarget() {
     const tasks = await liveTasks();
@@ -690,11 +730,6 @@ function createIntroduction(options) {
     const current = await service();
     assert.equal(current.taskDefinition, m.legacyTaskDefinition);
     assert.equal(current.desiredCount, 1);
-    assert(
-      (await liveTasks()).every(
-        (t) => t.taskDefinitionArn === m.legacyTaskDefinition,
-      ),
-    );
     const definition = (
       await aws("ecs", "describe-task-definition", {
         taskDefinition: m.taskDefinition,
@@ -718,6 +753,7 @@ function createIntroduction(options) {
       traffic,
     );
     assert.equal((await targets(m.targetGroupB)).length, 0);
+    await assertRepairTargets();
     stopBudget();
     const receipt = {
       pk: "ENV",

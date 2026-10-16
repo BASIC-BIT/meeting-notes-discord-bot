@@ -553,12 +553,17 @@ identity check. Optional bootstrap phases are explicit:
   manifest source must match the workflow source. Its exact STS session is
   `chronote-sandbox-<decimal value of the UUID without hyphens>-1`.
   The job refuses reruns and verifies the actual identity before writes.
+- `repair` requires a new prepared candidate UUID and the reviewed old/new manifest
+  envelope in `SANDBOX_BOOTSTRAP_MANIFEST`. Supply the checksum of the entire
+  parsed envelope. It accepts only the exact acknowledged, unserved first
+  activation after its coordinator lease expires. See the linked bootstrap
+  runbook for settlement, conditional supersession, and no-replay requirements.
 - `probe_without_environment` runs a separate read-only trust probe with no
   GitHub environment. Its job should fail at assumption. Verify AWS AccessDenied
   after OIDC token retrieval; configuration failures or timeouts are not trust
   evidence. A dispatch from a tag can separately verify the disallowed-ref case.
 
-Preparation and activation are serialized with normal Sandbox deployments. A
+Preparation, activation, and repair are serialized with normal Sandbox deployments. A
 durable INTRODUCTION receipt fences the one-time stop and listener writes.
 Initialization accepts only its exact acknowledged operation, principal and
 manifest checksum. Unknown provider acknowledgments stop the operation; do not

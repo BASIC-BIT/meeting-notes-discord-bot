@@ -3,16 +3,16 @@ on:
   workflow_dispatch:
     inputs:
       bootstrap_phase:
-        description: Read-only identity check, candidate preparation, or reviewed first activation
+        description: Read-only identity check, candidate preparation, first activation, or reviewed unserved-candidate repair
         type: choice
         default: none
         options: [none, prepare, activate, repair]
       bootstrap_operation_id:
-        description: Reviewed operation UUID, required for preparation or activation
+        description: Reviewed operation UUID, required for prepare, activate, and repair
         type: string
         default: ""
       bootstrap_manifest_sha256:
-        description: Reviewed private manifest checksum, required for activation
+        description: Reviewed checksum, manifest for activate or entire old/new manifest envelope for repair
         type: string
         default: ""
       probe_without_environment:
