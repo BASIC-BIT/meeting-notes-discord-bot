@@ -11,6 +11,7 @@ jest.mock("../../src/services/notesPromptService", () => ({
 }));
 /** @jest-environment node */
 jest.mock("../../src/services/recordingDeliveryService", () => ({
+  ...jest.requireActual("../../src/services/recordingDeliveryService"),
   acknowledgeRecordingDeliveryHistory: jest.fn(async () => {}),
 }));
 jest.mock("../../src/services/ownedMeetingInterruption", () => ({
@@ -70,7 +71,11 @@ import { MEETING_END_REASONS } from "../../src/types/meetingLifecycle";
 import { releaseMeetingLeaseForMeeting } from "../../src/services/activeMeetingLeaseService";
 import { runTranscriptionFinalPass } from "../../src/services/transcriptionFinalPassService";
 import { captureEvent } from "../../src/services/analyticsService";
-import { ensureMeetingNotes } from "../../src/services/meetingNotesService";
+import {
+  ensureMeetingNotes,
+  ensureMeetingSummaries,
+} from "../../src/services/meetingNotesService";
+import { EMPTY_RECORDING_NOTICE } from "../../src/utils/meetingProcessing";
 import {
   updateMeetingProcessingMessage,
   updateMeetingSummaryMessage,
@@ -115,6 +120,7 @@ jest.mock("../../src/commands/saveMeetingHistory", () => ({
 }));
 jest.mock("../../src/services/meetingHistoryService", () => ({
   transitionOwnedMeetingHistoryService: jest.fn(),
+  saveOwnedMeetingHistoryService: jest.fn(),
 }));
 jest.mock("../../src/utils/chatLog", () => ({
   renderChatEntryLine: jest.fn().mockReturnValue(""),
@@ -2105,6 +2111,169 @@ describe("completion notes latency contract", () => {
     });
   });
 
+  it.each(["empty", "generated"])(
+    "persists actual delivery and completion timing for %s notes",
+    async (outcome) => {
+      const db = await import("../../src/db");
+      const historyService =
+        await import("../../src/services/meetingHistoryService");
+      const notion = await import("../../src/services/notionAutomationService");
+      const upgrade = await import("../../src/services/summaryUpgradeService");
+      const delivery =
+        await import("../../src/services/recordingDeliveryService");
+      const realDelivery = jest.requireActual<typeof delivery>(
+        "../../src/services/recordingDeliveryService",
+      );
+      const realNotes = jest.requireActual<
+        typeof import("../../src/services/meetingNotesService")
+      >("../../src/services/meetingNotesService");
+      const meeting = timedMeeting();
+      meeting.notesDeliveryTiming = undefined;
+      meeting.summarySentence = "Synthetic summary";
+      if (outcome === "empty") {
+        meeting.audioData.audioFiles = [];
+        mockedCompileTranscriptions.mockResolvedValue("");
+      }
+      meeting.startMessageId = "summary";
+      const edit = jest.fn().mockResolvedValue(undefined);
+      const send = jest.fn().mockResolvedValue({ id: "notes" });
+      Object.assign(meeting.textChannel, {
+        messages: {
+          fetch: jest.fn().mockResolvedValue({ id: "summary", edit }),
+        },
+        send,
+      });
+      const row: import("../../src/types/db").MeetingHistory = {
+        guildId: meeting.guildId,
+        channelId_timestamp: "key",
+        meetingId: meeting.meetingId,
+        channelId: meeting.voiceChannel.id,
+        timestamp: meeting.startTime.toISOString(),
+        participants: [],
+        duration: 60,
+        transcribeMeeting: true,
+        generateNotes: true,
+        ownerInstanceId: "owner",
+        executionVersion: 1,
+        status: "processing",
+        checkpoint: {
+          artifactFolder: "synthetic",
+          schemaVersion: 1,
+          revision: 3,
+          capture: {
+            guildId: meeting.guildId,
+            channelId: meeting.voiceChannel.id,
+            channelId_timestamp: "key",
+            meetingId: meeting.meetingId,
+            ownerInstanceId: "owner",
+            executionVersion: 1,
+            reservedAt: meeting.startTime.toISOString(),
+            captureStartedAt: meeting.startTime.toISOString(),
+            requested: { transcribeMeeting: true, generateNotes: true },
+          },
+          manifest: {
+            key: "manifest",
+            checksumSha256: "a".repeat(64),
+            byteLength: 1,
+          },
+        },
+      };
+      const repository = db.getDeploymentControlRepository();
+      const getRepository = jest
+        .spyOn(db, "getDeploymentControlRepository")
+        .mockReturnValue({
+          ...repository,
+          getMeetingHistory: async () => ({ ...row }),
+          transitionMeetingHistory: async (input) => {
+            Object.assign(row, input.patch);
+            return "applied";
+          },
+        });
+      const saveHistory = jest
+        .spyOn(historyService, "saveOwnedMeetingHistoryService")
+        .mockImplementation(async (_meeting, history) => {
+          Object.assign(row, history);
+        });
+      const exportNotes = jest
+        .spyOn(notion, "maybeAutoExportCompletedMeeting")
+        .mockResolvedValue(undefined);
+      const claimUpgrade = jest
+        .spyOn(upgrade, "claimSummaryUpgrade")
+        .mockResolvedValue(undefined);
+      jest
+        .mocked(ensureMeetingNotes)
+        .mockImplementation(realNotes.ensureMeetingNotes);
+      jest
+        .mocked(ensureMeetingSummaries)
+        .mockImplementation(realNotes.ensureMeetingSummaries);
+      jest.mocked(getNotes).mockResolvedValue("Private notes");
+      mockedSaveMeetingHistoryToDatabase.mockImplementation(
+        jest.requireActual<
+          typeof import("../../src/commands/saveMeetingHistory")
+        >("../../src/commands/saveMeetingHistory").saveMeetingHistoryToDatabase,
+      );
+      jest
+        .mocked(updateMeetingSummaryMessage)
+        .mockImplementationOnce(
+          jest.requireActual<typeof import("../../src/embed")>(
+            "../../src/embed",
+          ).updateMeetingSummaryMessage,
+        );
+      jest
+        .mocked(delivery.acknowledgeRecordingDeliveryHistory)
+        .mockImplementationOnce(
+          realDelivery.acknowledgeRecordingDeliveryHistory,
+        );
+      try {
+        await runEndMeetingFlow({ client: {} as Client, meeting });
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send.mock.calls[0][0].embeds[0].toJSON().description).toBe(
+          outcome === "empty" ? EMPTY_RECORDING_NOTICE : "Private notes",
+        );
+        expect(edit).toHaveBeenCalledTimes(1);
+        expect(row).toMatchObject({
+          status: "complete",
+          notesMessageIds: ["notes"],
+          notesChannelId: "text",
+          recovery: { disposition: "done", outcome: "completed" },
+          processing: {
+            transcription: outcome === "empty" ? "empty" : "ready",
+            notes: outcome === "empty" ? "skipped" : "generated",
+          },
+        });
+        const completion = completionCapture();
+        if (outcome === "empty") {
+          expect(row.notes).toBeUndefined();
+          expect(row.notesDeliveryTiming).toBeUndefined();
+          expect(meeting.notesDeliveryTiming).toBeUndefined();
+          expect(completion.properties.notes_latency_status).toBe("unknown");
+          expect(completion.properties).not.toHaveProperty(
+            "notes_first_delivery_latency_ms",
+          );
+          expect(completion.properties).not.toHaveProperty(
+            "notes_complete_delivery_latency_ms",
+          );
+        } else {
+          expect(row.notesDeliveryTiming).toEqual(meeting.notesDeliveryTiming);
+          expect(row.notesDeliveryTiming?.kind).toBe("complete");
+          expect(completion.properties).toMatchObject({
+            notes_latency_status: "measured",
+            notes_first_delivery_latency_ms: 60000,
+            notes_complete_delivery_latency_ms: 60000,
+            notes_delivery_path: "live",
+          });
+        }
+        expect(meeting.historySaved).toBe(true);
+        expect(meeting.setFinished).toHaveBeenCalledTimes(1);
+      } finally {
+        getRepository.mockRestore();
+        saveHistory.mockRestore();
+        exportNotes.mockRestore();
+        claimUpgrade.mockRestore();
+        jest.mocked(ensureMeetingSummaries).mockReset();
+      }
+    },
+  );
   it("retains first-only timing for partial delivery", async () => {
     const meeting = timedMeeting();
     meeting.notesDeliveryTiming = {

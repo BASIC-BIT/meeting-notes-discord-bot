@@ -445,11 +445,13 @@ async function sendMeetingNotes(
       if (finalization) getMeetingProcessingSignal(meeting).throwIfAborted();
       const message = await meeting.textChannel.send(payload);
       if (finalization) {
-        const timing = recordNotesAcknowledgement(meeting.notesDeliveryTiming, {
-          acknowledgedAt: new Date().toISOString(),
-          complete: embeds === noteEmbedBatches.at(-1),
-          path: "live",
-        });
+        const timing = meeting.notesText?.trim()
+          ? recordNotesAcknowledgement(meeting.notesDeliveryTiming, {
+              acknowledgedAt: new Date().toISOString(),
+              complete: embeds === noteEmbedBatches.at(-1),
+              path: "live",
+            })
+          : undefined;
         await acknowledgeRecordingDeliveryMessage(
           meeting,
           "notes",
