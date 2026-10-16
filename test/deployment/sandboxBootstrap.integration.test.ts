@@ -944,6 +944,7 @@ test.each(["before", "after"])(
       manifest: f.manifest,
       expectedSha256: f.hash,
       aws,
+      bootstrap: f.bootstrap,
       now: () => 1000,
     });
     await expect(intro.activate()).rejects.toThrow();
@@ -970,6 +971,7 @@ test.each(["repair-lineage", "repair-receipt"])(
       manifest: f.manifest,
       expectedSha256: f.hash,
       aws: f.aws,
+      bootstrap: f.bootstrap,
       now: () => 1000,
     });
     await expect(intro.activate()).rejects.toThrow();
