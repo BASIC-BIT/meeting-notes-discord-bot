@@ -248,11 +248,12 @@ function assertSourceIdentity(
     throw changeUnavailable();
 }
 function assertChangeableSubscription(subscription: StripeSubscription) {
+  // A zero application invoice can create a SetupIntent for future payments.
+  // Paid service is verified separately; its presence is not unsettled payment.
   if (
     subscription.status !== "active" ||
     subscription.pending_update ||
-    subscription.pause_collection ||
-    subscription.pending_setup_intent
+    subscription.pause_collection
   )
     throw changePending();
   const item = subscription.items.data[0];

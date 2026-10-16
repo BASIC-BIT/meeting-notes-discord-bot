@@ -237,3 +237,27 @@ it("never credits a new period using the previous period's paid invoice", async 
     }),
   ).rejects.toThrow();
 });
+
+it("allows paid service with a future-payment SetupIntent after a zero application invoice", async () => {
+  const f = fixture();
+  f.provider = { ...f.provider, pending_setup_intent: "seti_future_payment" };
+  await expect(
+    readBillingChangeSource({
+      stripe: f.stripe,
+      guildId: renewalGuildId,
+      payerId: renewalPayerId,
+      at: f.provider.items.data[0].current_period_start + 100,
+    }),
+  ).resolves.toMatchObject({ source: { tier: "basic" } });
+  f.invoice.mockResolvedValue(
+    response({ ...fundedInvoice, status: "open", amount_remaining: 1000 }),
+  );
+  await expect(
+    readBillingChangeSource({
+      stripe: f.stripe,
+      guildId: renewalGuildId,
+      payerId: renewalPayerId,
+      at: f.provider.items.data[0].current_period_start + 100,
+    }),
+  ).rejects.toMatchObject({ reason: "purchase_pending" });
+});
