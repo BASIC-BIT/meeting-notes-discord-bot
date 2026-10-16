@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const { sameEcsTaskArn } = require("../../src/utils/ecsTaskArn.js");
 const { execFile } = require("node:child_process");
 const { promisify, isDeepStrictEqual } = require("node:util");
 const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb");
@@ -445,8 +446,8 @@ function createCoordinator(options = {}) {
       tasks: [identity.taskArn],
     });
     diagnostic.operation = "verify_native_protection";
-    const proof = result.protectedTasks?.find(
-      (task) => task.taskArn === identity.taskArn,
+    const proof = result.protectedTasks?.find((task) =>
+      sameEcsTaskArn(task.taskArn, identity.taskArn),
     );
     if (
       result.failures?.length ||

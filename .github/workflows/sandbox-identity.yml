@@ -6,7 +6,7 @@ on:
         description: Read-only identity check, candidate preparation, or reviewed first activation
         type: choice
         default: none
-        options: [none, prepare, activate]
+        options: [none, prepare, activate, repair]
       bootstrap_operation_id:
         description: Reviewed operation UUID, required for preparation or activation
         type: string
@@ -155,7 +155,7 @@ jobs:
           assert.equal(process.env.GITHUB_RUN_ATTEMPT, "1");
           const id = process.env.BOOTSTRAP_OPERATION_ID;
           assert.match(id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i);
-          const number = process.env.BOOTSTRAP_PHASE === "activate" ? BigInt("0x" + id.replaceAll("-", "")).toString() : process.env.GITHUB_RUN_ID;
+          const number = process.env.BOOTSTRAP_PHASE !== "prepare" ? BigInt("0x" + id.replaceAll("-", "")).toString() : process.env.GITHUB_RUN_ID;
           fs.appendFileSync(process.env.GITHUB_OUTPUT, "name=chronote-sandbox-" + number + "-1\n");
           NODE
       - name: Assume the scoped Sandbox deployment role

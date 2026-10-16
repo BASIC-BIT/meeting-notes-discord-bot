@@ -88,3 +88,13 @@ The window must end no later than now and span at most 24 hours. Keep the activa
 Use the native task heartbeat for the approved post-activation schedule, not a repository cron or newly installed service. Create it only after actual activation bindings and time are known. Verify its read access, retain the ID in the private owner note, check every 15 minutes through the bounded 24-hour window, notify only on meaningful changes and stop at the end. No watcher is started by either command.
 
 Simultaneous multi-server admission and crash recovery remain NOT_OBSERVED unless ordinary activity and separately reviewed metadata establish them. A quiet observation window is not proof of unexercised correctness. Live Notion acceptance, deliberate faults, historical repair and completed-object deletion remain separate.
+
+## Repair an acknowledged, unserved first candidate
+
+A failed startup after acknowledged launch requires a reviewed continuation. Do not rerun activation, delete operation receipts or reset ownership. The manual workflow's explicit `repair` phase accepts a checksum-pinned envelope containing `{ "manifest": NEW_MANIFEST, "previousManifest": ORIGINAL_MANIFEST }` in the existing Sandbox manifest secret. Supply the checksum of the whole parsed envelope as the workflow input. Each inner manifest retains its own checksum in durable receipts.
+
+Prepare the repaired image through the existing `prepare` phase using a new operation UUID. The new manifest must pin that source, digest and definition; its legacy definition is the failed candidate definition. Account, region, storage, service, runtime mode, listener and target groups must match the original manifest. Fresh maintenance isolation remains required.
+
+Repair refuses unless Control is still empty at generation zero, the original coordinator lease is expired, launch was acknowledged, the original introduction reached routing acknowledgment and no runtime registrations or work remain. It reserves a distinct repair receipt with conditional checks on all original records. Submitted intent precedes one desired-zero write. All tasks, targets and work must settle before a single conditional transaction transfers the empty Control, marks the old bootstrap superseded, preserves the old introduction bindings and creates the new bootstrap receipt. No task is force-stopped or unprotected, and the listener is not rewritten.
+
+The existing protected launch, readiness, promotion and serving-heartbeat checks then run. Unknown stop, transfer or launch acknowledgments preserve state and refuse replay. Repair is limited to this unserved first-activation state; it cannot adopt a serving environment or an uncertain launch. An expired lease alone does not prove voice or effect settlement.

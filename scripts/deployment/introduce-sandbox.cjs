@@ -1,11 +1,16 @@
 "use strict";
+const { sameEcsTaskArn } = require("../../src/utils/ecsTaskArn.js");
 const assert = require("node:assert/strict");
 const { isDeepStrictEqual: same } = require("node:util");
 const { setTimeout: pause } = require("node:timers/promises");
 const { readFileSync, writeFileSync, appendFileSync } = require("node:fs");
 const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb");
 const { z } = require("zod");
-const { parseManifest, awsCaller } = require("./sandbox-manifest.cjs");
+const {
+  parseManifest,
+  manifestHash,
+  awsCaller,
+} = require("./sandbox-manifest.cjs");
 const { action, canonical } = require("./routing.cjs");
 const { candidateDefinition, runtimeMode } = require("./coordinator.cjs");
 const uuid = z.string().uuid();
@@ -32,11 +37,25 @@ function bindJob(env) {
     assert.match(env.GITHUB_RUN_ID, /^\d+$/);
     return { sessionName: "chronote-sandbox-" + env.GITHUB_RUN_ID + "-1" };
   }
-  assert.equal(env.BOOTSTRAP_PHASE, "activate");
-  const manifest = parseManifest(
-    JSON.parse(env.BOOTSTRAP_MANIFEST_JSON),
-    env.BOOTSTRAP_MANIFEST_SHA256,
-  );
+  assert(["activate", "repair"].includes(env.BOOTSTRAP_PHASE));
+  const payload = JSON.parse(env.BOOTSTRAP_MANIFEST_JSON);
+  let manifestInput = payload,
+    previousManifest;
+  if (env.BOOTSTRAP_PHASE === "repair") {
+    assert.equal(manifestHash(payload), env.BOOTSTRAP_MANIFEST_SHA256);
+    assert.deepEqual(Object.keys(payload).sort(), [
+      "manifest",
+      "previousManifest",
+    ]);
+    manifestInput = payload.manifest;
+    previousManifest = payload.previousManifest;
+    parseManifest(previousManifest, manifestHash(previousManifest));
+  }
+  const expectedSha256 =
+    env.BOOTSTRAP_PHASE === "repair"
+      ? manifestHash(manifestInput)
+      : env.BOOTSTRAP_MANIFEST_SHA256;
+  const manifest = parseManifest(manifestInput, expectedSha256);
   assert.equal(manifest.operationId, env.BOOTSTRAP_OPERATION_ID);
   const name = sessionName(manifest.operationId);
   assert.equal(manifest.sourceCommit, env.GITHUB_SHA);
@@ -47,7 +66,14 @@ function bindJob(env) {
   );
   return {
     sessionName: name,
-    manifest: JSON.parse(env.BOOTSTRAP_MANIFEST_JSON),
+    manifest: manifestInput,
+    manifestSha256: expectedSha256,
+    ...(previousManifest
+      ? {
+          previousManifest,
+          previousManifestSha256: manifestHash(previousManifest),
+        }
+      : {}),
   };
 }
 async function assertSourceImage(m, image, aws) {
@@ -193,7 +219,6 @@ function createIntroduction(options) {
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const sleep = options.pause ?? (() => pause(5000));
   const table = m.tablePrefix + "DeploymentControlTable";
-  const key = marshall({ pk: "ENV", sk: "INTRODUCTION" });
   const bootstrap =
     options.bootstrap ??
     require("./bootstrap-sandbox.cjs").createBootstrap(options);
@@ -201,18 +226,18 @@ function createIntroduction(options) {
     sourceGroup: m.targetGroupA,
     candidateGroup: m.targetGroupB,
   };
-  async function read() {
+  async function read(sk = "INTRODUCTION") {
     const result = await aws("dynamodb", "get-item", {
       TableName: table,
-      Key: key,
+      Key: marshall({ pk: "ENV", sk }),
       ConsistentRead: true,
     });
     return result.Item ? unmarshall(result.Item) : undefined;
   }
-  async function stage(from, to) {
+  async function stage(from, to, sk = "INTRODUCTION") {
     await aws("dynamodb", "update-item", {
       TableName: table,
-      Key: key,
+      Key: marshall({ pk: "ENV", sk }),
       ConditionExpression:
         "operationId = :op AND manifestSha256 = :hash AND #stage = :from",
       UpdateExpression: "SET #stage = :next",
@@ -357,14 +382,15 @@ function createIntroduction(options) {
     });
     assert(!protection.failures?.length);
     assert.equal(protection.protectedTasks.length, 1);
-    assert.equal(protection.protectedTasks[0].taskArn, task.taskArn);
+    assert(sameEcsTaskArn(protection.protectedTasks[0].taskArn, task.taskArn));
     assert.equal(protection.protectedTasks[0].protectionEnabled, false);
   }
   function stopBudget() {
-    const expiresAt = Date.parse(m.maintenance.confirmedAt) / 1000 + 900;
+    const confirmedAt = Date.parse(m.maintenance.confirmedAt) / 1000;
+    const current = now();
     // Reserve eight minutes for shutdown and two for routing/initialization.
     assert(
-      expiresAt - now() >= 600,
+      confirmedAt <= current && confirmedAt + 900 - current >= 600,
       "Maintenance proof has insufficient remaining lifetime",
     );
   }
@@ -377,7 +403,7 @@ function createIntroduction(options) {
       if (ready) {
         if (!complete) return;
         try {
-          return await complete();
+          return await complete(deadline);
         } catch (error) {
           // This code is emitted only by promotion checks before any write.
           if (error.code !== "candidate_not_ready") throw error;
@@ -569,16 +595,237 @@ function createIntroduction(options) {
     );
     await stage("routing_submitted", "routing_acknowledged");
     await bootstrap.initialize();
+    return finish();
+  }
+  async function finish() {
     await bootstrap.launch();
     const result = await wait(
       async () => (await bootstrap.readiness()).kind === "ready",
-      { complete: () => bootstrap.promote() },
+      { complete: (deadline) => bootstrap.promote(deadline) },
     );
     await wait(() => runtimeReady());
     await stage("routing_acknowledged", "complete");
     return result;
   }
-  return { activate };
+
+  function snapshotChange(before, patch) {
+    const names = {},
+      values = {};
+    const conditions = Object.entries(before).map(([field, value], i) => {
+      names["#c" + i] = field;
+      values[":c" + i] = value;
+      return "#c" + i + " = :c" + i;
+    });
+    if (before.sk === "CONTROL") {
+      names["#deployment"] = "deployment";
+      conditions.push("attribute_not_exists(#deployment)");
+    }
+    const changes = Object.entries(patch).map(([field, value], i) => {
+      names["#u" + i] = field;
+      values[":u" + i] = value;
+      return "#u" + i + " = :u" + i;
+    });
+    return {
+      Update: {
+        TableName: table,
+        Key: marshall({ pk: before.pk, sk: before.sk }),
+        ConditionExpression: conditions.join(" AND "),
+        UpdateExpression: "SET " + changes.join(", "),
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: marshall(values),
+      },
+    };
+  }
+  async function previousState(previous, previousHash) {
+    const control = await read("CONTROL"),
+      receipt = await read("BOOTSTRAP#" + previous.operationId),
+      introduction = await read();
+    assert.equal(control?.coordinatorToken, previous.operationId);
+    assert.equal(control.coordinatorEpoch, 1);
+    assert.equal(control.runtimeEnvironment, "ecs");
+    assert.equal(control.protocolVersion, 1);
+    assert.equal(control.servingGeneration, 0);
+    assert.deepEqual(control.servingMembers, {});
+    assert(!control.deployment && control.coordinatorExpiresAt <= now());
+    assert.equal(receipt?.operationId, previous.operationId);
+    assert.equal(receipt.manifestSha256, previousHash);
+    assert.equal(receipt.stage, "launched");
+    uuid.parse(receipt.launchAttemptId);
+    assert.equal(introduction?.operationId, previous.operationId);
+    assert.equal(introduction.manifestSha256, previousHash);
+    assert.equal(introduction.principalArn, previous.principalArn);
+    assert.equal(introduction.stage, "routing_acknowledged");
+    return { control, receipt, introduction };
+  }
+  async function repair(previousInput, previousHash) {
+    const previous = parseManifest(previousInput, previousHash);
+    for (const field of [
+      "environment",
+      "accountId",
+      "region",
+      "tablePrefix",
+      "bucket",
+      "cluster",
+      "service",
+      "containerName",
+      "containerPort",
+      "runtimeMode",
+      "listenerArn",
+      "targetGroupA",
+      "targetGroupB",
+    ])
+      assert.deepEqual(m[field], previous[field]);
+    assert.notEqual(m.operationId, previous.operationId);
+    assert.notEqual(m.sourceCommit, previous.sourceCommit);
+    assert.notEqual(m.imageDigest, previous.imageDigest);
+    assert.equal(m.legacyTaskDefinition, previous.taskDefinition);
+    const actor = await aws("sts", "get-caller-identity", {});
+    assert.equal(actor.Account, m.accountId);
+    assert.equal(actor.Arn, m.principalArn);
+    const repairKey = "REPAIR#" + m.operationId;
+    assert(!(await read(repairKey)), "Repair cannot be replayed");
+    const prior = await previousState(previous, previousHash);
+    assert.equal(await count(table), 3, "Foreign runtime or ownership remains");
+    await workSettled();
+    const current = await service();
+    assert.equal(current.taskDefinition, m.legacyTaskDefinition);
+    assert.equal(current.desiredCount, 1);
+    assert(
+      (await liveTasks()).every(
+        (t) => t.taskDefinitionArn === m.legacyTaskDefinition,
+      ),
+    );
+    const definition = (
+      await aws("ecs", "describe-task-definition", {
+        taskDefinition: m.taskDefinition,
+      })
+    ).taskDefinition;
+    require("./bootstrap-sandbox.cjs").assertPreparedCandidate(m, definition);
+    await assertSourceImage(
+      m,
+      definition.containerDefinitions.find((c) => c.name === m.containerName)
+        .image,
+      aws,
+    );
+    const traffic = await listener();
+    assert.deepEqual(
+      canonical(traffic.DefaultActions),
+      canonical(action(routing, false)),
+    );
+    await require("./bootstrap-sandbox.cjs").assertTargetGroups(
+      m,
+      aws,
+      traffic,
+    );
+    assert.equal((await targets(m.targetGroupB)).length, 0);
+    stopBudget();
+    const receipt = {
+      pk: "ENV",
+      sk: repairKey,
+      operationId: m.operationId,
+      manifestSha256: options.expectedSha256,
+      previousOperationId: previous.operationId,
+      previousManifestSha256: previousHash,
+      stage: "reserved",
+    };
+    const guards = Object.values(prior).map((row) => {
+      const change = snapshotChange(row, { stage: "unused" }).Update;
+      delete change.UpdateExpression;
+      delete change.ExpressionAttributeNames["#u0"];
+      delete change.ExpressionAttributeValues[":u0"];
+      return { ConditionCheck: change };
+    });
+    await aws("dynamodb", "transact-write-items", {
+      TransactItems: [
+        ...guards,
+        {
+          Put: {
+            TableName: table,
+            Item: marshall(receipt),
+            ConditionExpression: "attribute_not_exists(pk)",
+          },
+        },
+      ],
+    });
+    stopBudget();
+    await stage("reserved", "stop_submitted", repairKey);
+    stopBudget();
+    const stopped = await aws("ecs", "update-service", {
+      cluster: m.cluster,
+      service: m.service,
+      desiredCount: 0,
+    });
+    assert.equal(stopped.service.serviceName, m.service);
+    assert.equal(stopped.service.desiredCount, 0);
+    await stage("stop_submitted", "stop_acknowledged", repairKey);
+    await wait(
+      async () => {
+        const svc = await service();
+        assert.equal(svc.taskDefinition, m.legacyTaskDefinition);
+        assert.equal(svc.desiredCount, 0);
+        return (
+          svc.runningCount === 0 &&
+          svc.pendingCount === 0 &&
+          (await liveTasks()).length === 0 &&
+          (await targets(m.targetGroupA)).length === 0 &&
+          (await targets(m.targetGroupB)).length === 0
+        );
+      },
+      { timeoutSeconds: 480 },
+    );
+    await workSettled();
+
+    assert.deepEqual(
+      canonical((await listener()).DefaultActions),
+      canonical(action(routing, false)),
+    );
+    assert.equal(await count(table), 4, "Foreign runtime or ownership remains");
+    const settled = await previousState(previous, previousHash),
+      repairReceipt = await read(repairKey);
+    assert.equal(repairReceipt.stage, "stop_acknowledged");
+    assert(
+      now() >= Date.parse(m.maintenance.confirmedAt) / 1000 &&
+        now() - Date.parse(m.maintenance.confirmedAt) / 1000 <= 900,
+      "Maintenance proof expired",
+    );
+    await aws("dynamodb", "transact-write-items", {
+      TransactItems: [
+        snapshotChange(settled.control, {
+          coordinatorToken: m.operationId,
+          coordinatorExpiresAt: now() + 1800,
+        }),
+        snapshotChange(settled.receipt, {
+          stage: "superseded",
+          supersededBy: m.operationId,
+        }),
+        snapshotChange(settled.introduction, {
+          operationId: m.operationId,
+          manifestSha256: options.expectedSha256,
+          principalArn: m.principalArn,
+          previousOperationId: previous.operationId,
+          previousManifestSha256: previousHash,
+        }),
+        snapshotChange(repairReceipt, { stage: "initialized" }),
+        {
+          Put: {
+            TableName: table,
+            Item: marshall({
+              pk: "ENV",
+              sk: "BOOTSTRAP#" + m.operationId,
+              operationId: m.operationId,
+              manifestSha256: options.expectedSha256,
+              stage: "initialized",
+            }),
+            ConditionExpression: "attribute_not_exists(pk)",
+          },
+        },
+      ],
+    });
+    const result = await finish();
+    await stage("initialized", "complete", repairKey);
+    return result;
+  }
+  return { activate, repair };
 }
 async function runCli(phase, env = process.env) {
   try {
@@ -597,15 +844,21 @@ async function runCli(phase, env = process.env) {
       return 0;
     }
     assert.equal(phase, env.BOOTSTRAP_PHASE);
-    const result =
-      phase === "prepare"
-        ? await prepare(env)
-        : await createIntroduction({
-            manifest: JSON.parse(
-              readFileSync("bootstrap-manifest.json", "utf8"),
-            ),
-            expectedSha256: env.BOOTSTRAP_MANIFEST_SHA256,
-          }).activate();
+    let result;
+    if (phase === "prepare") result = await prepare(env);
+    else {
+      const introduction = createIntroduction({
+        manifest: JSON.parse(readFileSync("bootstrap-manifest.json", "utf8")),
+        expectedSha256: binding.manifestSha256,
+      });
+      result =
+        phase === "repair"
+          ? await introduction.repair(
+              binding.previousManifest,
+              binding.previousManifestSha256,
+            )
+          : await introduction.activate();
+    }
     console.log(JSON.stringify(result));
     return 0;
   } catch {

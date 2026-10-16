@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const { sameEcsTaskArn } = require("../../src/utils/ecsTaskArn.js");
 const { isDeepStrictEqual: same } = require("node:util");
 const { randomUUID } = require("node:crypto");
 const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb");
@@ -573,7 +574,7 @@ function createBootstrap(options) {
     if (
       protection.failures?.length ||
       protection.protectedTasks?.length !== 1 ||
-      proof.taskArn !== task.taskArn ||
+      !sameEcsTaskArn(proof.taskArn, task.taskArn) ||
       !proof.protectionEnabled ||
       Date.parse(proof.expirationDate) / 1000 <= now() + 120
     )
@@ -593,7 +594,7 @@ function createBootstrap(options) {
       throw error;
     }
   }
-  async function promote() {
+  async function promote(notAfter = Infinity) {
     await identity();
     const [c, r] = await state();
     if (
@@ -623,6 +624,7 @@ function createBootstrap(options) {
     transaction.TransactItems.push(
       receiptUpdate("launched", "complete", { candidate: row.identity }),
     );
+    if (now() >= notAfter) fail("Candidate warmup deadline expired");
     await write(transaction.TransactItems, async () => {
       const [ctl, receipt] = await state(),
         current = await read(row.sk);

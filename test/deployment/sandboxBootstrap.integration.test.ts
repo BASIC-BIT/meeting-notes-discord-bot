@@ -7,10 +7,12 @@ import {
   ScanCommand,
   TransactWriteItemsCommand,
   PutItemCommand,
+  UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import * as builders from "../../src/services/deploymentControlTransactions";
 import * as types from "../../src/types/deploymentControl";
+import { createIntroduction } from "../../scripts/deployment/introduce-sandbox.cjs";
 import { createBootstrap } from "../../scripts/deployment/bootstrap-sandbox.cjs";
 
 const client = new DynamoDBClient({
@@ -887,5 +889,366 @@ test("read-only promotion readiness waits for ALB health and ignores replaced ru
   await expect(bootstrap.promote()).resolves.toEqual({
     kind: "complete",
     generation: 1,
+  });
+});
+
+async function repairFixture() {
+  const f = await fixture();
+  const previous = {
+    ...f.manifest,
+    operationId: randomUUID(),
+    sourceCommit: "b".repeat(40),
+    taskDefinition: f.manifest.legacyTaskDefinition,
+    legacyTaskDefinition: f.manifest.legacyTaskDefinition.replace(/:1$/, ":0"),
+    imageDigest: "sha256:" + "c".repeat(64),
+  };
+  const previousHash = createHash("sha256")
+    .update(JSON.stringify(previous))
+    .digest("hex");
+  const rows = [
+    {
+      pk: "ENV",
+      sk: "CONTROL",
+      recordType: "control",
+      runtimeEnvironment: "ecs",
+      protocolVersion: 1,
+      coordinatorToken: previous.operationId,
+      coordinatorEpoch: 1,
+      coordinatorExpiresAt: 999,
+      servingGeneration: 0,
+      servingMembers: {},
+    },
+    {
+      pk: "ENV",
+      sk: "BOOTSTRAP#" + previous.operationId,
+      operationId: previous.operationId,
+      manifestSha256: previousHash,
+      stage: "launched",
+      launchAttemptId: randomUUID(),
+    },
+    {
+      pk: "ENV",
+      sk: "INTRODUCTION",
+      operationId: previous.operationId,
+      manifestSha256: previousHash,
+      principalArn: previous.principalArn,
+      stage: "routing_acknowledged",
+    },
+  ];
+  for (const row of rows)
+    await client.send(
+      new PutItemCommand({ TableName: f.table, Item: marshall(row) }),
+    );
+  const calls: { service: string; operation: string }[] = [];
+  const state = {
+    stopped: false,
+    lostStop: false,
+    lostTransfer: false,
+    raceReservation: false,
+    slowIntent: false,
+    slowTransfer: false,
+    seconds: 1000,
+  };
+  async function providerRead(
+    service: string,
+    operation: string,
+    input: Record<string, never>,
+  ) {
+    if (
+      service === "dynamodb" &&
+      operation === "scan" &&
+      input.Select === "COUNT" &&
+      input.TableName !== f.table &&
+      input.TableName !== f.leaseTable
+    )
+      return { Count: 0 };
+    if (service === "ecs" && operation === "describe-services") {
+      return {
+        failures: [],
+        services: [
+          {
+            serviceName: f.manifest.service,
+            taskDefinition: previous.taskDefinition,
+            desiredCount: state.stopped ? 0 : 1,
+            runningCount: 0,
+            pendingCount: 0,
+            loadBalancers: [
+              {
+                targetGroupArn: f.manifest.targetGroupA,
+                containerName: f.manifest.containerName,
+                containerPort: f.manifest.containerPort,
+              },
+            ],
+          },
+        ],
+      };
+    }
+    if (service === "ecs" && operation === "describe-task-definition") {
+      const out = await f.aws(service, operation, input);
+      out.taskDefinition.containerDefinitions[0].image =
+        "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-sandbox-repo@" +
+        f.manifest.imageDigest;
+      return out;
+    }
+    if (service === "ecr")
+      return {
+        imageDetails: [
+          {
+            imageDigest: f.manifest.imageDigest,
+            imageTags: [f.manifest.sourceCommit],
+          },
+        ],
+      };
+    return f.aws(service, operation, input);
+  }
+  async function transact(input: Record<string, never>) {
+    if (state.raceReservation && !state.stopped) {
+      const control = await f.get("CONTROL");
+      control!.coordinatorExpiresAt = 2000;
+      await client.send(
+        new PutItemCommand({ TableName: f.table, Item: marshall(control) }),
+      );
+    }
+    const out = await f.aws("dynamodb", "transact-write-items", input);
+    if (state.lostTransfer && state.stopped)
+      throw new Error("transfer acknowledgment lost");
+    return out;
+  }
+  const aws = async (
+    service: string,
+    operation: string,
+    input: Record<string, never>,
+  ) => {
+    calls.push({ service, operation });
+    if (service === "dynamodb" && operation === "get-item") {
+      const result = await f.aws(service, operation, input);
+      if (
+        state.slowTransfer &&
+        unmarshall(input.Key).sk.startsWith("REPAIR#") &&
+        state.stopped
+      )
+        state.seconds = 1901;
+      return result;
+    }
+    if (service === "dynamodb" && operation === "update-item") {
+      const result = await client.send(new UpdateItemCommand(input));
+      if (
+        state.slowIntent &&
+        unmarshall(input.ExpressionAttributeValues)[":next"] ===
+          "stop_submitted"
+      )
+        state.seconds += 301;
+      return result;
+    }
+    if (service === "dynamodb" && operation === "transact-write-items") {
+      return transact(input);
+    }
+    if (service === "ecs" && operation === "update-service") {
+      state.stopped = true;
+      if (state.lostStop) throw new Error("stop acknowledgment lost");
+      return { service: { serviceName: f.manifest.service, desiredCount: 0 } };
+    }
+    return providerRead(service, operation, input);
+  };
+  const bootstrap = {
+    ...f.bootstrap,
+    promote: async () => {
+      const out = await f.bootstrap.promote();
+      const row = await f.get("RUNTIME#runtime");
+      row!.readiness.observedGeneration = 1;
+      await client.send(
+        new PutItemCommand({ TableName: f.table, Item: marshall(row) }),
+      );
+      return out;
+    },
+  };
+  const intro = createIntroduction({
+    manifest: f.manifest,
+    expectedSha256: f.hash,
+    aws,
+    bootstrap,
+    now: () => state.seconds,
+    pause: async () => undefined,
+  });
+  return {
+    ...f,
+    previous,
+    previousHash,
+    calls,
+    repairState: state,
+    repairAws: aws,
+    intro,
+  };
+}
+
+test("repair conditionally supersedes an acknowledged failed unserved bootstrap and reuses promotion", async () => {
+  const f = await repairFixture();
+  await expect(
+    f.intro.repair(f.previous, f.previousHash),
+  ).resolves.toMatchObject({ kind: "complete", generation: 1 });
+  expect(await f.get("BOOTSTRAP#" + f.previous.operationId)).toMatchObject({
+    stage: "superseded",
+    supersededBy: f.manifest.operationId,
+  });
+  expect(await f.get("INTRODUCTION")).toMatchObject({
+    stage: "complete",
+    previousOperationId: f.previous.operationId,
+    operationId: f.manifest.operationId,
+  });
+  expect(await f.get("REPAIR#" + f.manifest.operationId)).toMatchObject({
+    stage: "complete",
+    previousOperationId: f.previous.operationId,
+  });
+  expect(await f.get("CONTROL")).toMatchObject({
+    servingGeneration: 1,
+    coordinatorToken: f.manifest.operationId,
+  });
+  await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  expect(f.calls.filter((c) => c.operation === "update-service")).toHaveLength(
+    1,
+  );
+});
+
+test.each([
+  "foreign-owner",
+  "serving-member",
+  "unacknowledged-launch",
+  "live-coordinator",
+])("repair refuses %s before writes", async (kind) => {
+  const f = await repairFixture();
+  const sk =
+    kind === "unacknowledged-launch"
+      ? "BOOTSTRAP#" + f.previous.operationId
+      : "CONTROL";
+  const row = await f.get(sk);
+  if (kind === "foreign-owner") row!.coordinatorToken = randomUUID();
+  if (kind === "serving-member") row!.servingGeneration = 1;
+  if (kind === "unacknowledged-launch") row!.stage = "launch_submitted";
+  if (kind === "live-coordinator") row!.coordinatorExpiresAt = 2000;
+  await client.send(
+    new PutItemCommand({ TableName: f.table, Item: marshall(row) }),
+  );
+  await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  expect(
+    f.calls.some((c) =>
+      ["update-service", "transact-write-items"].includes(c.operation),
+    ),
+  ).toBe(false);
+});
+
+test.each(["stop", "transfer"])(
+  "repair preserves an unknown %s write and never replays",
+  async (kind) => {
+    const f = await repairFixture();
+    if (kind === "stop") f.repairState.lostStop = true;
+    else f.repairState.lostTransfer = true;
+    await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+    await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+    expect(
+      f.calls.filter((c) => c.operation === "update-service"),
+    ).toHaveLength(1);
+    expect(await f.get("REPAIR#" + f.manifest.operationId)).toMatchObject({
+      stage: kind === "stop" ? "stop_submitted" : "initialized",
+    });
+    expect(f.state.updates).toBe(0);
+  },
+);
+
+test("repair refuses a future maintenance proof before reserving or stopping", async () => {
+  const f = await repairFixture();
+  const manifest = {
+    ...f.manifest,
+    maintenance: {
+      ...f.manifest.maintenance,
+      confirmedAt: new Date(1001_000).toISOString(),
+    },
+  };
+  const hash = createHash("sha256")
+    .update(JSON.stringify(manifest))
+    .digest("hex");
+  const intro = createIntroduction({
+    manifest,
+    expectedSha256: hash,
+    aws: f.repairAws,
+    bootstrap: f.bootstrap,
+    now: () => 1000,
+    pause: async () => undefined,
+  });
+  await expect(intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  expect(
+    f.calls.some((c) =>
+      ["update-service", "transact-write-items"].includes(c.operation),
+    ),
+  ).toBe(false);
+});
+
+test("repair reservation condition rejects coordinator changes after its read", async () => {
+  const f = await repairFixture();
+  f.repairState.raceReservation = true;
+  await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  expect(f.calls.filter((c) => c.operation === "update-service")).toHaveLength(
+    0,
+  );
+  expect(await f.get("REPAIR#" + f.manifest.operationId)).toBeUndefined();
+  expect(await f.get("CONTROL")).toMatchObject({
+    coordinatorToken: f.previous.operationId,
+    coordinatorExpiresAt: 2000,
+  });
+});
+
+test("repair rechecks the stop budget after a slow intent acknowledgment", async () => {
+  const f = await repairFixture();
+  f.repairState.slowIntent = true;
+  await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  expect(f.calls.filter((c) => c.operation === "update-service")).toHaveLength(
+    0,
+  );
+  expect(await f.get("REPAIR#" + f.manifest.operationId)).toMatchObject({
+    stage: "stop_submitted",
+  });
+});
+
+test("repair rechecks maintenance after slow final reads before ownership transfer", async () => {
+  const f = await repairFixture();
+  f.repairState.slowTransfer = true;
+  await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  expect(
+    f.calls.filter((c) => c.operation === "transact-write-items"),
+  ).toHaveLength(1);
+  expect(await f.get("CONTROL")).toMatchObject({
+    coordinatorToken: f.previous.operationId,
+  });
+  expect(await f.get("REPAIR#" + f.manifest.operationId)).toMatchObject({
+    stage: "stop_acknowledged",
+  });
+});
+
+test("promotion refuses a deadline crossed during final native protection revalidation", async () => {
+  const f = await fixture();
+  await f.bootstrap.initialize();
+  await f.bootstrap.launch();
+  let seconds = 1000;
+  const aws = async (
+    service: string,
+    operation: string,
+    input: Record<string, never>,
+  ) => {
+    const result = await f.aws(service, operation, input);
+    if (service === "ecs" && operation === "get-task-protection")
+      seconds = 1002;
+    return result;
+  };
+  const bootstrap = createBootstrap({
+    manifest: f.manifest,
+    expectedSha256: f.hash,
+    aws,
+    builders,
+    types,
+    now: () => seconds,
+  });
+  await expect(bootstrap.promote(1001)).rejects.toThrow();
+  expect(await f.get("CONTROL")).toMatchObject({ servingGeneration: 0 });
+  expect(await f.get("BOOTSTRAP#" + f.manifest.operationId)).toMatchObject({
+    stage: "launched",
   });
 });

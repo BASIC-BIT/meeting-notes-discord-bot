@@ -209,7 +209,9 @@ function fixture() {
       "describe-services": () => ({ services: [service()], failures: [] }),
       "list-tasks": (p) => ({
         taskArns:
-          p.desiredStatus === "RUNNING" && !state.stopped ? ["legacy"] : [],
+          p.desiredStatus === "RUNNING" && !state.stopped
+            ? [ecs + "task/test-sandbox-cluster/legacy"]
+            : [],
       }),
       "describe-tasks": (p) => ({
         tasks: p.tasks.map((taskArn) => ({
@@ -789,4 +791,44 @@ test("never retries an unknown promotion write outcome", async () => {
   await expect(intro.activate()).rejects.toThrow();
   await expect(intro.activate()).rejects.toThrow();
   expect(f.bootstrap.promote).toHaveBeenCalledTimes(1);
+});
+
+test("repair binds the old and new manifests under one reviewed envelope checksum", () => {
+  const f = fixture();
+  const next = structuredClone(f.m);
+  next.operationId = randomUUID();
+  next.sourceCommit = "d".repeat(40);
+  next.legacyTaskDefinition = f.m.taskDefinition;
+  next.taskDefinition = f.m.taskDefinition.replace(/:2$/, ":3");
+  next.imageDigest = "sha256:" + "e".repeat(64);
+  next.principalArn = f.m.principalArn.replace(
+    /chronote-sandbox-\d+-1$/,
+    "chronote-sandbox-" +
+      BigInt("0x" + next.operationId.replaceAll("-", "")) +
+      "-1",
+  );
+  const payload = { manifest: next, previousManifest: f.m };
+  const checksum = createHash("sha256")
+    .update(JSON.stringify(payload))
+    .digest("hex");
+  const env = {
+    ...f.env,
+    BOOTSTRAP_PHASE: "repair",
+    BOOTSTRAP_MANIFEST_JSON: JSON.stringify(payload),
+    BOOTSTRAP_MANIFEST_SHA256: checksum,
+    BOOTSTRAP_OPERATION_ID: next.operationId,
+    GITHUB_SHA: next.sourceCommit,
+  };
+  expect(bindJob(env)).toMatchObject({
+    manifest: next,
+    previousManifest: f.m,
+    manifestSha256: createHash("sha256")
+      .update(JSON.stringify(next))
+      .digest("hex"),
+    previousManifestSha256: f.hash,
+  });
+  payload.previousManifest.sourceCommit = "f".repeat(40);
+  expect(() =>
+    bindJob({ ...env, BOOTSTRAP_MANIFEST_JSON: JSON.stringify(payload) }),
+  ).toThrow();
 });
