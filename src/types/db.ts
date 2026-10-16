@@ -2,6 +2,7 @@ import type { RecordingCheckpoint } from "./recordingCheckpoint";
 import { Participant } from "./participants";
 import type { MeetingDelivery } from "./meetingDelivery";
 import type { MeetingProcessingOutcome } from "./meetingProcessing";
+import type { NotesDeliveryTiming } from "./meetingNotesTiming";
 import type {
   RecordingCaptureState,
   RecordingRecoveryState,
@@ -501,6 +502,7 @@ export interface MeetingHistory {
   cancellationReason?: string;
   summaryMessageId?: string; // Message id for the summary embed
   delivery?: MeetingDelivery; // Acknowledged delivery outcomes, not generation flags
+  notesDeliveryTiming?: NotesDeliveryTiming;
   processing?: MeetingProcessingOutcome;
   notesMessageIds?: string[]; // All message ids when notes span multiple messages
   notesChannelId?: string; // Channel id where notes were posted
