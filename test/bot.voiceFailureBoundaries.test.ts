@@ -122,6 +122,9 @@ import {
   Guild,
   TextChannel,
   VoiceChannel,
+  SlashCommandBuilder,
+  REST,
+  Routes,
 } from "discord.js";
 import { CONFIG_KEYS } from "../src/config/keys";
 import { getGlobalConfigValues } from "../src/services/appConfigService";
@@ -289,4 +292,86 @@ test("a missing configured auto destination does not start elsewhere", async () 
   expect(fetchChannel).toHaveBeenCalledWith("missing-notes");
   expect(start).not.toHaveBeenCalled();
   expect(tts).not.toHaveBeenCalled();
+});
+
+test("registered startmeeting offers an optional ordinary text notes channel", async () => {
+  const source = ts.createSourceFile(
+    "bot.ts",
+    readFileSync(path.join(__dirname, "../src/bot.ts"), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const declaration = source.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "setupApplicationCommands",
+  );
+  if (!declaration) throw new Error("Missing command registration");
+  const put = jest.spyOn(REST.prototype, "put").mockResolvedValue([]);
+  const command = new SlashCommandBuilder()
+    .setName("fixture")
+    .setDescription("Fixture");
+  const context = vm.createContext({
+    SlashCommandBuilder,
+    ChannelType,
+    REST,
+    Routes,
+    TOKEN: "fake",
+    CLIENT_ID: "bot-1",
+    config: {
+      server: { onboardingEnabled: false },
+      chatTts: { maxChars: 100 },
+    },
+    TTS_VOICE_CHOICES: [{ name: "Alloy", value: "alloy" }],
+    TTS_PREFIX_MODE_CHOICES: [{ name: "Default", value: "default" }],
+    MIN_TTS_VOLUME_PERCENT: 0,
+    MAX_TTS_VOLUME_PERCENT: 200,
+    billingCommand: command,
+    dismissAutoRecordCommand: command,
+    startMeetingContextCommand: command,
+    console: { log: jest.fn(), error: jest.fn() },
+  });
+  try {
+    await vm.runInContext(
+      ts.transpileModule(
+        declaration.getText(source) + "\nsetupApplicationCommands();",
+        {
+          compilerOptions: {
+            module: ts.ModuleKind.None,
+            target: ts.ScriptTarget.ES2022,
+          },
+        },
+      ).outputText,
+      context,
+    );
+    expect(put).toHaveBeenCalledWith(
+      Routes.applicationCommands("bot-1"),
+      expect.objectContaining({
+        body: expect.arrayContaining([
+          expect.objectContaining({
+            name: "startmeeting",
+            options: [
+              expect.objectContaining({
+                name: "context",
+                required: false,
+                max_length: 500,
+              }),
+              expect.objectContaining({
+                name: "tags",
+                required: false,
+                max_length: 500,
+              }),
+              expect.objectContaining({
+                name: "notes-channel",
+                required: false,
+                channel_types: [ChannelType.GuildText],
+              }),
+            ],
+          }),
+        ]),
+      }),
+    );
+  } finally {
+    put.mockRestore();
+  }
 });

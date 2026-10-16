@@ -295,6 +295,12 @@ describe("handleEndMeetingOther", () => {
 
   it.each([
     { used: 240, outcome: "exhausted_after_meeting", fails: false },
+    {
+      used: 240,
+      outcome: "exhausted_after_meeting",
+      fails: false,
+      routed: true,
+    },
     { used: 200, outcome: "near_limit", fails: false },
     { used: 240, outcome: "exhausted_after_meeting", fails: true },
     {
@@ -305,7 +311,7 @@ describe("handleEndMeetingOther", () => {
     },
   ])(
     "flushes and saves despite a $outcome notice (failure=$fails)",
-    async ({ used, outcome, fails, pending }) => {
+    async ({ used, outcome, fails, pending, routed }) => {
       const events: string[] = [];
       jest.mocked(settleOwnedVoiceSession).mockImplementationOnce(async () => {
         events.push("voice-settled");
@@ -351,10 +357,12 @@ describe("handleEndMeetingOther", () => {
           workHandle: { settle: jest.fn(), transition: jest.fn() },
         },
         guildId: "guild-1",
-        channelId: "text-1",
+        channelId: "original-notes",
+        startMessageId: "published-recording",
         meetingId: "meeting-1",
         voiceChannel: { id: "voice-1", name: "Voice" },
         textChannel: {
+          id: "original-notes",
           send: jest.fn(),
           messages: { fetch: jest.fn() },
         },
@@ -412,7 +420,22 @@ describe("handleEndMeetingOther", () => {
           .mocked(notifyRecordingLimit)
           .mockRejectedValueOnce(new Error("test notice failure"));
       else jest.mocked(notifyRecordingLimit).mockResolvedValueOnce(undefined);
-      const ending = handleEndMeetingOther({} as Client, meeting);
+      const button = {
+        guildId: meeting.guildId,
+        message: { id: "published-recording" },
+        user: { id: "user-1" },
+        deferred: false,
+        replied: false,
+        deferUpdate: jest.fn(),
+        reply: jest.fn(),
+        followUp: jest.fn(),
+      } as unknown as ButtonInteraction;
+      if (routed) {
+        mockedGetMeeting.mockReturnValueOnce(meeting);
+      }
+      const ending = routed
+        ? handleEndMeetingButton({} as Client, button)
+        : handleEndMeetingOther({} as Client, meeting);
       if (pending) {
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(meeting.setFinished).not.toHaveBeenCalled();
@@ -421,6 +444,15 @@ describe("handleEndMeetingOther", () => {
       }
       await ending;
 
+      if (routed) {
+        expect(button.deferUpdate).toHaveBeenCalled();
+        expect(button.followUp).not.toHaveBeenCalled();
+        expect(meeting.textChannel.id).toBe("original-notes");
+        expect(updateMeetingProcessingMessage).toHaveBeenCalledWith(meeting);
+        expect(updateMeetingSummaryMessage).toHaveBeenCalledWith(meeting, {
+          finalization: true,
+        });
+      }
       expect(notifyRecordingLimit).toHaveBeenCalledWith(
         expect.objectContaining({
           outcome,

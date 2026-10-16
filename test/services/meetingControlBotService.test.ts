@@ -13,6 +13,8 @@ import {
   VoiceChannel,
   VoiceState,
 } from "discord.js";
+import { interruptOwnedMeeting } from "../../src/services/ownedMeetingInterruption";
+import { resolveServerMeetingArtifactAccess } from "../../src/services/meetingArtifactAccessService";
 import { CONFIG_KEYS } from "../../src/config/keys";
 import { initializeMeeting } from "../../src/meetings";
 import { getGlobalConfigValues } from "../../src/services/appConfigService";
@@ -62,6 +64,10 @@ jest.mock("../../src/services/appConfigService", () => ({
 }));
 jest.mock("../../src/services/configOverridesService", () => ({
   listConfigOverridesForScope: jest.fn(),
+}));
+
+jest.mock("../../src/services/ownedMeetingInterruption", () => ({
+  interruptOwnedMeeting: jest.fn(async () => ({ kind: "unresolved" })),
 }));
 
 const client = new Client({ intents: [] });
@@ -264,4 +270,42 @@ test("a missing configured remote destination never initializes", async () => {
     executeMeetingControlCommand(client, command()),
   ).rejects.toThrow();
   expect(initializeMeeting).not.toHaveBeenCalled();
+});
+
+test("remote uncertain publication preserves once without retrying", async () => {
+  send.mockRejectedValueOnce(new Error("Discord send response timed out"));
+  await expect(executeMeetingControlCommand(client, command())).rejects.toThrow(
+    "timed out",
+  );
+  const meeting = await jest.mocked(initializeMeeting).mock.results[0].value;
+  expect(interruptOwnedMeeting).toHaveBeenCalledTimes(1);
+  expect(interruptOwnedMeeting).toHaveBeenCalledWith(meeting, {
+    reason: "processing_failure",
+    deadline: expect.any(Number),
+  });
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(meeting.startMessageId).toBeUndefined();
+});
+
+test("remote ownership lost after initialization preserves before publication", async () => {
+  let checks = 0;
+  await expect(
+    executeMeetingControlCommand(client, command(), async () => {
+      if (++checks === 4) throw new Error("claim lost");
+    }),
+  ).rejects.toThrow("claim lost");
+  expect(initializeMeeting).toHaveBeenCalledTimes(1);
+  expect(interruptOwnedMeeting).toHaveBeenCalledTimes(1);
+  expect(send).not.toHaveBeenCalled();
+});
+
+test("remote artifact lookup failure never initializes", async () => {
+  jest
+    .mocked(resolveServerMeetingArtifactAccess)
+    .mockRejectedValueOnce(new Error("lookup failed"));
+  await expect(executeMeetingControlCommand(client, command())).rejects.toThrow(
+    "lookup failed",
+  );
+  expect(initializeMeeting).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
 });

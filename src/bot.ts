@@ -1282,6 +1282,15 @@ async function setupApplicationCommands() {
           .setDescription("Optional comma-separated tags for this meeting")
           .setRequired(false)
           .setMaxLength(500),
+      )
+      .addChannelOption((option) =>
+        option
+          .setName("notes-channel")
+          .setDescription(
+            "Text channel for this recording's controls and notes",
+          )
+          .addChannelTypes(ChannelType.GuildText)
+          .setRequired(false),
       ),
     new SlashCommandBuilder()
       .setName("autorecord")

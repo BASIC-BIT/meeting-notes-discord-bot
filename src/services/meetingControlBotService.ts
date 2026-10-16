@@ -1,3 +1,4 @@
+import { interruptOwnedMeeting } from "./ownedMeetingInterruption";
 import { initiatingStopInterruption } from "./meetingStopInterruption";
 import {
   PermissionFlagsBits,
@@ -11,7 +12,7 @@ import {
 import { persistExplicitMeetingStop } from "../commands/endMeeting";
 import { getMeeting } from "../meetings";
 import {
-  buildManualMeetingStartedMessage,
+  publishManualMeetingStartedMessage,
   startManualMeetingFromChannels,
 } from "../commands/startMeeting";
 import {
@@ -232,14 +233,19 @@ const executeStartMeeting = async (
     throw new MeetingControlExecutionError(startResult.error);
   }
 
-  await assertOwned();
-  const message = await textChannel.send(
-    buildManualMeetingStartedMessage(
-      startResult.meeting,
-      startResult.liveMeetingUrl,
-    ),
+  try {
+    await assertOwned();
+  } catch (error) {
+    await interruptOwnedMeeting(startResult.meeting, {
+      reason: "processing_failure",
+      deadline: Date.now() + 100_000,
+    });
+    throw error;
+  }
+  await publishManualMeetingStartedMessage(
+    startResult.meeting,
+    startResult.liveMeetingUrl,
   );
-  startResult.meeting.startMessageId = message.id;
 
   return {
     status: "started",
