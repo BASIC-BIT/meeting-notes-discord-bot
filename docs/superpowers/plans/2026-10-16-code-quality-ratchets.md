@@ -82,7 +82,7 @@ A report describes exactly three distinct scanner results. For each successful s
 - Produce the duplication CLI and `GateReport`. Retain `fingerprintCloneSource`, `classify`, `filterPreExisting`, and their ported signatures for the retained tests.
 - Reuse helper exports `tempRepo`, `withRepo`, `write`, `git`, `commit`, `runGate`, and `assertRatchetJson`. Extend async cleanup support only where an asynchronous test actually needs it.
 
-- [ ] **Step 1: Write the failing source-selection test and port relevant regression assertions.**
+- [x] **Step 1: Write the failing source-selection test and port relevant regression assertions.**
 
 ```js
 test("source eligibility includes modules and tests but excludes output", () => {
@@ -97,11 +97,11 @@ test("source eligibility includes modules and tests but excludes output", () => 
 
 Port the existing tests for new copies, same-file copies, formatting-only old clones, shortened clones, rewritten endpoints, preceding deletions, untracked files, unique filesystem renames, and baseline failures. Move Git-specific tests into `quality-git.test.mjs`; separate pure clone tests from scanner/process tests. Keep their actual assertions, not just their test names. Add an eligible-source rename out of generated output and an excluded directory symlink case.
 
-- [ ] **Step 2: Run the new suites and observe failure.** Run `node --test scripts/quality-git.test.mjs scripts/dup-gate.test.mjs scripts/dup-gate.integration.test.mjs`. Expect missing implementation/dependencies, not a skipped suite.
-- [ ] **Step 3: Port the minimum implementation.** Pin `jscpd@5.0.12` and `@jscpd/tokenizer@4.2.5` as dev dependencies and install with Yarn in the isolated worktree. Extract the existing Git operations once, preserve their error paths, and set the default to `origin/master`. Use one source predicate on diff collection and both scans. Add scanner format/pattern mappings so module extensions are measured rather than silently ignored. Normalize line endings consistently for clone identity.
-- [ ] **Step 4: Finish the duplicate port.** Keep normalized token endpoint identity, baseline suppression, deletion boundaries, temporary-index snapshots, and bounded subprocesses. Remove the Perkcord allowance registry, Markdown/shell parsers, unsupported-language paths, and optional structural engine. Do not add `mdast-util-from-markdown` or `sh-syntax`.
-- [ ] **Step 5: Verify the suites pass.** Rerun the step-2 command. Tests must compare `git status --porcelain=v1 -z` and the index tree before/after baseline scans and untracked renames. Real-process missing-engine, missing-base, malformed scanner output, and timeout/signal cases must return 2. Use temporary repositories outside the source tree.
-- [ ] **Step 6: Commit.** Stage only this task's source/tests/dependency files and commit as `feat: add Git-relative duplication checks`.
+- [x] **Step 2: Run the new suites and observe failure.** Run `node --test scripts/quality-git.test.mjs scripts/dup-gate.test.mjs scripts/dup-gate.integration.test.mjs`. Expect missing implementation/dependencies, not a skipped suite.
+- [x] **Step 3: Port the minimum implementation.** Pin `jscpd@5.0.12` and `@jscpd/tokenizer@4.2.5` as dev dependencies and install with Yarn in the isolated worktree. Extract the existing Git operations once, preserve their error paths, and set the default to `origin/master`. Use one source predicate on diff collection and both scans. Add scanner format/pattern mappings so module extensions are measured rather than silently ignored. Normalize line endings consistently for clone identity.
+- [x] **Step 4: Finish the duplicate port.** Keep normalized token endpoint identity, baseline suppression, deletion boundaries, temporary-index snapshots, and bounded subprocesses. Remove the Perkcord allowance registry, Markdown/shell parsers, unsupported-language paths, and optional structural engine. Do not add `mdast-util-from-markdown` or `sh-syntax`.
+- [x] **Step 5: Verify the suites pass.** Rerun the step-2 command. Tests must compare `git status --porcelain=v1 -z` and the index tree before/after baseline scans and untracked renames. Real-process missing-engine, missing-base, malformed scanner output, and timeout/signal cases must return 2. Use temporary repositories outside the source tree.
+- [x] **Step 6: Commit.** Stage only this task's source/tests/dependency files and commit as `feat: add Git-relative duplication checks`.
 
 ### Task 2: Port complexity and file-size checks
 

@@ -4394,6 +4394,21 @@
   resolved "https://registry.yarnpkg.com/@js-sdsl/ordered-map/-/ordered-map-4.4.2.tgz#9299f82874bab9e4c7f9c48d865becbfe8d6907c"
   integrity sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==
 
+"@jscpd/core@4.2.5":
+  version "4.2.5"
+  resolved "https://registry.yarnpkg.com/@jscpd/core/-/core-4.2.5.tgz#b582d51438265ae22f3096a45ba9e5591f3baa85"
+  integrity sha512-Esf2deHxaoNEjePwf2jqP6Urzj+BAOsJVPFLbnnSsV+q7rLNMcn0UEEoKBXIOOt4qMkrkhl9DfwpMyPPOr6GkQ==
+  dependencies:
+    eventemitter3 "^5.0.1"
+
+"@jscpd/tokenizer@4.2.5":
+  version "4.2.5"
+  resolved "https://registry.yarnpkg.com/@jscpd/tokenizer/-/tokenizer-4.2.5.tgz#514ac7c99d95e30ba0abbb70a9ca4d77032733f1"
+  integrity sha512-UM8Wx/jwahmflqQExlcKMQTYOAy58N/fn7Pv6NYrkD3EZm/FTk7gW97wkXy5aDE1Ts9oBUpT9tLY2rz7ogCHAQ==
+  dependencies:
+    "@jscpd/core" "4.2.5"
+    spark-md5 "^3.0.2"
+
 "@jsonjoy.com/base64@17.67.0":
   version "17.67.0"
   resolved "https://registry.yarnpkg.com/@jsonjoy.com/base64/-/base64-17.67.0.tgz#7eeda3cb41138d77a90408fd2e42b2aba10576d7"
@@ -12757,6 +12772,48 @@ js-yaml@5.4.1, js-yaml@^3.13.1, js-yaml@^4.1.0, js-yaml@^4.3.0:
   dependencies:
     argparse "^2.0.1"
 
+jscpd-darwin-arm64@5.0.12:
+  version "5.0.12"
+  resolved "https://registry.yarnpkg.com/jscpd-darwin-arm64/-/jscpd-darwin-arm64-5.0.12.tgz#6747a5e5355b2d9e526a08804015e9469d48d214"
+  integrity sha512-CQCDYhQY9yOGGeauzkRGYW/QtXurPCjfDkEhUoM/M5UdmpzxfG3i9mnNsaheJ0RdFRf73mL7JaLVRP8U2l5/kA==
+
+jscpd-darwin-x64@5.0.12:
+  version "5.0.12"
+  resolved "https://registry.yarnpkg.com/jscpd-darwin-x64/-/jscpd-darwin-x64-5.0.12.tgz#d8d580e8561fd0cd632074c2898117e74c223eba"
+  integrity sha512-7XNCDfChP9fPkIWLepd0zGnTov7/5mR7rJ5Utc1MdWFdgkN//qz6FAJ1FhQA0E/qjFedy9XTucfUCgLybSBsjw==
+
+jscpd-linux-arm64-gnu@5.0.12:
+  version "5.0.12"
+  resolved "https://registry.yarnpkg.com/jscpd-linux-arm64-gnu/-/jscpd-linux-arm64-gnu-5.0.12.tgz#c62c5db49d5192f220ca35d765d7709c7588518a"
+  integrity sha512-i/usHD0/8twzb2Qo4vFWcnuAD4IDLS6K/mTXwYy1CiJZDw4gmjfH45jtjdKUyoutTAiNs+ZWZgx1gIRljUbFuA==
+
+jscpd-linux-x64-gnu@5.0.12:
+  version "5.0.12"
+  resolved "https://registry.yarnpkg.com/jscpd-linux-x64-gnu/-/jscpd-linux-x64-gnu-5.0.12.tgz#ffc061dde7a7f1616f6267fe9a8e537de0eb16e8"
+  integrity sha512-TqaeSTaGawcqyXSrQvYJFtLRn4aQeHgphGGsq2ZtVAg+lPeuMmh81c3bl0yi2dL3gDX1RGBQKBVul1XQknOuoA==
+
+jscpd-linux-x64-musl@5.0.12:
+  version "5.0.12"
+  resolved "https://registry.yarnpkg.com/jscpd-linux-x64-musl/-/jscpd-linux-x64-musl-5.0.12.tgz#6555c91142f26f2dd9a7830d7f11a45970cbc2e9"
+  integrity sha512-WelugY1/rdoo0Y0sqJ2XQOIvyIZTfRe+vP3MJe4XvEUwPF0v+9SQoS34FnfblRhsddVixyNkgl7x/sHid9UMJw==
+
+jscpd-windows-x64-msvc@5.0.12:
+  version "5.0.12"
+  resolved "https://registry.yarnpkg.com/jscpd-windows-x64-msvc/-/jscpd-windows-x64-msvc-5.0.12.tgz#84805c02395d83d22c609985fe98051cddaf51da"
+  integrity sha512-01x1klKjvfzI6Of5tI9u72x7TIQZQLLG6kMdsEPJKl/BXbskdknrfCepeTXRBbdFPKs25jfcd0klZ4OdDvww5w==
+
+jscpd@5.0.12:
+  version "5.0.12"
+  resolved "https://registry.yarnpkg.com/jscpd/-/jscpd-5.0.12.tgz#f386b8605289e276df7a4c82c3a628f45a67b99a"
+  integrity sha512-87dC+akj2mCywlt8p3xnRlDg0B55u4GDbfE9cuwOOeIxbEuWuIoNqGoYi65A0516aJ4EzAjGwBj1Qb/Ahc8WAQ==
+  optionalDependencies:
+    jscpd-darwin-arm64 "5.0.12"
+    jscpd-darwin-x64 "5.0.12"
+    jscpd-linux-arm64-gnu "5.0.12"
+    jscpd-linux-x64-gnu "5.0.12"
+    jscpd-linux-x64-musl "5.0.12"
+    jscpd-windows-x64-msvc "5.0.12"
+
 jsdom@^26.1.0:
   version "26.1.0"
   resolved "https://registry.yarnpkg.com/jsdom/-/jsdom-26.1.0.tgz#ab5f1c1cafc04bd878725490974ea5e8bf0c72b3"
@@ -17157,6 +17214,11 @@ space-separated-tokens@^2.0.0:
   version "2.0.2"
   resolved "https://registry.yarnpkg.com/space-separated-tokens/-/space-separated-tokens-2.0.2.tgz#1ecd9d2350a3844572c3f4a312bceb018348859f"
   integrity sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==
+
+spark-md5@^3.0.2:
+  version "3.0.2"
+  resolved "https://registry.yarnpkg.com/spark-md5/-/spark-md5-3.0.2.tgz#7952c4a30784347abcee73268e473b9c0167e3fc"
+  integrity sha512-wcFzz9cDfbuqe0FZzfi2or1sgyIrsDwmPwfZC4hiNidPdPINjeUwNfv5kldczoEAcjl9Y1L3SM7Uz2PUEQzxQw==
 
 spawn-wrap@^2.0.0:
   version "2.0.0"
