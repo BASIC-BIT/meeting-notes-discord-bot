@@ -185,6 +185,7 @@ test(
       INSTALLED: "success",
       CHECKER_TESTS: "success",
       SCAN_EXIT: "1",
+      SCANNED: "success",
     };
     const prior = Object.fromEntries(
       Object.keys(values).map((k) => [k, process.env[k]]),
@@ -247,6 +248,19 @@ test(
           .result.outcome,
         "exception",
       );
+      const preparedEvidence = readFileSync(
+        join(dir, "quality-evidence.json"),
+        "utf8",
+      );
+      process.env.SCANNED = "failure";
+      await applyPolicy();
+      assert.equal(
+        JSON.parse(readFileSync(join(dir, "quality-evidence.json"), "utf8"))
+          .result.exitCode,
+        2,
+      );
+      process.env.SCANNED = "success";
+      write(dir, "quality-evidence.json", preparedEvidence);
       liveBase = "advanced";
       await applyPolicy();
       assert.equal(
@@ -303,3 +317,50 @@ test("local parity and deployments use the new policy without old suppressions",
   assert.match(template, /^## Quality exception$/m);
   assert.equal(extractRationale(template), null);
 });
+
+test(
+  "actual scanner shell rejects tracked mutations before and during scanning",
+  withRepo((dir) => {
+    const script = workflow().jobs.quality.steps.find(
+      (s) => s.id === "scan",
+    ).run;
+    write(dir, "src/a.ts", "export const a = 1;\n");
+    write(
+      dir,
+      "scripts/check-quality.mjs",
+      `import {writeFileSync} from "node:fs";
+writeFileSync("invoked", "yes");
+if(process.env.MUTATE) writeFileSync("src/a.ts", "export const a = 2;\\n");
+console.log("{}");`,
+    );
+    commit(dir, "prepared merge tree");
+    const tree = git(dir, "write-tree").trim();
+    const shell =
+      process.platform === "win32"
+        ? join(process.env.ProgramFiles, "Git", "bin", "bash.exe")
+        : "bash";
+    const execute = (extra = {}) =>
+      spawnSync(shell, ["-c", script], {
+        cwd: dir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BASE_SHA: git(dir, "rev-parse", "HEAD").trim(),
+          TREE_SHA: tree,
+          GITHUB_OUTPUT: join(dir, "outputs"),
+          ...extra,
+        },
+      });
+    let result = execute();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    rmSync(join(dir, "invoked"));
+    write(dir, "src/a.ts", "export const a = 2;\n");
+    result = execute();
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.equal(existsSync(join(dir, "invoked")), false);
+    git(dir, "add", "src/a.ts");
+    assert.equal(execute().status, 2);
+    git(dir, "checkout", "HEAD", "--", "src/a.ts");
+    assert.equal(execute({ MUTATE: "true" }).status, 2);
+  }),
+);

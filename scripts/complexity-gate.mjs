@@ -131,7 +131,7 @@ const recordFunctions = {
           if (key === null) {
             const ancestor = stack.findLast((f) => f.named);
             key = `${ancestor.key}#${++ancestor.anon}`;
-          }
+          } else if (stack.length > 1) key = `${stack.at(-1).key}/${key}`;
           stack.push({ key, named: own !== null, anon: 0 });
           records.push({ key, start: headStart(node), end: node.loc.end });
         };
@@ -221,8 +221,10 @@ const uniqueKeys = (keys) => {
  */
 export function joinMessages(recs, messages, filePath = "<input>") {
   const keys = uniqueKeys(recs.map((r) => r.key));
+  const families = Map.groupBy(recs, (r) => r.key);
   const fns = recs.map((r, i) => ({
     key: keys[i],
+    familySize: families.get(r.key).length,
     start: r.start.line,
     end: r.end.line,
     cyclomatic: 1,
@@ -278,7 +280,7 @@ export function verdicts(cands, base) {
   const out = [];
   for (const f of cands) {
     const b = byKey.get(f.key);
-    if (!b)
+    if (!b || f.familySize !== b.familySize)
       out.push({
         ...f,
         baseCyclomatic: null,

@@ -623,3 +623,14 @@ for (const mode of ["tracked ignored source", "source above one MiB"]) {
     }),
   );
 }
+
+test(
+  "ignored untracked scratch cannot create a duplication finding",
+  withRepo((dir) => {
+    writeFile(dir, ".gitignore", "tmp/\n");
+    commit(dir, "base");
+    write(dir, "new.js", body("alpha"));
+    writeFile(dir, "tmp/scratch.js", body("beta"));
+    assertClean(dir, "--base", "HEAD");
+  }),
+);

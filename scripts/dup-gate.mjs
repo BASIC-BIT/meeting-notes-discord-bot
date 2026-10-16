@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -22,6 +23,8 @@ import {
   touchesDiff,
   overlaps,
   isSourcePath,
+  isRepoSourcePath,
+  shQuiet,
   EXCLUDE_DIRS,
   GENERATED_SCAN_GLOBS,
   SUBPROCESS_TIMEOUT_MS,
@@ -368,6 +371,28 @@ export async function runJscpd(repo, opts) {
     return rows.filter(Boolean);
   } finally {
     rmSync(out, { recursive: true, force: true });
+  }
+}
+
+async function scanWorkingTree(repo, opts) {
+  const paths = shQuiet(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    { cwd: repo },
+  );
+  if (paths === null)
+    throw new SetupError("could not enumerate eligible source");
+  const snapshot = mkdtempSync(join(tmpdir(), "dupgate-current-"));
+  try {
+    for (const file of new Set(paths.split("\0").filter(Boolean))) {
+      if (!isRepoSourcePath(repo, file)) continue;
+      const target = join(snapshot, file);
+      mkdirSync(dirname(target), { recursive: true });
+      copyFileSync(join(repo, file), target);
+    }
+    return await runJscpd(snapshot, opts);
+  } finally {
+    rmSync(snapshot, { recursive: true, force: true });
   }
 }
 
@@ -727,7 +752,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   let token;
   try {
-    token = await runJscpd(opts.repo, opts);
+    token = await scanWorkingTree(opts.repo, opts);
   } catch (e) {
     if (e instanceof SetupError) {
       console.error(`dup-gate: ${e.message}`);
