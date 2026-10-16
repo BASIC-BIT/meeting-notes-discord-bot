@@ -24,11 +24,11 @@ The candidate definition must remain ACTIVE and:
 
 ## What activation does
 
-The workflow rechecks the exact STS identity, source/operation/checksum binding, prepared candidate, legacy service, work tables and listener before any shutdown. A conditional `INTRODUCTION` receipt reserves the operation while Control is absent. Durable submitted intent precedes each service or listener write.
+The workflow rechecks the exact STS identity, source/operation/checksum binding, candidate digest under the source commit ECR tag, prepared definition, legacy service, work tables, listener and full target-group configuration before any shutdown. The spare must be unattached; both groups must have the expected VPC, IP target type, protocol, port, health path and disabled stickiness. A conditional `INTRODUCTION` receipt reserves the operation while Control is absent. Durable submitted intent precedes each service or listener write.
 
 It submits desired zero once, waits for every legacy task to be STOPPED and both groups to have no targets including draining, then rechecks work and the unchanged listener. It introduces A100/B0 weighted routing with disabled stickiness once and requires acknowledgment plus exact readback. Initialization atomically verifies the same routing-acknowledged introduction receipt while creating Control and the bootstrap receipt.
 
-The existing bootstrap then launches the pinned candidate, verifies actual task identity, fresh readiness, native protection and target health, and conditionally promotes it. A fresh serving heartbeat completes the introduction. Keep maintenance in force until these checks and the approved generated-recording acceptance succeed. Use the normal coordinator for subsequent compatible handoffs.
+The existing bootstrap then launches the pinned candidate. A read-only preflight polls the exact live task registration, fresh readiness, native protection and ALB health before the single promotion attempt, with a 15-minute warmup deadline. Expired or replaced task rows do not substitute for the current live task. Promotion revalidates these conditions before its conditional transaction. A fresh serving heartbeat from the exact promoted Control member completes the introduction. Keep maintenance in force until these checks and the approved generated-recording acceptance succeed. Use the normal coordinator for subsequent compatible handoffs.
 
 Unknown provider acknowledgments preserve submitted receipts and refuse replay, reversal and promotion. A readiness timeout after shutdown can leave Sandbox down. Keep maintenance in force and reconcile manually; do not clear ownership or assume the old image can read checkpoint-bearing histories. Use only a proven compatible fallback or repair forward.
 

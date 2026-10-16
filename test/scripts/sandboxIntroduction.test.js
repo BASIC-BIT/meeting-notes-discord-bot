@@ -46,6 +46,14 @@ function fixture() {
       confirmedAt: new Date(1000000).toISOString(),
     },
   };
+  const runtimeIdentity = {
+    kind: "ecs",
+    instanceId: "runtime",
+    protocolVersion: 1,
+    candidateId: operationId,
+    imageDigest: m.imageDigest,
+    taskArn: ecs + "task/test-sandbox-cluster/runtime",
+  };
   const hash = createHash("sha256").update(JSON.stringify(m)).digest("hex");
   const env = {
     BOOTSTRAP_PHASE: "activate",
@@ -119,7 +127,7 @@ function fixture() {
         Items: [
           marshall({
             recordType: "runtime",
-            identity: { candidateId: m.operationId },
+            identity: runtimeIdentity,
             role: state.serving ? "serving" : "candidate",
             readiness: {
               cacheReady: true,
@@ -138,6 +146,13 @@ function fixture() {
     };
   }
   const handlers = {
+    ecr: {
+      "describe-images": () => ({
+        imageDetails: [
+          { imageDigest: m.imageDigest, imageTags: [m.sourceCommit] },
+        ],
+      }),
+    },
     sts: {
       "get-caller-identity": () => ({ Account: account, Arn: m.principalArn }),
     },
@@ -156,7 +171,18 @@ function fixture() {
         state.stage.stage = unmarshall(p.ExpressionAttributeValues)[":next"];
         return {};
       },
-      "get-item": () => (state.stage ? { Item: marshall(state.stage) } : {}),
+      "get-item": (p) =>
+        unmarshall(p.Key).sk === "CONTROL"
+          ? {
+              Item: marshall({
+                coordinatorToken: m.operationId,
+                servingGeneration: 1,
+                servingMembers: { runtime: runtimeIdentity },
+              }),
+            }
+          : state.stage
+            ? { Item: marshall(state.stage) }
+            : {},
       scan,
     },
     ecs: {
@@ -199,10 +225,27 @@ function fixture() {
         Listeners: [
           {
             ListenerArn: m.listenerArn,
+            LoadBalancerArn: "lb",
             Protocol: "HTTPS",
             DefaultActions: action(),
           },
         ],
+      }),
+      "describe-target-groups": () => ({
+        TargetGroups: [m.targetGroupA, m.targetGroupB].map(
+          (TargetGroupArn) => ({
+            TargetGroupArn,
+            TargetType: "ip",
+            Protocol: "HTTP",
+            Port: m.containerPort,
+            HealthCheckPath: "/health",
+            VpcId: "vpc",
+            LoadBalancerArns: TargetGroupArn === m.targetGroupA ? ["lb"] : [],
+          }),
+        ),
+      }),
+      "describe-target-group-attributes": () => ({
+        Attributes: [{ Key: "stickiness.enabled", Value: "false" }],
       }),
       "describe-rules": () => ({ Rules: [{ IsDefault: true }] }),
       "describe-target-health": () => ({ TargetHealthDescriptions: [] }),
@@ -223,6 +266,7 @@ function fixture() {
     return handler(p);
   };
   const bootstrap = {
+    readiness: jest.fn(async () => ({ kind: "ready" })),
     initialize: jest.fn(async () => ({ kind: "initialized" })),
     launch: jest.fn(async () => {
       state.launched = true;
@@ -507,4 +551,126 @@ test("accepts AWS's legacy TargetGroupArn-only forward action", async () => {
       pause: async () => {},
     }).activate(),
   ).resolves.toEqual({ kind: "complete", generation: 1 });
+});
+
+test.each(["foreign-source", "drifted-group"])(
+  "refuses %s before reserving or stopping",
+  async (kind) => {
+    const f = fixture();
+    const aws = async (service, operation, input) => {
+      if (
+        kind === "foreign-source" &&
+        service === "ecr" &&
+        operation === "describe-images"
+      )
+        return {
+          imageDetails: [
+            {
+              imageDigest: "sha256:" + "c".repeat(64),
+              imageTags: [f.m.sourceCommit],
+            },
+          ],
+        };
+      if (
+        service === "elbv2" &&
+        operation === "describe-target-groups" &&
+        kind === "drifted-group"
+      )
+        return { TargetGroups: [] };
+      return f.aws(service, operation, input);
+    };
+    await expect(
+      createIntroduction({
+        manifest: f.m,
+        expectedSha256: f.hash,
+        aws,
+        bootstrap: f.bootstrap,
+        now: () => 1000,
+        pause: async () => {},
+      }).activate(),
+    ).rejects.toThrow();
+    expect(
+      f.calls.some((c) =>
+        ["transact-write-items", "update-service", "modify-listener"].includes(
+          c.o,
+        ),
+      ),
+    ).toBe(false);
+  },
+);
+
+test("polls read-only promotion readiness before submitting promotion once", async () => {
+  const f = fixture();
+  f.bootstrap.readiness = jest
+    .fn()
+    .mockResolvedValueOnce({ kind: "waiting" })
+    .mockResolvedValue({ kind: "ready" });
+  f.bootstrap.promote.mockImplementation(async () => {
+    expect(f.bootstrap.readiness).toHaveBeenCalledTimes(2);
+    f.state.serving = true;
+    return { kind: "complete", generation: 1 };
+  });
+  await expect(
+    createIntroduction({
+      manifest: f.m,
+      expectedSha256: f.hash,
+      aws: f.aws,
+      bootstrap: f.bootstrap,
+      now: () => 1000,
+      pause: async () => {},
+    }).activate(),
+  ).resolves.toEqual({ kind: "complete", generation: 1 });
+  expect(f.bootstrap.promote).toHaveBeenCalledTimes(1);
+});
+
+test("ignores a replaced candidate row when confirming the promoted member", async () => {
+  const f = fixture();
+  const aws = async (service, operation, input) => {
+    const response = await f.aws(service, operation, input);
+    if (
+      service === "dynamodb" &&
+      operation === "scan" &&
+      input.Select !== "COUNT" &&
+      f.state.launched
+    )
+      response.Items.push(
+        marshall({
+          recordType: "runtime",
+          identity: { candidateId: f.m.operationId, taskArn: "replaced" },
+          role: "candidate",
+          readiness: { expiresAt: 900 },
+        }),
+      );
+    return response;
+  };
+  await expect(
+    createIntroduction({
+      manifest: f.m,
+      expectedSha256: f.hash,
+      aws,
+      bootstrap: f.bootstrap,
+      now: () => 1000,
+      pause: async () => {},
+    }).activate(),
+  ).resolves.toEqual({ kind: "complete", generation: 1 });
+});
+
+test("does not promote when a read-only readiness check exceeds its warmup deadline", async () => {
+  const f = fixture();
+  let time = 1000;
+  f.bootstrap.readiness = jest.fn(async () => {
+    time = 1901;
+    return { kind: "ready" };
+  });
+  await expect(
+    createIntroduction({
+      manifest: f.m,
+      expectedSha256: f.hash,
+      aws: f.aws,
+      bootstrap: f.bootstrap,
+      now: () => time,
+      pause: async () => {},
+    }).activate(),
+  ).rejects.toThrow();
+  expect(f.bootstrap.promote).not.toHaveBeenCalled();
 });

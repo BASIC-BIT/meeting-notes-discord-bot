@@ -50,6 +50,21 @@ function bindJob(env) {
     manifest: JSON.parse(env.BOOTSTRAP_MANIFEST_JSON),
   };
 }
+async function assertSourceImage(m, image, aws) {
+  const prefix = m.accountId + ".dkr.ecr." + m.region + ".amazonaws.com/";
+  assert(image.startsWith(prefix));
+  const [repository, digest] = image.slice(prefix.length).split("@");
+  assert.match(repository, /^[a-z0-9-]*sandbox[a-z0-9-]*$/);
+  assert.match(digest, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(image, prefix + repository + "@" + digest);
+  const response = await aws("ecr", "describe-images", {
+    repositoryName: repository,
+    imageIds: [{ imageTag: m.sourceCommit }],
+  });
+  assert.equal(response.imageDetails.length, 1);
+  assert.equal(response.imageDetails[0].imageDigest, digest);
+  assert(response.imageDetails[0].imageTags.includes(m.sourceCommit));
+}
 async function prepare(env, aws = awsCaller(env.AWS_REGION)) {
   const binding = bindJob({ ...env, BOOTSTRAP_PHASE: "prepare" });
   const actor = await aws("sts", "get-caller-identity", {});
@@ -86,14 +101,15 @@ async function prepare(env, aws = awsCaller(env.AWS_REGION)) {
     ),
   );
   assert.match(env.AWS_REGION, /^[a-z]{2}-[a-z]+-[0-9]$/);
-  const repository = config.image.split("/")[1].split("@")[0];
-  const image = await aws("ecr", "describe-images", {
-    repositoryName: repository,
-    imageIds: [{ imageTag: env.GITHUB_SHA }],
-  });
-  assert.equal(image.imageDetails.length, 1);
-  assert.equal(image.imageDetails[0].imageDigest, config.image.split("@")[1]);
-  assert(image.imageDetails[0].imageTags.includes(env.GITHUB_SHA));
+  await assertSourceImage(
+    {
+      accountId: env.EXPECTED_ACCOUNT_ID,
+      region: env.AWS_REGION,
+      sourceCommit: env.GITHUB_SHA,
+    },
+    config.image,
+    aws,
+  );
   let nextToken,
     count = 0;
   do {
@@ -318,13 +334,29 @@ function createIntroduction(options) {
     return true;
   }
   async function wait(check) {
+    const deadline = now() + 900;
     for (let i = 0; i < 180; i++) {
-      if (await check()) return;
+      if (now() >= deadline) break;
+      const ready = await check();
+      if (now() >= deadline) break;
+      if (ready) return;
       await sleep();
     }
     throw new Error("Bounded wait expired; preserve operation");
   }
-  async function runtimeReady(serving) {
+  async function runtimeReady() {
+    const response = await aws("dynamodb", "get-item", {
+      TableName: table,
+      Key: marshall({ pk: "ENV", sk: "CONTROL" }),
+      ConsistentRead: true,
+    });
+    const control = unmarshall(response.Item);
+    assert.equal(control.coordinatorToken, m.operationId);
+    assert.equal(control.servingGeneration, 1);
+    const members = Object.values(control.servingMembers);
+    assert.equal(members.length, 1);
+    assert.equal(members[0].candidateId, m.operationId);
+
     let ExclusiveStartKey,
       matches = [];
     do {
@@ -345,8 +377,7 @@ function createIntroduction(options) {
           .map(unmarshall)
           .filter(
             (row) =>
-              row.recordType === "runtime" &&
-              row.identity?.candidateId === m.operationId,
+              row.recordType === "runtime" && same(row.identity, members[0]),
           ),
       );
       ExclusiveStartKey = page.LastEvaluatedKey;
@@ -355,11 +386,11 @@ function createIntroduction(options) {
     const row = matches[0],
       proof = row?.readiness;
     return (
-      row?.role === (serving ? "serving" : "candidate") &&
+      row?.role === "serving" &&
       proof?.cacheReady &&
       proof.dependenciesReady &&
       (m.runtimeMode === "api" || proof.gatewayReady) &&
-      proof.observedGeneration === (serving ? 1 : 0) &&
+      proof.observedGeneration === 1 &&
       proof.provenAt <= now() &&
       proof.expiresAt > now()
     );
@@ -380,13 +411,17 @@ function createIntroduction(options) {
     assert.equal(original.pendingCount, 0);
     assert.equal(original.taskDefinition, m.legacyTaskDefinition);
     await workSettled();
-    require("./bootstrap-sandbox.cjs").assertPreparedCandidate(
+    const definition = (
+      await aws("ecs", "describe-task-definition", {
+        taskDefinition: m.taskDefinition,
+      })
+    ).taskDefinition;
+    require("./bootstrap-sandbox.cjs").assertPreparedCandidate(m, definition);
+    await assertSourceImage(
       m,
-      (
-        await aws("ecs", "describe-task-definition", {
-          taskDefinition: m.taskDefinition,
-        })
-      ).taskDefinition,
+      definition.containerDefinitions.find((c) => c.name === m.containerName)
+        .image,
+      aws,
     );
     const before = await listener();
     const actions = before.DefaultActions;
@@ -407,6 +442,12 @@ function createIntroduction(options) {
         false,
       );
     }
+    await require("./bootstrap-sandbox.cjs").assertTargetGroups(
+      m,
+      aws,
+      before,
+      true,
+    );
     assert.equal((await targets(m.targetGroupB)).length, 0);
     await aws("dynamodb", "transact-write-items", {
       TransactItems: [
@@ -480,9 +521,9 @@ function createIntroduction(options) {
     await stage("routing_submitted", "routing_acknowledged");
     await bootstrap.initialize();
     await bootstrap.launch();
-    await wait(() => runtimeReady(false));
+    await wait(async () => (await bootstrap.readiness()).kind === "ready");
     const result = await bootstrap.promote();
-    await wait(() => runtimeReady(true));
+    await wait(() => runtimeReady());
     await stage("routing_acknowledged", "complete");
     return result;
   }

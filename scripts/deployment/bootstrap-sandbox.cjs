@@ -47,6 +47,46 @@ function assertPreparedCandidate(m, d) {
   )
     throw new Error("Prepared candidate definition mismatch");
 }
+async function assertTargetGroups(
+  m,
+  aws,
+  listener,
+  beforeIntroduction = false,
+) {
+  const groups = await aws("elbv2", "describe-target-groups", {
+    TargetGroupArns: [m.targetGroupA, m.targetGroupB],
+  });
+  if (
+    groups.TargetGroups.length !== 2 ||
+    new Set(groups.TargetGroups.map((g) => g.TargetGroupArn)).size !== 2
+  )
+    throw new Error("Group identities incomplete");
+  let vpc;
+  for (const g of groups.TargetGroups) {
+    if (
+      ![m.targetGroupA, m.targetGroupB].includes(g.TargetGroupArn) ||
+      g.TargetType !== "ip" ||
+      g.Protocol !== "HTTP" ||
+      g.Port !== m.containerPort ||
+      g.HealthCheckPath !== "/health" ||
+      (beforeIntroduction && g.TargetGroupArn === m.targetGroupB
+        ? g.LoadBalancerArns?.length !== 0
+        : !g.LoadBalancerArns?.includes(listener.LoadBalancerArn)) ||
+      !g.VpcId ||
+      (vpc && vpc !== g.VpcId)
+    )
+      throw new Error("Group configuration mismatch");
+    vpc = g.VpcId;
+    const attrs = await aws("elbv2", "describe-target-group-attributes", {
+      TargetGroupArn: g.TargetGroupArn,
+    });
+    if (
+      attrs.Attributes.find((a) => a.Key === "stickiness.enabled")?.Value !==
+      "false"
+    )
+      throw new Error("Sticky target group");
+  }
+}
 function createBootstrap(options) {
   const m = parseManifest(options.manifest, options.expectedSha256);
   const aws = options.aws ?? awsCaller(m.region);
@@ -193,41 +233,13 @@ function createBootstrap(options) {
       !rules.Rules[0].IsDefault
     )
       fail("Foreign listener rules");
-    const groups = await aws("elbv2", "describe-target-groups", {
-      TargetGroupArns: [m.targetGroupA, m.targetGroupB],
-    });
-    if (
-      groups.TargetGroups.length !== 2 ||
-      new Set(groups.TargetGroups.map((g) => g.TargetGroupArn)).size !== 2
-    )
-      fail("Group identities incomplete");
-    let vpc;
-    for (const g of groups.TargetGroups) {
-      if (
-        ![m.targetGroupA, m.targetGroupB].includes(g.TargetGroupArn) ||
-        g.TargetType !== "ip" ||
-        g.Protocol !== "HTTP" ||
-        g.Port !== m.containerPort ||
-        g.HealthCheckPath !== "/health" ||
-        !g.LoadBalancerArns?.includes(listener.LoadBalancerArn) ||
-        !g.VpcId ||
-        (vpc && vpc !== g.VpcId)
-      )
-        fail("Group configuration mismatch");
-      vpc = g.VpcId;
-      const attrs = await aws("elbv2", "describe-target-group-attributes", {
-        TargetGroupArn: g.TargetGroupArn,
-      });
-      if (
-        attrs.Attributes.find((a) => a.Key === "stickiness.enabled")?.Value !==
-        "false"
-      )
-        fail("Sticky target group");
+    await assertTargetGroups(m, aws, listener);
+    for (const group of [m.targetGroupA, m.targetGroupB]) {
       const health = await aws("elbv2", "describe-target-health", {
-        TargetGroupArn: g.TargetGroupArn,
+        TargetGroupArn: group,
       });
       if (
-        (requireEmpty || g.TargetGroupArn === m.targetGroupB) &&
+        (requireEmpty || group === m.targetGroupB) &&
         health.TargetHealthDescriptions.length
       )
         fail("Occupied target group");
@@ -489,18 +501,12 @@ function createBootstrap(options) {
     );
     return { kind: "launched" };
   }
-  async function promote() {
-    await identity();
-    const [c, r] = await state();
-    if (
-      owned(c, r) &&
-      r.stage === "complete" &&
-      c.servingGeneration === 1 &&
-      same(c.servingMembers, { [r.candidate.instanceId]: r.candidate })
-    )
-      return { kind: "complete", receipt: "previously_confirmed" };
-    live(c, r);
-    if (r.stage !== "launched") fail("Acknowledged launch required");
+  function notReady(message) {
+    const error = new Error(message);
+    error.code = "candidate_not_ready";
+    throw error;
+  }
+  async function readyCandidate() {
     const svc = await service(),
       running = await tasks();
     if (
@@ -512,7 +518,7 @@ function createBootstrap(options) {
       running[0].taskDefinitionArn !== m.taskDefinition ||
       running[0].lastStatus !== "RUNNING"
     )
-      fail("Exact candidate task unavailable");
+      notReady("Exact candidate task unavailable");
     const task = running[0],
       container = task.containers.find((v) => v.name === m.containerName);
     if (
@@ -531,12 +537,12 @@ function createBootstrap(options) {
       health.TargetHealthDescriptions[0].Target.Port !== m.containerPort ||
       health.TargetHealthDescriptions[0].TargetHealth.State !== "healthy"
     )
-      fail("Candidate target not healthy");
+      notReady("Candidate target not healthy");
     const rows = await scan(table, "pk, sk, recordType, identity");
     const candidates = rows.filter(
       (v) => v.recordType === "runtime" && v.identity?.taskArn === task.taskArn,
     );
-    if (candidates.length !== 1) fail("Candidate registration ambiguous");
+    if (candidates.length !== 1) notReady("Candidate registration ambiguous");
     const row = types.runtimeRecordSchema.parse(await read(candidates[0].sk));
     if (
       row.identity.kind !== "ecs" ||
@@ -558,7 +564,7 @@ function createBootstrap(options) {
       row.protection.provenAt > now() ||
       row.protection.expiresAt <= now() + 120
     )
-      fail("Candidate readiness is stale");
+      notReady("Candidate readiness is stale");
     const protection = await aws("ecs", "get-task-protection", {
       cluster: m.cluster,
       tasks: [task.taskArn],
@@ -571,7 +577,35 @@ function createBootstrap(options) {
       !proof.protectionEnabled ||
       Date.parse(proof.expirationDate) / 1000 <= now() + 120
     )
-      fail("Native protection unconfirmed");
+      notReady("Native protection unconfirmed");
+    return row;
+  }
+  async function readiness() {
+    await identity();
+    const [c, r] = await state();
+    live(c, r);
+    if (r.stage !== "launched") fail("Acknowledged launch required");
+    try {
+      await readyCandidate();
+      return { kind: "ready" };
+    } catch (error) {
+      if (error.code === "candidate_not_ready") return { kind: "waiting" };
+      throw error;
+    }
+  }
+  async function promote() {
+    await identity();
+    const [c, r] = await state();
+    if (
+      owned(c, r) &&
+      r.stage === "complete" &&
+      c.servingGeneration === 1 &&
+      same(c.servingMembers, { [r.candidate.instanceId]: r.candidate })
+    )
+      return { kind: "complete", receipt: "previously_confirmed" };
+    live(c, r);
+    if (r.stage !== "launched") fail("Acknowledged launch required");
+    const row = await readyCandidate();
     const transaction = builders.buildPromotionTransaction({
       tables: { deploymentControl: table },
       coordinatorToken: m.operationId,
@@ -605,7 +639,7 @@ function createBootstrap(options) {
     });
     return { kind: "complete", generation: 1 };
   }
-  return { initialize, launch, promote };
+  return { initialize, launch, readiness, promote };
 }
 async function runCli(args = process.argv.slice(2), output = console) {
   try {
@@ -638,7 +672,12 @@ async function runCli(args = process.argv.slice(2), output = console) {
     return 1;
   }
 }
-module.exports = { createBootstrap, assertPreparedCandidate, runCli };
+module.exports = {
+  createBootstrap,
+  assertPreparedCandidate,
+  assertTargetGroups,
+  runCli,
+};
 if (require.main === module)
   runCli().then((code) => {
     process.exitCode = code;

@@ -829,3 +829,60 @@ test("introduction readiness projection is accepted by native DynamoDB", async (
     }),
   );
 });
+
+test("read-only promotion readiness waits for ALB health and ignores replaced runtime rows", async () => {
+  const f = await fixture();
+  await f.bootstrap.initialize();
+  await f.bootstrap.launch();
+  const runtime = await f.get("RUNTIME#runtime");
+  await client.send(
+    new PutItemCommand({
+      TableName: f.table,
+      Item: marshall({
+        ...runtime,
+        sk: "RUNTIME#replaced",
+        identity: {
+          ...runtime!.identity,
+          instanceId: "replaced",
+          taskArn: "replaced",
+        },
+      }),
+    }),
+  );
+  let healthy = false;
+  const aws = async (
+    service: string,
+    operation: string,
+    input: Record<string, never>,
+  ) => {
+    const response = await f.aws(service, operation, input);
+    if (
+      service === "elbv2" &&
+      operation === "describe-target-health" &&
+      !healthy
+    )
+      for (const target of response.TargetHealthDescriptions ?? [])
+        target.TargetHealth.State = "initial";
+    return response;
+  };
+  const bootstrap = createBootstrap({
+    manifest: f.manifest,
+    expectedSha256: f.hash,
+    aws,
+    builders,
+    types,
+    now: () => 1000,
+  });
+  await expect(bootstrap.readiness()).resolves.toEqual({ kind: "waiting" });
+  expect((await f.get("CONTROL"))?.servingGeneration).toBe(0);
+  expect((await f.get("BOOTSTRAP#" + f.manifest.operationId))?.stage).toBe(
+    "launched",
+  );
+  healthy = true;
+  await expect(bootstrap.readiness()).resolves.toEqual({ kind: "ready" });
+  expect((await f.get("CONTROL"))?.servingGeneration).toBe(0);
+  await expect(bootstrap.promote()).resolves.toEqual({
+    kind: "complete",
+    generation: 1,
+  });
+});
