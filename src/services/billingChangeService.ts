@@ -290,7 +290,7 @@ export async function cancelBillingChange(
     operation.state === "canceled" ||
     operation.state === "applying"
   )
-    return present(context, operation);
+    return present(context, await resume(context, operation));
   return present(
     context,
     await resume(context, await beginCancel(context, operation)),
@@ -380,7 +380,7 @@ async function resume(
         return operation;
       case "succeeded":
       case "canceled":
-        return operation;
+        return finishReconciliation(context, operation);
     }
     if (operation.revision === previousRevision) return operation;
   }
@@ -390,7 +390,16 @@ async function prepareInvoice(
   context: Context,
   operation: Extract<BillingChangeOperation, { state: "preparing" }>,
 ) {
-  const source = await readBillingChangeSource({ ...context, at: at(context) });
+  if (at(context) >= operation.expiresAt)
+    return beginCancel(context, operation);
+  let source;
+  try {
+    source = await readBillingChangeSource({ ...context, at: at(context) });
+  } catch (error) {
+    if (error instanceof BillingActionError && error.code === "BAD_REQUEST")
+      return beginCancel(context, operation);
+    throw error;
+  }
   if (
     changeSourceFingerprint(source.subscription) !==
     operation.source.fingerprint
@@ -407,8 +416,6 @@ async function prepareInvoice(
       operation,
     );
   if (!operation.draftInvoiceId) {
-    if (at(context) - operation.createdAt >= 23 * 3600)
-      throw changeUnavailable();
     const draftInvoiceId = await createChangeFundingDraft({
       stripe: context.stripe,
       operation,
@@ -447,7 +454,20 @@ async function afterAcceptance(
   )
     return beginCancel(context, operation);
   if (operation.timing === "renewal") {
-    const scheduleId = await scheduleBillingChange(context.stripe, operation);
+    let latest = operation;
+    const scheduleId = await scheduleBillingChange(
+      context.stripe,
+      operation,
+      async (providerScheduleId) => {
+        if (latest.providerScheduleId === providerScheduleId) return;
+        const saved = await persist(
+          { ...latest, revision: randomUUID(), providerScheduleId },
+          latest,
+        );
+        if (saved.state !== "accepted") throw changeUnavailable();
+        latest = saved;
+      },
+    );
     return persist(
       {
         ...billingChangeBase(operation),
@@ -456,7 +476,7 @@ async function afterAcceptance(
         scheduleId,
         consent: operation.consent,
       },
-      operation,
+      latest,
     );
   }
   if (!operation.funding) throw changeUnavailable();
@@ -531,12 +551,7 @@ async function applyPayment(
     operation,
     await settleChangeOffer(next, invoice, at(context)),
   );
-  await reconcileSubscription(
-    context.stripe,
-    operation.guildId,
-    operation.source.subscriptionId,
-  );
-  return completed;
+  return finishReconciliation(context, completed);
 }
 async function settleScheduled(
   context: Context,
@@ -581,12 +596,7 @@ async function settleScheduled(
       ? await settleChangeOffer(next, result.invoice, at(context))
       : undefined;
   const completed = await persist(next, operation, usage);
-  await reconcileSubscription(
-    context.stripe,
-    operation.guildId,
-    operation.source.subscriptionId,
-  );
-  return completed;
+  return finishReconciliation(context, completed);
 }
 async function finishCancellation(
   context: Context,
@@ -630,12 +640,24 @@ async function finishCancellation(
     at(context),
   );
   const completed = await persist(next, latest, usage);
+  return finishReconciliation(context, completed);
+}
+async function finishReconciliation(
+  context: Context,
+  operation: BillingChangeOperation,
+) {
+  if (operation.state !== "succeeded" && operation.state !== "canceled")
+    throw changeUnavailable();
+  if (operation.reconciled) return operation;
   await reconcileSubscription(
     context.stripe,
     operation.guildId,
     operation.source.subscriptionId,
   );
-  return completed;
+  return persist(
+    { ...operation, revision: randomUUID(), reconciled: true },
+    operation,
+  );
 }
 export async function reconcileBillingChangeForWebhook(
   stripe: StripeClient,

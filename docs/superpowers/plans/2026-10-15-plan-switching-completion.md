@@ -66,11 +66,11 @@ flowchart TD
 
 **Interfaces:** Produces `resolveChangeTiming({sourceTier, sourceInterval, targetTier, targetInterval})`, a same-plan no-op, and schema-derived operation, source, target and public quote types. Quote amounts use integer minor units.
 
-- [ ] Add table-driven timing tests for all tier/cadence pairs and unchanged selections.
-- [ ] Run focused Jest and observe the missing-policy failure.
-- [ ] Implement timing and validated operation/quote contracts. Reuse the existing review component's field meanings.
-- [ ] Run focused Jest. Expected: all policy cases pass.
-- [ ] Commit this task.
+- [x] Add table-driven timing tests for all tier/cadence pairs and unchanged selections.
+- [x] Run focused Jest and observe the missing-policy failure.
+- [x] Implement timing and validated operation/quote contracts. Reuse the existing review component's field meanings.
+- [x] Run focused Jest. Expected: all policy cases pass.
+- [x] Commit this task.
 
 ## Task 2: Durable operation and shared offer transactions
 
@@ -78,11 +78,11 @@ flowchart TD
 
 **Interfaces:** Consumes Task 1 operation types. Produces `getControl`, `getOperation`, `claim`, and `compareAndWrite`. Claims bind the saved subscription revision and optional offer authority. Completion atomically finalizes or releases the reservation.
 
-- [ ] Add concurrency tests for competing tabs, renewal operations, changed source revision, independent offer identities and immutable used history.
-- [ ] Run focused Jest. Expected: missing repository behavior fails.
-- [ ] Implement actual DynamoDB transactions and equivalent mock-store behavior without manufacturing purchase attempts.
-- [ ] Run repository and existing offer/renewal tests. Expected: all pass.
-- [ ] Commit this task.
+- [x] Add concurrency tests for competing tabs, renewal operations, changed source revision, independent offer identities and immutable used history.
+- [x] Run focused Jest. Expected: missing repository behavior fails.
+- [x] Implement actual DynamoDB transactions and equivalent mock-store behavior without manufacturing purchase attempts.
+- [x] Run repository and existing offer/renewal tests. Expected: all pass.
+- [x] Commit this task.
 
 ## Task 3: Fixed invoice adapter and recovery
 
@@ -90,13 +90,13 @@ flowchart TD
 
 **Interfaces:** Consumes frozen source/target and operation IDs. Produces verified source fingerprint, preview, finalized funding invoice, application result and compensating result. Every write uses a deterministic operation idempotency key.
 
-- [ ] Add tests for discounted unused credit, both billing modes, balance drift, zero cash, source rollover, decline/authentication, canceled links, repeated compensation and nonzero inclusive tax.
-- [ ] Run focused tests and observe the required missing behavior.
-- [ ] Implement the previously tested native sequence, preserving discounts until application and excluding unrelated pending items from funding.
-- [ ] Verify native response/ownership/status before accepting financial results. Keep unknown operations recoverable.
-- [ ] Run focused adapter tests. Expected: exact consent, no duplicate collection and bounded compensation pass.
-- [ ] Probe any unresolved native contract using only new owned Sandbox fixtures and verify cleanup.
-- [ ] Commit this task.
+- [x] Add tests for discounted unused credit, both billing modes, balance drift, zero cash, source rollover, decline/authentication, canceled links, repeated compensation and nonzero inclusive tax.
+- [x] Run focused tests and observe the required missing behavior.
+- [x] Implement the previously tested native sequence, preserving discounts until application and excluding unrelated pending items from funding.
+- [x] Verify native response/ownership/status before accepting financial results. Keep unknown operations recoverable.
+- [x] Run focused adapter tests. Expected: exact consent, no duplicate collection and bounded compensation pass.
+- [x] Probe any unresolved native contract using only new owned Sandbox fixtures and verify cleanup.
+- [x] Commit this task.
 
 ## Task 4: Switching orchestration, schedules and reconciliation
 
@@ -104,10 +104,10 @@ flowchart TD
 
 **Interfaces:** Consumes Tasks 1 to 3. Produces `prepareBillingChange`, `confirmBillingChange`, `readBillingChange`, `cancelBillingChange` and authenticated tRPC procedures. Deferred operations reserve the offer and use a native future phase.
 
-- [ ] Add tests for original payer, Manage Server, disabled fresh operations, payment-event ordering, explicit zero-cash consent, both offer orders and schedule edit/cancel/application.
-- [ ] Observe failing tests, implement orchestration and native schedules, then pass the tests.
-- [ ] Keep owned recovery available after a gate is disabled. Remove the rejected hosted update adapter and customer-wide offer lock.
-- [ ] Commit this task.
+- [x] Add tests for original payer, Manage Server, disabled fresh operations, payment-event ordering, explicit zero-cash consent, both offer orders and schedule edit/cancel/application.
+- [x] Observe failing tests, implement orchestration and native schedules, then pass the tests.
+- [x] Keep owned recovery available after a gate is disabled. Remove the rejected hosted update adapter and customer-wide offer lock.
+- [x] Commit this task.
 
 ## Task 5: Connect the existing review and recovery UI
 
@@ -115,11 +115,11 @@ flowchart TD
 
 **Interfaces:** Consumes the Task 4 public view. Plan selection opens the existing review. Confirm opens the bound Stripe invoice, and refresh/return resumes persisted status. Scheduled changes show effective date and edit/cancel actions.
 
-- [ ] Add flow tests before wiring the UI. Keep narrow cards vertically stacked and retain the approved price/copy presentation.
-- [ ] Connect real APIs and preserve route server identity. Remove obsolete account-wide restriction copy and data.
-- [ ] Run Storybook capture, review screenshots and existing visual snapshots, and run browser assertions for the complete flow.
-- [ ] Update public billing documentation for changed behavior and run docs checks.
-- [ ] Commit this task.
+- [x] Add flow tests before wiring the UI. Keep narrow cards vertically stacked and retain the approved price/copy presentation.
+- [x] Connect real APIs and preserve route server identity. Remove obsolete account-wide restriction copy and data.
+- [x] Run Storybook capture, review screenshots and existing visual snapshots, and run browser assertions for the complete flow.
+- [x] Update public billing documentation for changed behavior and run docs checks.
+- [x] Commit this task.
 
 ## Task 6: Review, publish and Sandbox acceptance
 
@@ -138,8 +138,15 @@ Starting source: current remote master `7ef341791db82aa04ceb0ba609c77f872d94d74b
 
 ## Implementation checkpoint
 
-The source now connects the real review, payment recovery and scheduled-change views. The full functional suite passed 3,032 tests across 354 suites. The affected billing slice passed 407 tests, five connected Storybook flows passed, mobile scrolling was asserted, screenshots were reviewed and the public docs build passed.
+Tasks 1 through 5 are implemented on PR #412. The latest complete functional run passed 3,063 tests across 358 suites. The connected UI previously passed 48 browser tests and six Storybook flows, including mobile scrolling and terminal-subscription recovery. Screenshots were reviewed. TypeScript, ESLint, pinned complexity checks, the API build and public docs build pass.
 
-Owned native Sandbox probes separately verified nonzero automatic tax, both offer orders, scheduled cancellation, three $6 monthly renewals followed by $10, and subsequent unused annual credit based on the $60 paid value. Fixtures were cleaned up. Stripe's deferred phase replaces the old item while retaining the subscription; the implementation verifies the actual paid target item. SDK 22.4.0 matches the pinned API contract.
+Review fixes keep expired preparation recoverable, reject credits from reversed invoices, and retain the server control until entitlement reconciliation succeeds. Schedule creation saves its native receipt before configuration. If that acknowledgement is lost, recovery verifies Stripe's exact creation idempotency key through its event record. Stripe retains those records for 30 days; an older unacknowledged creation requires operator reconciliation rather than adopting an unproven schedule. Canceling a scheduled change restores the cancellation captured from the original subscription.
 
-Independent source review, CI coverage and the final readiness audit remain. Integrated signed-in acceptance needs the guarded Sandbox deployment bootstrap being prepared by the recording work. Native provider proof does not establish deployment or signed-in acceptance.
+Native Sandbox tests using the current services verified both offer orders in classic and flexible modes. They covered explicit confirmation of a zero-dollar annual switch and a scheduled monthly offer with an unrelated invoice item. The annual coupon is verified on the application invoice after Stripe consumes it. The first invoice after a scheduled phase change can be a subscription-update invoice; acceptance still requires the exact target line, offer, period and operation owner. Test clocks and coupons were cleaned up.
+
+These native tests use an in-memory operation store and explicitly simulated eligibility authority. They do not prove the deployed writer, history import or signed-in application. Hosted acceptance still needs the guarded Sandbox deployment bootstrap and its separately reviewed deployment identity. Production activation remains outside scope. The latest pushed commit needs a fresh CI/review audit after the required 30-minute window.
+
+### Provider references
+
+- [Stripe event request identity and retention](https://docs.stripe.com/api/events/object)
+- [Schedule release and cancellation-date preservation](https://docs.stripe.com/api/subscription_schedules/release)

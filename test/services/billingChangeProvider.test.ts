@@ -261,3 +261,22 @@ it("allows paid service with a future-payment SetupIntent after a zero applicati
     }),
   ).rejects.toMatchObject({ reason: "purchase_pending" });
 });
+
+it.each([
+  "pre_payment_credit_notes_amount",
+  "post_payment_credit_notes_amount",
+] as const)(
+  "does not grant another credit from a source reversed through %s",
+  async (field) => {
+    const f = fixture();
+    f.invoice.mockResolvedValue(response({ ...fundedInvoice, [field]: 100 }));
+    await expect(
+      readBillingChangeSource({
+        stripe: f.stripe,
+        guildId: renewalGuildId,
+        payerId: renewalPayerId,
+        at: f.provider.items.data[0].current_period_start + 100,
+      }),
+    ).rejects.toMatchObject({ reason: "purchase_pending" });
+  },
+);

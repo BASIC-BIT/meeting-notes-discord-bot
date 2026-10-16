@@ -265,3 +265,95 @@ it("does not race a pending initial purchase into a plan-change claim", async ()
   ).toBe(false);
   expect(getMockStore().billingChangeControls.size).toBe(0);
 });
+
+it("keeps control through financial settlement until the exact result is reconciled", async () => {
+  const repo = getBillingChangeRepository();
+  await repo.claim({
+    operation: changeOperation,
+    expectedSubscription: changePointer,
+  });
+  const canceling = {
+    ...changeOperation,
+    revision: "canceling",
+    state: "canceling" as const,
+    funding: null,
+    scheduleId: null,
+    consent: null,
+  };
+  await repo.compareAndWrite({
+    next: canceling,
+    expectedRevision: changeOperation.revision,
+  });
+  const canceled = {
+    ...changeOperation,
+    revision: "settled",
+    state: "canceled" as const,
+    completedAt: 1700000001,
+  };
+  await expect(
+    repo.compareAndWrite({
+      next: { ...canceled, reconciled: true },
+      expectedRevision: canceling.revision,
+    }),
+  ).rejects.toThrow("requires entitlement reconciliation");
+  expect(
+    await repo.compareAndWrite({
+      next: canceled,
+      expectedRevision: canceling.revision,
+    }),
+  ).toBe(true);
+  expect(await repo.getControl(changeOperation.guildId)).toBeDefined();
+  await expect(
+    repo.compareAndWrite({
+      next: {
+        ...canceled,
+        revision: "forged",
+        completedAt: 1700000002,
+        reconciled: true,
+      },
+      expectedRevision: canceled.revision,
+    }),
+  ).rejects.toThrow("Only entitlement reconciliation");
+  expect(
+    await repo.compareAndWrite({
+      next: { ...canceled, revision: "reconciled", reconciled: true },
+      expectedRevision: canceled.revision,
+    }),
+  ).toBe(true);
+  expect(await repo.getControl(changeOperation.guildId)).toBeUndefined();
+});
+
+it.each([false, true])(
+  "keeps the native Dynamo control until reconciled=%s",
+  async (reconciled) => {
+    config.mock.enabled = false;
+    const send = jest
+      .spyOn(DynamoDBClient.prototype, "send")
+      .mockResolvedValue({});
+    try {
+      const { writeBillingChangeOperation } = await import("../../src/db");
+      await writeBillingChangeOperation({
+        next: {
+          ...changeOperation,
+          state: "canceled",
+          completedAt: 1700000001,
+          revision: "settled",
+          reconciled,
+        },
+        expectedRevision: "prior",
+      });
+      const command = send.mock.calls[0][0];
+      if (!(command instanceof TransactWriteItemsCommand))
+        throw Error("Expected Dynamo transaction");
+      const control = command.input.TransactItems?.[1];
+      expect(
+        reconciled ? control?.Delete : control?.ConditionCheck,
+      ).toBeDefined();
+      expect(
+        reconciled ? control?.ConditionCheck : control?.Delete,
+      ).toBeUndefined();
+    } finally {
+      send.mockRestore();
+    }
+  },
+);

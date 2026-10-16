@@ -1,4 +1,6 @@
 /** @jest-environment node */
+import * as reconciliation from "../../src/services/subscriptionReconciliation";
+import { changeSourceFingerprint } from "../../src/services/billingChangeProvider";
 import * as scheduling from "../../src/services/billingChangeSchedule";
 import {
   readBillingChange,
@@ -512,4 +514,102 @@ it("releases an unexpired review after its subscription has become terminal", as
   expect(
     await getBillingChangeRepository().getControl(operation.guildId),
   ).toBeUndefined();
+});
+
+it.each(["expired", "terminal"] as const)(
+  "recovers a claimed preparing operation with an %s source without trapping its control",
+  async (kind) => {
+    const f = renewalStripeClientFixture();
+    const now = f.provider.items.data[0].current_period_start + 100;
+    const preparing = {
+      ...changeOperation,
+      payerId: renewalPayerId,
+      createdAt: kind === "expired" ? now - 86400 : now,
+      expiresAt: kind === "expired" ? now - 85800 : now + 600,
+      source: {
+        ...changeOperation.source,
+        fingerprint: changeSourceFingerprint(f.provider),
+        customerId: "cus_renewal",
+        subscriptionId: f.provider.id,
+        periodStart: f.provider.items.data[0].current_period_start,
+        periodEnd: f.provider.items.data[0].current_period_end,
+        at: now,
+      },
+    };
+    getMockStore().subscriptions.set(preparing.guildId, {
+      ...changePointer,
+      stripeCustomerId: "cus_renewal",
+      stripeSubscriptionId: f.provider.id,
+    });
+    getMockStore().billingChangeOperations.set(
+      `CHANGE_OP#${preparing.guildId}#${preparing.operationId}`,
+      preparing,
+    );
+    getMockStore().billingChangeControls.set(
+      `CHANGE_CONTROL#${preparing.guildId}`,
+      { operationId: preparing.operationId },
+    );
+    if (kind === "terminal") f.provider = { ...f.provider, status: "canceled" };
+    const result = await readBillingChange({
+      stripe: f.stripe,
+      guildId: preparing.guildId,
+      payerId: renewalPayerId,
+      now,
+    });
+    expect(result).toMatchObject({ state: "canceled" });
+    expect(
+      await getBillingChangeRepository().getControl(preparing.guildId),
+    ).toBeUndefined();
+    expect(f.update).not.toHaveBeenCalled();
+  },
+);
+
+it("retains terminal work until entitlement reconciliation succeeds, without repeating payment", async () => {
+  const operation = {
+    ...billingChangeBase(changeOperation),
+    state: "succeeded" as const,
+    funding: null,
+    scheduleId: null,
+    appliedAt: changeOperation.createdAt,
+    consent: { at: changeOperation.createdAt, quoteRevision: "approved" },
+  };
+  getMockStore().billingChangeOperations.set(
+    `CHANGE_OP#${operation.guildId}#${operation.operationId}`,
+    operation,
+  );
+  getMockStore().billingChangeControls.set(
+    `CHANGE_CONTROL#${operation.guildId}`,
+    { operationId: operation.operationId },
+  );
+  const reconcile = jest
+    .spyOn(reconciliation, "reconcileSubscription")
+    .mockRejectedValueOnce(new Error("pointer write unavailable"))
+    .mockResolvedValue(undefined);
+  const f = stripeTransport(() => {
+    throw new Error("Unexpected payment request");
+  });
+  const context = {
+    stripe: f.stripe,
+    guildId: operation.guildId,
+    payerId: operation.payerId,
+    now: operation.createdAt,
+  };
+  try {
+    await expect(readBillingChange(context)).rejects.toThrow(
+      "pointer write unavailable",
+    );
+    expect(
+      await getBillingChangeRepository().getControl(operation.guildId),
+    ).toBeDefined();
+    expect(await readBillingChange(context)).toMatchObject({
+      state: "succeeded",
+    });
+    expect(
+      await getBillingChangeRepository().getControl(operation.guildId),
+    ).toBeUndefined();
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(f.requests).toHaveLength(0);
+  } finally {
+    reconcile.mockRestore();
+  }
 });

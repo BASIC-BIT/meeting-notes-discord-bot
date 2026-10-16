@@ -131,6 +131,10 @@ export async function readBillingChangeSource(input: {
     at: input.at ?? Math.floor(Date.now() / 1000),
     fingerprint: changeSourceFingerprint(subscription),
     invariantFingerprint: changeServiceFingerprint(subscription),
+    cancellation: {
+      at: subscription.cancel_at,
+      atPeriodEnd: subscription.cancel_at_period_end,
+    },
     productId: stripeId(item.price.product),
     taxBehavior: item.price.tax_behavior,
     taxRateIds: (item.tax_rates?.length
@@ -294,14 +298,7 @@ async function readPaidSourceInvoice(
   const invoiceId = stripeId(subscription.latest_invoice);
   if (!invoiceId) throw changePending();
   const invoice = await stripe.invoices.retrieve(invoiceId);
-  if (
-    invoice.amount_remaining !== 0 ||
-    stripeId(invoice.customer) !== stripeId(subscription.customer) ||
-    invoice.livemode !== subscription.livemode ||
-    stripeId(invoice.parent?.subscription_details?.subscription) !==
-      subscription.id
-  )
-    throw changePending();
+  assertUnreversedSourceInvoice(invoice, subscription);
   if (invoice.lines.has_more || !hasCurrentServiceLine(invoice, subscription))
     throw changeUnavailable();
   if (invoice.total > 0 && invoice.status === "paid") return invoice;
@@ -313,6 +310,21 @@ async function readPaidSourceInvoice(
   if (fullyDiscountedNativePeriod(invoice, subscription)) return invoice;
   await assertPreviouslyFundedService(stripe, subscription, invoice, guildId);
   return invoice;
+}
+function assertUnreversedSourceInvoice(
+  invoice: StripeInvoice,
+  subscription: StripeSubscription,
+) {
+  if (
+    invoice.amount_remaining !== 0 ||
+    invoice.pre_payment_credit_notes_amount !== 0 ||
+    invoice.post_payment_credit_notes_amount !== 0 ||
+    stripeId(invoice.customer) !== stripeId(subscription.customer) ||
+    invoice.livemode !== subscription.livemode ||
+    stripeId(invoice.parent?.subscription_details?.subscription) !==
+      subscription.id
+  )
+    throw changePending();
 }
 async function assertPreviouslyFundedService(
   stripe: StripeClient,

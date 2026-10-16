@@ -104,20 +104,18 @@ function assertRecurringInvoiceItems(
       throw invalid();
   }
 }
-export function assertRecurringOfferInvoice(
+export function assertOfferServiceLine(
   invoice: StripeInvoice,
   subscriptionId: string,
   terms: Extract<OfferUsage, { state: "reserved" }>["terms"],
 ) {
-  if (invoice.billing_reason !== "subscription_cycle" || invoice.lines.has_more)
-    throw invalid();
+  if (invoice.lines.has_more) throw invalid();
   const service = invoice.lines.data.filter(
     (line) =>
       referenceId(line.pricing?.price_details?.price) === terms.priceId &&
       line.parent?.subscription_item_details?.subscription === subscriptionId,
   );
   if (service.length !== 1) throw invalid();
-  assertRecurringInvoiceItems(invoice, service[0], terms.currency);
   const discountId = referenceId(service[0].discount_amounts?.[0]?.discount);
   const discount = invoice.discounts.find(
     (item) => referenceId(item) === discountId,
@@ -138,4 +136,17 @@ export function assertRecurringOfferInvoice(
     terms.regularUnitAmount - terms.discountedUnitAmount,
   );
   return service[0];
+}
+
+export function assertRecurringOfferInvoice(
+  invoice: StripeInvoice,
+  subscriptionId: string,
+  terms: Extract<OfferUsage, { state: "reserved" }>["terms"],
+  billingReason:
+    "subscription_cycle" | "subscription_update" = "subscription_cycle",
+) {
+  if (invoice.billing_reason !== billingReason) throw invalid();
+  const line = assertOfferServiceLine(invoice, subscriptionId, terms);
+  assertRecurringInvoiceItems(invoice, line, terms.currency);
+  return line;
 }

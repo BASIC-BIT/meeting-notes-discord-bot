@@ -168,7 +168,7 @@ from monthly to annual starts a full new year, with credit for unused paid time.
 A failed or incomplete payment leaves your current plan active. Use **Continue
 payment** to resume the same change, or cancel it before choosing again.
 
-Downgrades to Basic or Free and a change from annual to monthly take effect at
+Downgrades to Basic or Free and a change from annual to monthly within the same plan take effect at
 your next renewal. You keep the plan you already paid for until that date.
 Cancel a scheduled change before choosing a different plan.
 

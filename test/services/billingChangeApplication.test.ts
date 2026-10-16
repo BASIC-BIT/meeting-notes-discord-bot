@@ -8,7 +8,11 @@ import {
 } from "../../src/services/billingChangeApplication";
 import { changeOperation } from "../fixtures/billingChange";
 import { billingChangeBase } from "../../src/types/billingChange";
-import { sourceSubscription, fundedInvoice } from "../fixtures/renewalStripe";
+import {
+  sourceSubscription,
+  fundedInvoice,
+  remainingDiscount,
+} from "../fixtures/renewalStripe";
 const operation = {
   ...billingChangeBase(changeOperation),
   state: "applying" as const,
@@ -250,3 +254,126 @@ it("can compensate a definitive rejected update while holding an ambiguous trans
     }),
   ).rejects.toThrow("Lost response");
 });
+
+it.each([true, false])(
+  "verifies the consumed one-time annual coupon from its application invoice: correct discount %s",
+  (valid) => {
+    const start = operation.consent.at;
+    const end = new Date(start * 1000);
+    end.setUTCFullYear(end.getUTCFullYear() + 1);
+    const target = {
+      ...operation.target,
+      priceId: "price_basic_year",
+      unitAmount: 10000,
+      selection: {
+        tier: "basic" as const,
+        interval: "year" as const,
+        expectedOffer: "basic_annual_intro_v1" as const,
+      },
+      offer: {
+        id: "basic_annual_intro_v1" as const,
+        terms: {
+          interval: "year" as const,
+          currency: "usd" as const,
+          priceId: "price_basic_year",
+          couponId: "co_annual",
+          regularUnitAmount: 10000 as const,
+          discountedUnitAmount: 6000 as const,
+          durationMonths: 12 as const,
+        },
+        authority: {
+          guildId: operation.guildId,
+          mode: "test" as const,
+          offerId: "basic_annual_intro_v1" as const,
+          accountId: "acct-owned",
+          coverageRevision: "coverage",
+          boundaryRevision: "boundary",
+          writerImageDigest: "sha256:" + "a".repeat(64),
+        },
+      },
+    };
+    const applying = { ...operation, target };
+    const native = {
+      ...sourceSubscription,
+      id: operation.source.subscriptionId,
+      customer: operation.source.customerId,
+      billing_mode: { type: operation.source.billingMode, flexible: null },
+      discounts: [],
+      metadata: {
+        guild_id: operation.guildId,
+        chronote_change_operation: operation.operationId,
+      },
+      items: {
+        ...sourceSubscription.items,
+        data: [
+          {
+            ...sourceSubscription.items.data[0],
+            id: operation.source.itemId,
+            price: {
+              ...sourceSubscription.items.data[0].price,
+              id: target.priceId,
+            },
+            current_period_start: start,
+            current_period_end: end.getTime() / 1000,
+          },
+        ],
+      },
+    };
+    const discount = {
+      ...remainingDiscount,
+      id: "di_annual",
+      source: { ...remainingDiscount.source, coupon: "co_annual" },
+    };
+    const line = {
+      ...fundedInvoice.lines.data[0],
+      invoice: "in_annual_application",
+      amount: 10000,
+      quantity: 1,
+      period: { start, end: end.getTime() / 1000 },
+      pricing: {
+        ...fundedInvoice.lines.data[0].pricing,
+        type: "price_details" as const,
+        price_details: { price: target.priceId, product: "prod_basic" },
+        unit_amount_decimal: "10000",
+      },
+      discount_amounts: [
+        { amount: valid ? 4000 : 3000, discount: discount.id },
+      ],
+      parent: {
+        type: "subscription_item_details" as const,
+        invoice_item_details: null,
+        subscription_item_details: {
+          invoice_item: null,
+          subscription: native.id,
+          subscription_item: operation.source.itemId,
+          proration: false,
+          proration_details: null,
+        },
+      },
+    };
+    const invoice = {
+      ...fundedInvoice,
+      id: "in_annual_application",
+      customer: operation.source.customerId,
+      billing_reason: "subscription_update" as const,
+      total: 0,
+      amount_due: 0,
+      amount_paid: 0,
+      amount_remaining: 0,
+      parent: {
+        type: "subscription_details" as const,
+        quote_details: null,
+        subscription_details: {
+          subscription: native.id,
+          metadata: {},
+          subscription_proration_date: null,
+        },
+      },
+      discounts: [discount],
+      lines: { ...fundedInvoice.lines, data: [line] },
+    };
+    expect(inspectChangeApplication(native, invoice, applying)).toBe(
+      valid ? "applied" : "unknown",
+    );
+  },
+);

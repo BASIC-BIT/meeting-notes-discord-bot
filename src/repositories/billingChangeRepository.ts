@@ -82,6 +82,19 @@ function mockClaimAvailable(
     (!input.usage || mockUsageAllowed(input.usage, next)),
   );
 }
+function assertAtomicSettlement(
+  next: BillingChangeOperation,
+  previous: BillingChangeOperation,
+  usage: BillingChangeWrite["usage"],
+) {
+  if (
+    next.target.offer &&
+    ["succeeded", "canceled"].includes(next.state) &&
+    previous.state !== next.state &&
+    !usage
+  )
+    throw new Error("Terminal offer settlement must be atomic");
+}
 export function getBillingChangeRepository() {
   return {
     async getControl(
@@ -132,8 +145,7 @@ export function getBillingChangeRepository() {
         return false;
       assertBillingChangeTransition(next, previous);
       if (input.usage) parseChangeUsage(next, input.usage);
-      if (next.target.offer && isBillingChangeComplete(next) && !input.usage)
-        throw new Error("Terminal offer settlement must be atomic");
+      assertAtomicSettlement(next, previous, input.usage);
       if (!config.mock.enabled) return writeBillingChangeOperation(input);
       const store = getMockStore();
       const key = billingChangeOperationKey(next.guildId, next.operationId);

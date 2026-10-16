@@ -58,6 +58,10 @@ export const billingChangeSourceSchema = z
     periodEnd: seconds,
     fingerprint: id,
     invariantFingerprint: id,
+    cancellation: z
+      .object({ at: seconds.nullable(), atPeriodEnd: z.boolean() })
+      .strict()
+      .optional(),
     productId: id,
     taxBehavior: z.enum(["inclusive", "exclusive"]),
     taxRateIds: z.array(id),
@@ -134,6 +138,7 @@ export const billingChangeOperationSchema = z.discriminatedUnion("state", [
   base
     .extend({
       state: z.literal("accepted"),
+      providerScheduleId: id.optional(),
       funding: funding.nullable(),
       consent: accepted,
     })
@@ -160,6 +165,7 @@ export const billingChangeOperationSchema = z.discriminatedUnion("state", [
   base
     .extend({
       state: z.literal("succeeded"),
+      reconciled: z.boolean().optional(),
       funding: funding.nullable(),
       scheduleId: id.nullable(),
       appliedAt: seconds,
@@ -173,6 +179,7 @@ export const billingChangeOperationSchema = z.discriminatedUnion("state", [
   base
     .extend({
       state: z.literal("canceled"),
+      reconciled: z.boolean().optional(),
       completedAt: seconds,
       recovery: billingChangeRecoverySchema.default(emptyRecovery),
     })
@@ -205,7 +212,8 @@ export const billingChangeOperationKey = (
 export const billingChangeControlKey = (guildId: string) =>
   `CHANGE_CONTROL#${guildId}`;
 export const isBillingChangeComplete = (operation: BillingChangeOperation) =>
-  operation.state === "succeeded" || operation.state === "canceled";
+  (operation.state === "succeeded" || operation.state === "canceled") &&
+  operation.reconciled === true;
 
 export type BillingChangeClaim = {
   operation: BillingChangeOperation;
@@ -225,12 +233,12 @@ const transitions: Record<
 > = {
   preparing: ["preparing", "review", "canceling"],
   review: ["accepted", "canceling"],
-  accepted: ["applying", "scheduled", "canceling"],
+  accepted: ["accepted", "applying", "scheduled", "canceling"],
   applying: ["applying", "succeeded", "canceling"],
   scheduled: ["scheduled", "succeeded", "canceling"],
   canceling: ["canceling", "canceled", "succeeded"],
-  succeeded: [],
-  canceled: [],
+  succeeded: ["succeeded"],
+  canceled: ["canceled"],
 };
 export function assertBillingChangeTransition(
   next: BillingChangeOperation,
@@ -251,6 +259,8 @@ export function assertBillingChangeTransition(
     next.revision === previous.revision
   )
     throw new Error("Invalid plan change state transition");
+  assertReconciliationTransition(next, previous);
+  assertScheduleReceiptTransition(next, previous);
   assertFrozenChangeTerms(next, previous);
   if (
     "funding" in previous &&
@@ -265,6 +275,70 @@ export function assertBillingChangeTransition(
     !isDeepStrictEqual(previous.consent, next.consent)
   )
     throw new Error("Plan change consent cannot change");
+}
+
+function assertReconciliationTransition(
+  next: BillingChangeOperation,
+  previous: BillingChangeOperation,
+) {
+  if (next.state === "succeeded" || next.state === "canceled") {
+    if (previous.state === next.state) {
+      const {
+        revision: oldRevision,
+        reconciled: oldReconciled,
+        ...oldResult
+      } = previous;
+      const {
+        revision: newRevision,
+        reconciled: newReconciled,
+        ...newResult
+      } = next;
+      if (
+        oldReconciled === true ||
+        newReconciled !== true ||
+        !isDeepStrictEqual(oldResult, newResult)
+      )
+        throw new Error(
+          "Only entitlement reconciliation can complete a settled change",
+        );
+      void oldRevision;
+      void newRevision;
+    } else if (next.reconciled === true) {
+      throw new Error("Settled change requires entitlement reconciliation");
+    }
+  }
+}
+function assertScheduleReceiptTransition(
+  next: BillingChangeOperation,
+  previous: BillingChangeOperation,
+) {
+  if (previous.state === "accepted" && next.state === "accepted") {
+    const {
+      revision: oldRevision,
+      providerScheduleId: oldSchedule,
+      ...oldAccepted
+    } = previous;
+    const {
+      revision: newRevision,
+      providerScheduleId: newSchedule,
+      ...newAccepted
+    } = next;
+    if (
+      oldSchedule ||
+      !newSchedule ||
+      !isDeepStrictEqual(oldAccepted, newAccepted)
+    )
+      throw new Error("Only the first native schedule receipt can be bound");
+    void oldRevision;
+    void newRevision;
+  }
+  if (
+    previous.state === "accepted" &&
+    previous.providerScheduleId &&
+    next.state === "scheduled" &&
+    next.scheduleId !== previous.providerScheduleId
+  )
+    throw new Error("Bound native schedule cannot change");
 }
 
 export function parseChangeUsage(

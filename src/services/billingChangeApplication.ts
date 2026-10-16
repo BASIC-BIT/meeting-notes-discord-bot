@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { assertOfferServiceLine } from "./firstOfferInvoiceEvidence";
 import type {
   StripeClient,
   StripeInvoice,
@@ -61,11 +62,38 @@ export function buildChangeApplicationRequest(
     expand: ["latest_invoice", "discounts.source.coupon"],
   };
 }
+function consumedAnnualOfferMatches(
+  subscription: StripeSubscription,
+  invoice: StripeInvoice,
+  operation: Applying,
+) {
+  const offer = operation.target.offer;
+  if (
+    offer?.terms.interval !== "year" ||
+    invoice.billing_reason !== "subscription_update"
+  )
+    return false;
+  try {
+    const line = assertOfferServiceLine(invoice, subscription.id, offer.terms);
+    const item = subscription.items.data[0];
+    return (
+      line.parent?.subscription_item_details?.subscription_item === item.id &&
+      line.period.start === item.current_period_start &&
+      line.period.end === item.current_period_end
+    );
+  } catch {
+    return false;
+  }
+}
 function targetDiscountMatches(
   subscription: StripeSubscription,
   operation: Applying,
+  invoice: StripeInvoice,
 ) {
   if (!operation.target.offer) return subscription.discounts.length === 0;
+  // Stripe consumes annual once-coupons on the zero application invoice.
+  if (subscription.discounts.length === 0)
+    return consumedAnnualOfferMatches(subscription, invoice, operation);
   return (
     subscription.discounts.length === 1 &&
     subscription.discounts.every(
@@ -82,7 +110,7 @@ export function inspectChangeApplication(
   operation: Applying,
 ): "applied" | "residual_balance" | "unknown" {
   if (
-    !targetSubscriptionMatches(subscription, operation) ||
+    !targetSubscriptionMatches(subscription, operation, invoice) ||
     !zeroApplicationInvoice(invoice, subscription, operation)
   )
     return "unknown";
@@ -125,7 +153,9 @@ export async function applyFundedBillingChange(input: {
   }
   const invoiceId = stripeId(subscription.latest_invoice);
   if (!invoiceId || invoiceId === operation.funding.invoiceId) return "unknown";
-  let invoice = await stripe.invoices.retrieve(invoiceId);
+  let invoice = await stripe.invoices.retrieve(invoiceId, {
+    expand: ["discounts.source.coupon"],
+  });
   let result = inspectChangeApplication(subscription, invoice, operation);
   if (result === "residual_balance") {
     await stripe.invoices.voidInvoice(
@@ -136,7 +166,9 @@ export async function applyFundedBillingChange(input: {
     subscription = await stripe.subscriptions.retrieve(subscription.id, {
       expand: ["discounts.source.coupon"],
     });
-    invoice = await stripe.invoices.retrieve(invoiceId);
+    invoice = await stripe.invoices.retrieve(invoiceId, {
+      expand: ["discounts.source.coupon"],
+    });
     result = inspectChangeApplication(subscription, invoice, operation);
   }
   return result === "applied"
@@ -147,6 +179,7 @@ export async function applyFundedBillingChange(input: {
 function targetSubscriptionMatches(
   subscription: StripeSubscription,
   operation: Applying,
+  invoice: StripeInvoice,
 ) {
   const item = subscription.items.data[0];
   return (
@@ -161,7 +194,7 @@ function targetSubscriptionMatches(
     item.price.id === operation.target.priceId &&
     item.quantity === 1 &&
     subscription.billing_mode.type === operation.source.billingMode &&
-    targetDiscountMatches(subscription, operation)
+    targetDiscountMatches(subscription, operation, invoice)
   );
 }
 function zeroApplicationInvoice(

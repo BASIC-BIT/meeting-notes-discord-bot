@@ -191,8 +191,8 @@ it("creates from a subscription without unsupported metadata, then marks the own
     customer: operation.source.customerId,
     metadata: { guild_id: operation.guildId },
     schedule: null,
-    cancel_at: null,
-    cancel_at_period_end: false,
+    cancel_at: operation.source.periodEnd,
+    cancel_at_period_end: true,
     items: {
       ...sourceSubscription.items,
       data: [
@@ -249,6 +249,11 @@ it("creates from a subscription without unsupported metadata, then marks the own
     throw new Error(`Unexpected ${method} ${path}`);
   });
   expect(await scheduleBillingChange(f.stripe, selected)).toBe(schedule.id);
+  expect(
+    f.requests.filter(
+      (r) => r.method === "POST" && r.path === `/v1/subscriptions/${native.id}`,
+    ),
+  ).toHaveLength(0);
 });
 
 it("settles the actual target item when Stripe replaces the old item at renewal", async () => {
@@ -340,9 +345,14 @@ it("settles the actual target item when Stripe replaces the old item at renewal"
   ).toMatchObject({ kind: "paid", invoice: { id: "in_scheduled" } });
 });
 
-it.each([true, false])(
-  "settles a paid scheduled offer with a separate pending invoice item: valid discount %s",
-  async (valid) => {
+it.each([
+  [true, "subscription_cycle"],
+  [false, "subscription_cycle"],
+  [true, "subscription_update"],
+  [false, "subscription_update"],
+] as const)(
+  "settles a paid scheduled offer with a separate pending invoice item: valid discount %s, reason %s",
+  async (valid, reason) => {
     const terms = {
       interval: "month" as const,
       currency: "usd" as const,
@@ -423,7 +433,7 @@ it.each([true, false])(
       ...original,
       id: "in_scheduled",
       customer: operation.source.customerId,
-      billing_reason: "subscription_cycle",
+      billing_reason: reason,
       subtotal: 1200,
       total: 800,
       amount_due: 800,
@@ -463,3 +473,182 @@ it.each([true, false])(
     ).toMatchObject({ kind: valid ? "paid" : "waiting" });
   },
 );
+
+function recoveryFixture() {
+  const native = {
+    ...sourceSubscription,
+    id: operation.source.subscriptionId,
+    customer: operation.source.customerId,
+    metadata: { guild_id: operation.guildId },
+    cancel_at: null,
+    cancel_at_period_end: false,
+    schedule: "sub_sched_recovery",
+    items: {
+      ...sourceSubscription.items,
+      data: [
+        {
+          ...sourceSubscription.items.data[0],
+          id: operation.source.itemId,
+          price: {
+            ...sourceSubscription.items.data[0].price,
+            id: operation.source.priceId,
+          },
+          current_period_start: operation.source.periodStart,
+          current_period_end: operation.source.periodEnd,
+        },
+      ],
+    },
+  };
+  const selected = {
+    ...operation,
+    createdAt: Math.floor(Date.now() / 1000) - 25 * 3600,
+    source: {
+      ...operation.source,
+      fingerprint: changeSourceFingerprint(native),
+      invariantFingerprint: changeServiceFingerprint(native),
+    },
+  };
+  const schedule = {
+    id: native.schedule,
+    customer: native.customer,
+    subscription: native.id,
+    livemode: false,
+    status: "active",
+    metadata: {},
+  };
+  return { native, selected, schedule };
+}
+it.each([true, false])(
+  "recovers an old unmarked schedule only with its exact creation request: owned %s",
+  async (owned) => {
+    const { native, selected, schedule } = recoveryFixture();
+    const saved = jest.fn();
+    const f = stripeTransport(({ path, method }) => {
+      if (path === `/v1/subscriptions/${native.id}`) return native;
+      if (path === "/v1/events")
+        return {
+          object: "list",
+          has_more: false,
+          data: [
+            {
+              id: "evt_created",
+              type: "subscription_schedule.created",
+              livemode: false,
+              request: {
+                id: "req_created",
+                idempotency_key: owned
+                  ? `chronote_change_test_${operation.operationId}_create-schedule`
+                  : "foreign-key",
+              },
+              data: { object: schedule },
+            },
+          ],
+        };
+      if (
+        path === `/v1/subscription_schedules/${schedule.id}` &&
+        method === "POST"
+      )
+        return {
+          ...schedule,
+          metadata: { chronote_change_operation: operation.operationId },
+          phases: [
+            {},
+            {
+              start_date: operation.source.periodEnd,
+              items: [{ price: operation.target.priceId }],
+            },
+          ],
+        };
+      if (path === `/v1/subscription_schedules/${schedule.id}`) return schedule;
+      throw Error(`Unexpected ${method} ${path}`);
+    });
+    if (owned) {
+      expect(await scheduleBillingChange(f.stripe, selected, saved)).toBe(
+        schedule.id,
+      );
+      expect(saved).toHaveBeenCalledWith(schedule.id);
+      expect(
+        f.requests
+          .filter((r) => r.method === "POST")
+          .every((r) => r.path !== "/v1/subscription_schedules"),
+      ).toBe(true);
+    } else {
+      await expect(
+        scheduleBillingChange(f.stripe, selected, saved),
+      ).rejects.toThrow();
+      expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+    }
+  },
+);
+it.each(["classic", "flexible"] as const)(
+  "restores the original requested cancellation after abandoning a paid schedule in %s",
+  async (mode) => {
+    const { native, selected, schedule } = recoveryFixture();
+    const scheduled = {
+      ...selected,
+      state: "scheduled" as const,
+      scheduleId: schedule.id,
+      source: {
+        ...selected.source,
+        billingMode: mode,
+        cancellation: {
+          at: selected.source.periodEnd,
+          atPeriodEnd: mode === "classic",
+        },
+      },
+    };
+    const owned = {
+      ...schedule,
+      metadata: { chronote_change_operation: operation.operationId },
+    };
+    const f = stripeTransport(({ path, method, fields }) => {
+      if (path.endsWith("/release")) {
+        expect(fields.get("preserve_cancel_date")).toBe("true");
+        return {
+          ...owned,
+          status: "released",
+          released_subscription: native.id,
+        };
+      }
+      if (path === `/v1/subscription_schedules/${schedule.id}`) return owned;
+      if (path === `/v1/subscriptions/${native.id}` && method === "POST") {
+        expect(fields.get("proration_behavior")).toBe("none");
+        return {
+          ...native,
+          cancel_at: selected.source.periodEnd,
+          cancel_at_period_end: mode === "classic",
+        };
+      }
+      if (path === `/v1/subscriptions/${native.id}`) return native;
+      throw Error(`Unexpected ${method} ${path}`);
+    });
+    expect(await cancelChangeSchedule(f.stripe, scheduled, schedule.id)).toBe(
+      true,
+    );
+    expect(
+      f.requests.some(
+        (r) =>
+          r.path === `/v1/subscriptions/${native.id}` && r.method === "POST",
+      ),
+    ).toBe(true);
+  },
+);
+
+it("uses its durable creation receipt after idempotency expiry before any other write", async () => {
+  const { native, selected, schedule } = recoveryFixture();
+  const saved = jest.fn().mockRejectedValue(Error("receipt write unavailable"));
+  const f = stripeTransport(({ path }) => {
+    if (path === `/v1/subscriptions/${native.id}`) return native;
+    if (path === `/v1/subscription_schedules/${schedule.id}`) return schedule;
+    throw Error(`Unexpected ${path}`);
+  });
+  await expect(
+    scheduleBillingChange(
+      f.stripe,
+      { ...selected, providerScheduleId: schedule.id },
+      saved,
+    ),
+  ).rejects.toThrow("receipt write unavailable");
+  expect(saved).toHaveBeenCalledWith(schedule.id);
+  expect(f.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+});
