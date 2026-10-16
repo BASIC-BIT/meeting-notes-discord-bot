@@ -372,6 +372,7 @@ class ConfigService {
   };
 
   readonly stripe = {
+    renewalGraceEnabled: process.env.STRIPE_RENEWAL_GRACE_ENABLED === "true",
     introOfferLedgerEnabled:
       process.env.STRIPE_INTRO_OFFER_LEDGER_ENABLED === "true",
     basicIntroOffer: {

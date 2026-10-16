@@ -290,12 +290,12 @@ function sourcePrice(price: Stripe.Price) {
     throw changeUnavailable();
   return { tier, interval };
 }
-async function readPaidSourceInvoice(
+export async function readPaidSourceInvoice(
   stripe: StripeClient,
   subscription: StripeSubscription,
   guildId: string,
+  invoiceId = stripeId(subscription.latest_invoice),
 ) {
-  const invoiceId = stripeId(subscription.latest_invoice);
   if (!invoiceId) throw changePending();
   const invoice = await stripe.invoices.retrieve(invoiceId);
   assertUnreversedSourceInvoice(invoice, subscription);

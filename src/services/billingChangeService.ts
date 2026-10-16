@@ -43,6 +43,8 @@ import {
   readScheduledChangeSettlement,
 } from "./billingChangeSchedule";
 import { reconcileSubscription } from "./subscriptionReconciliation";
+import { trackPaidRenewalPeriod } from "./renewalRecoveryService";
+import { getRenewalRecoveryRepository } from "../repositories/renewalRecoveryRepository";
 
 type Context = {
   stripe: StripeClient;
@@ -441,6 +443,36 @@ async function prepareInvoice(
     operation,
   );
 }
+async function ensureScheduledRenewalWatch(
+  context: Context,
+  operation: Extract<BillingChangeOperation, { state: "accepted" }>,
+): Promise<void> {
+  if (
+    config.stripe.renewalGraceEnabled &&
+    operation.target.selection.tier !== "free"
+  ) {
+    const recovery = await getRenewalRecoveryRepository().getCurrent(
+      context.guildId,
+    );
+    if (
+      recovery?.subscriptionId !== operation.source.subscriptionId ||
+      recovery.paid.periodEnd !== operation.source.periodEnd
+    ) {
+      const subscription = await context.stripe.subscriptions.retrieve(
+        operation.source.subscriptionId,
+      );
+      const invoiceId = stripeId(subscription.latest_invoice);
+      if (!invoiceId) throw changeUnavailable();
+      await trackPaidRenewalPeriod({
+        stripe: context.stripe,
+        guildId: context.guildId,
+        subscriptionId: operation.source.subscriptionId,
+        invoiceId,
+        now: at(context),
+      });
+    }
+  }
+}
 async function afterAcceptance(
   context: Context,
   operation: Extract<BillingChangeOperation, { state: "accepted" }>,
@@ -454,6 +486,7 @@ async function afterAcceptance(
   )
     return beginCancel(context, operation);
   if (operation.timing === "renewal") {
+    await ensureScheduledRenewalWatch(context, operation);
     let latest = operation;
     const scheduleId = await scheduleBillingChange(
       context.stripe,

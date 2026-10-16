@@ -14,6 +14,7 @@ import {
   renewalRecoveryPointerSchema,
   assertRenewalRecoveryTransition,
   isRenewalRecoveryBlocking,
+  renewalRecoveryNextCheck,
   readRenewalRecoveryCursor,
   writeRenewalRecoveryCursor,
   type RenewalRecovery,
@@ -154,13 +155,13 @@ export function getRenewalRecoveryRepository() {
       const due = [...getMockStore().renewalRecoveryRecords.values()]
         .filter(
           (record) =>
-            "nextCheckAt" in record &&
-            record.nextCheckAt <= input.now &&
+            renewalRecoveryNextCheck(record) !== undefined &&
+            (renewalRecoveryNextCheck(record) ?? Infinity) <= input.now &&
             record.mode === input.mode,
         )
         .map((record) => ({
           key: renewalRecoveryKey(record),
-          at: "nextCheckAt" in record ? record.nextCheckAt : 0,
+          at: renewalRecoveryNextCheck(record) ?? 0,
         }))
         .sort((a, b) => a.at - b.at || a.key.localeCompare(b.key))
         .filter(

@@ -143,8 +143,12 @@ it("uses real Dynamo transactions to fence the source, renewal operation and pla
     if (!(command instanceof TransactWriteItemsCommand))
       throw new Error("Expected Dynamo transaction");
     const allEntries = command.input.TransactItems ?? [];
-    expect(unmarshall(allEntries[0].ConditionCheck?.Key ?? {})).toEqual({
-      guildId: `RENEWAL_RECOVERY_CURRENT#${changeOperation.guildId}`,
+    expect(allEntries[0]).toMatchObject({
+      ConditionCheck: {
+        Key: {
+          guildId: { S: `RENEWAL_RECOVERY_CURRENT#${changeOperation.guildId}` },
+        },
+      },
     });
     const entries = allEntries.slice(1);
     expect(entries).toHaveLength(5);

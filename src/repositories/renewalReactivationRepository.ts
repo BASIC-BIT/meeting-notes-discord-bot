@@ -69,18 +69,19 @@ export function getRenewalReactivationRepository() {
       const pointer = store.subscriptions.get(next.guildId);
       const operationKey = renewalOperationKey(next.guildId, next.operationId);
       const controlKey = renewalControlKey(next.guildId);
+      const blocked = [
+        store.renewalRecoveryPointers.get(next.guildId)?.blocking,
+        store.renewalControls.has(controlKey),
+        store.billingChangeControls.has(billingChangeControlKey(next.guildId)),
+        store.renewalOperations.has(operationKey),
+      ].some(Boolean);
       if (
         !pointer ||
         pointer.stripeSubscriptionId !==
           expectedSubscription.stripeSubscriptionId ||
         pointer.stripeSyncRevision !==
           expectedSubscription.stripeSyncRevision ||
-        store.renewalRecoveryPointers.get(next.guildId)?.blocking ||
-        store.renewalControls.has(controlKey) ||
-        store.billingChangeControls.has(
-          billingChangeControlKey(next.guildId),
-        ) ||
-        store.renewalOperations.has(operationKey)
+        blocked
       )
         return false;
       store.renewalOperations.set(operationKey, structuredClone(next));

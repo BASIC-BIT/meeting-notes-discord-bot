@@ -1,4 +1,11 @@
 import { getBillingChangeRepository } from "../repositories/billingChangeRepository";
+import { config } from "./configService";
+import {
+  refreshRenewalRecovery,
+  trackPaidRenewalPeriod,
+  completeRenewalPaidProjection,
+} from "./renewalRecoveryService";
+import { stripeId } from "./billingChangeProvider";
 import {
   buildBillingLifecycleState,
   publishBillingLifecycleTransition,
@@ -163,6 +170,13 @@ export const reconcileSubscription = async (
       )
         return;
     }
+    if (config.stripe.renewalGraceEnabled) {
+      await refreshRenewalRecovery({
+        stripe,
+        guildId,
+        now: Math.floor(Date.now() / 1000),
+      });
+    }
     if (await hasUnsettledPlanChange(guildId, subscription)) return;
     await validatePurchaseSubscription(guildId, subscription);
     const tier = isTerminalSubscription(subscription)
@@ -214,6 +228,19 @@ export const reconcileSubscription = async (
       stripeSubscriptionId: subscription.id,
       updatedBy,
     });
+    if (config.stripe.renewalGraceEnabled && subscription.status === "active") {
+      await completeRenewalPaidProjection(guildId, subscription, payload);
+      const invoiceId =
+        settlement?.invoiceId ?? stripeId(subscription.latest_invoice);
+      if (invoiceId)
+        await trackPaidRenewalPeriod({
+          stripe,
+          guildId,
+          subscriptionId: subscription.id,
+          invoiceId,
+          now: Math.floor(Date.now() / 1000),
+        });
+    }
     return { subscription, tier };
   }
   throw new Error("Stripe subscription changed concurrently; retry webhook");

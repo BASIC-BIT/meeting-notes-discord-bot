@@ -58,6 +58,7 @@ export const renewalRecoverySchema = z
     base
       .extend({ state: z.literal("watching"), nextCheckAt: seconds })
       .strict(),
+    base.extend({ state: z.literal("ended") }).strict(),
     bound.extend({ state: z.literal("grace"), nextCheckAt: seconds }).strict(),
     bound
       .extend({
@@ -67,7 +68,17 @@ export const renewalRecoverySchema = z
         receipts: renewalRecoveryReceiptsSchema,
       })
       .strict(),
-    bound.extend({ state: z.literal("paid") }).strict(),
+    bound
+      .extend({
+        state: z.literal("paid"),
+        projection: z.discriminatedUnion("state", [
+          z
+            .object({ state: z.literal("pending"), nextCheckAt: seconds })
+            .strict(),
+          z.object({ state: z.literal("complete") }).strict(),
+        ]),
+      })
+      .strict(),
     bound
       .extend({
         state: z.literal("canceled"),
@@ -79,6 +90,7 @@ export const renewalRecoverySchema = z
   .superRefine((record, context) => {
     if (
       record.state !== "watching" &&
+      record.state !== "ended" &&
       record.endsAt !== renewalGraceDeadline(record.invoice.finalizedAt)
     )
       context.addIssue({
@@ -104,26 +116,46 @@ export type RenewalRecoveryPointer = z.infer<
 >;
 export const isRenewalRecoveryBlocking = (record: RenewalRecovery) =>
   record.enforcementAccepted &&
-  (record.state === "grace" || record.state === "canceling");
+  (record.state === "grace" ||
+    record.state === "canceling" ||
+    (record.state === "paid" && record.projection.state === "pending"));
+export const renewalRecoveryNextCheck = (
+  record: RenewalRecovery,
+): number | undefined =>
+  "nextCheckAt" in record
+    ? record.nextCheckAt
+    : record.state === "paid" && record.projection.state === "pending"
+      ? record.projection.nextCheckAt
+      : undefined;
 const transitions: Record<
   RenewalRecovery["state"],
   RenewalRecovery["state"][]
 > = {
-  watching: ["watching", "grace", "paid"],
+  watching: ["watching", "grace", "paid", "ended"],
+  ended: [],
   grace: ["grace", "canceling", "paid"],
   canceling: ["canceling", "paid", "canceled"],
-  paid: [],
+  paid: ["paid"],
   canceled: [],
 };
 export function assertRenewalRecoveryTransition(
   next: RenewalRecovery,
   previous: RenewalRecovery,
 ): void {
+  next = renewalRecoverySchema.parse(next);
+  previous = renewalRecoverySchema.parse(previous);
   if (
     next.revision === previous.revision ||
     !transitions[previous.state].includes(next.state)
   )
     throw new Error("Invalid renewal recovery transition");
+  if (
+    previous.state === "paid" &&
+    (previous.projection.state !== "pending" ||
+      next.state !== "paid" ||
+      next.projection.state !== "complete")
+  )
+    throw new Error("Paid renewal requires projection reconciliation");
   for (const field of [
     "guildId",
     "subscriptionId",
@@ -131,20 +163,28 @@ export function assertRenewalRecoveryTransition(
     "payerId",
     "mode",
     "paid",
-    "scheduledOperationId",
   ] as const)
     if (!isDeepStrictEqual(next[field], previous[field]))
       throw new Error("Renewal paid source is immutable");
   if (previous.enforcementAccepted && !next.enforcementAccepted)
     throw new Error("Accepted renewal recovery cannot be disabled");
+  assertBoundRenewalRecovery(next, previous);
+}
+function assertBoundRenewalRecovery(
+  next: RenewalRecovery,
+  previous: RenewalRecovery,
+): void {
+  if (previous.state === "watching" || previous.state === "ended") return;
+  if (next.state === "watching" || next.state === "ended")
+    throw new Error("Bound renewal cannot become a watch");
   if (
-    previous.state !== "watching" &&
-    (next.state === "watching" ||
-      !isDeepStrictEqual(next.invoice, previous.invoice) ||
-      next.endsAt !== previous.endsAt)
+    !isDeepStrictEqual(next.invoice, previous.invoice) ||
+    next.scheduledOperationId !== previous.scheduledOperationId ||
+    next.endsAt !== previous.endsAt
   )
     throw new Error("Bound renewal invoice and deadline are immutable");
 }
+
 export const renewalRecoveryCursorSchema = z
   .object({
     guildId: id,

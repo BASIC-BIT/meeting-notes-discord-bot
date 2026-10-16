@@ -1,4 +1,5 @@
 import { reconcileBillingChangeForWebhook } from "../services/billingChangeService";
+import { refreshRenewalRecovery } from "../services/renewalRecoveryService";
 import { captureBillingInvoiceOutcome } from "../services/billingLifecycleAnalytics";
 import { checkoutInvoiceHint } from "../services/purchaseSession";
 import type Stripe from "stripe";
@@ -133,6 +134,12 @@ const handleInvoicePaymentFailed: WebhookHandler = async ({
   const guildId = await resolveGuildIdFromInvoice(stripe, invoice);
   const subscription = resolveInvoiceSubscription(invoice);
   if (!guildId) return;
+  if (config.stripe.renewalGraceEnabled)
+    await refreshRenewalRecovery({
+      stripe,
+      guildId,
+      now: Math.floor(Date.now() / 1000),
+    });
   await reconcileBillingChangeForWebhook(stripe, guildId);
   if (!subscription) return;
   await reconcileSubscription(

@@ -120,6 +120,7 @@ import {
   renewalRecoveryKey,
   renewalRecoveryCurrentKey,
   RENEWAL_RECOVERY_DUE_INDEX,
+  renewalRecoveryNextCheck,
   readRenewalRecoveryCursor,
   writeRenewalRecoveryCursor,
   renewalRecoveryCursorSchema,
@@ -4401,8 +4402,11 @@ export async function writeRenewalRecoveryRecord(input: {
             ...next,
             ownerGuildId: next.guildId,
             guildId: renewalRecoveryKey(next),
-            ...("nextCheckAt" in next
-              ? { recoveryQueue: next.mode, recoveryDueAt: next.nextCheckAt }
+            ...(renewalRecoveryNextCheck(next) !== undefined
+              ? {
+                  recoveryQueue: next.mode,
+                  recoveryDueAt: renewalRecoveryNextCheck(next),
+                }
               : {}),
           },
           { removeUndefinedValues: true },

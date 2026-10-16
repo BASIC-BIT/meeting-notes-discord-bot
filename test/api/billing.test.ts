@@ -11,6 +11,7 @@ import {
 import express from "express";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import * as renewalRecoveryService from "../../src/services/renewalRecoveryService";
 import { registerBillingRoutes } from "../../src/api/billing";
 import { getEntitlementGrantRepository } from "../../src/repositories/entitlementGrantRepository";
 import { getStripeWebhookRepository } from "../../src/repositories/stripeWebhookRepository";
@@ -1466,4 +1467,32 @@ describe("initial purchase webhook recovery", () => {
       await closeServer(server);
     }
   });
+});
+
+test("does not acknowledge a failed renewal webhook when durable recovery cannot be saved", async () => {
+  const previous = {
+    mock: config.mock.enabled,
+    enabled: config.stripe.renewalGraceEnabled,
+  };
+  config.mock.enabled = true;
+  config.stripe.renewalGraceEnabled = true;
+  config.stripe.webhookSecret = "whsec_test";
+  resetMockStore();
+  const refresh = jest
+    .spyOn(renewalRecoveryService, "refreshRenewalRecovery")
+    .mockRejectedValue(new Error("Recovery storage unavailable"));
+  const { server, baseUrl } = createServer(createStripe(failedInvoiceEvent));
+  try {
+    expect((await postWebhook(baseUrl)).statusCode).toBe(500);
+    expect(refresh).toHaveBeenCalled();
+    expect(
+      (await getStripeWebhookRepository().get(failedInvoiceEvent.id))?.state,
+    ).not.toBe("completed");
+  } finally {
+    await closeServer(server);
+    refresh.mockRestore();
+    config.mock.enabled = previous.mock;
+    Object.assign(config.stripe, originalStripeConfig);
+    config.stripe.renewalGraceEnabled = previous.enabled;
+  }
 });
