@@ -2,9 +2,9 @@
 
 Keep a server's previous paid plan available for 48 hours when its renewal payment fails. Show the payment problem and the deadline in Billing, let the payer retry, and return the server to Free if payment remains unresolved. A scheduled plan change follows the same rule. It does not grant the new plan before payment.
 
-The user requested a grace period of about two days before downgrade. The detailed behavior below is my recommendation for that request. It replaces the previous proposal to return a server to Free immediately when an unpaid scheduled renewal is canceled. The existing plan switching and introductory offer decisions remain in force.
+The user approved the behavior below on October 16. It replaces the previous proposal to return a server to Free immediately when an unpaid scheduled renewal is canceled. The existing plan switching and introductory offer decisions remain in force.
 
-## Decisions to review
+## Agreed behavior
 
 | Question                             | Recommendation                                                                                                          | Reason and tradeoff                                                                                                                                                                       |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -16,11 +16,17 @@ The user requested a grace period of about two days before downgrade. The detail
 
 ## What the payer sees
 
-Billing shows the plan the server can currently use, the plan awaiting payment, the exact outstanding amount, and a date and time in the payer's local timezone. Use a calm payment notice:
+Billing shows the plan the server can currently use, the plan awaiting payment, the exact outstanding amount, and a date and time in the payer's local timezone. The message must distinguish a failed ordinary renewal from a failed scheduled plan change.
 
-> We couldn't collect your renewal payment. Your server keeps Pro until October 18 at 10:00 AM. Complete payment to switch to Basic, or cancel this renewal.
+For a server whose scheduled Pro-to-Basic change reaches renewal and payment fails:
 
-Use the actual plan names and deadline. Actions are **Complete payment**, **Update payment method**, and **Cancel renewal**. The payment action resumes the same verified invoice. Updating a card alone does not count as payment. The existing payer and Manage Server checks still apply. Payment methods remain available through the existing managed billing portal.
+> We couldn't collect payment for your scheduled change to Basic. You can keep using Pro until October 18 at 10:00 AM. Without payment, your server will move to Free.
+
+For a server staying on Basic whose renewal payment fails:
+
+> We couldn't collect your Basic renewal payment. You can keep using Basic until October 18 at 10:00 AM. Without payment, your server will move to Free.
+
+Use the actual plan names and deadline. Actions are **Retry payment**, **Update payment method**, and **Cancel renewal**. The payment action resumes the same verified invoice. Updating a card alone does not count as payment. The existing payer and Manage Server checks still apply. Payment methods remain available through the existing managed billing portal.
 
 Canceling opens a confirmation that states the retained-access deadline and explains that the unpaid plan charge will be removed. After successful cleanup, show **Renewal canceled. Your server keeps Pro until October 18 at 10:00 AM.** The payer can choose a new plan immediately. Once grace ends, show Free and the usual plan selection. No horizontal plan scrolling or account-wide plan lock is introduced.
 
@@ -96,4 +102,4 @@ Run owned Sandbox test clocks through the 48-hour boundary and verify provider i
 - [Stripe custom cancellation dates affect billing periods](https://docs.stripe.com/billing/subscriptions/cancel#custom-cancel-date).
 - [Stripe credit note allocation](https://docs.stripe.com/api/credit_notes/create).
 
-Status: design revision for review. The two-day preference is user supplied; the choices in the review table are recommendations. No grace-period product code or provider configuration has been changed.
+Status: approved by the user on October 16, including ordinary and scheduled renewals. The table above records the accepted behavior. The [implementation plan](../plans/2026-10-16-renewal-payment-grace.md) is ready for review before coding. No grace-period product code or provider configuration has been changed.

@@ -158,4 +158,4 @@ The user requested about two days of grace before a failed renewal downgrades th
 
 The recommendation retains the previous paid tier for a fixed 48 hours, permits retrying the same invoice, and preserves remaining grace after explicit cancellation. Automatic expiry must enforce access without a browser and reconcile only the plan charge, allocated credit and any money received. Ordinary renewals and scheduled plan changes follow the same rule. The current product has no bounded grace implementation.
 
-Implementation remains pending review of this revision. The existing open PR finding remains unresolved. Current CI passes for the existing pushed head, which does not implement grace. Hosted acceptance still depends on the separate guarded Sandbox bootstrap.
+The user approved the full grace behavior on October 16. Implement it through the [renewal grace implementation plan](2026-10-16-renewal-payment-grace.md), which covers ordinary renewals and scheduled changes. The existing open PR finding remains unresolved until implementation and verification pass. Hosted acceptance still depends on the separate guarded Sandbox bootstrap.
