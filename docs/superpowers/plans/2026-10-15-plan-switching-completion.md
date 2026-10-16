@@ -152,27 +152,10 @@ These native tests use an in-memory operation store and explicitly simulated eli
 - [Stripe event request identity and retention](https://docs.stripe.com/api/events/object)
 - [Schedule release and cancellation-date preservation](https://docs.stripe.com/api/subscription_schedules/release)
 
-## Open decision: canceling a failed renewal
+## Revised decision: two-day renewal grace
 
-**Proposed:** If a scheduled change reaches renewal and payment fails, let the payer resume that payment or cancel the unpaid renewal. Canceling returns the server to Free, because its previous paid period has ended. The payer can then choose another plan. This is awaiting the user's answer and is not implemented.
+The user requested about two days of grace before a failed renewal downgrades the server. This replaces the earlier immediate return to Free when an unpaid renewal is canceled. The proposed details are in [Two-day grace for failed renewal payments](../specs/2026-10-16-renewal-payment-grace-design.md).
 
-Canceling must remove only the new plan's charge, return any account credit allocated to that charge, and preserve unrelated invoice items. Verify the credit note and canceled native subscription before releasing the operation and unused offer reservation. An already used offer stays used. A partially paid or otherwise ambiguous result must retain recovery until its money is reconciled.
+The recommendation retains the previous paid tier for a fixed 48 hours, permits retrying the same invoice, and preserves remaining grace after explicit cancellation. Automatic expiry must enforce access without a browser and reconcile only the plan charge, allocated credit and any money received. Ordinary renewals and scheduled plan changes follow the same rule. The current product has no bounded grace implementation.
 
-The alternative is to keep the change pending until payment succeeds. That avoids this cancellation path but leaves the server unable to select another plan during failed-payment recovery. Returning to the previous paid plan would require a new review and payment for its new period.
-
-### How can the payer leave a failed renewal?
-
-```mermaid
-flowchart TD
-    A[Scheduled plan reaches renewal] --> B{Payment settled?}
-    B -->|Yes| C[Apply paid plan and finish change]
-    B -->|No| D[Payment required]
-    D --> E[Resume the same payment]
-    E --> B
-    D --> F[Cancel unpaid renewal]
-    F --> G[Credit only the unpaid plan charge]
-    G --> H[Verify cancellation and show Free]
-    H --> I[Choose another plan]
-```
-
-Owned native provider investigation verified the proposed financial sequence in classic and flexible billing: a plan-only credit note removed the unpaid plan charge, restored allocated customer credit, and retained a separate invoice item. Subscription cancellation then succeeded. This proves the provider mechanism, not completed application behavior. The current application deadlock is reproduced and remains an open PR finding until this decision and its implementation are complete.
+Implementation remains pending review of this revision. The existing open PR finding remains unresolved. Current CI passes for the existing pushed head, which does not implement grace. Hosted acceptance still depends on the separate guarded Sandbox bootstrap.
