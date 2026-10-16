@@ -107,60 +107,60 @@ function fixture() {
       },
     ],
   });
-  const aws = async (s, o, p) => {
-    calls.push({ s, o, p });
-    if (s === "sts") return { Account: account, Arn: m.principalArn };
-    if (s === "dynamodb") {
-      if (o === "transact-write-items") {
+  function scan(p) {
+    if (!p.TableName.endsWith("DeploymentControlTable"))
+      return {
+        Count: p.TableName.endsWith("MeetingHistoryTable")
+          ? state.historyCount
+          : 0,
+      };
+    if (state.launched && p.Select !== "COUNT")
+      return {
+        Items: [
+          marshall({
+            recordType: "runtime",
+            identity: { candidateId: m.operationId },
+            role: state.serving ? "serving" : "candidate",
+            readiness: {
+              cacheReady: true,
+              dependenciesReady: true,
+              gatewayReady: true,
+              observedGeneration: state.serving ? 1 : 0,
+              provenAt: 1000,
+              expiresAt: 2000,
+            },
+          }),
+        ],
+      };
+    return {
+      Items: state.stage ? [marshall(state.stage)] : [],
+      Count: state.stage ? 1 : 0,
+    };
+  }
+  const handlers = {
+    sts: {
+      "get-caller-identity": () => ({ Account: account, Arn: m.principalArn }),
+    },
+    dynamodb: {
+      "transact-write-items": (p) => {
         if (state.stage) throw Error("exists");
         state.stage = unmarshall(p.TransactItems.find((x) => x.Put).Put.Item);
         return {};
-      }
-      if (o === "put-item") {
+      },
+      "put-item": (p) => {
         if (state.stage) throw Error("exists");
         state.stage = unmarshall(p.Item);
         return {};
-      }
-      if (o === "update-item") {
+      },
+      "update-item": (p) => {
         state.stage.stage = unmarshall(p.ExpressionAttributeValues)[":next"];
         return {};
-      }
-      if (o === "get-item")
-        return state.stage ? { Item: marshall(state.stage) } : {};
-      if (o === "scan") {
-        if (p.TableName.endsWith("DeploymentControlTable")) {
-          if (state.launched && p.Select !== "COUNT")
-            return {
-              Items: [
-                marshall({
-                  recordType: "runtime",
-                  identity: { candidateId: m.operationId },
-                  role: state.serving ? "serving" : "candidate",
-                  readiness: {
-                    cacheReady: true,
-                    dependenciesReady: true,
-                    gatewayReady: true,
-                    observedGeneration: state.serving ? 1 : 0,
-                    provenAt: 1000,
-                    expiresAt: 2000,
-                  },
-                }),
-              ],
-            };
-          return {
-            Items: state.stage ? [marshall(state.stage)] : [],
-            Count: state.stage ? 1 : 0,
-          };
-        }
-        return {
-          Count: p.TableName.endsWith("MeetingHistoryTable")
-            ? state.historyCount
-            : 0,
-        };
-      }
-    }
-    if (s === "ecs" && o === "describe-task-definition")
-      return {
+      },
+      "get-item": () => (state.stage ? { Item: marshall(state.stage) } : {}),
+      scan,
+    },
+    ecs: {
+      "describe-task-definition": () => ({
         taskDefinition: {
           taskDefinitionArn: m.taskDefinition,
           status: "ACTIVE",
@@ -180,21 +180,22 @@ function fixture() {
             },
           ],
         },
-      };
-    if (s === "ecs" && o === "describe-services")
-      return { services: [service()], failures: [] };
-    if (s === "ecs" && o === "list-tasks")
-      return { taskArns: state.foreignTasks ? ["foreign"] : [] };
-    if (s === "ecs" && o === "describe-tasks")
-      return { tasks: [{ lastStatus: "RUNNING" }], failures: [] };
-    if (s === "ecs" && o === "update-service") {
-      expect(state.stage.stage).toBe("stop_submitted");
-      if (state.lostStop) throw Error("ACK unknown");
-      state.stopped = true;
-      return { service: service() };
-    }
-    if (s === "elbv2" && o === "describe-listeners")
-      return {
+      }),
+      "describe-services": () => ({ services: [service()], failures: [] }),
+      "list-tasks": () => ({ taskArns: state.foreignTasks ? ["foreign"] : [] }),
+      "describe-tasks": () => ({
+        tasks: [{ lastStatus: "RUNNING" }],
+        failures: [],
+      }),
+      "update-service": () => {
+        expect(state.stage.stage).toBe("stop_submitted");
+        if (state.lostStop) throw Error("ACK unknown");
+        state.stopped = true;
+        return { service: service() };
+      },
+    },
+    elbv2: {
+      "describe-listeners": () => ({
         Listeners: [
           {
             ListenerArn: m.listenerArn,
@@ -202,20 +203,24 @@ function fixture() {
             DefaultActions: action(),
           },
         ],
-      };
-    if (s === "elbv2" && o === "describe-rules")
-      return { Rules: [{ IsDefault: true }] };
-    if (s === "elbv2" && o === "describe-target-health")
-      return { TargetHealthDescriptions: [] };
-    if (s === "elbv2" && o === "modify-listener") {
-      expect(state.stage.stage).toBe("routing_submitted");
-      if (state.lostRoute) throw Error("ACK unknown");
-      state.routed = true;
-      return {
-        Listeners: [{ ListenerArn: m.listenerArn, DefaultActions: action() }],
-      };
-    }
-    throw Error("Unexpected " + s + "." + o);
+      }),
+      "describe-rules": () => ({ Rules: [{ IsDefault: true }] }),
+      "describe-target-health": () => ({ TargetHealthDescriptions: [] }),
+      "modify-listener": () => {
+        expect(state.stage.stage).toBe("routing_submitted");
+        if (state.lostRoute) throw Error("ACK unknown");
+        state.routed = true;
+        return {
+          Listeners: [{ ListenerArn: m.listenerArn, DefaultActions: action() }],
+        };
+      },
+    },
+  };
+  const aws = async (s, o, p) => {
+    calls.push({ s, o, p });
+    const handler = handlers[s]?.[o];
+    if (!handler) throw Error("Unexpected " + s + "." + o);
+    return handler(p);
   };
   const bootstrap = {
     initialize: jest.fn(async () => ({ kind: "initialized" })),
