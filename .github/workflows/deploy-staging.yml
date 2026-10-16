@@ -1,0 +1,659 @@
+name: Meeting Notes Bot Deploy (Sandbox)
+
+run-name: Sandbox Deploy ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chronote-deploy-sandbox
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Run linter
+        run: yarn lint
+
+  markdownlint:
+    name: Markdown Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Run markdownlint
+        run: yarn markdownlint:check
+
+  test:
+    name: Unit Tests (Non-blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Run tests
+        id: run-tests
+        run: |
+          yarn test --passWithNoTests || echo "test_failed=true" >> $GITHUB_OUTPUT
+
+      - name: Report test results
+        if: steps.run-tests.outputs.test_failed == 'true'
+        run: |
+          echo "::warning::Some tests failed, but continuing with deployment. Please fix failing tests."
+
+  code-stats:
+    name: Code Stats
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Get Python version
+        id: py-version
+        run: |
+          python_version=$(python3 -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
+          echo "version=$python_version" >> $GITHUB_OUTPUT
+
+      - name: Cache pip (lizard)
+        id: pip-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ steps.py-version.outputs.version }}-lizard
+
+      - name: Code stats (scc + lizard)
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          docker run --rm -v "$WORKSPACE:/pwd" ghcr.io/boyter/scc:master \
+            scc --ci /pwd
+          docker run --rm -v "$WORKSPACE:/pwd" ghcr.io/boyter/scc:master \
+            scc --ci --by-file --sort lines /pwd
+          lizard_version=$(python3 -c 'import tomllib; lock = tomllib.load(open("uv.lock", "rb")); print(next(package["version"] for package in lock["package"] if package["name"] == "lizard"))')
+          python3 -m pip install --quiet "lizard==$lizard_version"
+          lizard -i -1 -l ts -l tsx -l js -l jsx src test
+
+  # Prompts Check and LLM Connections Check are intentionally absent here.
+  # They describe external Langfuse state rather than code quality, ci.yml
+  # already enforces them, and while they gated this workflow an unpromoted
+  # prompt or a brief Langfuse outage would skip every deploy job. Sandbox
+  # also does not promote prompts: this workflow is manual dispatch and shares
+  # the Langfuse project, so pushing from here could overwrite production
+  # prompts. Promotion happens only in deploy.yml, after Deploy Backend.
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Build TypeScript
+        run: yarn build
+
+      - name: Verify dist directory exists
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "ERROR: dist directory not found after build!"
+            exit 1
+          fi
+          if [ ! -f "dist/index.js" ]; then
+            echo "ERROR: dist/index.js not found after build!"
+            exit 1
+          fi
+          echo "Build artifacts verified successfully"
+
+  desktop-check:
+    name: Desktop Check
+    runs-on: blacksmith-4vcpu-windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: |
+            yarn.lock
+            apps/desktop/yarn.lock
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate desktop app
+        run: yarn desktop:ci
+
+  docs-check:
+    name: Docs Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Build and validate docs
+        run: yarn docs:check
+
+  e2e-tests:
+    name: E2E Tests (Playwright)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      FRONTEND_SITE_URL: http://127.0.0.1:5173
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Get Playwright version
+        id: pw-version
+        run: |
+          pw_version=$(node -p 'require("@playwright/test/package.json").version')
+          echo "version=$pw_version" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run Playwright tests (mock mode)
+        run: yarn test:e2e
+
+  deploy-target-preflight:
+    name: Deploy Target Preflight
+    needs:
+      [
+        lint,
+        markdownlint,
+        test,
+        code-stats,
+        build,
+        desktop-check,
+        docs-check,
+        e2e-tests,
+      ]
+    runs-on: ubuntu-latest
+    environment: sandbox
+    env:
+      DEPLOY_ENVIRONMENT: sandbox
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+      ECS_LOG_GROUP: ${{ vars.ECS_LOG_GROUP }}
+      SECRETS_PREFIX: ${{ vars.SECRETS_PREFIX }}
+      FRONTEND_BUCKET: ${{ vars.FRONTEND_BUCKET }}
+      DOCS_BUCKET: ${{ vars.DOCS_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      FRONTEND_DISTRIBUTION_ID: ${{ vars.FRONTEND_DISTRIBUTION_ID }}
+      HAS_AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY != '' }}
+    steps:
+      - name: Reject production resources for sandbox deploys
+        run: |
+          set -euo pipefail
+          required_names=(
+            AWS_ACCESS_KEY_ID
+            AWS_REGION
+            ECR_REPOSITORY
+            ECS_CLUSTER
+            ECS_SERVICE
+            ECS_TASK_FAMILY
+            ECS_LOG_GROUP
+            FRONTEND_BUCKET
+            FRONTEND_DISTRIBUTION_ID
+            SECRETS_PREFIX
+            VITE_API_BASE_URL
+          )
+
+          missing_values=()
+          for name in "${required_names[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              missing_values+=("$name")
+            fi
+          done
+
+          if [ "$HAS_AWS_SECRET_ACCESS_KEY" != "true" ]; then
+            missing_values+=("AWS_SECRET_ACCESS_KEY")
+          fi
+
+          if [ ${#missing_values[@]} -gt 0 ]; then
+            echo "ERROR: sandbox deploy is missing required configuration."
+            printf ' - %s\n' "${missing_values[@]}"
+            exit 1
+          fi
+
+          production_hits=()
+          for value in \
+            "$VITE_API_BASE_URL" \
+            "$ECR_REPOSITORY" \
+            "$ECS_CLUSTER" \
+            "$ECS_SERVICE" \
+            "$ECS_TASK_FAMILY" \
+            "$ECS_LOG_GROUP" \
+            "$SECRETS_PREFIX" \
+            "$FRONTEND_BUCKET" \
+            "$DOCS_BUCKET"; do
+            normalized="${value,,}"
+            if [[ "$normalized" == *"prod"* ]] || [[ "$normalized" == "https://api.chronote.gg"* ]]; then
+              production_hits+=("$value")
+            fi
+          done
+
+          if [ ${#production_hits[@]} -gt 0 ]; then
+            echo "ERROR: sandbox deploy variables still reference production resources."
+            printf ' - %s\n' "${production_hits[@]}"
+            exit 1
+          fi
+
+          echo "Sandbox deploy target preflight passed."
+
+  # Keep each deploy job scoped to the sandbox environment so AWS credentials and
+  # target variables do not need to be passed through job outputs.
+  deploybackend:
+    name: Deploy Backend (Sandbox)
+    needs: [deploy-target-preflight]
+    runs-on: ubuntu-latest
+    environment: sandbox
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+      DEPLOYMENT_LISTENER_ARN: ${{ vars.DEPLOYMENT_LISTENER_ARN }}
+      DEPLOYMENT_TARGET_GROUP_A: ${{ vars.DEPLOYMENT_TARGET_GROUP_A }}
+      DEPLOYMENT_TARGET_GROUP_B: ${{ vars.DEPLOYMENT_TARGET_GROUP_B }}
+      ECS_LOG_GROUP: ${{ vars.ECS_LOG_GROUP }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      SECRETS_PREFIX: ${{ vars.SECRETS_PREFIX }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure Sandbox backend credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.SANDBOX_BACKEND_DEPLOY_ROLE_ARN }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: chronote-sandbox-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 10800
+          aws-region: ${{ vars.AWS_REGION }}
+          unset-current-credentials: true
+          mask-aws-account-id: true
+
+      - name: Verify exact Sandbox deployment identity
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          EXPECTED_ROLE_ARN: ${{ vars.SANDBOX_BACKEND_DEPLOY_ROLE_ARN }}
+          EXPECTED_SESSION_NAME: chronote-sandbox-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --output json | node scripts/deployment/assert-sandbox-identity.cjs
+
+      - name: Preflight Secrets Manager values
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+
+          SECRETS_PREFIX="${SECRETS_PREFIX:-}"
+          if [ -z "$SECRETS_PREFIX" ] && [ -n "${ECS_TASK_FAMILY:-}" ]; then
+            SECRETS_PREFIX="${ECS_TASK_FAMILY%-bot-task}"
+          fi
+          if [ -z "$SECRETS_PREFIX" ]; then
+            echo "ERROR: SECRETS_PREFIX is not set and could not be derived."
+            exit 1
+          fi
+
+          SECRETS=(
+            "${SECRETS_PREFIX}/discord-bot-token"
+            "${SECRETS_PREFIX}/discord-client-secret"
+            "${SECRETS_PREFIX}/oauth-secret"
+            "${SECRETS_PREFIX}/openai-api-key"
+            "${SECRETS_PREFIX}/langfuse-public-key"
+            "${SECRETS_PREFIX}/langfuse-secret-key"
+            "${SECRETS_PREFIX}/stripe-secret-key"
+            "${SECRETS_PREFIX}/stripe-webhook-secret"
+          )
+
+          missing=()
+          for secret in "${SECRETS[@]}"; do
+            if ! versions=$(aws secretsmanager list-secret-version-ids --secret-id "$secret" --region "$AWS_REGION" 2>/dev/null); then
+              missing+=("$secret (missing)")
+              continue
+            fi
+            if ! echo "$versions" | jq -e '.Versions[]? | select(.VersionStages | index("AWSCURRENT"))' >/dev/null; then
+              missing+=("$secret (no AWSCURRENT value)")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "ERROR: Missing or unset Secrets Manager values:"
+            printf ' - %s\n' "${missing[@]}"
+            exit 1
+          fi
+
+          echo "Secrets Manager preflight passed."
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "Image tag already exists, skipping build and push."
+            echo "image=$IMAGE" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          docker build -t "$IMAGE" .
+          docker run --rm "$IMAGE" ls -la dist/index.js || {
+            echo "ERROR: dist/index.js not found in Docker image!"
+            exit 1
+          }
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Setup coordinator Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install coordinator dependencies
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Build backend protocol builders
+        run: yarn build
+
+      - name: Pin candidate image and deployment identity
+        env:
+          IMAGE: ${{ steps.build-image.outputs.image }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          digest=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="${IMAGE##*:}" --query 'imageDetails[0].imageDigest' --output text)
+          echo "CANDIDATE_IMAGE=${IMAGE%:*}@$digest" >> "$GITHUB_ENV"
+          echo "DEPLOYMENT_RUN_TOKEN=${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_ENV"
+          echo "DEPLOYMENT_CANDIDATE_ID=${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_ENV"
+
+      - name: Protect serving runtime and warm candidate
+        id: prepare
+        run: node scripts/deployment/coordinator.cjs prepare
+
+      - name: Promote exact ready candidate
+        id: promote
+        run: node scripts/deployment/coordinator.cjs promote
+
+      - name: Wait for runtime-owned retirement acknowledgment
+        id: retire
+        run: node scripts/deployment/coordinator.cjs retire
+
+      - name: Reconcile failed deployment without terminating work
+        if: failure() && steps.prepare.outcome != 'skipped'
+        run: node scripts/deployment/coordinator.cjs reconcile
+
+      - name: Create deployment summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          COMMIT_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ "$JOB_STATUS" == "success" ]; then
+            echo "## ✅ Sandbox Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Commit:** $COMMIT_SHA" >> $GITHUB_STEP_SUMMARY
+            echo "- **Branch:** $REF_NAME" >> $GITHUB_STEP_SUMMARY
+            echo "- **Environment:** sandbox" >> $GITHUB_STEP_SUMMARY
+            echo "- **Deployed by:** $ACTOR" >> $GITHUB_STEP_SUMMARY
+            echo "- **Deployment time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Sandbox Deployment Failed!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Commit:** $COMMIT_SHA" >> $GITHUB_STEP_SUMMARY
+            echo "- **Branch:** $REF_NAME" >> $GITHUB_STEP_SUMMARY
+            echo "- **Environment:** sandbox" >> $GITHUB_STEP_SUMMARY
+            echo "- **Failed by:** $ACTOR" >> $GITHUB_STEP_SUMMARY
+            echo "- **Failure time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  deploy-frontend:
+    name: Deploy Frontend (Sandbox)
+    needs: [deploy-target-preflight]
+    runs-on: ubuntu-latest
+    environment: sandbox
+    env:
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+      VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
+      VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Build frontend (Vite)
+        run: yarn build:web
+
+      - name: Sync frontend to S3 and invalidate CloudFront
+        uses: ./.github/actions/sync-frontend
+        with:
+          bucket: ${{ vars.FRONTEND_BUCKET }}
+          distribution-id: ${{ vars.FRONTEND_DISTRIBUTION_ID }}
+
+  deploy-docs:
+    name: Deploy Docs (Sandbox)
+    needs: [deploy-target-preflight]
+    runs-on: ubuntu-latest
+    environment: sandbox
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check docs deploy configuration
+        id: docs-config
+        env:
+          DOCS_BUCKET: ${{ vars.DOCS_BUCKET }}
+          DOCS_DISTRIBUTION_ID: ${{ vars.DOCS_DISTRIBUTION_ID }}
+        run: |
+          if [ -z "$DOCS_BUCKET" ] || [ -z "$DOCS_DISTRIBUTION_ID" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Docs deployment skipped because DOCS_BUCKET or DOCS_DISTRIBUTION_ID is not configured." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        if: steps.docs-config.outputs.enabled == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Preflight docs publish targets
+        if: steps.docs-config.outputs.enabled == 'true'
+        env:
+          DOCS_BUCKET: ${{ vars.DOCS_BUCKET }}
+          DOCS_DISTRIBUTION_ID: ${{ vars.DOCS_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DOCS_BUCKET" ]; then
+            echo "ERROR: DOCS_BUCKET is not set in the GitHub Actions environment."
+            exit 1
+          fi
+
+          if [ -z "$DOCS_DISTRIBUTION_ID" ]; then
+            echo "ERROR: DOCS_DISTRIBUTION_ID is not set in the GitHub Actions environment."
+            exit 1
+          fi
+
+          if ! aws s3api head-bucket --bucket "$DOCS_BUCKET" >/dev/null 2>&1; then
+            echo "ERROR: DOCS_BUCKET '$DOCS_BUCKET' is not accessible with the configured AWS credentials."
+            exit 1
+          fi
+
+          if ! aws cloudfront get-distribution --id "$DOCS_DISTRIBUTION_ID" >/dev/null 2>&1; then
+            echo "ERROR: DOCS_DISTRIBUTION_ID '$DOCS_DISTRIBUTION_ID' is not accessible with the configured AWS credentials."
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        if: steps.docs-config.outputs.enabled == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: "yarn.lock"
+
+      - name: Install dependencies
+        if: steps.docs-config.outputs.enabled == 'true'
+        run: bash scripts/ci-install-dependencies.sh
+
+      - name: Build docs site
+        if: steps.docs-config.outputs.enabled == 'true'
+        env:
+          DOCS_ALGOLIA_APP_ID: ${{ vars.DOCS_ALGOLIA_APP_ID }}
+          DOCS_ALGOLIA_API_KEY: ${{ vars.DOCS_ALGOLIA_API_KEY }}
+          DOCS_ALGOLIA_INDEX_NAME: ${{ vars.DOCS_ALGOLIA_INDEX_NAME }}
+          DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL }}
+        run: yarn docs:build
+
+      - name: Verify docs build output
+        if: steps.docs-config.outputs.enabled == 'true'
+        run: test -d build/docs-site
+
+      - name: Sync docs to S3
+        if: steps.docs-config.outputs.enabled == 'true'
+        env:
+          DOCS_BUCKET: ${{ vars.DOCS_BUCKET }}
+        run: |
+          if [ -z "$DOCS_BUCKET" ]; then
+            echo "DOCS_BUCKET not set in environment variables"
+            exit 1
+          fi
+
+          aws s3 sync build/docs-site s3://$DOCS_BUCKET --delete --exclude "assets/*" --cache-control "public,max-age=600"
+
+          if [ -d build/docs-site/assets ]; then
+            aws s3 sync build/docs-site/assets s3://$DOCS_BUCKET/assets --delete --cache-control "public,max-age=31536000,immutable"
+          fi
+
+      - name: Invalidate docs CloudFront
+        if: steps.docs-config.outputs.enabled == 'true'
+        env:
+          DOCS_DISTRIBUTION_ID: ${{ vars.DOCS_DISTRIBUTION_ID }}
+        run: |
+          if [ -z "$DOCS_DISTRIBUTION_ID" ]; then
+            echo "DOCS_DISTRIBUTION_ID not set in environment variables"
+            exit 1
+          fi
+
+          aws cloudfront create-invalidation --distribution-id "$DOCS_DISTRIBUTION_ID" --paths "/*"

@@ -1,0 +1,249 @@
+name: CI
+permissions:
+  contents: read
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-changes:
+    name: Detect Windows-relevant changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+      visual: ${{ steps.filter.outputs.visual }}
+    steps:
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            desktop:
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/ci-core.yml'
+              - 'apps/desktop/**'
+              - 'jest.desktop-coverage.config.ts'
+              - 'package.json'
+              - 'scripts/desktop-*.js'
+              - 'scripts/desktop-*.mjs'
+              - 'yarn.lock'
+            visual:
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/ci-core.yml'
+              - 'apps/desktop/**'
+              - 'package.json'
+              - 'playwright.config.ts'
+              - 'public/**'
+              - 'scripts/ci-install-dependencies.sh'
+              - 'scripts/run-visual-tests.js'
+              - 'scripts/visual/**'
+              - 'src/**'
+              - 'test/e2e/**'
+              - 'tsconfig.frontend.json'
+              - 'tsconfig.json'
+              - 'vite.config.mts'
+              - 'yarn.lock'
+
+  core-ci:
+    name: Core CI
+    needs: [pr-changes]
+    if: ${{ always() }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-core.yml
+    with:
+      run_desktop: ${{ needs.pr-changes.result != 'success' || needs.pr-changes.outputs.desktop == 'true' }}
+    secrets: inherit
+
+  visual-regression:
+    name: Visual Regression
+    needs: [pr-changes]
+    if: ${{ always() && github.event_name == 'pull_request' && (needs.pr-changes.result != 'success' || needs.pr-changes.outputs.visual == 'true') }}
+    runs-on: blacksmith-4vcpu-windows-2025
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      FRONTEND_SITE_URL: http://127.0.0.1:5173
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh --ignore-scripts
+
+      - name: Get Playwright version
+        id: pw-version-visual
+        run: |
+          pw_version=$(node -p 'require("@playwright/test/package.json").version')
+          echo "version=$pw_version" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: pw-cache-visual
+        uses: actions/cache@v6
+        with:
+          path: ~/AppData/Local/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw-version-visual.outputs.version }}
+
+      - name: Install Playwright browsers
+        run: npx playwright install
+
+      - name: Install desktop dependencies
+        run: yarn desktop:install
+
+      - name: Restore baseline snapshots
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch origin "$BASE_REF" --depth=1
+          if git diff --name-only "origin/${BASE_REF}...HEAD" -- ':(glob)test/e2e/*-snapshots/**' | grep -q .; then
+            echo "Snapshots updated in this PR, skipping baseline restore."
+          else
+            git checkout "origin/${BASE_REF}" -- ':(glob)test/e2e/*-snapshots/**' || echo "No baseline snapshots found"
+          fi
+
+      - name: Run visual tests
+        id: visual-tests
+        continue-on-error: true
+        env:
+          DEBUG: pw:webserver
+        run: yarn test:visual
+
+      - name: Detect visual diffs
+        id: visual-diff
+        if: always()
+        run: |
+          diff_count=$(find test-results -type f \( -name "*-diff.png" -o -name "*-diff.jpg" -o -name "*-diff.jpeg" \) 2>/dev/null | wc -l || true)
+          if [ "${diff_count}" -gt 0 ]; then
+            echo "has_diffs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_diffs=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect committed snapshot changes
+        id: snapshot-changes
+        if: always()
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git diff --name-status "origin/${BASE_REF}...HEAD" -- ':(glob)test/e2e/*-snapshots/**' > snapshot-changes.txt || true
+          if [ -s snapshot-changes.txt ]; then
+            echo "has_snapshot_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_snapshot_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish visual previews
+        id: visual-preview
+        continue-on-error: true
+        if: always() && github.event.pull_request.head.repo.fork == false && steps.visual-diff.outputs.has_diffs == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_BRANCH: visual-regression-previews
+          PREVIEW_ROOT: pr-${{ github.event.pull_request.number }}/run-${{ github.run_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          preview_source="$(pwd)/../visual-preview-source"
+          preview_repo="$(pwd)/../visual-preview-branch"
+          rm -rf "$preview_source" "$preview_repo"
+          mkdir -p "$preview_source/$PREVIEW_ROOT"
+
+          copied=0
+          while IFS= read -r -d '' file; do
+            rel="${file#./}"
+            mkdir -p "$preview_source/$PREVIEW_ROOT/$(dirname "$rel")"
+            cp "$file" "$preview_source/$PREVIEW_ROOT/$rel"
+            copied=$((copied + 1))
+          done < <(find test-results -type f \( -name "*-diff.png" -o -name "*-diff.jpg" -o -name "*-diff.jpeg" -o -name "*-actual.png" -o -name "*-actual.jpg" -o -name "*-actual.jpeg" -o -name "*-expected.png" -o -name "*-expected.jpg" -o -name "*-expected.jpeg" \) -print0 2>/dev/null || true)
+
+          if [ "$copied" -eq 0 ]; then
+            echo "base_url=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          repo_url="https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          if git -c http.extraheader="$auth_header" ls-remote --exit-code --heads "$repo_url" "$PREVIEW_BRANCH" >/dev/null 2>&1; then
+            git -c http.extraheader="$auth_header" clone --depth=1 --branch "$PREVIEW_BRANCH" "$repo_url" "$preview_repo"
+          else
+            git -c http.extraheader="$auth_header" clone --depth=1 "$repo_url" "$preview_repo"
+            git -C "$preview_repo" switch --orphan "$PREVIEW_BRANCH"
+            git -C "$preview_repo" rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          rm -rf "$preview_repo/$PREVIEW_ROOT"
+          mkdir -p "$preview_repo/$(dirname "$PREVIEW_ROOT")"
+          cp -R "$preview_source/$PREVIEW_ROOT" "$preview_repo/$PREVIEW_ROOT"
+          git -C "$preview_repo" config user.name "github-actions[bot]"
+          git -C "$preview_repo" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$preview_repo" add -A "$PREVIEW_ROOT"
+
+          if git -C "$preview_repo" diff --cached --quiet; then
+            echo "No visual previews changed."
+          else
+            git -C "$preview_repo" commit -m "[AGENT] Publish visual previews for PR ${PR_NUMBER} run ${GITHUB_RUN_ID}"
+            git -C "$preview_repo" -c http.extraheader="$auth_header" push origin "HEAD:$PREVIEW_BRANCH"
+          fi
+
+          echo "base_url=https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${PREVIEW_BRANCH}/${PREVIEW_ROOT}" >> "$GITHUB_OUTPUT"
+
+      - name: Build visual summary
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VISUAL_PREVIEW_BASE_URL: ${{ steps.visual-preview.outputs.base_url }}
+          HEAD_IMAGE_BASE_URL: https://raw.githubusercontent.com/${{ github.event.pull_request.head.repo.full_name }}/${{ github.event.pull_request.head.sha }}
+        run: |
+          node scripts/visual/summarize.js --results test-results --output visual-summary.md --run-url "$RUN_URL" --snapshot-changes snapshot-changes.txt --preview-base-url "$VISUAL_PREVIEW_BASE_URL" --head-image-base-url "$HEAD_IMAGE_BASE_URL"
+
+      - name: Append visual failure note
+        if: always() && steps.visual-tests.outcome != 'success'
+        run: |
+          cat >> visual-summary.md <<'EOF'
+
+          Visual tests failed or did not run. Review any diffs above and the workflow logs for failures.
+          EOF
+
+      - name: Upload visual artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-regression
+          path: |
+            playwright-report
+            test-results
+            visual-summary.md
+
+      - name: Comment on PR
+        if: always() && github.event.pull_request.head.repo.fork == false
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --body-file visual-summary.md
+
+      - name: Fail on visual test failures
+        if: always() && steps.visual-tests.outcome != 'success'
+        run: exit 1

@@ -1,0 +1,153 @@
+name: Desktop Package
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-package.yml"
+      - "apps/desktop/**"
+      - "scripts/desktop-*.js"
+      - "scripts/desktop-*.mjs"
+      - "jest.desktop-coverage.config.ts"
+      - "package.json"
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/desktop-package.yml"
+      - "apps/desktop/**"
+      - "scripts/desktop-*.js"
+      - "scripts/desktop-*.mjs"
+      - "jest.desktop-coverage.config.ts"
+      - "package.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+
+jobs:
+  package:
+    name: Build Windows Desktop Artifacts
+    runs-on: blacksmith-4vcpu-windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: |
+            yarn.lock
+            apps/desktop/yarn.lock
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      - name: Install desktop dependencies
+        run: yarn desktop:install
+
+      - name: Run desktop API coverage
+        run: yarn test:desktop:coverage
+
+      # The bundler fetches the WiX toolset and the NSIS tooling from GitHub the
+      # first time it runs, after the Rust build has already succeeded, and that
+      # download has failed three times running with `io: Peer disconnected`,
+      # discarding a green compile each time.
+      #
+      # The cache and the retry below are both needed, and neither works alone.
+      # actions/cache only writes in its post step when the job succeeds, so
+      # while the download keeps failing the directory is never populated and
+      # the cache is never saved: every run stays a miss. The retry is what gets
+      # one run over the line; the cache is what stops the download from being
+      # attempted again afterwards.
+      - name: Cache Tauri bundler tools
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-bundler-tools-${{ runner.os }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            tauri-bundler-tools-${{ runner.os }}-
+
+      - name: Build unsigned desktop package
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if yarn desktop:package; then
+              exit 0
+            fi
+            echo "::warning::Desktop bundling failed on attempt ${attempt}. Retrying; the bundler downloads WiX and NSIS at this point and that fetch is unreliable."
+            sleep 15
+          done
+          echo "::error::Desktop bundling failed three times."
+          exit 1
+
+      - name: Validate desktop artifacts
+        run: yarn desktop:artifacts --write
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: chronote-desktop-windows-unsigned
+          path: apps/desktop/src-tauri/target/release/bundle/**
+
+  packaged-smoke:
+    name: Native Desktop Smoke
+    runs-on: blacksmith-4vcpu-windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+          cache-dependency-path: |
+            yarn.lock
+            apps/desktop/yarn.lock
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      - name: Install desktop dependencies
+        run: yarn desktop:install
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      - name: Install Microsoft Edge WebDriver
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\msedgedriver" | Out-Null
+          cargo install --git https://github.com/chippers/msedgedriver-tool --rev 8c4b34f51b45f5cf08013366d703de464ab871d1
+          Push-Location "$env:RUNNER_TEMP\msedgedriver"
+          & "$env:USERPROFILE\.cargo\bin\msedgedriver-tool.exe"
+          $driver = Get-ChildItem -Path "$env:RUNNER_TEMP\msedgedriver" -Filter "msedgedriver.exe" -Recurse | Select-Object -First 1
+          if ($null -eq $driver) {
+            throw "msedgedriver.exe was not downloaded."
+          }
+          $driver.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
+          "CHRONOTE_DESKTOP_WEBDRIVER_DIR=$($driver.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Pop-Location
+
+      - name: Run native desktop smoke
+        run: yarn desktop:smoke:native
