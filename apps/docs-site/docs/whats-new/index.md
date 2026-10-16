@@ -7,6 +7,12 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Choose where recording controls and notes appear (October 16)
+
+- Use `notes-channel` on `/startmeeting` for a one-meeting text destination. Otherwise, manual starts use the voice-channel override, then the server default, then the command channel if nothing is configured. The private **View recording** link opens the published recording message.
+- Server settings show inherited destinations and voice-channel overrides. Configure or reset a destination with auto-recording off; changing routing never enables recording. Explicit overrides survive server-default changes, even if they previously matched the default.
+- An unavailable destination blocks a start without fallback. Controls, processing updates and final notes keep the destination selected at start. See [Choose where controls and notes appear](/admin/setup-and-access/#4-choose-where-controls-and-notes-appear).
+
 ### Time to resolve a failed renewal
 
 - When renewal payment fails for an existing paid Basic or Pro subscription, the server keeps its previous paid plan for 48 hours from invoice finalization, including scheduled plan changes. Billing shows the local deadline and lets the original payer retry the same invoice, update their payment method, or cancel the unpaid renewal.
