@@ -452,6 +452,8 @@ function isScheduledInvoice(
     } catch {
       return false;
     }
+  } else if (!isUndiscountedScheduledInvoice(invoice, operation)) {
+    return false;
   }
   const details = invoice.parent?.subscription_details;
   return (
@@ -473,6 +475,54 @@ function isScheduledInvoice(
         line.amount === operation.target.unitAmount &&
         line.period.start === periodStart,
     )
+  );
+}
+
+function isUndiscountedScheduledInvoice(
+  invoice: import("../types/stripe").StripeInvoice,
+  operation: Scheduled,
+): boolean {
+  if (
+    invoice.currency !== operation.target.currency ||
+    invoice.discounts.length ||
+    invoice.total_discount_amounts?.length
+  )
+    return false;
+  let total = 0;
+  let services = 0;
+  for (const line of invoice.lines.data) {
+    if (
+      line.invoice !== invoice.id ||
+      line.livemode !== invoice.livemode ||
+      line.currency !== invoice.currency ||
+      line.discounts?.length ||
+      line.discount_amounts?.length
+    )
+      return false;
+    const service = line.parent?.subscription_item_details;
+    if (service) {
+      if (
+        service.subscription !== operation.source.subscriptionId ||
+        service.proration ||
+        line.pricing?.price_details?.price !== operation.target.priceId ||
+        line.quantity !== 1 ||
+        line.amount !== operation.target.unitAmount
+      )
+        return false;
+      services++;
+    } else if (line.parent?.type !== "invoice_item_details") return false;
+    total +=
+      line.amount +
+      (line.taxes ?? []).reduce(
+        (sum, tax) => sum + (tax.tax_behavior === "exclusive" ? tax.amount : 0),
+        0,
+      );
+  }
+  return (
+    services === 1 &&
+    invoice.total === total &&
+    invoice.subtotal ===
+      invoice.lines.data.reduce((sum, line) => sum + line.amount, 0)
   );
 }
 

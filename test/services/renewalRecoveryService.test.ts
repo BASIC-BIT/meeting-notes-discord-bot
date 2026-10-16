@@ -14,6 +14,7 @@ import { getRenewalRecoveryRepository } from "../../src/repositories/renewalReco
 import {
   trackPaidRenewalPeriod,
   cancelRenewalRecovery,
+  cancelScheduledRenewalRecovery,
   reconcileRenewalRecovery,
   refreshRenewalRecovery,
   completeRenewalPaidProjection,
@@ -253,6 +254,35 @@ test("does not adopt a new grace or block billing while the flag is off", async 
       ?.blocking,
   ).toBe(false);
 });
+test.each(["ordinary", "foreign_operation"] as const)(
+  "does not use passive coverage to authorize %s cancellation",
+  async (scope) => {
+    const f = fixture();
+    await f.track();
+    f.fail();
+    config.stripe.renewalGraceEnabled = false;
+    await f.refresh();
+    const input = {
+      stripe: f.stripe,
+      guildId: renewalSubscription.guildId,
+      payerId: f.subscription.metadata.discord_id,
+      now: paidEndsAt + 4001,
+    };
+    await expect(
+      scope === "ordinary"
+        ? cancelRenewalRecovery(input)
+        : cancelScheduledRenewalRecovery({
+            ...input,
+            operationId: "other_operation",
+          }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(f.requests.some((request) => request.method !== "GET")).toBe(false);
+    expect(
+      await getRenewalRecoveryRepository().getCurrent(input.guildId),
+    ).toMatchObject({ state: "grace", enforcementAccepted: false });
+  },
+);
+
 test.each(["customer", "mode", "credited", "first_purchase", "funding"])(
   "rejects unsafe renewal evidence: %s",
   async (mismatch) => {
@@ -616,9 +646,15 @@ async function scheduledFixture(withOffer = false) {
   );
   return { f, operation };
 }
-test.each([false, true])(
-  "cancels an applied unpaid schedule and releases its old operation control (offer=%s)",
-  async (withOffer) => {
+test.each([
+  [false, true],
+  [true, true],
+  [false, false],
+  [true, false],
+] as const)(
+  "cancels an applied unpaid schedule and releases its old operation control (offer=%s, enforcement=%s)",
+  async (withOffer, enforcement) => {
+    config.stripe.renewalGraceEnabled = enforcement;
     const { f, operation } = await scheduledFixture(withOffer);
     const grace = await f.refresh();
     if (!grace || grace.state !== "grace") throw new Error("Expected grace");
@@ -691,7 +727,18 @@ test.each([false, true])(
       ).toBe(false);
       expect(
         await getRenewalRecoveryRepository().getCurrent(operation.guildId),
-      ).toMatchObject({ state: "canceled", endsAt: grace.endsAt });
+      ).toMatchObject({
+        state: "canceled",
+        endsAt: grace.endsAt,
+        enforcementAccepted: enforcement,
+      });
+      if (!enforcement)
+        expect(
+          await resolveRenewalAccess(
+            getMockStore().subscriptions.get(operation.guildId),
+            paidEndsAt + 4002,
+          ),
+        ).toBeUndefined();
     } finally {
       payer.mockRestore();
       provider.mockRestore();

@@ -28,6 +28,11 @@ async function historicalPaidBasis(
       limit: 100,
     }),
   );
+  if (
+    subscription.status === "trialing" &&
+    invoices.some((invoice) => invoice.total > 0 && invoice.lines.has_more)
+  )
+    throw changeUnavailable();
   for (const invoice of invoices.toSorted(
     (a, b) =>
       (historicalLine(b, subscription)?.period.end ?? 0) -
@@ -55,13 +60,14 @@ async function historicalPaidBasis(
     };
     return readRenewalPaidBasis(stripe, historical, guildId, invoice.id);
   }
-  throw changeUnavailable();
+  return undefined;
 }
 function historicalLine(
   invoice: StripeInvoice,
   subscription: StripeSubscription,
 ) {
   if (
+    (subscription.status === "trialing" && invoice.total <= 0) ||
     invoice.lines.has_more ||
     invoice.metadata?.chronote_invoice_role === "funding"
   )
@@ -81,7 +87,7 @@ export async function readRenewalCoverageCandidate(input: {
   stripe: StripeClient;
   saved: GuildSubscription;
   mode: "test" | "live";
-}): Promise<RenewalRecovery> {
+}): Promise<RenewalRecovery | null> {
   const { stripe, saved, mode } = input;
   if (!saved.stripeSubscriptionId || !saved.stripeCustomerId)
     throw changeUnavailable();
@@ -103,7 +109,9 @@ export async function readRenewalCoverageCandidate(input: {
   const invoiceId = stripeId(subscription.latest_invoice);
   const latest = invoiceId ? await stripe.invoices.retrieve(invoiceId) : null;
   const paid =
-    latest?.status === "paid" && invoiceId
+    latest?.status === "paid" &&
+    invoiceId &&
+    (subscription.status !== "trialing" || latest.total > 0)
       ? await readRenewalPaidBasis(
           stripe,
           subscription,
@@ -111,6 +119,10 @@ export async function readRenewalCoverageCandidate(input: {
           invoiceId,
         )
       : await historicalPaidBasis(stripe, subscription, saved.guildId);
+  if (!paid) {
+    if (subscription.status === "trialing") return null;
+    throw changeUnavailable();
+  }
   return renewalRecoverySchema.parse({
     guildId: saved.guildId,
     subscriptionId: subscription.id,

@@ -123,7 +123,8 @@ async function catchUpPaidWatch(
     if (error instanceof BillingActionError) return false;
     throw error;
   }
-  if (candidate.paid.periodEnd <= record.paid.periodEnd) return false;
+  if (!candidate || candidate.paid.periodEnd <= record.paid.periodEnd)
+    return false;
   const registered = await getRenewalRecoveryRepository().register({
     record: {
       ...candidate,
@@ -302,7 +303,7 @@ export async function completeRenewalPaidProjection(
       saved: { ...saved, stripeCustomerId: record.customerId },
       mode: record.mode,
     });
-    if (candidate.paid.periodEnd < paidPeriod.periodEnd)
+    if (!candidate || candidate.paid.periodEnd < paidPeriod.periodEnd)
       throw changeUnavailable();
     paidPeriod = candidate.paid;
   }
@@ -372,6 +373,17 @@ async function beginRenewalCancellation(
 export async function cancelRenewalRecovery(
   input: Context & { payerId: string },
 ): Promise<void> {
+  return cancelOwnedRecovery(input, null);
+}
+export async function cancelScheduledRenewalRecovery(
+  input: Context & { payerId: string; operationId: string },
+): Promise<void> {
+  return cancelOwnedRecovery(input, input.operationId);
+}
+async function cancelOwnedRecovery(
+  input: Context & { payerId: string },
+  scheduledOperationId: string | null,
+): Promise<void> {
   const record = await getRenewalRecoveryRepository().getCurrent(input.guildId);
   if (!record || record.mode !== config.subscription.stripeMode)
     throw changeUnavailable();
@@ -385,7 +397,15 @@ export async function cancelRenewalRecovery(
     customerId: record.customerId,
     payerId: input.payerId,
   });
-  if (!record.enforcementAccepted) throw changeUnavailable();
+  if (
+    scheduledOperationId
+      ? record.scheduledOperationId !== scheduledOperationId
+      : !record.enforcementAccepted
+  )
+    throw changeUnavailable();
+  // Explicit cancellation of an owned scheduled change also works during passive
+  // rollout. It does not accept enforcement or grant courtesy access.
+
   if (record.state === "grace")
     await beginRenewalCancellation(input, record, "payer");
   else if (!["canceling", "paid", "canceled"].includes(record.state))
@@ -429,6 +449,7 @@ async function repairRenewalPaidAccess(
       saved,
       mode: record.mode,
     });
+    if (!candidate) throw changeUnavailable();
     if (
       !(await getRenewalRecoveryRepository().register({
         record: {

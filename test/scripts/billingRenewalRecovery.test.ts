@@ -34,7 +34,7 @@ afterEach(() => {
   config.subscription.stripeMode = original.mode;
   jest.restoreAllMocks();
 });
-function fixture() {
+function fixture(paidHistory = true) {
   getMockStore().subscriptions.clear();
   getMockStore().subscriptions.set(renewalSubscription.guildId, {
     ...renewalSubscription,
@@ -69,16 +69,20 @@ function fixture() {
       })),
     },
   };
+  const invoices = new Map([
+    [fundedInvoice.id, { ...fundedInvoice }],
+    [renewal.id, renewal],
+  ]);
   const f = stripeTransport(({ path }) => {
     if (path === "/v1/account") return { id: "acct_owned" };
     if (path === "/v1/balance") return { livemode: false };
     if (path === `/v1/subscriptions/${native.id}`) return native;
-    if (path === `/v1/invoices/${fundedInvoice.id}`) return fundedInvoice;
-    if (path === `/v1/invoices/${renewal.id}`) return renewal;
+    for (const invoice of invoices.values())
+      if (path === `/v1/invoices/${invoice.id}`) return invoice;
     if (path === "/v1/invoices")
       return {
         object: "list",
-        data: [fundedInvoice],
+        data: paidHistory ? [fundedInvoice] : [],
         has_more: false,
         url: path,
       };
@@ -88,6 +92,7 @@ function fixture() {
   });
   return {
     ...f,
+    invoices,
     native,
     renewal,
     input: {
@@ -134,6 +139,38 @@ test("audit never writes coverage or provider resources and cannot claim activat
   expect(getMockStore().renewalRecoveryRecords.size).toBe(0);
   expect(f.requests.some((request) => request.method !== "GET")).toBe(false);
 });
+test.each(["none", "zero", "paid_history"] as const)(
+  "handles a trial with %s payment evidence without accepting a first-payment grace period",
+  async (evidence) => {
+    const f = fixture(evidence === "paid_history");
+    f.native.status = "trialing";
+    getMockStore().subscriptions.set(renewalSubscription.guildId, {
+      ...renewalSubscription,
+      stripeCustomerId: "cus_renewal",
+      status: "trialing",
+    });
+    f.native.latest_invoice = evidence === "none" ? null : "in_trial";
+    f.native.items.data[0].current_period_start = paidEndsAt;
+    f.native.items.data[0].current_period_end = paidEndsAt + 2592000;
+    f.invoices.set("in_trial", {
+      ...fundedInvoice,
+      id: "in_trial",
+      total: 0,
+      amount_paid: 0,
+      amount_due: 0,
+    });
+    const report = await auditRenewalCoverage(f.input);
+    expect(report.outcomes).toEqual([
+      expect.objectContaining({
+        state: evidence === "paid_history" ? "would_register" : "ignored",
+      }),
+    ]);
+    expect(report.enumeration).toBe("complete");
+    expect(getMockStore().renewalRecoveryRecords.size).toBe(0);
+    expect(f.requests.some((request) => request.method !== "GET")).toBe(false);
+  },
+);
+
 test("apply is idempotent and writes only owned coverage", async () => {
   const f = fixture();
   const report = await auditRenewalCoverage({ ...f.input, apply: true });

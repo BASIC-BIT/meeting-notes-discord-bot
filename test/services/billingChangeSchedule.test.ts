@@ -256,94 +256,169 @@ it("creates from a subscription without unsupported metadata, then marks the own
   ).toHaveLength(0);
 });
 
-it("settles the actual target item when Stripe replaces the old item at renewal", async () => {
-  const scheduled = {
-    ...operation,
-    state: "scheduled" as const,
-    scheduleId: "sub_sched_owned",
-  };
-  const item = {
-    ...sourceSubscription.items.data[0],
-    id: "si_new_target",
-    price: {
-      ...sourceSubscription.items.data[0].price,
-      id: operation.target.priceId ?? "",
-    },
-    current_period_start: operation.source.periodEnd,
-    current_period_end: operation.source.periodEnd + 30 * 86400,
-  };
-  const native = {
-    ...sourceSubscription,
-    id: operation.source.subscriptionId,
-    customer: operation.source.customerId,
-    metadata: {
-      guild_id: operation.guildId,
-      chronote_change_operation: operation.operationId,
-    },
-    items: { ...sourceSubscription.items, data: [item] },
-    latest_invoice: "in_scheduled",
-  };
-  const original = (await import("../fixtures/renewalStripe")).fundedInvoice;
-  const invoice = {
-    ...original,
-    id: "in_scheduled",
-    customer: operation.source.customerId,
-    parent: {
-      type: "subscription_details",
-      subscription_details: {
-        subscription: native.id,
-        metadata: {
-          guild_id: operation.guildId,
-          chronote_change_operation: operation.operationId,
+it.each([
+  "regular",
+  "line_discount",
+  "invoice_discount",
+  "net_total",
+  "pending_item",
+  "exclusive_tax",
+  "account_credit",
+] as const)(
+  "settles only the frozen non-offer renewal price (%s)",
+  async (variant) => {
+    const scheduled = {
+      ...operation,
+      state: "scheduled" as const,
+      scheduleId: "sub_sched_owned",
+    };
+    const item = {
+      ...sourceSubscription.items.data[0],
+      id: "si_new_target",
+      price: {
+        ...sourceSubscription.items.data[0].price,
+        id: operation.target.priceId ?? "",
+      },
+      current_period_start: operation.source.periodEnd,
+      current_period_end: operation.source.periodEnd + 30 * 86400,
+    };
+    const native = {
+      ...sourceSubscription,
+      id: operation.source.subscriptionId,
+      customer: operation.source.customerId,
+      metadata: {
+        guild_id: operation.guildId,
+        chronote_change_operation: operation.operationId,
+      },
+      items: { ...sourceSubscription.items, data: [item] },
+      latest_invoice: "in_scheduled",
+    };
+    const original = (await import("../fixtures/renewalStripe")).fundedInvoice;
+    const invoice = {
+      ...original,
+      id: "in_scheduled",
+      customer: operation.source.customerId,
+      subtotal: operation.target.unitAmount,
+      total: operation.target.unitAmount,
+      amount_due: operation.target.unitAmount,
+      amount_paid: operation.target.unitAmount,
+      parent: {
+        type: "subscription_details",
+        subscription_details: {
+          subscription: native.id,
+          metadata: {
+            guild_id: operation.guildId,
+            chronote_change_operation: operation.operationId,
+          },
         },
       },
-    },
-    lines: {
-      ...original.lines,
-      data: [
-        {
-          ...original.lines.data[0],
-          amount: operation.target.unitAmount,
-          quantity: 1,
-          period: {
-            start: operation.source.periodEnd,
-            end: item.current_period_end,
-          },
-          pricing: { price_details: { price: operation.target.priceId } },
-          parent: {
-            subscription_item_details: {
-              subscription: native.id,
-              subscription_item: item.id,
+      lines: {
+        ...original.lines,
+        data: [
+          {
+            ...original.lines.data[0],
+            invoice: "in_scheduled",
+            amount: operation.target.unitAmount,
+            quantity: 1,
+            period: {
+              start: operation.source.periodEnd,
+              end: item.current_period_end,
+            },
+            pricing: { price_details: { price: operation.target.priceId } },
+            parent: {
+              subscription_item_details: {
+                subscription: native.id,
+                subscription_item: item.id,
+              },
             },
           },
+        ],
+      },
+    };
+    const service = invoice.lines.data[0];
+    if (variant === "line_discount")
+      service.discount_amounts = [{ discount: "di_unexpected", amount: 400 }];
+    if (variant === "invoice_discount") {
+      invoice.discounts = ["di_unexpected"];
+      invoice.total_discount_amounts = [
+        { discount: "di_unexpected", amount: 400 },
+      ];
+    }
+    if (["line_discount", "invoice_discount", "net_total"].includes(variant)) {
+      invoice.total -= 400;
+      invoice.amount_paid -= 400;
+      invoice.amount_due -= 400;
+    }
+    if (variant === "exclusive_tax") {
+      service.taxes = [
+        {
+          amount: 168,
+          tax_behavior: "exclusive",
+          taxable_amount: service.amount,
+          type: "tax_rate_details",
+          tax_rate_details: { tax_rate: "txr_owned" },
         },
-      ],
-    },
-  };
-  const schedule = {
-    id: "sub_sched_owned",
-    status: "active",
-    livemode: false,
-    customer: operation.source.customerId,
-    subscription: native.id,
-    metadata: { chronote_change_operation: operation.operationId },
-  };
-  const f = stripeTransport(({ path }) => {
-    if (path === `/v1/subscriptions/${native.id}`) return native;
-    if (path === "/v1/invoices/in_scheduled") return invoice;
-    if (path.endsWith("/release"))
-      return {
-        ...schedule,
-        status: "released",
-        released_subscription: native.id,
-      };
-    if (path === "/v1/subscription_schedules/sub_sched_owned") return schedule;
-    throw new Error(`Unexpected ${path}`);
-  });
-  expect(
-    await readScheduledChangeSettlement(f.stripe, scheduled),
-  ).toMatchObject({ kind: "paid", invoice: { id: "in_scheduled" } });
-});
+      ];
+      invoice.total += 168;
+      invoice.amount_paid += 168;
+      invoice.amount_due += 168;
+    }
+    if (variant === "account_credit") {
+      invoice.starting_balance = -400;
+      invoice.amount_paid -= 400;
+      invoice.amount_due -= 400;
+    }
+    const pending = {
+      ...service,
+      id: "il_unrelated",
+      amount: 200,
+      parent: {
+        type: "invoice_item_details",
+        invoice_item_details: { invoice_item: "ii_owned", proration: false },
+      },
+    };
+    if (variant === "pending_item") {
+      invoice.subtotal += 200;
+      invoice.total += 200;
+      invoice.amount_paid += 200;
+      invoice.amount_due += 200;
+    }
+    const nativeInvoice =
+      variant === "pending_item"
+        ? { ...invoice, lines: { ...invoice.lines, data: [service, pending] } }
+        : invoice;
+    const schedule = {
+      id: "sub_sched_owned",
+      status: "active",
+      livemode: false,
+      customer: operation.source.customerId,
+      subscription: native.id,
+      metadata: { chronote_change_operation: operation.operationId },
+    };
+    const f = stripeTransport(({ path }) => {
+      if (path === `/v1/subscriptions/${native.id}`) return native;
+      if (path === "/v1/invoices/in_scheduled") return nativeInvoice;
+      if (path === "/v1/invoices")
+        return { object: "list", data: [], has_more: false };
+      if (path.endsWith("/release"))
+        return {
+          ...schedule,
+          status: "released",
+          released_subscription: native.id,
+        };
+      if (path === "/v1/subscription_schedules/sub_sched_owned")
+        return schedule;
+      throw new Error(`Unexpected ${path}`);
+    });
+    expect(
+      await readScheduledChangeSettlement(f.stripe, scheduled),
+    ).toMatchObject({
+      kind: ["line_discount", "invoice_discount", "net_total"].includes(variant)
+        ? "waiting"
+        : "paid",
+    });
+  },
+);
 
 it.each([
   [true, "subscription_cycle", "none"],

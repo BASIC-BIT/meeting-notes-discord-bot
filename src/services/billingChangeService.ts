@@ -46,7 +46,7 @@ import {
 import { reconcileSubscription } from "./subscriptionReconciliation";
 import {
   trackPaidRenewalPeriod,
-  cancelRenewalRecovery,
+  cancelScheduledRenewalRecovery,
 } from "./renewalRecoveryService";
 import { isRenewalCancellationComplete } from "../types/renewalRecovery";
 import { getRenewalRecoveryRepository } from "../repositories/renewalRecoveryRepository";
@@ -294,7 +294,11 @@ export async function cancelBillingChange(
     recovery?.scheduledOperationId === operation.operationId &&
     (recovery.state === "grace" || recovery.state === "canceling")
   ) {
-    await cancelRenewalRecovery({ ...context, now: at(context) });
+    await cancelScheduledRenewalRecovery({
+      ...context,
+      operationId: operation.operationId,
+      now: at(context),
+    });
     const current = await owned(context, operation.operationId);
     if (!current) throw changeUnavailable();
     return present(context, current);

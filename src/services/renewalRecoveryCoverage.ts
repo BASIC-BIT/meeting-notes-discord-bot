@@ -87,6 +87,7 @@ async function inspectGuild(
     saved,
     mode: input.mode,
   });
+  if (!candidate) return { guildId, state: "ignored" };
   if (
     current?.subscriptionId === candidate.subscriptionId &&
     current.mode === candidate.mode &&
