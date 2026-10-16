@@ -148,7 +148,7 @@ export function qualityReport(codes = [0, 0, 0]) {
               mergeBase: "b",
               changedFiles: 1,
               scanned: 1,
-              findings: codes[i] === 1 ? [{ file: "src/a.ts" }] : [],
+              findings: codes[i] === 1 ? [qualityFinding(name)] : [],
             },
       error: codes[i] === 2 ? "scanner unavailable" : null,
     })),
@@ -172,4 +172,32 @@ export function qualityInput(codes = [0, 0, 0]) {
     },
     checkerTestsPassed: true,
   };
+}
+
+function qualityFinding(name) {
+  if (name === "duplication")
+    return {
+      a: "src/a.ts",
+      b: "src/b.ts",
+      as: 1,
+      ae: 12,
+      bs: 1,
+      be: 12,
+      lines: 12,
+      tokens: 60,
+      verdict: "duplicates-existing",
+    };
+  if (name === "complexity")
+    return {
+      file: "src/a.ts",
+      key: "heavy",
+      start: 1,
+      end: 20,
+      cyclomatic: 17,
+      cognitive: 16,
+      baseCyclomatic: null,
+      baseCognitive: null,
+      verdict: "NEW",
+    };
+  return { file: "src/a.ts", lines: 1001, baseLines: 1000, verdict: "GREW" };
 }

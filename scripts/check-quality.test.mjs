@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { evaluatePolicy } from "./quality-policy.mjs";
 import {
   parseScannerResult,
   validateQualityReport,
@@ -13,6 +14,7 @@ import {
   body,
   runGate,
   qualityReport,
+  qualityInput,
 } from "./ratchet-test-helpers.mjs";
 
 test("child reports validate outcomes rather than trusting exit codes", () => {
@@ -35,8 +37,10 @@ test("child reports validate outcomes rather than trusting exit codes", () => {
   ])
     assert.equal(parseScannerResult("duplication", raw).exitCode, 2);
   assert.equal(
-    parseScannerResult("duplication", child({ ...valid, findings: [{}] }, 1))
-      .exitCode,
+    parseScannerResult(
+      "duplication",
+      child(qualityReport([1, 0, 0]).scanners[0].report, 1),
+    ).exitCode,
     1,
   );
 });
@@ -105,3 +109,29 @@ test(
     assert.equal(JSON.parse(result.stdout).scanners.length, 3);
   }),
 );
+
+test("malformed scanner findings cannot receive an exception", () => {
+  const corruptions = [
+    [0, (f) => delete f.as],
+    [0, (f) => (f.be = -1)],
+    [0, (f) => (f.tokens = "50")],
+    [1, (f) => delete f.cognitive],
+    [1, (f) => (f.end = 0)],
+    [1, (f) => (f.baseCyclomatic = 3)],
+    [2, (f) => delete f.lines],
+    [2, (f) => (f.baseLines = f.lines + 1)],
+  ];
+  for (const [index, corrupt] of corruptions) {
+    const input = qualityInput([1, 1, 1]);
+    corrupt(input.report.scanners[index].report.findings[0]);
+    assert.equal(evaluatePolicy(input).exitCode, 2, String(corrupt));
+  }
+  for (let index = 0; index < 3; index++) {
+    const input = qualityInput([1, 1, 1]);
+    input.report.scanners[index].report.findings = [{}];
+    assert.equal(evaluatePolicy(input).exitCode, 2);
+    input.report = qualityReport([1, 1, 1]);
+    input.report.scanners[index].report.scanned = 0;
+    assert.equal(evaluatePolicy(input).exitCode, 2);
+  }
+});

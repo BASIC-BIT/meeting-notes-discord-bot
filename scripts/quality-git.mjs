@@ -274,6 +274,8 @@ export function changedRanges(repo, mergeBase) {
       "-c",
       "core.quotePath=false",
       "diff",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
       "--unified=0",
       "--no-color",
       "--diff-filter=d",

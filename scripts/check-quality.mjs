@@ -13,18 +13,62 @@ export const GATES = [
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
 const isText = (value) => typeof value === "string" && value.length > 0;
 
-function validateGateReport(report, exitCode) {
+const isLine = (value) => isCount(value) && value > 0;
+const isRange = (f, start, end) =>
+  isLine(f[start]) && isLine(f[end]) && f[end] >= f[start];
+
+function validComparison(f, fields) {
+  if (f.verdict === "NEW") return fields.every(([, base]) => f[base] === null);
+  return (
+    f.verdict === "GREW" &&
+    fields.every(([, base]) => isCount(f[base])) &&
+    fields.some(([current, base]) => f[current] > f[base])
+  );
+}
+
+const findingValidators = {
+  duplication: (f) =>
+    isText(f.a) &&
+    isText(f.b) &&
+    isRange(f, "as", "ae") &&
+    isRange(f, "bs", "be") &&
+    isLine(f.lines) &&
+    isLine(f.tokens) &&
+    ["added-twice", "duplicates-existing"].includes(f.verdict),
+  complexity: (f) =>
+    isText(f.file) &&
+    isText(f.key) &&
+    isRange(f, "start", "end") &&
+    isLine(f.cyclomatic) &&
+    isCount(f.cognitive) &&
+    validComparison(f, [
+      ["cyclomatic", "baseCyclomatic"],
+      ["cognitive", "baseCognitive"],
+    ]),
+  "file-size": (f) =>
+    isText(f.file) &&
+    isLine(f.lines) &&
+    validComparison(f, [["lines", "baseLines"]]),
+};
+
+function validateFindings(name, report) {
+  const valid = findingValidators[name];
+  if (
+    !valid ||
+    !Array.isArray(report.findings) ||
+    !report.findings.every((f) => f && valid(f))
+  )
+    throw new Error("Invalid scanner findings");
+  if (report.findings.length && (!report.changedFiles || !report.scanned))
+    throw new Error("Findings contradict scanner counts");
+}
+
+function validateGateReport(name, report, exitCode) {
   if (!report || !["base", "mergeBase"].every((key) => isText(report[key])))
     throw new Error("Missing scanner baseline metadata");
   if (!["changedFiles", "scanned"].every((key) => isCount(report[key])))
     throw new Error("Invalid scanner counts");
-  if (
-    !Array.isArray(report.findings) ||
-    !report.findings.every(
-      (f) => f && typeof f === "object" && !Array.isArray(f),
-    )
-  )
-    throw new Error("Invalid scanner findings");
+  validateFindings(name, report);
   if (Boolean(report.findings.length) !== Boolean(exitCode))
     throw new Error("Scanner findings contradict its exit code");
   if (report.preExisting !== undefined && !isCount(report.preExisting))
@@ -41,7 +85,7 @@ export function parseScannerResult(name, raw) {
     );
   try {
     const report = JSON.parse(raw.stdout);
-    validateGateReport(report, raw.status);
+    validateGateReport(name, report, raw.status);
     return { name, exitCode: raw.status, report, error: null };
   } catch (error) {
     return failed(error.message);
@@ -71,7 +115,7 @@ export function validateQualityReport(report) {
       throw new Error("Invalid scanner exit");
     if (scan.exitCode === 2) {
       if (!isText(scan.error)) throw new Error("Missing operational error");
-    } else validateGateReport(scan.report, scan.exitCode);
+    } else validateGateReport(scan.name, scan.report, scan.exitCode);
   }
   const baselines = report.scanners
     .filter((s) => s.exitCode !== 2)

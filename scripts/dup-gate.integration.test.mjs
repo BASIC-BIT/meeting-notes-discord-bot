@@ -603,3 +603,23 @@ test(
     }
   }),
 );
+
+for (const mode of ["tracked ignored source", "source above one MiB"]) {
+  test(
+    mode + " retains duplication coverage",
+    withRepo((dir) => {
+      if (mode === "tracked ignored source") {
+        writeFile(dir, ".gitignore", "src/original.js\n");
+        write(dir, "original.js", body("alpha"));
+        git(dir, "add", "-f", "src/original.js");
+      } else write(dir, "original.js", body("alpha"));
+      commit(dir, "eligible source");
+      const padding =
+        mode === "source above one MiB"
+          ? "/*" + "x".repeat(1024 * 1024) + "*/\n"
+          : "";
+      write(dir, "copy.js", padding + body("beta"));
+      assertFlags(dir, /DUPLICATES EXISTING/, "--base", "HEAD");
+    }),
+  );
+}
