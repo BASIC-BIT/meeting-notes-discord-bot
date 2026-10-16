@@ -1,4 +1,10 @@
 /** @jest-environment node */
+import {
+  DynamoDBClient,
+  TransactWriteItemsCommand,
+} from "@aws-sdk/client-dynamodb";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
+import { createDynamoRecoveryRepository } from "../../src/repositories/meetingRecoveryRepository";
 import { createMockDeploymentControlRepository } from "../../src/repositories/deploymentControlRepository";
 import {
   control,
@@ -169,3 +175,132 @@ test("durable cursor resumes across worker repositories and wraps for fair disco
     page.keys,
   );
 });
+
+test("stale recovery claims cannot overwrite notes timing", async () => {
+  const f = await fixture();
+  const claim = (await f.repository.claimRecordingRecovery({
+    history: structuredClone(f.row),
+    lease: undefined,
+    context,
+    attemptId: "timing",
+  }))!;
+  const stale = structuredClone(claim);
+  const timing = {
+    kind: "complete",
+    notesVersion: 1,
+    path: "recovery",
+    firstAcknowledgedAt: "2026-01-01T00:02:00Z",
+    completeAcknowledgedAt: "2026-01-01T00:02:00Z",
+  } as const;
+  const updated = await f.repository.updateRecordingRecovery(
+    claim,
+    { notesDeliveryTiming: timing },
+    context.now,
+  );
+  expect(updated?.notesDeliveryTiming).toEqual(timing);
+  expect(
+    await f.repository.updateRecordingRecovery(
+      stale,
+      {
+        notesDeliveryTiming: {
+          ...timing,
+          firstAcknowledgedAt: "2026-01-01T00:03:00Z",
+          completeAcknowledgedAt: "2026-01-01T00:03:00Z",
+        },
+      },
+      context.now,
+    ),
+  ).toBeUndefined();
+  claim.history = updated!;
+  await expect(
+    f.repository.updateRecordingRecovery(
+      claim,
+      {
+        notesDeliveryTiming: {
+          ...timing,
+          firstAcknowledgedAt: "2026-01-01T00:03:00Z",
+          completeAcknowledgedAt: "2026-01-01T00:03:00Z",
+        },
+      },
+      context.now,
+    ),
+  ).rejects.toThrow("cannot be replaced");
+  await expect(
+    f.repository.updateRecordingRecovery(
+      claim,
+      {
+        notesDeliveryTiming: {
+          kind: "first",
+          notesVersion: 1,
+          path: "recovery",
+          firstAcknowledgedAt: timing.firstAcknowledgedAt,
+        },
+      },
+      context.now,
+    ),
+  ).rejects.toThrow("cannot be replaced");
+  expect(f.row.notesDeliveryTiming).toEqual(timing);
+});
+
+test.each(["absent", "malformed"] as const)(
+  "Dynamo recovery snapshots retain %s prior optional timing",
+  async (kind) => {
+    const f = await fixture();
+    const claim = (await f.repository.claimRecordingRecovery({
+      history: structuredClone(f.row),
+      lease: undefined,
+      context,
+      attemptId: "snapshot",
+    }))!;
+    if (kind === "malformed")
+      Object.assign(claim.history, {
+        notesDeliveryTiming: { kind: "bad", firstAcknowledgedAt: "bad" },
+      });
+    const client = new DynamoDBClient({
+      region: "us-east-1",
+      credentials: { accessKeyId: "fixture", secretAccessKey: "fixture" },
+    });
+    const send = jest.spyOn(client, "send").mockResolvedValue({});
+    const repository = createDynamoRecoveryRepository(client, {
+      deploymentControl: "control",
+      meetingHistory: "history",
+      activeMeeting: "lease",
+    });
+    const timing = {
+      kind: "complete",
+      notesVersion: 1,
+      path: "recovery",
+      firstAcknowledgedAt: "2026-01-01T00:02:00Z",
+      completeAcknowledgedAt: "2026-01-01T00:02:00Z",
+    } as const;
+    try {
+      await repository.updateRecordingRecovery(
+        claim,
+        { notesDeliveryTiming: timing },
+        context.now,
+      );
+      const command = send.mock.calls[0][0];
+      if (!(command instanceof TransactWriteItemsCommand))
+        throw new Error("Expected recovery transaction");
+      const update = command.input.TransactItems?.[1].Update;
+      const field = Object.entries(update?.ExpressionAttributeNames ?? {}).find(
+        ([key, name]) => key.startsWith("#o") && name === "notesDeliveryTiming",
+      )?.[0];
+      expect(field).toBeDefined();
+      if (!field) throw new Error("Timing missing from observed fields");
+      if (kind === "absent")
+        expect(update?.ConditionExpression).toContain(
+          "attribute_not_exists(" + field + ")",
+        );
+      else {
+        const value = field.replace("#", ":");
+        expect(update?.ConditionExpression).toContain(field + " = " + value);
+        expect(
+          unmarshall(update?.ExpressionAttributeValues ?? {})[value],
+        ).toEqual(claim.history.notesDeliveryTiming);
+      }
+    } finally {
+      client.destroy();
+    }
+  },
+);

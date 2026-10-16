@@ -30,6 +30,7 @@ function scanWorker(
     recover: recoverMeeting,
     now,
     content: {
+      nowMs: Date.now,
       autoExport: async () => "skipped",
       reader: f.reader,
       upload: f.upload,
@@ -355,6 +356,7 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
     recover: recoverMeeting,
     now: () => Math.floor(Date.now() / 1000),
     content: {
+      nowMs: Date.now,
       autoExport: async () => "skipped",
       reader: f.reader,
       upload: f.upload,
@@ -476,6 +478,7 @@ test.each(["retained", "active"] as const)(
         recover: recoverMeeting,
         now: () => Math.floor(Date.now() / 1000),
         content: {
+          nowMs: Date.now,
           autoExport: async () => "skipped",
           reader: f.reader,
           upload: f.upload,
