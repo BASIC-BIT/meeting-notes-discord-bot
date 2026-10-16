@@ -87,6 +87,19 @@ export const renewalRecoverySchema = z
       .strict(),
     bound
       .extend({
+        state: z.literal("superseded"),
+        replacementPaid: paid,
+        receipts: renewalRecoveryReceiptsSchema,
+        projection: z.discriminatedUnion("state", [
+          z
+            .object({ state: z.literal("pending"), nextCheckAt: seconds })
+            .strict(),
+          z.object({ state: z.literal("complete") }).strict(),
+        ]),
+      })
+      .strict(),
+    bound
+      .extend({
         state: z.literal("canceled"),
         reason: z.enum(["payer", "expired"]),
         receipts: renewalRecoveryReceiptsSchema,
@@ -94,6 +107,17 @@ export const renewalRecoverySchema = z
       .strict(),
   ])
   .superRefine((record, context) => {
+    if (
+      record.state === "superseded" &&
+      (!record.receipts.collectionRestored ||
+        record.replacementPaid.invoiceId === record.invoice.id ||
+        record.replacementPaid.periodStart < record.invoice.periodStart)
+    )
+      context.addIssue({
+        code: "custom",
+        message:
+          "Superseded recovery requires verified later paid coverage and collection restoration",
+      });
     if (
       record.state === "canceled" &&
       !(
@@ -152,7 +176,8 @@ export const isRenewalRecoveryBlocking = (record: RenewalRecovery) =>
   record.enforcementAccepted &&
   (record.state === "grace" ||
     record.state === "canceling" ||
-    (record.state === "paid" && record.projection.state === "pending"));
+    ((record.state === "paid" || record.state === "superseded") &&
+      record.projection.state === "pending"));
 export function isRenewalCancellationComplete(
   record: RenewalRecovery | undefined,
 ): record is Extract<RenewalRecovery, { state: "canceling" | "canceled" }> {
@@ -169,7 +194,8 @@ export const renewalRecoveryNextCheck = (
 ): number | undefined =>
   "nextCheckAt" in record
     ? record.nextCheckAt
-    : record.state === "paid" && record.projection.state === "pending"
+    : (record.state === "paid" || record.state === "superseded") &&
+        record.projection.state === "pending"
       ? record.projection.nextCheckAt
       : undefined;
 const transitions: Record<
@@ -179,7 +205,8 @@ const transitions: Record<
   watching: ["watching", "grace", "paid", "ended"],
   ended: [],
   grace: ["grace", "canceling", "paid"],
-  canceling: ["canceling", "paid", "canceled"],
+  canceling: ["canceling", "paid", "canceled", "superseded"],
+  superseded: ["superseded"],
   paid: ["paid"],
   canceled: [],
 };
@@ -194,13 +221,7 @@ export function assertRenewalRecoveryTransition(
     !transitions[previous.state].includes(next.state)
   )
     throw new Error("Invalid renewal recovery transition");
-  if (
-    previous.state === "paid" &&
-    (previous.projection.state !== "pending" ||
-      next.state !== "paid" ||
-      next.projection.state !== "complete")
-  )
-    throw new Error("Paid renewal requires projection reconciliation");
+  assertProjectionTransition(next, previous);
   for (const field of [
     "guildId",
     "subscriptionId",
@@ -222,6 +243,24 @@ export function assertRenewalRecoveryTransition(
     throw new Error("Accepted renewal recovery cannot be disabled");
   if (previous.state === "canceling") assertRecoveryReceipts(next, previous);
   assertBoundRenewalRecovery(next, previous);
+}
+function assertProjectionTransition(
+  next: RenewalRecovery,
+  previous: RenewalRecovery,
+): void {
+  if (
+    (previous.state === "paid" || previous.state === "superseded") &&
+    (previous.projection.state !== "pending" ||
+      next.state !== previous.state ||
+      next.projection.state !== "complete")
+  )
+    throw new Error("Paid renewal requires projection reconciliation");
+  if (
+    previous.state === "superseded" &&
+    next.state === "superseded" &&
+    !isDeepStrictEqual(previous.replacementPaid, next.replacementPaid)
+  )
+    throw new Error("Replacement paid evidence is immutable");
 }
 function canReplaceUnboundWatch(
   next: RenewalRecovery,
@@ -262,17 +301,36 @@ function assertRecoveryReceipts(
       throw new Error("Compensated renewal cannot become paid");
     return;
   }
-  if (next.state !== "canceling" && next.state !== "canceled")
+  if (
+    next.state !== "canceling" &&
+    next.state !== "canceled" &&
+    next.state !== "superseded"
+  )
     throw new Error("Invalid recovery receipt transition");
   const before = previous.receipts;
   const after = next.receipts;
   assertNativeReceipts(before, after);
+  assertCollectionReceipts(before, after);
+  if (before.refundIds.some((id) => !after.refundIds.includes(id)))
+    throw new Error("Refund receipts cannot be removed");
+  if (next.state === "canceled" && !isRenewalCancellationComplete(next))
+    throw new Error("Renewal cancellation requires complete native proof");
+}
+function assertCollectionReceipts(
+  before: RenewalRecoveryReceipts,
+  after: RenewalRecoveryReceipts,
+): void {
   if (
-    before.unrelatedInvoices.length &&
-    !isDeepStrictEqual(before.unrelatedInvoices, after.unrelatedInvoices)
+    before.unrelatedInvoices.some(
+      (invoice) =>
+        !after.unrelatedInvoices.some((next) =>
+          isDeepStrictEqual(invoice, next),
+        ),
+    )
   )
     throw new Error("Collection snapshot is immutable");
   if (
+    (before.canceled || before.collectionRestored) &&
     before.collectionToRestore !== null &&
     !isDeepStrictEqual(before.collectionToRestore, after.collectionToRestore)
   )
@@ -286,10 +344,6 @@ function assertRecoveryReceipts(
     )
   )
     throw new Error("Collection restoration must match its original snapshot");
-  if (before.refundIds.some((id) => !after.refundIds.includes(id)))
-    throw new Error("Refund receipts cannot be removed");
-  if (next.state === "canceled" && !isRenewalCancellationComplete(next))
-    throw new Error("Renewal cancellation requires complete native proof");
 }
 function assertNativeReceipts(
   before: RenewalRecoveryReceipts,

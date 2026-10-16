@@ -9,7 +9,7 @@ import type Stripe from "stripe";
 import type { StripeClient, StripeSubscription } from "../types/stripe";
 import type { BillingChangeOperation } from "../types/billingChange";
 import {
-  isTerminalUnappliedChange,
+  isUnappliedChangeSourceEnded,
   changeSourceFingerprint,
   changeServiceFingerprint,
   stripeId,
@@ -213,6 +213,7 @@ export async function canceledBeforeSchedule(
     BillingChangeOperation,
     { state: "accepted" | "canceling" }
   >,
+  now: number,
 ): Promise<boolean> {
   const boundSchedule =
     operation.state === "accepted"
@@ -223,7 +224,7 @@ export async function canceledBeforeSchedule(
     operation.source.subscriptionId,
   );
   return (
-    isTerminalUnappliedChange(subscription, operation) &&
+    isUnappliedChangeSourceEnded(subscription, operation, now) &&
     !subscription.schedule &&
     subscription.metadata.chronote_scheduled_change !== operation.operationId
   );
@@ -243,15 +244,7 @@ export async function cancelChangeSchedule(
     const subscription = await stripe.subscriptions.retrieve(
       operation.source.subscriptionId,
     );
-    return (
-      subscription.status === "canceled" &&
-      subscription.id === recovery.subscriptionId &&
-      stripeId(subscription.customer) === recovery.customerId &&
-      subscription.metadata.guild_id === operation.guildId &&
-      subscription.livemode === (recovery.mode === "live") &&
-      subscription.metadata.chronote_renewal_recovery ===
-        renewalRecoveryKey(recovery)
-    );
+    return completedRecoveryOwnsCancellation(subscription, recovery);
   }
   if (scheduleId) {
     const released = await releaseOwnedSchedule(stripe, operation, scheduleId);
@@ -275,6 +268,24 @@ export async function cancelChangeSchedule(
   if (subscription.metadata.chronote_scheduled_change !== operation.operationId)
     return false;
   return restoreOriginalCancellation(stripe, operation, subscription, true);
+}
+function completedRecoveryOwnsCancellation(
+  subscription: StripeSubscription,
+  recovery: Extract<
+    import("../types/renewalRecovery").RenewalRecovery,
+    { state: "canceling" | "canceled" }
+  >,
+): boolean {
+  return (
+    subscription.status === "canceled" &&
+    subscription.id === recovery.subscriptionId &&
+    stripeId(subscription.customer) === recovery.customerId &&
+    subscription.metadata.guild_id === recovery.guildId &&
+    subscription.livemode === (recovery.mode === "live") &&
+    (!subscription.metadata.chronote_renewal_recovery ||
+      subscription.metadata.chronote_renewal_recovery ===
+        renewalRecoveryKey(recovery))
+  );
 }
 async function restoreOriginalCancellation(
   stripe: StripeClient,
@@ -382,6 +393,25 @@ async function firstScheduledInvoice(
   operation: Scheduled,
   subscription: StripeSubscription,
 ) {
+  const recovery = await getRenewalRecoveryRepository().getCurrent(
+    operation.guildId,
+  );
+  if (
+    recovery?.state === "superseded" &&
+    recovery.scheduledOperationId === operation.operationId
+  ) {
+    const invoice = await stripe.invoices.retrieve(
+      recovery.replacementPaid.invoiceId,
+      { expand: ["discounts.source.coupon"] },
+    );
+    return isScheduledInvoice(
+      invoice,
+      operation,
+      recovery.replacementPaid.periodStart,
+    )
+      ? invoice
+      : null;
+  }
   const latest = stripeId(subscription.latest_invoice);
   if (latest) {
     const invoice = await stripe.invoices.retrieve(latest, {
@@ -406,6 +436,7 @@ async function firstScheduledInvoice(
 function isScheduledInvoice(
   invoice: import("../types/stripe").StripeInvoice,
   operation: Scheduled,
+  periodStart = operation.source.periodEnd,
 ) {
   if (operation.target.offer) {
     const reason = invoice.billing_reason;
@@ -440,7 +471,7 @@ function isScheduledInvoice(
         line.pricing?.price_details?.price === operation.target.priceId &&
         line.quantity === 1 &&
         line.amount === operation.target.unitAmount &&
-        line.period.start === operation.source.periodEnd,
+        line.period.start === periodStart,
     )
   );
 }

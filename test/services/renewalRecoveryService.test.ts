@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { resolveRenewalAccess } from "../../src/services/renewalRecoveryAccess";
 import { reconcileSubscription } from "../../src/services/subscriptionReconciliation";
 import { getRenewalRecoveryView } from "../../src/services/renewalRecoveryView";
 import { offerUsageKey, offerUsageSchema } from "../../src/types/offerUsage";
@@ -142,7 +143,11 @@ function fixture() {
     if (request.path === "/v1/invoices")
       return {
         object: "list",
-        data: [renewal],
+        data: [...invoices.values()].filter(
+          (invoice) =>
+            !request.fields.get("status") ||
+            invoice.status === request.fields.get("status"),
+        ),
         has_more: false,
         url: request.path,
       };
@@ -959,3 +964,214 @@ test("retries a concurrent registration using fresh ownership and paid proof", a
     spy.mockRestore();
   }
 });
+
+test.each(["paid", "open"] as const)(
+  "catches up an old watch to the latest verified paid basis before the current %s renewal",
+  async (status) => {
+    const f = fixture();
+    await f.track();
+    f.fail();
+    f.renewal.status = "paid";
+    f.renewal.amount_remaining = 0;
+    f.renewal.amount_paid = 1000;
+    const start = f.renewal.lines.data[0].period.end;
+    const current = {
+      ...f.renewal,
+      id: "in_second_renewal",
+      status,
+      amount_paid: status === "paid" ? 1000 : 0,
+      amount_remaining: status === "paid" ? 0 : 1000,
+      created: start,
+      status_transitions: {
+        ...f.renewal.status_transitions,
+        finalized_at: start,
+      },
+      lines: {
+        ...f.renewal.lines,
+        data: f.renewal.lines.data.map((line) => ({
+          ...line,
+          id: "il_second",
+          invoice: "in_second_renewal",
+          period: { start, end: start + 2592000 },
+        })),
+      },
+    };
+    f.invoices.set(current.id, current);
+    f.subscription.latest_invoice = current.id;
+    f.subscription.status = status === "paid" ? "active" : "past_due";
+    f.subscription.items.data[0].current_period_start = start;
+    f.subscription.items.data[0].current_period_end = start + 2592000;
+    expect(await f.refresh(start + 10)).toMatchObject(
+      status === "paid"
+        ? {
+            state: "watching",
+            paid: { invoiceId: current.id, periodEnd: start + 2592000 },
+          }
+        : {
+            state: "grace",
+            paid: { invoiceId: f.renewal.id, periodEnd: start },
+            endsAt: start + 172800,
+          },
+    );
+    expect(
+      (
+        await getRenewalRecoveryRepository().listDue({
+          mode: "test",
+          now: start + 172800,
+          limit: 100,
+        })
+      ).keys,
+    ).toHaveLength(status === "paid" ? 0 : 1);
+  },
+);
+
+test("finishes old compensation while preserving newer paid service and replacing the due watch", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const original = await f.refresh();
+  if (!original) throw new Error("Missing recovery");
+  const item = f.subscription.items.data[0];
+  const start = item.current_period_end;
+  const current = {
+    ...fundedInvoice,
+    id: "in_paid_after_recovery",
+    created: start,
+    lines: {
+      ...fundedInvoice.lines,
+      data: fundedInvoice.lines.data.map((line) => ({
+        ...line,
+        invoice: "in_paid_after_recovery",
+        period: { start, end: start + 2592000 },
+      })),
+    },
+  };
+  f.invoices.set(current.id, current);
+  f.subscription.status = "active";
+  f.subscription.latest_invoice = current.id;
+  item.current_period_start = start;
+  item.current_period_end = start + 2592000;
+  const paid = {
+    invoiceId: current.id,
+    priceId: item.price.id,
+    tier: "basic" as const,
+    interval: "month" as const,
+    periodStart: start,
+    periodEnd: item.current_period_end,
+  };
+  const cancel = jest
+    .spyOn(renewalProvider, "cancelUnpaidRenewal")
+    .mockImplementation(async (input) => {
+      if (input.recovery.state !== "canceling")
+        throw new Error("Expected cancellation");
+      await input.onReceipt({
+        ...input.recovery,
+        revision: "native-receipt",
+        receipts: {
+          ...input.recovery.receipts,
+          creditNoteId: "cn_native",
+          canceled: false,
+          collectionRestored: true,
+          collectionToRestore: [],
+        },
+      });
+      return { kind: "superseded", paid };
+    });
+  try {
+    await cancelRenewalRecovery({
+      stripe: f.stripe,
+      guildId: renewalSubscription.guildId,
+      payerId: f.subscription.metadata.discord_id,
+      now: start + 10,
+    });
+    const repo = getRenewalRecoveryRepository();
+    expect(await repo.get(renewalRecoveryKey(original))).toMatchObject({
+      state: "superseded",
+      projection: { state: "complete" },
+      replacementPaid: paid,
+      receipts: { canceled: false, creditNoteId: "cn_native" },
+    });
+    expect(await repo.getCurrent(original.guildId)).toMatchObject({
+      state: "watching",
+      paid,
+    });
+    const saved = getMockStore().subscriptions.get(original.guildId);
+    expect(saved?.status).toBe("active");
+    expect(await resolveRenewalAccess(saved, start + 10)).toMatchObject({
+      tier: "basic",
+      expiresAt: paid.periodEnd * 1000,
+    });
+    await reconcileRenewalRecovery({
+      stripe: f.stripe,
+      guildId: original.guildId,
+      now: start + 20,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  } finally {
+    cancel.mockRestore();
+  }
+});
+
+test.each(["paid", "open"] as const)(
+  "repairs a paid projection after the provider has advanced to another %s period",
+  async (status) => {
+    const f = fixture();
+    await f.track();
+    f.fail();
+    await f.refresh();
+    f.renewal.status = "paid";
+    f.renewal.amount_paid = 1000;
+    f.renewal.amount_remaining = 0;
+    expect(await f.refresh()).toMatchObject({
+      state: "paid",
+      projection: { state: "pending" },
+    });
+    const item = f.subscription.items.data[0];
+    const start = item.current_period_end;
+    const current = {
+      ...f.renewal,
+      id: "in_later_projection",
+      created: start,
+      status,
+      amount_paid: status === "paid" ? 1000 : 0,
+      amount_remaining: status === "paid" ? 0 : 1000,
+      status_transitions: {
+        ...f.renewal.status_transitions,
+        finalized_at: start,
+      },
+      lines: {
+        ...f.renewal.lines,
+        data: f.renewal.lines.data.map((line) => ({
+          ...line,
+          invoice: "in_later_projection",
+          period: { start, end: start + 2592000 },
+        })),
+      },
+    };
+    f.invoices.set(current.id, current);
+    f.subscription.latest_invoice = current.id;
+    f.subscription.status = status === "paid" ? "active" : "past_due";
+    item.current_period_start = start;
+    item.current_period_end = start + 2592000;
+    await expect(
+      reconcileRenewalRecovery({
+        stripe: f.stripe,
+        guildId: renewalSubscription.guildId,
+        now: start + 10,
+      }),
+    ).resolves.toBeUndefined();
+    expect(
+      await getRenewalRecoveryRepository().getCurrent(
+        renewalSubscription.guildId,
+      ),
+    ).toMatchObject(
+      status === "paid"
+        ? { state: "watching", paid: { invoiceId: current.id } }
+        : {
+            state: "grace",
+            paid: { invoiceId: f.renewal.id },
+            endsAt: start + 172800,
+          },
+    );
+  },
+);

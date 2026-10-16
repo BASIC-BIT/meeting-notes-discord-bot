@@ -28,7 +28,11 @@ async function historicalPaidBasis(
       limit: 100,
     }),
   );
-  for (const invoice of invoices) {
+  for (const invoice of invoices.toSorted(
+    (a, b) =>
+      (historicalLine(b, subscription)?.period.end ?? 0) -
+      (historicalLine(a, subscription)?.period.end ?? 0),
+  )) {
     const line = historicalLine(invoice, subscription);
     if (!line) continue;
     const priceId = stripeId(line.pricing?.price_details?.price);
@@ -97,8 +101,9 @@ export async function readRenewalCoverageCandidate(input: {
   )
     throw changeUnavailable();
   const invoiceId = stripeId(subscription.latest_invoice);
+  const latest = invoiceId ? await stripe.invoices.retrieve(invoiceId) : null;
   const paid =
-    subscription.status === "active" && invoiceId
+    latest?.status === "paid" && invoiceId
       ? await readRenewalPaidBasis(
           stripe,
           subscription,

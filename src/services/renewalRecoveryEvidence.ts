@@ -32,7 +32,7 @@ export async function readRenewalPaidBasis(
   subscription: StripeSubscription,
   guildId: string,
   invoiceId: string,
-) {
+): Promise<RenewalRecovery["paid"]> {
   const item = subscription.items.data[0];
   if (
     subscription.items.has_more ||
@@ -61,7 +61,7 @@ export async function readRenewalPaidBasis(
     invoiceId: invoice.id,
     priceId: item.price.id,
     tier,
-    interval,
+    interval: interval === "year" ? "year" : "month",
     periodStart: item.current_period_start,
     periodEnd: item.current_period_end,
   };
@@ -85,9 +85,8 @@ function serviceLine(
     lines.length !== 1 ||
     subscription.items.has_more ||
     subscription.items.data.length !== 1 ||
-    stripeId(lines[0].pricing?.price_details?.price) !== item.price.id ||
-    lines[0].period.end !== item.current_period_end ||
-    lines[0].period.start !== item.current_period_start ||
+    lines[0].period.end > item.current_period_end ||
+    lines[0].period.start > item.current_period_start ||
     lines[0].period.end <= lines[0].period.start
   )
     throw changeUnavailable();

@@ -111,6 +111,9 @@ function fixture(cash = 0, post = 0, tax = 0, extra = 0) {
     receipts: { creditNoteId: null, refundIds: [], canceled: false },
   });
   const notes: object[] = [];
+  let otherVisible = true;
+  let appearOnCancellation = false;
+  const additionalInvoices = new Map<string, typeof fundedInvoice>();
   let loseNoteAck = false;
   let failCancel = false;
   let loseCancelAck = false;
@@ -141,6 +144,7 @@ function fixture(cash = 0, post = 0, tax = 0, extra = 0) {
     if (path === `/v1/subscriptions/${native.id}` && method === "DELETE") {
       if (failCancel) throw new Error("Provider cancellation unavailable");
       native.status = "canceled";
+      if (appearOnCancellation) otherVisible = true;
       other.auto_advance = false;
       if (loseCancelAck) {
         loseCancelAck = false;
@@ -150,18 +154,26 @@ function fixture(cash = 0, post = 0, tax = 0, extra = 0) {
     }
     return undefined;
   }
+  function readAdditionalInvoice(path: string, method: string) {
+    if (method !== "GET") return undefined;
+    return additionalInvoices.get(path.split("/").at(-1) ?? "");
+  }
   function serviceRequest({ path, method, fields }: Request): unknown {
     if (path === "/v1/invoices")
       return {
         object: "list",
-        data: [invoice, other],
+        data: otherVisible ? [invoice, other] : [invoice],
         has_more: false,
         url: path,
       };
+    const additional = readAdditionalInvoice(path, method);
+    if (additional) return additional;
     if (path === `/v1/invoices/${invoice.id}` && method === "GET")
       return invoice;
     if (path === `/v1/invoices/${other.id}` && method === "GET") return other;
     if (path.startsWith("/v1/invoices/") && method === "POST") {
+      if (path.endsWith(invoice.id) && invoice.status === "uncollectible")
+        throw new Error("Forgiven invoices cannot be updated");
       return updateInvoice(path.endsWith(other.id) ? other : invoice, fields);
     }
     return undefined;
@@ -315,6 +327,13 @@ function fixture(cash = 0, post = 0, tax = 0, extra = 0) {
   return {
     ...transport,
     native,
+    additionalInvoices,
+    showOther(value: boolean) {
+      otherVisible = value;
+    },
+    appearOnCancellation() {
+      appearOnCancellation = true;
+    },
     invoice,
     other,
     notes,
@@ -561,3 +580,102 @@ test("native restoration marker survives a lost acknowledgment and preserves a l
   expect(await f.run()).toBe("canceled");
   expect(f.other.auto_advance).toBe(false);
 });
+
+test("preserves an unrelated invoice created between the initial snapshot and cancellation retry", async () => {
+  const f = fixture();
+  f.showOther(false);
+  await expect(f.run(2)).rejects.toThrow("Receipt persistence unavailable");
+  f.showOther(true);
+  expect(f.other.auto_advance).toBe(true);
+  expect(await f.run()).toBe("canceled");
+  expect(f.other.auto_advance).toBe(true);
+});
+test("cleans an uncollectible renewal without trying to update the forgiven invoice", async () => {
+  const f = fixture();
+  f.invoice.status = "uncollectible";
+  f.invoice.auto_advance = false;
+  expect(await f.run()).toBe("canceled");
+  expect(f.native.status).toBe("canceled");
+  expect(
+    f.requests.some(
+      (request) =>
+        request.path === `/v1/invoices/${f.invoice.id}` &&
+        request.method === "POST",
+    ),
+  ).toBe(false);
+});
+test("preserves a newer verified paid period when old compensation is retried", async () => {
+  const f = fixture();
+  await expect(f.run(2)).rejects.toThrow("Receipt persistence unavailable");
+  const item = f.native.items.data[0];
+  const start = item.current_period_end;
+  f.native.status = "active";
+  f.native.latest_invoice = "in_new_paid_period";
+  item.current_period_start = start;
+  item.current_period_end = start + 2592000;
+  const current = {
+    ...fundedInvoice,
+    id: f.native.latest_invoice,
+    lines: {
+      ...fundedInvoice.lines,
+      data: fundedInvoice.lines.data.map((line) => ({
+        ...line,
+        invoice: "in_new_paid_period",
+        period: { start, end: item.current_period_end },
+      })),
+    },
+  };
+  f.additionalInvoices.set(current.id, current);
+  expect(await f.run()).toMatchObject({
+    kind: "superseded",
+    paid: { invoiceId: current.id, periodEnd: item.current_period_end },
+  });
+  expect(f.native.status).toBe("active");
+  expect(
+    f.requests.some((request) => request.path === `/v1/invoices/${current.id}`),
+  ).toBe(true);
+  expect(f.requests.some((request) => request.method === "DELETE")).toBe(false);
+});
+
+test("retains recovery when cancellation reveals an unjournaled invoice with unknown collection intent", async () => {
+  const f = fixture();
+  f.showOther(false);
+  f.appearOnCancellation();
+  await expect(f.run()).rejects.toThrow();
+  expect(f.other.auto_advance).toBe(false);
+  await expect(f.run()).rejects.toThrow();
+  expect(f.recovery).toMatchObject({
+    state: "canceling",
+    receipts: { collectionRestored: false },
+  });
+  expect(
+    f.requests.some(
+      (request) =>
+        request.path === `/v1/invoices/${f.other.id}` &&
+        request.method === "POST",
+    ),
+  ).toBe(false);
+});
+
+test.each([null, "sub_sched_already_canceled"])(
+  "finishes a verified portal cancellation with schedule %s while preserving its current collection settings",
+  async (schedule) => {
+    const f = fixture();
+    f.native.status = "canceled";
+    f.native.schedule = schedule;
+    f.invoice.auto_advance = false;
+    f.other.auto_advance = false;
+    expect(await f.run()).toBe("canceled");
+    expect(f.recovery).toMatchObject({
+      receipts: { canceled: true, collectionRestored: true },
+    });
+    expect(f.other.auto_advance).toBe(false);
+    expect(
+      f.requests.filter(
+        (r) => r.path.includes("subscriptions") && r.method !== "GET",
+      ),
+    ).toHaveLength(0);
+    expect(await f.run()).toBe("canceled");
+    expect(f.notes).toHaveLength(1);
+  },
+);

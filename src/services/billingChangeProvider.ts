@@ -21,17 +21,43 @@ import { BillingActionError } from "./billingActionError";
 
 export const stripeId = (value: string | { id: string } | null | undefined) =>
   typeof value === "string" ? value : value?.id;
-export function isTerminalUnappliedChange(
+export function isUnappliedChangeSourceEnded(
+  subscription: StripeSubscription,
+  operation: BillingChangeOperation,
+  now: number,
+): boolean {
+  if (
+    subscription.id !== operation.source.subscriptionId ||
+    stripeId(subscription.customer) !== operation.source.customerId ||
+    subscription.metadata.guild_id !== operation.guildId ||
+    subscription.livemode !== (operation.mode === "live") ||
+    subscription.metadata.chronote_change_operation === operation.operationId
+  )
+    return false;
+  if (["canceled", "incomplete_expired"].includes(subscription.status))
+    return true;
+  return (
+    now >= operation.source.periodEnd &&
+    expiredSourceStillUnapplied(subscription, operation)
+  );
+}
+function expiredSourceStillUnapplied(
   subscription: StripeSubscription,
   operation: BillingChangeOperation,
 ): boolean {
+  const item = subscription.items.data[0];
   return (
-    ["canceled", "incomplete_expired"].includes(subscription.status) &&
-    subscription.id === operation.source.subscriptionId &&
-    stripeId(subscription.customer) === operation.source.customerId &&
-    subscription.metadata.guild_id === operation.guildId &&
-    subscription.livemode === (operation.mode === "live") &&
-    subscription.metadata.chronote_change_operation !== operation.operationId
+    !subscription.schedule &&
+    !subscription.pending_update &&
+    subscription.metadata.chronote_scheduled_change !== operation.operationId &&
+    !subscription.items.has_more &&
+    subscription.items.data.length === 1 &&
+    item.id === operation.source.itemId &&
+    item.price.id === operation.source.priceId &&
+    item.quantity === 1 &&
+    ((item.current_period_start === operation.source.periodStart &&
+      item.current_period_end === operation.source.periodEnd) ||
+      item.current_period_start >= operation.source.periodEnd)
   );
 }
 export const changePending = () =>

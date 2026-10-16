@@ -419,6 +419,90 @@ it.each(["canceled", "incomplete_expired"] as const)(
     expect(f.requests.every((request) => request.method === "GET")).toBe(true);
   },
 );
+it.each([
+  "rolled_forward",
+  "at_boundary",
+  "foreign_customer",
+  "application_marked",
+  "other_price",
+  "owned_schedule",
+] as const)(
+  "rejects a verified %s expired source so its funding can be compensated",
+  async (status) => {
+    const paid = {
+      ...fundedInvoice,
+      id: operation.funding.invoiceId,
+      parent: null,
+      customer: operation.source.customerId,
+      total: 900,
+      amount_due: 900,
+      amount_paid: 900,
+      amount_remaining: 0,
+      starting_balance: 0,
+      auto_advance: false,
+      metadata: {
+        guild_id: operation.guildId,
+        chronote_change_operation: operation.operationId,
+        chronote_invoice_role: "funding",
+      },
+    };
+    const native = {
+      ...sourceSubscription,
+      id: operation.source.subscriptionId,
+      customer:
+        status === "foreign_customer"
+          ? "cus_foreign"
+          : operation.source.customerId,
+      livemode: operation.mode === "live",
+      status: "active" as const,
+      schedule: status === "owned_schedule" ? "sub_sched_unresolved" : null,
+      pending_update: null,
+      items: {
+        ...sourceSubscription.items,
+        data: sourceSubscription.items.data.map((item) => ({
+          ...item,
+          id: operation.source.itemId,
+          price: {
+            ...item.price,
+            id:
+              status === "other_price"
+                ? "price_other"
+                : operation.source.priceId,
+          },
+          current_period_start:
+            status === "rolled_forward"
+              ? operation.source.periodEnd
+              : operation.source.periodStart,
+          current_period_end:
+            status === "rolled_forward"
+              ? operation.source.periodEnd + 2592000
+              : operation.source.periodEnd,
+        })),
+      },
+      metadata: {
+        guild_id: operation.guildId,
+        ...(status === "application_marked"
+          ? { chronote_change_operation: operation.operationId }
+          : {}),
+      },
+    };
+    const f = stripeTransport(({ path }) =>
+      path.startsWith("/v1/invoices/") ? paid : native,
+    );
+    expect(
+      await applyFundedBillingChange({
+        stripe: f.stripe,
+        operation,
+        now: operation.source.periodEnd,
+      }),
+    ).toBe(
+      status === "rolled_forward" || status === "at_boundary"
+        ? "rejected"
+        : "unknown",
+    );
+    expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  },
+);
 it("does not compensate an unowned terminal source", async () => {
   const paid = {
     ...fundedInvoice,

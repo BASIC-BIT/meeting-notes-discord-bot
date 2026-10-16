@@ -1,3 +1,4 @@
+import { readRenewalCoverageCandidate } from "./renewalRecoveryCoverageEvidence";
 import { isDeepStrictEqual } from "node:util";
 import { readLedgerWriterRuntime } from "./ledgerWriterRuntime";
 import { RENEWAL_RECOVERY_WRITER_VERSION } from "../types/renewalRecovery";
@@ -71,7 +72,6 @@ async function registerPaidRenewalPeriod(
     input.guildId,
     input.invoiceId,
   );
-  if (saved.priceId && saved.priceId !== paid.priceId) return false;
   const current = await getRenewalRecoveryRepository().getCurrent(
     input.guildId,
   );
@@ -107,6 +107,35 @@ async function registerPaidRenewalPeriod(
   });
 }
 
+async function catchUpPaidWatch(
+  input: Context,
+  record: RenewalRecovery,
+  pointer: GuildSubscription,
+): Promise<boolean> {
+  let candidate;
+  try {
+    candidate = await readRenewalCoverageCandidate({
+      stripe: input.stripe,
+      saved: { ...pointer, stripeCustomerId: record.customerId },
+      mode: record.mode,
+    });
+  } catch (error) {
+    if (error instanceof BillingActionError) return false;
+    throw error;
+  }
+  if (candidate.paid.periodEnd <= record.paid.periodEnd) return false;
+  const registered = await getRenewalRecoveryRepository().register({
+    record: {
+      ...candidate,
+      writerVersion: record.writerVersion,
+      writerRuntime: record.writerRuntime,
+    },
+    expectedSubscription: pointer,
+  });
+  if (!registered) throw changeUnavailable();
+  clearGuildSubscriptionCache(record.guildId);
+  return true;
+}
 async function saveRecovery(
   next: RenewalRecovery,
   previous: RenewalRecovery,
@@ -124,18 +153,16 @@ async function saveRecovery(
   clearGuildSubscriptionCache(next.guildId);
   return next;
 }
+function isRefreshableRecovery(
+  record: RenewalRecovery | undefined,
+): record is Extract<RenewalRecovery, { state: "watching" | "grace" }> {
+  return record?.state === "watching" || record?.state === "grace";
+}
 export async function refreshRenewalRecovery(
   input: Context,
 ): Promise<RenewalRecovery | undefined> {
   const record = await getRenewalRecoveryRepository().getCurrent(input.guildId);
-  if (
-    !record ||
-    record.state === "paid" ||
-    record.state === "canceling" ||
-    record.state === "canceled" ||
-    record.state === "ended"
-  )
-    return record;
+  if (!isRefreshableRecovery(record)) return record;
   const pointer = await getSubscriptionRepository().get(input.guildId);
   if (
     !pointer ||
@@ -149,6 +176,10 @@ export async function refreshRenewalRecovery(
     record.subscriptionId,
   );
   assertRenewalOwner(subscription, record);
+  if (record.state === "watching") {
+    const advanced = await catchUpPaidWatch(input, record, pointer);
+    if (advanced) return refreshRenewalRecovery(input);
+  }
   const invoice = await findRenewalInvoice(input.stripe, record, subscription);
   if (!invoice) {
     if (subscription.status === "canceled" && record.state === "watching") {
@@ -252,22 +283,38 @@ export async function completeRenewalPaidProjection(
   guildId: string,
   subscription: StripeSubscription,
   saved: GuildSubscription,
+  stripe?: StripeClient,
 ): Promise<void> {
   const record = await getRenewalRecoveryRepository().getCurrent(guildId);
   if (
     !record ||
-    record.state !== "paid" ||
+    (record.state !== "paid" && record.state !== "superseded") ||
     record.projection.state === "complete"
   )
     return;
   assertRenewalOwner(subscription, record);
   const item = subscription.items.data[0];
+  let paidPeriod =
+    record.state === "superseded" ? record.replacementPaid : record.invoice;
+  if (stripe && item.current_period_start >= paidPeriod.periodEnd) {
+    const candidate = await readRenewalCoverageCandidate({
+      stripe,
+      saved: { ...saved, stripeCustomerId: record.customerId },
+      mode: record.mode,
+    });
+    if (candidate.paid.periodEnd < paidPeriod.periodEnd)
+      throw changeUnavailable();
+    paidPeriod = candidate.paid;
+  }
+  const projectedPeriod = matchesProjectedPeriod(
+    subscription,
+    paidPeriod,
+    Boolean(stripe),
+  );
   if (
-    subscription.status !== "active" ||
-    saved.status !== "active" ||
+    !projectedPeriod ||
+    saved.status !== subscription.status ||
     saved.stripeSubscriptionId !== record.subscriptionId ||
-    item.current_period_start !== record.invoice.periodStart ||
-    item.current_period_end !== record.invoice.periodEnd ||
     saved.priceId !== item.price.id
   )
     throw changeUnavailable();
@@ -278,6 +325,23 @@ export async function completeRenewalPaidProjection(
   );
 }
 
+function matchesProjectedPeriod(
+  subscription: StripeSubscription,
+  paidPeriod: { periodStart: number; periodEnd: number },
+  verifiedHistory: boolean,
+): boolean {
+  const item = subscription.items.data[0];
+  if (subscription.status === "active")
+    return (
+      item.current_period_start === paidPeriod.periodStart &&
+      item.current_period_end === paidPeriod.periodEnd
+    );
+  return (
+    verifiedHistory &&
+    ["past_due", "unpaid"].includes(subscription.status) &&
+    item.current_period_start >= paidPeriod.periodEnd
+  );
+}
 async function beginRenewalCancellation(
   input: Context,
   record: Extract<RenewalRecovery, { state: "grace" }>,
@@ -330,7 +394,7 @@ export async function cancelRenewalRecovery(
 }
 async function repairRenewalPaidAccess(
   input: Context,
-  record: Extract<RenewalRecovery, { state: "paid" }>,
+  record: Extract<RenewalRecovery, { state: "paid" | "superseded" }>,
 ): Promise<void> {
   await reconcileBillingChangeForWebhook(
     input.stripe,
@@ -347,13 +411,37 @@ async function repairRenewalPaidAccess(
   const subscription = await input.stripe.subscriptions.retrieve(
     record.subscriptionId,
   );
-  await completeRenewalPaidProjection(input.guildId, subscription, saved);
+  await completeRenewalPaidProjection(
+    input.guildId,
+    subscription,
+    saved,
+    input.stripe,
+  );
   if (subscription.status === "active")
     await trackPaidRenewalPeriod({
       ...input,
       subscriptionId: record.subscriptionId,
-      invoiceId: record.invoice.id,
+      invoiceId: stripeId(subscription.latest_invoice) ?? "",
     });
+  else {
+    const candidate = await readRenewalCoverageCandidate({
+      stripe: input.stripe,
+      saved,
+      mode: record.mode,
+    });
+    if (
+      !(await getRenewalRecoveryRepository().register({
+        record: {
+          ...candidate,
+          writerVersion: record.writerVersion,
+          writerRuntime: record.writerRuntime,
+        },
+        expectedSubscription: saved,
+      }))
+    )
+      throw changeUnavailable();
+    await reconcileRenewalRecovery(input);
+  }
 }
 async function finishRenewalCancellation(
   input: Context,
@@ -372,6 +460,23 @@ async function finishRenewalCancellation(
     },
   });
   if (result === "pending") return;
+  if (typeof result === "object") {
+    const { nextCheckAt, reason, ...base } = record;
+    void nextCheckAt;
+    void reason;
+    const next = renewalRecoverySchema.parse({
+      ...base,
+      state: "superseded",
+      revision: randomUUID(),
+      replacementPaid: result.paid,
+      projection: { state: "pending", nextCheckAt: input.now },
+    });
+    const pointer = await getSubscriptionRepository().get(input.guildId);
+    if (!pointer) throw changeUnavailable();
+    await saveRecovery(next, record, pointer);
+    if (next.state !== "superseded") throw changeUnavailable();
+    return repairRenewalPaidAccess(input, next);
+  }
   if (result === "paid") {
     const { nextCheckAt, reason, receipts, ...base } = record;
     void nextCheckAt;
@@ -424,7 +529,10 @@ export async function reconcileRenewalRecovery(
   input.signal?.throwIfAborted();
   let record = await refreshRenewalRecovery(input);
   if (!record) return;
-  if (record.state === "paid" && record.projection.state === "pending")
+  if (
+    (record.state === "paid" || record.state === "superseded") &&
+    record.projection.state === "pending"
+  )
     return repairRenewalPaidAccess(input, record);
   if (
     record.state === "grace" &&

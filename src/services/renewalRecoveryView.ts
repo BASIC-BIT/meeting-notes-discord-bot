@@ -45,7 +45,9 @@ async function baseView(
     selectedInterval,
     scheduledChange: record.scheduledOperationId !== null,
     endsAt:
-      "endsAt" in record && record.state !== "paid"
+      "endsAt" in record &&
+      record.state !== "paid" &&
+      record.state !== "superseded"
         ? new Date(record.endsAt * 1000).toISOString()
         : null,
     amountDue: null,
@@ -127,7 +129,8 @@ export async function getRenewalRecoveryView(
   }
   if (
     record.state === "ended" ||
-    (record.state === "paid" && record.projection.state === "complete")
+    ((record.state === "paid" || record.state === "superseded") &&
+      record.projection.state === "complete")
   )
     return { status: "none" };
   const view = await baseView(record, input);

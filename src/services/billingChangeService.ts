@@ -502,7 +502,7 @@ async function afterAcceptance(
   )
     return beginCancel(context, operation);
   if (operation.timing === "renewal") {
-    if (await canceledBeforeSchedule(context.stripe, operation))
+    if (await canceledBeforeSchedule(context.stripe, operation, at(context)))
       return beginCancel(context, operation);
     await ensureScheduledRenewalWatch(context, operation);
     let latest = operation;
@@ -675,7 +675,7 @@ async function finishCancellation(
   if (
     operation.timing === "renewal" &&
     operation.consent &&
-    !(await canceledBeforeSchedule(context.stripe, operation))
+    !(await canceledBeforeSchedule(context.stripe, operation, at(context)))
   ) {
     const settled = await settleScheduled(context, operation);
     if (settled.state === "succeeded") return settled;

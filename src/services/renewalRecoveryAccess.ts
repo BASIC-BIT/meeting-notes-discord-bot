@@ -92,6 +92,8 @@ async function trackedPaidAccess(
   record: RenewalRecovery,
   now: number,
 ): Promise<PaidAccess> {
+  if (record.state === "superseded")
+    return verifiedCurrentPaidAccess(subscription, now);
   const savedCourtesy = courtesy(record, now);
   if (savedCourtesy) return savedCourtesy;
   if (record.state === "watching" && now < record.paid.periodEnd)
@@ -106,6 +108,12 @@ async function trackedPaidAccess(
   if (!refreshed) return noPaidAccess;
   const refreshedCourtesy = courtesy(refreshed, now);
   if (refreshedCourtesy) return refreshedCourtesy;
-  if (refreshed.state !== "paid") return noPaidAccess;
+  if (refreshed.state === "watching" && now < refreshed.paid.periodEnd)
+    return {
+      tier: refreshed.paid.tier,
+      expiresAt: refreshed.paid.periodEnd * 1000,
+    };
+  if (refreshed.state !== "paid" && refreshed.state !== "superseded")
+    return noPaidAccess;
   return verifiedCurrentPaidAccess(subscription, now);
 }

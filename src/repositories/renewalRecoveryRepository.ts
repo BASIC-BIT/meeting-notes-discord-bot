@@ -113,7 +113,8 @@ function cannotReplacePaidWatch(
 ): boolean {
   return (
     isRenewalRecoveryBlocking(previous) ||
-    (previous.state === "paid" && previous.projection.state === "pending") ||
+    ((previous.state === "paid" || previous.state === "superseded") &&
+      previous.projection.state === "pending") ||
     (previous.subscriptionId === next.subscriptionId &&
       (previous.paid.periodStart > next.paid.periodStart ||
         isDeepStrictEqual(previous.paid, next.paid) ||

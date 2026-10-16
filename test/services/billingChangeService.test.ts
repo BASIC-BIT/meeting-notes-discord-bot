@@ -673,6 +673,74 @@ it.each(["canceled", "incomplete_expired"] as const)(
   },
 );
 
+it.each(["rolled_forward", "at_boundary"] as const)(
+  "releases accepted unscheduled consent after %s source expiry without scheduling stale terms",
+  async (status) => {
+    const seeded = seedReview();
+    const operation = {
+      ...billingChangeBase(seeded),
+      state: "accepted" as const,
+      timing: "renewal" as const,
+      funding: null,
+      consent: { at: seeded.createdAt, quoteRevision: seeded.revision },
+    };
+    getMockStore().billingChangeOperations.set(
+      `CHANGE_OP#${operation.guildId}#${operation.operationId}`,
+      operation,
+    );
+    const baseline = renewalStripeClientFixture();
+    const customer = await baseline.stripe.customers.retrieve("cus_renewal");
+    if (customer.deleted) throw new Error("Expected customer");
+    const native = {
+      ...sourceSubscription,
+      id: operation.source.subscriptionId,
+      customer: operation.source.customerId,
+      status: "active" as const,
+      items: {
+        ...sourceSubscription.items,
+        data: sourceSubscription.items.data.map((item) => ({
+          ...item,
+          id: operation.source.itemId,
+          price: { ...item.price, id: operation.source.priceId },
+          current_period_start:
+            status === "rolled_forward"
+              ? operation.source.periodEnd
+              : operation.source.periodStart,
+          current_period_end:
+            status === "rolled_forward"
+              ? operation.source.periodEnd + 2592000
+              : operation.source.periodEnd,
+        })),
+      },
+      schedule: null,
+      metadata: { guild_id: operation.guildId, discord_id: operation.payerId },
+    };
+    const f = stripeTransport(({ path }) => {
+      if (path.includes("customers"))
+        return {
+          ...customer,
+          id: operation.source.customerId,
+          metadata: { discord_id: operation.payerId },
+        };
+      if (path.includes("subscriptions")) return native;
+      if (path.includes("invoices")) return currentPaidFixture(native);
+      throw new Error(`Unexpected ${path}`);
+    });
+    expect(
+      await readBillingChange({
+        stripe: f.stripe,
+        guildId: operation.guildId,
+        payerId: operation.payerId,
+        now: operation.source.periodEnd,
+      }),
+    ).toMatchObject({ state: "canceled" });
+    expect(
+      await getBillingChangeRepository().getControl(operation.guildId),
+    ).toBeUndefined();
+    expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  },
+);
+
 it("compensates paid applying work once and releases its control after the source is canceled", async () => {
   const seeded = seedReview(900);
   const operation = {
@@ -760,3 +828,160 @@ it("compensates paid applying work once and releases its control after the sourc
     compensation.mockRestore();
   }
 });
+
+it("compensates paid applying work once and releases its control after the unmarked source period expires", async () => {
+  const seeded = seedReview(900);
+  const operation = {
+    ...billingChangeBase(seeded),
+    state: "applying" as const,
+    funding: { ...seeded.funding, startingBalance: 0 },
+    consent: { at: seeded.createdAt, quoteRevision: seeded.revision },
+  };
+  getMockStore().billingChangeOperations.set(
+    `CHANGE_OP#${operation.guildId}#${operation.operationId}`,
+    operation,
+  );
+  const baseline = renewalStripeClientFixture();
+  const customer = await baseline.stripe.customers.retrieve("cus_renewal");
+  if (customer.deleted) throw new Error("Expected customer");
+  const funding = {
+    ...fundedInvoice,
+    id: operation.funding.invoiceId,
+    parent: null,
+    customer: operation.source.customerId,
+    total: 900,
+    amount_due: 900,
+    amount_paid: 900,
+    amount_remaining: 0,
+    starting_balance: 0,
+    auto_advance: false,
+    metadata: {
+      guild_id: operation.guildId,
+      chronote_change_operation: operation.operationId,
+      chronote_invoice_role: "funding",
+    },
+  };
+  const f = stripeTransport(({ path }) => {
+    if (path.includes("customers"))
+      return {
+        ...customer,
+        id: operation.source.customerId,
+        metadata: { discord_id: operation.payerId },
+      };
+    if (path.includes("subscriptions"))
+      return {
+        ...sourceSubscription,
+        id: operation.source.subscriptionId,
+        customer: operation.source.customerId,
+        status: "active",
+        schedule: null,
+        items: {
+          ...sourceSubscription.items,
+          data: sourceSubscription.items.data.map((item) => ({
+            ...item,
+            id: operation.source.itemId,
+            price: { ...item.price, id: operation.source.priceId },
+            current_period_start: operation.source.periodStart,
+            current_period_end: operation.source.periodEnd,
+          })),
+        },
+        metadata: {
+          guild_id: operation.guildId,
+          discord_id: operation.payerId,
+        },
+      };
+    if (path === `/v1/invoices/${funding.id}`) return funding;
+    if (path.includes("invoices"))
+      return currentPaidFixture({
+        ...sourceSubscription,
+        id: operation.source.subscriptionId,
+        customer: operation.source.customerId,
+        items: {
+          ...sourceSubscription.items,
+          data: sourceSubscription.items.data.map((item) => ({
+            ...item,
+            id: operation.source.itemId,
+            price: { ...item.price, id: operation.source.priceId },
+            current_period_start: operation.source.periodStart,
+            current_period_end: operation.source.periodEnd,
+          })),
+        },
+      });
+    throw new Error(`Unexpected ${path}`);
+  });
+  const compensation = jest
+    .spyOn(fundingRecovery, "compensateChangeFunding")
+    .mockImplementation(async (input) => {
+      const receipt = {
+        creditNoteId: "cn_owned",
+        debtRefundId: null,
+        balanceTransactionId: null,
+      };
+      await input.onProgress(receipt);
+      return receipt;
+    });
+  const context = {
+    stripe: f.stripe,
+    guildId: operation.guildId,
+    payerId: operation.payerId,
+    now: operation.source.periodEnd,
+  };
+  try {
+    expect(await readBillingChange(context)).toMatchObject({
+      state: "canceled",
+    });
+    expect(
+      await getBillingChangeRepository().getControl(operation.guildId),
+    ).toBeUndefined();
+    await readBillingChange(context);
+    expect(compensation).toHaveBeenCalledTimes(1);
+    expect(compensation.mock.calls[0][0].operation.funding?.invoiceId).toBe(
+      funding.id,
+    );
+    expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  } finally {
+    compensation.mockRestore();
+  }
+});
+
+function currentPaidFixture(native: typeof sourceSubscription) {
+  const item = native.items.data[0];
+  return {
+    ...fundedInvoice,
+    id: native.latest_invoice,
+    customer: native.customer,
+    parent: {
+      type: "subscription_details",
+      quote_details: null,
+      subscription_details: { metadata: {}, subscription: native.id },
+    },
+    lines: {
+      ...fundedInvoice.lines,
+      data: fundedInvoice.lines.data.map((line) => ({
+        ...line,
+        pricing: {
+          ...line.pricing,
+          price_details: {
+            ...line.pricing?.price_details,
+            price: item.price.id,
+          },
+        },
+        parent: {
+          type: "subscription_item_details",
+          invoice_item_details: null,
+          subscription_item_details: {
+            invoice_item: null,
+            proration: false,
+            proration_details: null,
+            subscription: native.id,
+            subscription_item: item.id,
+          },
+        },
+        period: {
+          start: item.current_period_start,
+          end: item.current_period_end,
+        },
+      })),
+    },
+  };
+}

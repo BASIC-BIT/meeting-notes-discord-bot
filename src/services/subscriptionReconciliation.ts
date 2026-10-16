@@ -230,7 +230,12 @@ export const reconcileSubscription = async (
     });
     clearGuildSubscriptionCache(guildId);
     if (subscription.status === "active") {
-      await completeRenewalPaidProjection(guildId, subscription, payload);
+      await completeRenewalPaidProjection(
+        guildId,
+        subscription,
+        payload,
+        stripe,
+      );
       const invoiceId =
         settlement?.invoiceId ?? stripeId(subscription.latest_invoice);
       if (!invoiceId)

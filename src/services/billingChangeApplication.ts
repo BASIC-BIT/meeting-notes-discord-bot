@@ -7,7 +7,7 @@ import type {
 } from "../types/stripe";
 import type { BillingChangeOperation } from "../types/billingChange";
 import {
-  isTerminalUnappliedChange,
+  isUnappliedChangeSourceEnded,
   changeSourceFingerprint,
   changeUpdateParams,
   stripeId,
@@ -140,7 +140,14 @@ export async function applyFundedBillingChange(input: {
     operation.source.subscriptionId,
     { expand: ["latest_invoice", "discounts.source.coupon"] },
   );
-  if (isTerminalUnappliedChange(subscription, operation)) return "rejected";
+  if (
+    isUnappliedChangeSourceEnded(
+      subscription,
+      operation,
+      input.now ?? Math.floor(Date.now() / 1000),
+    )
+  )
+    return "rejected";
   if (
     subscription.metadata.chronote_change_operation !== operation.operationId
   ) {

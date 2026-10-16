@@ -1,3 +1,4 @@
+import { readRenewalPaidBasis } from "./renewalRecoveryEvidence";
 import { randomUUID, createHash } from "node:crypto";
 import type Stripe from "stripe";
 import type {
@@ -333,7 +334,8 @@ async function collectionBeforeCancellation(
   record: Canceling,
   save: (receipts: Canceling["receipts"]) => Promise<Canceling>,
 ): Promise<Canceling> {
-  if (record.receipts.collectionToRestore !== null) return record;
+  const invoice = await stripe.invoices.retrieve(record.invoice.id);
+  record = await snapshotCollection(stripe, invoice, record, save);
   const ids: string[] = [];
   for (const before of record.receipts.unrelatedInvoices) {
     if (!before.autoAdvance) continue;
@@ -352,7 +354,12 @@ async function collectionBeforeCancellation(
 }
 export async function cancelUnpaidRenewal(
   input: Input,
-): Promise<"paid" | "canceled" | "pending"> {
+): Promise<
+  | "paid"
+  | "canceled"
+  | "pending"
+  | { kind: "superseded"; paid: RenewalRecovery["paid"] }
+> {
   if (
     input.recovery.state !== "canceling" ||
     input.recovery.mode !== config.subscription.stripeMode
@@ -381,9 +388,27 @@ export async function cancelUnpaidRenewal(
     customer.metadata.discord_id !== record.payerId
   )
     throw changeUnavailable();
-  const debt = await settleRenewalDebt(stripe, record, save, write);
+  const debt = await settleRenewalDebt(
+    stripe,
+    record,
+    save,
+    write,
+    subscription.status === "canceled",
+  );
   if (debt !== "cleared") return debt;
-  await cancelVerifiedSubscription(stripe, subscription, record, write, save);
+  const replacement = await cancelVerifiedSubscription(
+    stripe,
+    subscription,
+    record,
+    write,
+    save,
+  );
+  if (replacement) {
+    record = await collectionBeforeCancellation(stripe, record, save);
+    await restoreCollection(stripe, record, write);
+    await save({ ...record.receipts, collectionRestored: true });
+    return { kind: "superseded", paid: replacement };
+  }
   await save({ ...record.receipts, canceled: true });
   await restoreCollection(stripe, record, write);
   await save({ ...record.receipts, collectionRestored: true });
@@ -395,6 +420,7 @@ async function settleRenewalDebt(
   record: Canceling,
   save: (receipts: Canceling["receipts"]) => Promise<Canceling>,
   write: StripeEffect,
+  alreadyCanceled: boolean,
 ): Promise<"paid" | "pending" | "cleared"> {
   let invoice = await stripe.invoices.retrieve(record.invoice.id);
   assertInvoice(invoice, record);
@@ -403,18 +429,20 @@ async function settleRenewalDebt(
     return "paid";
   if (!note && (await hasProcessingRenewalPayment(stripe, invoice, record)))
     return "pending";
-  record = await snapshotCollection(stripe, invoice, record, save);
+  if (!alreadyCanceled)
+    record = await snapshotCollection(stripe, invoice, record, save);
   if (!note && invoice.status !== "void") {
-    await write(() =>
-      stripe.invoices.update(
-        invoice.id,
-        {
-          auto_advance: false,
-          metadata: { chronote_renewal_pause: renewalRecoveryKey(record) },
-        },
-        { idempotencyKey: `${renewalRecoveryKey(record)}:pause-invoice` },
-      ),
-    );
+    if (invoice.status === "open")
+      await write(() =>
+        stripe.invoices.update(
+          invoice.id,
+          {
+            auto_advance: false,
+            metadata: { chronote_renewal_pause: renewalRecoveryKey(record) },
+          },
+          { idempotencyKey: `${renewalRecoveryKey(record)}:pause-invoice` },
+        ),
+      );
     invoice = await stripe.invoices.retrieve(invoice.id);
     assertInvoice(invoice, record);
     if (invoice.status === "paid" && invoice.amount_remaining === 0)
@@ -442,23 +470,30 @@ async function snapshotCollection(
   record: Canceling,
   save: (receipts: Canceling["receipts"]) => Promise<Canceling>,
 ): Promise<Canceling> {
-  if (!record.receipts.unrelatedInvoices.length) {
-    const invoices = await inventory(
-      stripe.invoices.list({ customer: record.customerId, limit: 100 }),
-    );
-    const snapshots = [
-      invoice,
-      ...invoices.filter((value) => value.id !== invoice.id),
-    ].filter((value) => value.status === "open" || value.status === "draft");
-    return save({
-      ...record.receipts,
-      unrelatedInvoices: snapshots.map((value) => ({
+  const invoices = await inventory(
+    stripe.invoices.list({ customer: record.customerId, limit: 100 }),
+  );
+  const snapshots = [
+    invoice,
+    ...invoices.filter((value) => value.id !== invoice.id),
+  ].filter((value) => value.status === "open" || value.status === "draft");
+  const added = snapshots.filter(
+    (value) =>
+      !record.receipts.unrelatedInvoices.some(
+        (before) => before.id === value.id,
+      ),
+  );
+  if (!added.length) return record;
+  return save({
+    ...record.receipts,
+    unrelatedInvoices: [
+      ...record.receipts.unrelatedInvoices,
+      ...added.map((value) => ({
         id: value.id,
         autoAdvance: value.auto_advance === true,
       })),
-    });
-  }
-  return record;
+    ],
+  });
 }
 async function cancelVerifiedSubscription(
   stripe: StripeClient,
@@ -466,10 +501,22 @@ async function cancelVerifiedSubscription(
   record: Canceling,
   write: StripeEffect,
   save: (receipts: Canceling["receipts"]) => Promise<Canceling>,
-): Promise<void> {
-  await releaseRenewalSchedule(stripe, subscription, record, write);
+): Promise<RenewalRecovery["paid"] | undefined> {
+  let replacement = await newerPaidCoverage(stripe, subscription, record);
+  if (replacement) return replacement;
+  if (subscription.status !== "canceled")
+    await releaseRenewalSchedule(stripe, subscription, record, write);
   subscription = await stripe.subscriptions.retrieve(record.subscriptionId);
   assertRenewalOwner(subscription, record);
+  replacement = await newerPaidCoverage(stripe, subscription, record);
+  if (replacement) return replacement;
+  if (
+    subscription.status === "canceled" &&
+    !subscription.metadata.chronote_renewal_recovery
+  ) {
+    // An external cancellation already changed collection settings. Preserve that current intent.
+    record = await collectionBeforeCancellation(stripe, record, save);
+  }
   if (subscription.status !== "canceled") {
     subscription = await write(() =>
       stripe.subscriptions.update(
@@ -480,6 +527,10 @@ async function cancelVerifiedSubscription(
     );
     assertRenewalOwner(subscription, record);
     record = await collectionBeforeCancellation(stripe, record, save);
+    subscription = await stripe.subscriptions.retrieve(record.subscriptionId);
+    assertRenewalOwner(subscription, record);
+    replacement = await newerPaidCoverage(stripe, subscription, record);
+    if (replacement) return replacement;
     subscription = await write(() =>
       stripe.subscriptions.cancel(
         subscription.id,
@@ -491,8 +542,53 @@ async function cancelVerifiedSubscription(
   assertRenewalOwner(subscription, record);
   if (
     subscription.status !== "canceled" ||
-    subscription.metadata.chronote_renewal_recovery !==
-      renewalRecoveryKey(record)
+    (subscription.metadata.chronote_renewal_recovery &&
+      subscription.metadata.chronote_renewal_recovery !==
+        renewalRecoveryKey(record))
   )
     throw changeUnavailable();
+  await assertCollectionJournalComplete(stripe, subscription, record);
+}
+
+async function assertCollectionJournalComplete(
+  stripe: StripeClient,
+  subscription: StripeSubscription,
+  record: Canceling,
+): Promise<void> {
+  const invoices = await inventory(
+    stripe.invoices.list({ customer: record.customerId, limit: 100 }),
+  );
+  const unknown = invoices.some(
+    (invoice) =>
+      (invoice.status === "open" || invoice.status === "draft") &&
+      !invoice.auto_advance &&
+      invoice.created <= (subscription.canceled_at ?? Infinity) &&
+      !record.receipts.unrelatedInvoices.some(
+        (before) => before.id === invoice.id,
+      ),
+  );
+  if (unknown) throw changeUnavailable();
+}
+async function newerPaidCoverage(
+  stripe: StripeClient,
+  subscription: StripeSubscription,
+  record: Canceling,
+): Promise<RenewalRecovery["paid"] | undefined> {
+  const invoiceId = stripeId(subscription.latest_invoice);
+  if (
+    subscription.status !== "active" ||
+    !invoiceId ||
+    invoiceId === record.invoice.id ||
+    subscription.items.data[0]?.current_period_start <
+      record.invoice.periodStart
+  )
+    return undefined;
+  const paid = await readRenewalPaidBasis(
+    stripe,
+    subscription,
+    record.guildId,
+    invoiceId,
+  );
+  if (paid.periodStart < record.invoice.periodStart) throw changeUnavailable();
+  return paid;
 }
