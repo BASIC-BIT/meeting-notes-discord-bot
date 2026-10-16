@@ -1,3 +1,8 @@
+import { getRenewalRecoveryRepository } from "../repositories/renewalRecoveryRepository";
+import {
+  isRenewalCancellationComplete,
+  renewalRecoveryKey,
+} from "../types/renewalRecovery";
 import type { BillingChangeOperation } from "../types/billingChange";
 import type { StripeInvoice } from "../types/stripe";
 import type {
@@ -33,7 +38,7 @@ export async function classifyChangeHistory(
   const funding = invoice.id === operation.draftInvoiceId;
   if (
     operation.state === "canceled" &&
-    (funding || isAbandonedEmptyDraft(invoice, operation))
+    (await isCanceledChangeInvoice(invoice, operation, funding))
   )
     return { kind: "ordinary" };
   if (operation.state !== "succeeded") return unresolved;
@@ -62,6 +67,38 @@ export async function classifyChangeHistory(
   return { kind: "ordinary" };
 }
 
+async function isCanceledChangeInvoice(
+  invoice: StripeInvoice,
+  operation: BillingChangeOperation,
+  funding: boolean,
+): Promise<boolean> {
+  return (
+    funding ||
+    isAbandonedEmptyDraft(invoice, operation) ||
+    (await isCanceledRenewal(invoice, operation))
+  );
+}
+async function isCanceledRenewal(
+  invoice: StripeInvoice,
+  operation: BillingChangeOperation,
+): Promise<boolean> {
+  if (operation.timing !== "renewal") return false;
+  const recovery = await getRenewalRecoveryRepository().get(
+    renewalRecoveryKey({
+      guildId: operation.guildId,
+      subscriptionId: operation.source.subscriptionId,
+      paid: { periodEnd: operation.source.periodEnd },
+    }),
+  );
+  return Boolean(
+    isRenewalCancellationComplete(recovery) &&
+    recovery.state === "canceled" &&
+    recovery.scheduledOperationId === operation.operationId &&
+    recovery.invoice.id === invoice.id &&
+    recovery.customerId === stripeId(invoice.customer) &&
+    recovery.mode === operation.mode,
+  );
+}
 function isAbandonedEmptyDraft(
   invoice: StripeInvoice,
   operation: BillingChangeOperation,

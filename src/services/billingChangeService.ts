@@ -43,7 +43,11 @@ import {
   readScheduledChangeSettlement,
 } from "./billingChangeSchedule";
 import { reconcileSubscription } from "./subscriptionReconciliation";
-import { trackPaidRenewalPeriod } from "./renewalRecoveryService";
+import {
+  trackPaidRenewalPeriod,
+  cancelRenewalRecovery,
+} from "./renewalRecoveryService";
+import { isRenewalCancellationComplete } from "../types/renewalRecovery";
 import { getRenewalRecoveryRepository } from "../repositories/renewalRecoveryRepository";
 
 type Context = {
@@ -280,6 +284,19 @@ export async function cancelBillingChange(
   let operation = await owned(context, context.operationId);
   if (!operation) throw changeUnavailable();
   await verifyPayer(context, operation);
+  const recovery =
+    operation.timing === "renewal"
+      ? await getRenewalRecoveryRepository().getCurrent(context.guildId)
+      : undefined;
+  if (
+    recovery?.scheduledOperationId === operation.operationId &&
+    (recovery.state === "grace" || recovery.state === "canceling")
+  ) {
+    await cancelRenewalRecovery({ ...context, now: at(context) });
+    const current = await owned(context, operation.operationId);
+    if (!current) throw changeUnavailable();
+    return present(context, current);
+  }
   // Recover the idempotent scheduling write before cancellation can release
   // control. A missing schedule snapshot cannot prove an in-flight write ended.
   if (
@@ -594,6 +611,17 @@ async function settleScheduled(
   >,
 ) {
   if (!operation.consent) return operation;
+  const recovery = await getRenewalRecoveryRepository().getCurrent(
+    context.guildId,
+  );
+  if (
+    isRenewalCancellationComplete(recovery) &&
+    recovery.scheduledOperationId === operation.operationId
+  ) {
+    return operation.state === "scheduled"
+      ? beginCancel(context, operation)
+      : operation;
+  }
   const result = await readScheduledChangeSettlement(context.stripe, operation);
   if (result.kind === "waiting") return operation;
   const next = billingChangeOperationSchema.parse({

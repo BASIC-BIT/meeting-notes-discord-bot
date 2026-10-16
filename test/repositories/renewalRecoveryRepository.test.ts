@@ -92,3 +92,41 @@ test("discovers only due work in its provider mode", async () => {
     (await repo.listDue({ mode: "test", now: 1000000, limit: 1 })).keys,
   ).toHaveLength(1);
 });
+
+test("cannot replace an ordinary paid renewal before its access projection completes", async () => {
+  const { record, pointer } = await seed();
+  const repo = getRenewalRecoveryRepository();
+  await repo.register({ record, expectedSubscription: pointer });
+  const { nextCheckAt, ...base } = record;
+  void nextCheckAt;
+  const pending = renewalRecoverySchema.parse({
+    ...base,
+    revision: "paid",
+    state: "paid",
+    invoice: {
+      id: "in_next",
+      lineId: "il_next",
+      finalizedAt: 1000000,
+      periodStart: 1000000,
+      periodEnd: 2000000,
+    },
+    endsAt: 1172800,
+    projection: { state: "pending", nextCheckAt: 1000000 },
+  });
+  await repo.compareAndWrite({
+    next: pending,
+    expectedRevision: record.revision,
+    expectedSubscription: pointer,
+    blocking: false,
+  });
+  expect(
+    await repo.register({
+      record: {
+        ...record,
+        revision: "new-watch",
+        paid: { ...record.paid, periodStart: 1000000, periodEnd: 2000000 },
+      },
+      expectedSubscription: pointer,
+    }),
+  ).toBe(false);
+});

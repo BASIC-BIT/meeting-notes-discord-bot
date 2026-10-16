@@ -1,9 +1,17 @@
 /** @jest-environment node */
+import { offerUsageKey, offerUsageSchema } from "../../src/types/offerUsage";
+import { renewalRecoveryKey } from "../../src/types/renewalRecovery";
+import { classifyChangeHistory } from "../../src/services/billingChangeHistory";
+import { cancelBillingChange } from "../../src/services/billingChangeService";
+import * as renewalProvider from "../../src/services/renewalRecoveryProvider";
+import * as renewalPayer from "../../src/services/billingPayerService";
 import { config } from "../../src/services/configService";
 import { getMockStore, resetMockStore } from "../../src/repositories/mockStore";
 import { getRenewalRecoveryRepository } from "../../src/repositories/renewalRecoveryRepository";
 import {
   trackPaidRenewalPeriod,
+  cancelRenewalRecovery,
+  reconcileRenewalRecovery,
   refreshRenewalRecovery,
   completeRenewalPaidProjection,
 } from "../../src/services/renewalRecoveryService";
@@ -39,6 +47,7 @@ afterEach(() => {
 function fixture() {
   const subscription = {
     ...sourceSubscription,
+    metadata: { ...sourceSubscription.metadata },
     items: {
       ...sourceSubscription.items,
       data: sourceSubscription.items.data.map((item) => ({
@@ -91,6 +100,12 @@ function fixture() {
   const transport = stripeTransport((request) => {
     if (request.path === `/v1/subscriptions/${subscription.id}`)
       return subscription;
+    if (request.path === "/v1/customers/cus_renewal")
+      return {
+        id: "cus_renewal",
+        livemode: false,
+        metadata: { discord_id: subscription.metadata.discord_id },
+      };
     if (request.path.startsWith("/v1/prices/"))
       return subscription.items.data[0].price;
     if (request.path.startsWith("/v1/invoices/"))
@@ -261,48 +276,7 @@ test("refuses to reuse reversed paid service and ignores an old subscription aft
 });
 
 test("recognizes a scheduled downgrade but treats its old metadata as ordinary next cycle", async () => {
-  const f = fixture();
-  f.subscription.items.data[0].price.lookup_key = "chronote_pro_monthly";
-  await f.track();
-  f.fail();
-  f.subscription.items.data[0].price.id = "price_basic";
-  f.subscription.items.data[0].price.lookup_key = "chronote_basic_monthly";
-  const pricing = f.renewal.lines.data[0].pricing;
-  if (!pricing?.price_details) throw new Error("Missing price fixture");
-  pricing.price_details = { ...pricing.price_details, price: "price_basic" };
-  const operation = {
-    ...changeOperation,
-    timing: "renewal" as const,
-    state: "scheduled" as const,
-    scheduleId: "sub_sched",
-    consent: { at: paidEndsAt - 100, quoteRevision: changeOperation.revision },
-    source: {
-      ...changeOperation.source,
-      customerId: "cus_renewal",
-      periodEnd: paidEndsAt,
-    },
-    target: {
-      ...changeOperation.target,
-      priceId: "price_basic",
-      selection: {
-        tier: "basic" as const,
-        interval: "month" as const,
-        expectedOffer: "none" as const,
-      },
-    },
-  };
-  getMockStore().billingChangeOperations.set(
-    `CHANGE_OP#${operation.guildId}#${operation.operationId}`,
-    operation,
-  );
-  f.renewal.parent = {
-    type: "subscription_details",
-    quote_details: null,
-    subscription_details: {
-      subscription: f.subscription.id,
-      metadata: { chronote_change_operation: operation.operationId },
-    },
-  };
+  const { f, operation } = await scheduledFixture();
   expect(await f.refresh()).toMatchObject({
     state: "grace",
     scheduledOperationId: operation.operationId,
@@ -398,3 +372,290 @@ test("accepts the provider's expanded price reference on a renewal service line"
   };
   expect(await f.refresh()).toMatchObject({ state: "grace" });
 });
+
+test("explicit cancellation keeps its grace deadline and releases billing only after saved Free access", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const grace = await f.refresh();
+  if (!grace || grace.state !== "grace") throw new Error("Expected grace");
+  const payer = jest
+    .spyOn(renewalPayer, "assertStripePayer")
+    .mockResolvedValue();
+  const provider = jest
+    .spyOn(renewalProvider, "cancelUnpaidRenewal")
+    .mockImplementation(async (input) => {
+      if (input.recovery.state !== "canceling")
+        throw new Error("Expected cancellation");
+      await input.onReceipt({
+        ...input.recovery,
+        revision: "native-canceled",
+        receipts: {
+          ...input.recovery.receipts,
+          canceled: true,
+          collectionRestored: true,
+        },
+      });
+      f.subscription.status = "canceled";
+      return "canceled";
+    });
+  try {
+    await cancelRenewalRecovery({
+      stripe: f.stripe,
+      guildId: grace.guildId,
+      payerId: grace.payerId,
+      now: paidEndsAt + 4001,
+    });
+    expect(
+      await getRenewalRecoveryRepository().getCurrent(grace.guildId),
+    ).toMatchObject({ state: "canceled", endsAt: grace.endsAt });
+    expect(
+      getMockStore().renewalRecoveryPointers.get(grace.guildId)?.blocking,
+    ).toBe(false);
+    expect(getMockStore().subscriptions.get(grace.guildId)).toMatchObject({
+      status: "canceled",
+      tier: "free",
+    });
+  } finally {
+    provider.mockRestore();
+    payer.mockRestore();
+  }
+});
+test("expiry starts cleanup automatically and retains control when the provider is unavailable", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const grace = await f.refresh();
+  if (!grace || grace.state !== "grace") throw new Error("Expected grace");
+  const provider = jest
+    .spyOn(renewalProvider, "cancelUnpaidRenewal")
+    .mockRejectedValue(new Error("Provider unavailable"));
+  try {
+    await expect(
+      reconcileRenewalRecovery({
+        stripe: f.stripe,
+        guildId: grace.guildId,
+        now: grace.endsAt,
+      }),
+    ).rejects.toThrow("Provider unavailable");
+    expect(
+      await getRenewalRecoveryRepository().getCurrent(grace.guildId),
+    ).toMatchObject({
+      state: "canceling",
+      reason: "expired",
+      endsAt: grace.endsAt,
+    });
+    expect(
+      getMockStore().renewalRecoveryPointers.get(grace.guildId)?.blocking,
+    ).toBe(true);
+  } finally {
+    provider.mockRestore();
+  }
+});
+test("rejects another payer before any cancellation write", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const grace = await f.refresh();
+  if (!grace) throw new Error("Expected grace");
+  await expect(
+    cancelRenewalRecovery({
+      stripe: f.stripe,
+      guildId: grace.guildId,
+      payerId: "another-payer",
+      now: paidEndsAt + 4001,
+    }),
+  ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  expect(
+    (await getRenewalRecoveryRepository().getCurrent(grace.guildId))?.state,
+  ).toBe("grace");
+});
+test("a paid renewal completes access reconciliation and queues its next paid period", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const grace = await f.refresh();
+  if (!grace) throw new Error("Expected grace");
+  f.renewal.status = "paid";
+  f.renewal.amount_remaining = 0;
+  f.subscription.status = "active";
+  await reconcileRenewalRecovery({
+    stripe: f.stripe,
+    guildId: grace.guildId,
+    now: paidEndsAt + 5000,
+  });
+  expect(
+    await getRenewalRecoveryRepository().getCurrent(grace.guildId),
+  ).toMatchObject({ state: "watching", paid: { invoiceId: f.renewal.id } });
+  expect(
+    getMockStore().renewalRecoveryPointers.get(grace.guildId)?.blocking,
+  ).toBe(false);
+});
+
+async function scheduledFixture(withOffer = false) {
+  const f = fixture();
+  f.subscription.items.data[0].price.lookup_key = "chronote_pro_monthly";
+  await f.track();
+  f.fail();
+  f.subscription.items.data[0].price.id = "price_basic";
+  f.subscription.items.data[0].price.lookup_key = "chronote_basic_monthly";
+  const pricing = f.renewal.lines.data[0].pricing;
+  if (!pricing?.price_details) throw new Error("Missing price fixture");
+  pricing.price_details = { ...pricing.price_details, price: "price_basic" };
+  const operation = {
+    ...changeOperation,
+    payerId: f.subscription.metadata.discord_id,
+    timing: "renewal" as const,
+    state: "scheduled" as const,
+    scheduleId: "sub_sched",
+    consent: { at: paidEndsAt - 100, quoteRevision: changeOperation.revision },
+    source: {
+      ...changeOperation.source,
+      customerId: "cus_renewal",
+      periodEnd: paidEndsAt,
+    },
+    target: {
+      ...changeOperation.target,
+      priceId: "price_basic",
+      selection: {
+        tier: "basic" as const,
+        interval: "month" as const,
+        expectedOffer: "none" as const,
+      },
+    },
+  };
+  if (withOffer) {
+    operation.target.offer = {
+      id: "basic_intro_v1",
+      authority: {
+        guildId: operation.guildId,
+        mode: "test",
+        offerId: "basic_intro_v1",
+        accountId: "acct_owned",
+        coverageRevision: "coverage",
+        boundaryRevision: "boundary",
+        writerImageDigest: "sha256:" + "a".repeat(64),
+      },
+      terms: {
+        interval: "month",
+        currency: "usd",
+        priceId: "price_basic",
+        couponId: "co_monthly",
+        regularUnitAmount: 1000,
+        discountedUnitAmount: 600,
+        durationMonths: 3,
+      },
+    };
+    getMockStore().offerUsages.set(
+      offerUsageKey(operation.guildId, "basic_intro_v1", "test"),
+      offerUsageSchema.parse({
+        guildId: operation.guildId,
+        mode: "test",
+        offerId: "basic_intro_v1",
+        revision: "reserved",
+        state: "reserved",
+        operationId: operation.operationId,
+        reservedAt: operation.createdAt * 1000,
+        terms: operation.target.offer.terms,
+      }),
+    );
+  }
+  getMockStore().billingChangeOperations.set(
+    `CHANGE_OP#${operation.guildId}#${operation.operationId}`,
+    operation,
+  );
+  f.renewal.parent = {
+    type: "subscription_details",
+    quote_details: null,
+    subscription_details: {
+      subscription: f.subscription.id,
+      metadata: { chronote_change_operation: operation.operationId },
+    },
+  };
+  getMockStore().billingChangeControls.set(
+    `CHANGE_CONTROL#${operation.guildId}`,
+    { operationId: operation.operationId },
+  );
+  return { f, operation };
+}
+test.each([false, true])(
+  "cancels an applied unpaid schedule and releases its old operation control (offer=%s)",
+  async (withOffer) => {
+    const { f, operation } = await scheduledFixture(withOffer);
+    const grace = await f.refresh();
+    if (!grace || grace.state !== "grace") throw new Error("Expected grace");
+    const payer = jest
+      .spyOn(renewalPayer, "assertStripePayer")
+      .mockResolvedValue();
+    const provider = jest
+      .spyOn(renewalProvider, "cancelUnpaidRenewal")
+      .mockImplementation(async (input) => {
+        if (input.recovery.state !== "canceling")
+          throw new Error("Expected cancellation");
+        f.subscription.status = "canceled";
+        f.subscription.metadata.chronote_renewal_recovery = renewalRecoveryKey(
+          input.recovery,
+        );
+        await input.onReceipt({
+          ...input.recovery,
+          revision: "native-canceled",
+          receipts: {
+            ...input.recovery.receipts,
+            creditNoteId: "cn_owned",
+            canceled: true,
+            collectionRestored: true,
+          },
+        });
+        return "canceled";
+      });
+    try {
+      const result = await cancelBillingChange({
+        stripe: f.stripe,
+        guildId: operation.guildId,
+        payerId: operation.payerId,
+        operationId: operation.operationId,
+        now: paidEndsAt + 4001,
+      });
+      expect(result).toMatchObject({ state: "canceled" });
+      if (withOffer)
+        expect(
+          getMockStore().offerUsages.get(
+            offerUsageKey(operation.guildId, "basic_intro_v1", "test"),
+          ),
+        ).toMatchObject({
+          state: "unused",
+          released: {
+            reason: "schedule_canceled",
+            operationId: operation.operationId,
+          },
+        });
+      expect(
+        await classifyChangeHistory(f.renewal, {
+          guildId: operation.guildId,
+          mode: "test",
+          accountId: "acct_owned",
+          createdBefore: paidEndsAt + 8000,
+        }),
+      ).toEqual({ kind: "ordinary" });
+      expect(
+        getMockStore().billingChangeOperations.get(
+          `CHANGE_OP#${operation.guildId}#${operation.operationId}`,
+        ),
+      ).toMatchObject({ state: "canceled", reconciled: true });
+      expect(
+        getMockStore().billingChangeControls.has(
+          `CHANGE_CONTROL#${operation.guildId}`,
+        ),
+      ).toBe(false);
+      expect(
+        getMockStore().renewalRecoveryPointers.get(operation.guildId)?.blocking,
+      ).toBe(false);
+      expect(
+        await getRenewalRecoveryRepository().getCurrent(operation.guildId),
+      ).toMatchObject({ state: "canceled", endsAt: grace.endsAt });
+    } finally {
+      payer.mockRestore();
+      provider.mockRestore();
+    }
+  },
+);

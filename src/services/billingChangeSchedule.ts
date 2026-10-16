@@ -1,3 +1,8 @@
+import { getRenewalRecoveryRepository } from "../repositories/renewalRecoveryRepository";
+import {
+  isRenewalCancellationComplete,
+  renewalRecoveryKey,
+} from "../types/renewalRecovery";
 import { assertRecurringOfferInvoice } from "./firstOfferInvoiceEvidence";
 import type Stripe from "stripe";
 import type { StripeClient, StripeSubscription } from "../types/stripe";
@@ -205,6 +210,26 @@ export async function cancelChangeSchedule(
   operation: BillingChangeOperation,
   scheduleId: string | null,
 ): Promise<boolean> {
+  const recovery = await getRenewalRecoveryRepository().getCurrent(
+    operation.guildId,
+  );
+  if (
+    isRenewalCancellationComplete(recovery) &&
+    recovery.scheduledOperationId === operation.operationId
+  ) {
+    const subscription = await stripe.subscriptions.retrieve(
+      operation.source.subscriptionId,
+    );
+    return (
+      subscription.status === "canceled" &&
+      subscription.id === recovery.subscriptionId &&
+      stripeId(subscription.customer) === recovery.customerId &&
+      subscription.metadata.guild_id === operation.guildId &&
+      subscription.livemode === (recovery.mode === "live") &&
+      subscription.metadata.chronote_renewal_recovery ===
+        renewalRecoveryKey(recovery)
+    );
+  }
   if (scheduleId) {
     const released = await releaseOwnedSchedule(stripe, operation, scheduleId);
     if (!released) return false;
@@ -305,7 +330,7 @@ function assertOwnedSchedule(
   )
     throw changeUnavailable();
 }
-async function releaseOwnedSchedule(
+export async function releaseOwnedSchedule(
   stripe: StripeClient,
   operation: BillingChangeOperation,
   scheduleId: string,

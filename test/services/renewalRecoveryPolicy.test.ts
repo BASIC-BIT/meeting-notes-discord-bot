@@ -98,3 +98,29 @@ test("allows accepted recovery to retain its deadline during cancellation", () =
   });
   expect(() => assertRenewalRecoveryTransition(next, grace)).not.toThrow();
 });
+
+test("rejects terminal cancellation until native collection restoration is proved", () => {
+  const { nextCheckAt, ...fields } = base;
+  void nextCheckAt;
+  expect(
+    renewalRecoverySchema.safeParse({
+      ...fields,
+      state: "canceled",
+      reason: "payer",
+      invoice: {
+        id: "in_renew",
+        lineId: "il_plan",
+        finalizedAt: 1000000,
+        periodStart: 1000000,
+        periodEnd: 2000000,
+      },
+      endsAt: 1172800,
+      receipts: {
+        creditNoteId: "cn_owned",
+        refundIds: [],
+        canceled: true,
+        collectionRestored: false,
+      },
+    }).success,
+  ).toBe(false);
+});

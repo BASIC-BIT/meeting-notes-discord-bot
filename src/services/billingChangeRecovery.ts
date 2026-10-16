@@ -20,7 +20,7 @@ export function compensationAmounts(total: number, paid: number) {
     balanceReversal: Math.max(0, -total),
   };
 }
-async function inventory<T>(values: AsyncIterable<T>): Promise<T[]> {
+export async function inventory<T>(values: AsyncIterable<T>): Promise<T[]> {
   const result: T[] = [];
   for await (const value of values) {
     if (result.length >= 10000) throw changeUnavailable();

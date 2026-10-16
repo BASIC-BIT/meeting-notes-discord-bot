@@ -106,6 +106,8 @@ export function getRenewalRecoveryRepository() {
         if (
           !previous ||
           isRenewalRecoveryBlocking(previous) ||
+          (previous.state === "paid" &&
+            previous.projection.state === "pending") ||
           (previous.subscriptionId === next.subscriptionId &&
             previous.paid.periodEnd >= next.paid.periodEnd)
         )

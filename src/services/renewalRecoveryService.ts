@@ -1,3 +1,8 @@
+import { cancelUnpaidRenewal } from "./renewalRecoveryProvider";
+import { reconcileBillingChangeForWebhook } from "./billingChangeService";
+import { reconcileSubscription } from "./subscriptionReconciliation";
+import { assertStripePayer } from "./billingPayerService";
+import { BillingActionError } from "./billingActionError";
 import { randomUUID } from "node:crypto";
 import type {
   StripeClient,
@@ -101,6 +106,7 @@ export async function refreshRenewalRecovery(
   if (
     !record ||
     record.state === "paid" ||
+    record.state === "canceling" ||
     record.state === "canceled" ||
     record.state === "ended"
   )
@@ -139,10 +145,7 @@ export async function refreshRenewalRecovery(
 }
 async function observeRenewalInvoice(
   input: Context,
-  record: Extract<
-    RenewalRecovery,
-    { state: "watching" | "grace" | "canceling" }
-  >,
+  record: Extract<RenewalRecovery, { state: "watching" | "grace" }>,
   pointer: GuildSubscription,
   subscription: StripeSubscription,
   invoice: StripeInvoice,
@@ -162,7 +165,6 @@ async function observeRenewalInvoice(
     endsAt: renewalGraceDeadline(finalizedAt),
   };
   if (invoice.status === "paid" && invoice.amount_remaining === 0) {
-    if (record.state === "canceling") return record;
     const { nextCheckAt, ...base } = record;
     void nextCheckAt;
     return saveRecovery(
@@ -236,4 +238,150 @@ export async function completeRenewalPaidProjection(
     record,
     saved,
   );
+}
+
+async function beginRenewalCancellation(
+  input: Context,
+  record: Extract<RenewalRecovery, { state: "grace" }>,
+  reason: "payer" | "expired",
+): Promise<RenewalRecovery> {
+  const pointer = await getSubscriptionRepository().get(input.guildId);
+  if (!pointer || pointer.stripeSubscriptionId !== record.subscriptionId)
+    throw changeUnavailable();
+  return saveRecovery(
+    renewalRecoverySchema.parse({
+      ...record,
+      state: "canceling",
+      reason,
+      revision: randomUUID(),
+      nextCheckAt: input.now,
+      receipts: {
+        creditNoteId: null,
+        refundIds: [],
+        canceled: false,
+        collectionRestored: false,
+        unrelatedInvoices: [],
+      },
+    }),
+    record,
+    pointer,
+  );
+}
+export async function cancelRenewalRecovery(
+  input: Context & { payerId: string },
+): Promise<void> {
+  const record = await getRenewalRecoveryRepository().getCurrent(input.guildId);
+  if (!record || record.mode !== config.subscription.stripeMode)
+    throw changeUnavailable();
+  if (record.payerId !== input.payerId)
+    throw new BillingActionError(
+      "FORBIDDEN",
+      "Only the original payer can cancel this renewal.",
+    );
+  await assertStripePayer({
+    stripe: input.stripe,
+    customerId: record.customerId,
+    payerId: input.payerId,
+  });
+  if (record.state === "grace")
+    await beginRenewalCancellation(input, record, "payer");
+  else if (!["canceling", "paid", "canceled"].includes(record.state))
+    throw changeUnavailable();
+  await reconcileRenewalRecovery(input);
+}
+async function repairRenewalPaidAccess(
+  input: Context,
+  record: Extract<RenewalRecovery, { state: "paid" }>,
+): Promise<void> {
+  await reconcileBillingChangeForWebhook(input.stripe, input.guildId);
+  await reconcileSubscription(
+    input.stripe,
+    input.guildId,
+    record.subscriptionId,
+  );
+  const saved = await getSubscriptionRepository().get(input.guildId);
+  if (!saved || saved.stripeSubscriptionId !== record.subscriptionId) return;
+  const subscription = await input.stripe.subscriptions.retrieve(
+    record.subscriptionId,
+  );
+  await completeRenewalPaidProjection(input.guildId, subscription, saved);
+  if (subscription.status === "active")
+    await trackPaidRenewalPeriod({
+      ...input,
+      subscriptionId: record.subscriptionId,
+      invoiceId: record.invoice.id,
+    });
+}
+async function finishRenewalCancellation(
+  input: Context,
+  initial: Extract<RenewalRecovery, { state: "canceling" }>,
+): Promise<void> {
+  let record = initial;
+  const result = await cancelUnpaidRenewal({
+    ...input,
+    recovery: initial,
+    onReceipt: async (next) => {
+      if (next.state !== "canceling") throw changeUnavailable();
+      const pointer = await getSubscriptionRepository().get(input.guildId);
+      if (!pointer) throw changeUnavailable();
+      await saveRecovery(next, record, pointer);
+      record = next;
+    },
+  });
+  if (result === "pending") return;
+  if (result === "paid") {
+    const { nextCheckAt, reason, receipts, ...base } = record;
+    void nextCheckAt;
+    void reason;
+    void receipts;
+    const next = renewalRecoverySchema.parse({
+      ...base,
+      state: "paid",
+      revision: randomUUID(),
+      projection: { state: "pending", nextCheckAt: input.now },
+    });
+    const pointer = await getSubscriptionRepository().get(input.guildId);
+    if (!pointer) throw changeUnavailable();
+    await saveRecovery(next, record, pointer);
+    if (next.state !== "paid") throw changeUnavailable();
+    return repairRenewalPaidAccess(input, next);
+  }
+  await reconcileBillingChangeForWebhook(input.stripe, input.guildId);
+  await reconcileSubscription(
+    input.stripe,
+    input.guildId,
+    record.subscriptionId,
+  );
+  const pointer = await getSubscriptionRepository().get(input.guildId);
+  if (
+    !pointer ||
+    pointer.stripeSubscriptionId !== record.subscriptionId ||
+    pointer.status !== "canceled"
+  )
+    throw changeUnavailable();
+  const { nextCheckAt, ...base } = record;
+  void nextCheckAt;
+  await saveRecovery(
+    renewalRecoverySchema.parse({
+      ...base,
+      state: "canceled",
+      revision: randomUUID(),
+    }),
+    record,
+    pointer,
+  );
+}
+export async function reconcileRenewalRecovery(
+  input: Context & { signal?: AbortSignal },
+): Promise<void> {
+  input.signal?.throwIfAborted();
+  let record = await refreshRenewalRecovery(input);
+  if (!record) return;
+  if (record.state === "paid" && record.projection.state === "pending")
+    return repairRenewalPaidAccess(input, record);
+  if (record.state === "grace" && input.now >= record.endsAt)
+    record = await beginRenewalCancellation(input, record, "expired");
+  if (record.state !== "canceling") return;
+  input.signal?.throwIfAborted();
+  await finishRenewalCancellation(input, record);
 }

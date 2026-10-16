@@ -48,6 +48,7 @@ export const renewalRecoveryReceiptsSchema = z
     creditNoteId: id.nullable(),
     refundIds: z.array(id),
     canceled: z.boolean(),
+    collectionRestored: z.boolean().default(false),
     unrelatedInvoices: z
       .array(z.object({ id, autoAdvance: z.boolean() }).strict())
       .default([]),
@@ -89,6 +90,14 @@ export const renewalRecoverySchema = z
   ])
   .superRefine((record, context) => {
     if (
+      record.state === "canceled" &&
+      !(record.receipts.canceled && record.receipts.collectionRestored)
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Renewal cancellation requires complete native proof",
+      });
+    if (
       record.state !== "watching" &&
       record.state !== "ended" &&
       record.endsAt !== renewalGraceDeadline(record.invoice.finalizedAt)
@@ -103,7 +112,9 @@ export type RenewalRecoveryReceipts = z.infer<
   typeof renewalRecoveryReceiptsSchema
 >;
 export const renewalRecoveryKey = (
-  record: Pick<RenewalRecovery, "guildId" | "subscriptionId" | "paid">,
+  record: Pick<RenewalRecovery, "guildId" | "subscriptionId"> & {
+    paid: Pick<RenewalRecovery["paid"], "periodEnd">;
+  },
 ) =>
   `RENEWAL_RECOVERY#${record.guildId}#${record.subscriptionId}#${record.paid.periodEnd}`;
 export const renewalRecoveryCurrentKey = (guildId: string) =>
@@ -119,6 +130,16 @@ export const isRenewalRecoveryBlocking = (record: RenewalRecovery) =>
   (record.state === "grace" ||
     record.state === "canceling" ||
     (record.state === "paid" && record.projection.state === "pending"));
+export function isRenewalCancellationComplete(
+  record: RenewalRecovery | undefined,
+): record is Extract<RenewalRecovery, { state: "canceling" | "canceled" }> {
+  return Boolean(
+    record &&
+    (record.state === "canceling" || record.state === "canceled") &&
+    record.receipts.canceled &&
+    record.receipts.collectionRestored,
+  );
+}
 export const renewalRecoveryNextCheck = (
   record: RenewalRecovery,
 ): number | undefined =>
@@ -168,6 +189,7 @@ export function assertRenewalRecoveryTransition(
       throw new Error("Renewal paid source is immutable");
   if (previous.enforcementAccepted && !next.enforcementAccepted)
     throw new Error("Accepted renewal recovery cannot be disabled");
+  if (previous.state === "canceling") assertRecoveryReceipts(next, previous);
   assertBoundRenewalRecovery(next, previous);
 }
 function assertBoundRenewalRecovery(
@@ -185,6 +207,41 @@ function assertBoundRenewalRecovery(
     throw new Error("Bound renewal invoice and deadline are immutable");
 }
 
+function assertRecoveryReceipts(
+  next: RenewalRecovery,
+  previous: Extract<RenewalRecovery, { state: "canceling" }>,
+): void {
+  if (next.state === "paid") {
+    if (previous.receipts.creditNoteId || previous.receipts.canceled)
+      throw new Error("Compensated renewal cannot become paid");
+    return;
+  }
+  if (next.state !== "canceling" && next.state !== "canceled")
+    throw new Error("Invalid recovery receipt transition");
+  const before = previous.receipts;
+  const after = next.receipts;
+  assertNativeReceipts(before, after);
+  if (
+    before.unrelatedInvoices.length &&
+    !isDeepStrictEqual(before.unrelatedInvoices, after.unrelatedInvoices)
+  )
+    throw new Error("Collection snapshot is immutable");
+  if (before.refundIds.some((id) => !after.refundIds.includes(id)))
+    throw new Error("Refund receipts cannot be removed");
+  if (next.state === "canceled" && !isRenewalCancellationComplete(next))
+    throw new Error("Renewal cancellation requires complete native proof");
+}
+function assertNativeReceipts(
+  before: RenewalRecoveryReceipts,
+  after: RenewalRecoveryReceipts,
+): void {
+  if (
+    (before.creditNoteId && before.creditNoteId !== after.creditNoteId) ||
+    (before.canceled && !after.canceled) ||
+    (before.collectionRestored && !after.collectionRestored)
+  )
+    throw new Error("Bound native recovery receipts are immutable");
+}
 export const renewalRecoveryCursorSchema = z
   .object({
     guildId: id,
