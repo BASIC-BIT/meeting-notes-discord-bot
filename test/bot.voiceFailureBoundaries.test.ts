@@ -115,3 +115,178 @@ test("the registered voice-state boundary keeps a successful subscription silent
   await new Promise((resolve) => setImmediate(resolve));
   expect(warn).not.toHaveBeenCalled();
 });
+
+import {
+  ChannelType,
+  Client,
+  Guild,
+  TextChannel,
+  VoiceChannel,
+} from "discord.js";
+import { CONFIG_KEYS } from "../src/config/keys";
+import { getGlobalConfigValues } from "../src/services/appConfigService";
+import { listConfigOverridesForScope } from "../src/services/configOverridesService";
+import { getAutoRecordSettingByChannel } from "../src/services/autoRecordService";
+import { resolveMeetingNotesChannel } from "../src/services/meetingNotesDestinationService";
+import {
+  getSnapshotString,
+  resolveConfigSnapshot,
+} from "../src/services/unifiedConfigService";
+import { MEETING_START_REASONS } from "../src/types/meetingLifecycle";
+import { parseTags } from "../src/utils/tags";
+
+jest.mock("../src/services/appConfigService", () => ({
+  getGlobalConfigValues: jest.fn(),
+}));
+jest.mock("../src/services/configOverridesService", () => ({
+  listConfigOverridesForScope: jest.fn(),
+}));
+
+async function runAutoRecordJoin(options: {
+  voiceDestination?: string;
+  serverDestination?: string;
+  destinationMissing?: boolean;
+}) {
+  jest.mocked(getGlobalConfigValues).mockResolvedValue({});
+  jest.mocked(listConfigOverridesForScope).mockImplementation(async (scope) => {
+    const values =
+      scope.scope === "server"
+        ? {
+            [CONFIG_KEYS.autorecord.enabled]: true,
+            [CONFIG_KEYS.notes.channelId]: options.serverDestination,
+            [CONFIG_KEYS.notes.tags]: "server-tag",
+          }
+        : { [CONFIG_KEYS.notes.channelId]: options.voiceDestination };
+    return Object.entries(values)
+      .filter(([, value]) => value !== undefined)
+      .map(([configKey, value]) => ({
+        scopeId: `${scope.scope}#guild-1`,
+        configKey,
+        value,
+        updatedAt: "2026-10-16T00:00:00Z",
+        updatedBy: "admin-1",
+      }));
+  });
+  const discord = new Client({ intents: [] });
+  const guild: Guild = Reflect.construct(Guild, [discord, { id: "guild-1" }]);
+  const voiceChannel: VoiceChannel = Reflect.construct(VoiceChannel, [
+    guild,
+    { id: "voice-1", name: "Voice", type: ChannelType.GuildVoice },
+    guild.client,
+  ]);
+  const notesChannel: TextChannel = Reflect.construct(TextChannel, [
+    guild,
+    { id: "voice-notes", name: "private-notes", type: ChannelType.GuildText },
+    guild.client,
+  ]);
+  const fetchChannel = jest
+    .spyOn(guild.channels, "fetch")
+    .mockResolvedValue(options.destinationMissing ? null : notesChannel);
+  const start = jest.fn().mockResolvedValue(true);
+  const tts = jest.fn();
+  const admission = jest.fn();
+  const errors = jest.fn();
+  const source = ts.createSourceFile(
+    "bot.ts",
+    readFileSync(path.join(__dirname, "../src/bot.ts"), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const declaration = source.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) && node.name?.text === "handleUserJoin",
+  );
+  if (!declaration) throw new Error("Missing production voice-join handler");
+  const context = vm.createContext({
+    client: { user: { id: "bot-1" } },
+    getMeeting: () => undefined,
+    isMeetingCollectingEvents: () => false,
+    getActiveMeetingLease: async () => undefined,
+    autoRecordJoinSuppressionService: {
+      shouldSuppressAutoJoin: async () => false,
+    },
+    getAutoRecordSettingByChannel,
+    getGuildLimits: async () => ({
+      subscription: { tier: "free" },
+      limits: {},
+    }),
+    resolveConfigSnapshot,
+    getSnapshotString,
+    CONFIG_KEYS,
+    parseTags,
+    resolveMeetingNotesChannel,
+    resolveMeetingVoiceSettings: async () => ({}),
+    MEETING_START_REASONS,
+    handleAutoStartMeeting: start,
+    assertServingBotAdmission: admission,
+    maybeStartAutoTtsOnly: tts,
+    console: { log: jest.fn(), error: errors, warn: jest.fn() },
+    newState: {
+      guild,
+      channel: voiceChannel,
+      channelId: voiceChannel.id,
+      member: { user: { id: "trigger-1" } },
+    },
+  });
+  await vm.runInContext(
+    ts.transpileModule(
+      declaration.getText(source) + "\nhandleUserJoin(newState, true);",
+      {
+        compilerOptions: {
+          module: ts.ModuleKind.None,
+          target: ts.ScriptTarget.ES2022,
+        },
+      },
+    ).outputText,
+    context,
+  );
+  return {
+    start,
+    tts,
+    fetchChannel,
+    notesChannel,
+    voiceChannel,
+    admission,
+    errors,
+  };
+}
+
+test("auto-record-all uses a notes-only voice override and preserves its rule and tags", async () => {
+  const { start, notesChannel, voiceChannel, admission, fetchChannel } =
+    await runAutoRecordJoin({
+      voiceDestination: "voice-notes",
+      serverDestination: "server-notes",
+    });
+  expect(fetchChannel).toHaveBeenCalledWith("voice-notes");
+  expect(start).toHaveBeenCalledWith(
+    expect.anything(),
+    voiceChannel,
+    notesChannel,
+    expect.objectContaining({
+      assertAdmission: admission,
+      tags: ["server-tag"],
+      startReason: MEETING_START_REASONS.AUTO_RECORD_ALL,
+      startTriggeredByUserId: "trigger-1",
+      autoRecordRule: { mode: "all", channelId: "ALL" },
+    }),
+  );
+});
+
+test("unconfigured auto-record cannot use an invocation fallback", async () => {
+  const { start, fetchChannel, tts } = await runAutoRecordJoin({});
+  expect(fetchChannel).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+  expect(tts).not.toHaveBeenCalled();
+});
+
+test("a missing configured auto destination does not start elsewhere", async () => {
+  const { start, fetchChannel, tts } = await runAutoRecordJoin({
+    voiceDestination: "missing-notes",
+    serverDestination: "server-notes",
+    destinationMissing: true,
+  });
+  expect(fetchChannel).toHaveBeenCalledTimes(1);
+  expect(fetchChannel).toHaveBeenCalledWith("missing-notes");
+  expect(start).not.toHaveBeenCalled();
+  expect(tts).not.toHaveBeenCalled();
+});
