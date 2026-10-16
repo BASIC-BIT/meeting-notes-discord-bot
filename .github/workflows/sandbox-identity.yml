@@ -48,5 +48,21 @@ jobs:
           ECS_SERVICE: ${{ vars.ECS_SERVICE }}
         run: |
           set -euo pipefail
-          aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
-            --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount}' --output json
+          aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --output json | node -e '
+            const assert = require("node:assert/strict");
+            try {
+              const response = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+              assert.deepEqual(response.failures, []);
+              assert.equal(response.services.length, 1);
+              const service = response.services[0];
+              assert.equal(service.serviceName, process.env.ECS_SERVICE);
+              console.log(JSON.stringify({
+                desired: service.desiredCount,
+                running: service.runningCount,
+                pending: service.pendingCount,
+              }));
+            } catch {
+              console.error("Sandbox service lookup failed");
+              process.exitCode = 1;
+            }
+          '

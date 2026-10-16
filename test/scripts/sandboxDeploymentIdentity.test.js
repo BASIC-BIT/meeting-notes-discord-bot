@@ -117,3 +117,49 @@ test.each([
     }),
   ).toThrow();
 });
+
+const canaryRead = parse(
+  readFileSync(".github/workflows/sandbox-identity.yml", "utf8"),
+).jobs.identity.steps.find(
+  (step) => step.name === "Read Sandbox service counts",
+).run;
+const sandboxService = {
+  serviceName: "meeting-notes-sandbox-bot-service",
+  desiredCount: 0,
+  runningCount: 0,
+  pendingCount: 0,
+};
+function runCanary(response) {
+  return execFileSync(
+    "bash",
+    [
+      "-c",
+      `aws() { if [[ "$*" == *"--query"* ]]; then printf '%s' null; else printf '%s' "$TEST_RESPONSE"; fi; }; ${canaryRead}`,
+    ],
+    {
+      env: {
+        ...process.env,
+        TEST_RESPONSE: JSON.stringify(response),
+        ECS_SERVICE: sandboxService.serviceName,
+        ECS_CLUSTER: "meeting-notes-sandbox-bot-cluster",
+      },
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+}
+test("canary accepts a visible parked Sandbox service", () => {
+  expect(
+    JSON.parse(runCanary({ services: [sandboxService], failures: [] })),
+  ).toEqual({ desired: 0, running: 0, pending: 0 });
+});
+test.each([
+  { services: [], failures: [{ arn: "private-resource", reason: "MISSING" }] },
+  { services: [], failures: [] },
+  {
+    services: [{ ...sandboxService, serviceName: "foreign-service" }],
+    failures: [],
+  },
+])("canary refuses missing or wrong service evidence", (response) => {
+  expect(() => runCanary(response)).toThrow();
+});
