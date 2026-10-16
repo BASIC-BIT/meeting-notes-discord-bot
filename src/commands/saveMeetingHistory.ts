@@ -100,6 +100,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
     const timing = notesDeliveryTimingSchema.safeParse(
       meeting.notesDeliveryTiming,
     );
+    const notesDeliveryTiming = timing.success ? timing.data : undefined;
     const timestamp = meeting.startTime.toISOString();
     const duration = meeting.endTime
       ? Math.floor(
@@ -134,7 +135,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
         summaryMessageId:
           meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
         notesMessageIds: meeting.notesMessageIds,
-        notesDeliveryTiming: timing.success ? timing.data : undefined,
+        notesDeliveryTiming,
         delivery: meeting.delivery,
         notesChannelId: meeting.notesChannelId,
         transcriptS3Key: meeting.transcriptS3Key,
@@ -186,7 +187,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       summaryMessageId:
         meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
       notesMessageIds: meeting.notesMessageIds,
-      notesDeliveryTiming: timing.success ? timing.data : undefined,
+      notesDeliveryTiming,
       delivery: meeting.delivery,
       notesChannelId: meeting.notesChannelId,
       notesVersion,

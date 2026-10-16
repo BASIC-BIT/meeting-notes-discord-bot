@@ -233,7 +233,10 @@ type RecoveryPatch = Parameters<
   RecoveryRepository["updateRecordingRecovery"]
 >[1];
 const stages = ["verification", "transcription", "notes", "delivery", "export"];
-function validateRecoveryPatch(claim: RecoveryClaim, patch: RecoveryPatch) {
+function validateRecoveryNotesTiming(
+  claim: RecoveryClaim,
+  patch: RecoveryPatch,
+) {
   if (patch.notesDeliveryTiming !== undefined) {
     const next = notesDeliveryTimingSchema.parse(patch.notesDeliveryTiming);
     const prior = notesDeliveryTimingSchema.safeParse(
@@ -249,6 +252,9 @@ function validateRecoveryPatch(claim: RecoveryClaim, patch: RecoveryPatch) {
     )
       throw new Error("Acknowledged notes timing cannot be replaced");
   }
+}
+function validateRecoveryPatch(claim: RecoveryClaim, patch: RecoveryPatch) {
+  validateRecoveryNotesTiming(claim, patch);
   if (patch.captureCoverage)
     captureCoverageSummarySchema.parse(patch.captureCoverage);
   if (patch.recovery) {
