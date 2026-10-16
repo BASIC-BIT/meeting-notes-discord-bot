@@ -21,7 +21,7 @@ import { BillingActionError } from "./billingActionError";
 
 export const stripeId = (value: string | { id: string } | null | undefined) =>
   typeof value === "string" ? value : value?.id;
-export function isUnappliedChangeSourceEnded(
+export function isUnappliedChangeSourceInvalidated(
   subscription: StripeSubscription,
   operation: BillingChangeOperation,
   now: number,
@@ -37,11 +37,23 @@ export function isUnappliedChangeSourceEnded(
   if (["canceled", "incomplete_expired"].includes(subscription.status))
     return true;
   return (
-    now >= operation.source.periodEnd &&
-    expiredSourceStillUnapplied(subscription, operation)
+    sourceStillUnapplied(subscription, operation) &&
+    (now >= operation.source.periodEnd ||
+      hasNewSourceCancellation(subscription, operation))
   );
 }
-function expiredSourceStillUnapplied(
+function hasNewSourceCancellation(
+  subscription: StripeSubscription,
+  operation: BillingChangeOperation,
+): boolean {
+  const original = operation.source.cancellation;
+  return Boolean(
+    (subscription.cancel_at || subscription.cancel_at_period_end) &&
+    ((subscription.cancel_at ?? null) !== (original?.at ?? null) ||
+      subscription.cancel_at_period_end !== (original?.atPeriodEnd ?? false)),
+  );
+}
+function sourceStillUnapplied(
   subscription: StripeSubscription,
   operation: BillingChangeOperation,
 ): boolean {

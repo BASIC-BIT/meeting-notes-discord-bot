@@ -7,7 +7,7 @@ import type {
 } from "../types/stripe";
 import type { BillingChangeOperation } from "../types/billingChange";
 import {
-  isUnappliedChangeSourceEnded,
+  isUnappliedChangeSourceInvalidated,
   changeSourceFingerprint,
   changeUpdateParams,
   stripeId,
@@ -141,7 +141,7 @@ export async function applyFundedBillingChange(input: {
     { expand: ["latest_invoice", "discounts.source.coupon"] },
   );
   if (
-    isUnappliedChangeSourceEnded(
+    isUnappliedChangeSourceInvalidated(
       subscription,
       operation,
       input.now ?? Math.floor(Date.now() / 1000),

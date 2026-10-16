@@ -3,7 +3,10 @@ import { ECSClient } from "@aws-sdk/client-ecs";
 import * as deploymentProof from "../../src/services/ledgerWriterDeployment";
 import * as writerRuntime from "../../src/services/ledgerWriterRuntime";
 import { trackPaidRenewalPeriod } from "../../src/services/renewalRecoveryService";
-import { parseBillingRenewalRecoveryArgs } from "../../scripts/billing-renewal-recovery";
+import {
+  parseBillingRenewalRecoveryArgs,
+  renewalCoverageExitCode,
+} from "../../scripts/billing-renewal-recovery";
 import { auditRenewalCoverage } from "../../src/services/renewalRecoveryCoverage";
 import { config } from "../../src/services/configService";
 import * as db from "../../src/db";
@@ -171,6 +174,33 @@ test.each(["none", "zero", "paid_history"] as const)(
   },
 );
 
+test("an applied coverage audit fails until index and deployed writer readiness are proved", async () => {
+  const f = fixture();
+  const report = await auditRenewalCoverage({ ...f.input, apply: true });
+  expect(report.enumeration).toBe("complete");
+  expect(report.outcomes.every((outcome) => outcome.state === "covered")).toBe(
+    true,
+  );
+  expect(report.writerVerified).toBe(false);
+  expect(renewalCoverageExitCode(report)).toBe(1);
+  expect(renewalCoverageExitCode({ ...report, apply: false })).toBe(0);
+  expect(
+    renewalCoverageExitCode({
+      ...report,
+      writerVerified: true,
+      indexActive: false,
+    }),
+  ).toBe(1);
+  expect(
+    renewalCoverageExitCode({
+      ...report,
+      writerVerified: true,
+      indexActive: true,
+      coverageReady: true,
+    }),
+  ).toBe(0);
+});
+
 test("apply is idempotent and writes only owned coverage", async () => {
   const f = fixture();
   const report = await auditRenewalCoverage({ ...f.input, apply: true });
@@ -316,6 +346,101 @@ test("only complete catch-up, ACTIVE index and an exact normal-writer deployment
     writerVerified: false,
   });
 });
+test("uses a current deployed writer even when an older same-image witness is encountered first", async () => {
+  const { renewalRecoverySchema, renewalRecoveryKey } =
+    await import("../../src/types/renewalRecovery");
+  const f = fixture();
+  const digest = "sha256:" + "a".repeat(64);
+  const oldRuntime = {
+    taskArn: "arn:aws:ecs:us-east-1:123456789012:task/test/retired",
+    imageDigest: digest,
+  };
+  const currentRuntime = {
+    taskArn: "arn:aws:ecs:us-east-1:123456789012:task/test/current",
+    imageDigest: digest,
+  };
+  jest
+    .spyOn(writerRuntime, "readLedgerWriterRuntime")
+    .mockResolvedValue(oldRuntime);
+  await trackPaidRenewalPeriod({
+    stripe: f.stripe,
+    guildId: renewalSubscription.guildId,
+    subscriptionId: f.native.id,
+    invoiceId: fundedInvoice.id,
+    now: f.input.now,
+  });
+  const watch = await getRenewalRecoveryRepository().getCurrent(
+    renewalSubscription.guildId,
+  );
+  if (!watch) throw new Error("Missing writer fixture");
+  const first = renewalRecoverySchema.parse({
+    ...watch,
+    state: "grace",
+    enforcementAccepted: true,
+    invoice: {
+      id: f.renewal.id,
+      lineId: f.renewal.lines.data[0].id,
+      finalizedAt: paidEndsAt + 3600,
+      periodStart: paidEndsAt,
+      periodEnd: paidEndsAt + 2592000,
+    },
+    endsAt: paidEndsAt + 3600 + 172800,
+  });
+  const second = renewalRecoverySchema.parse({
+    ...first,
+    guildId: "333333333333333333",
+    subscriptionId: "sub_current_writer",
+    customerId: "cus_current_writer",
+    revision: "current-writer",
+    writerRuntime: currentRuntime,
+  });
+  getMockStore().subscriptions.set(second.guildId, {
+    ...renewalSubscription,
+    guildId: second.guildId,
+    stripeSubscriptionId: second.subscriptionId,
+    stripeCustomerId: second.customerId,
+  });
+  for (const record of [first, second]) {
+    getMockStore().renewalRecoveryRecords.set(
+      renewalRecoveryKey(record),
+      record,
+    );
+    getMockStore().renewalRecoveryPointers.set(record.guildId, {
+      key: renewalRecoveryKey(record),
+      revision: record.revision,
+      blocking: true,
+    });
+  }
+  const target = {
+    clusterArn: "cluster",
+    serviceArn: "service",
+    containerName: "api",
+    imageDigest: digest,
+  };
+  const verify = jest
+    .spyOn(deploymentProof, "verifyLedgerWriterDeployment")
+    .mockImplementation(async (_ecs, selected, witness) => {
+      if (witness.taskArn === oldRuntime.taskArn)
+        throw new Error("Retired task");
+      return {
+        ...selected,
+        taskDefinitionArn: "taskdef",
+        taskArns: [currentRuntime.taskArn],
+      };
+    });
+  const result = await auditRenewalCoverage({
+    ...f.input,
+    apply: true,
+    deployment: { ecs: new ECSClient({ region: "us-east-1" }), target },
+  });
+  expect(result).toMatchObject({
+    coverageReady: true,
+    writerVerified: true,
+    writerSampleGuildId: second.guildId,
+  });
+  expect(verify).toHaveBeenCalledTimes(2);
+});
+
 test("resuming under another account or mode is rejected before scanning", async () => {
   const f = fixture();
   const resume = await auditRenewalCoverage({ ...f.input, maxPages: 1 });

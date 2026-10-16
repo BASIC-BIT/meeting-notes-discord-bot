@@ -7,6 +7,7 @@ import { getStripeClient } from "../src/services/stripeClient";
 import {
   auditRenewalCoverage,
   renewalCoverageReportSchema,
+  type RenewalCoverageReport,
 } from "../src/services/renewalRecoveryCoverage";
 import { ledgerWriterDeploymentTargetSchema } from "../src/services/ledgerWriterDeployment";
 export function parseBillingRenewalRecoveryArgs(args: string[]) {
@@ -57,6 +58,13 @@ export function parseBillingRenewalRecoveryArgs(args: string[]) {
       : undefined,
   };
 }
+export function renewalCoverageExitCode(report: RenewalCoverageReport): 0 | 1 {
+  return report.enumeration !== "complete" ||
+    report.outcomes.some((outcome) => outcome.state === "unresolved") ||
+    (report.apply && !report.coverageReady)
+    ? 1
+    : 0;
+}
 async function main() {
   const args = parseBillingRenewalRecoveryArgs(process.argv.slice(2));
   const stripe = getStripeClient();
@@ -99,11 +107,7 @@ async function main() {
       ).length,
     }),
   );
-  if (
-    report.enumeration !== "complete" ||
-    report.outcomes.some((outcome) => outcome.state === "unresolved")
-  )
-    process.exitCode = 1;
+  process.exitCode = renewalCoverageExitCode(report);
 }
 if (require.main === module)
   main().catch(() => {

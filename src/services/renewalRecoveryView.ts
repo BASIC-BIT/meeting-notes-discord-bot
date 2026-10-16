@@ -78,6 +78,19 @@ async function payableView(
   assertRenewalOwner(subscription, record);
   const invoice = await input.stripe.invoices.retrieve(record.invoice.id);
   await verifyRenewalInvoice(invoice, record, subscription);
+  if (invoice.status === "void" || invoice.status === "uncollectible") {
+    if (view.canManage)
+      await assertStripePayer({
+        stripe: input.stripe,
+        customerId: record.customerId,
+        payerId: record.payerId,
+      });
+    return {
+      ...view,
+      amountDue: invoice.status === "void" ? null : invoice.amount_remaining,
+      currency: invoice.currency,
+    };
+  }
   if (invoice.status !== "open" || invoice.amount_remaining <= 0)
     return { ...view, status: "settlement_pending" };
   if (await hasProcessingRenewalPayment(input.stripe, invoice, record))

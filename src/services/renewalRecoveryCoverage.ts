@@ -127,24 +127,41 @@ async function verifyWriter(
   input: Input,
   report: RenewalCoverageReport,
 ): Promise<boolean> {
-  if (!input.deployment || !report.writerSampleGuildId) return false;
-  const record = await getRenewalRecoveryRepository().getCurrent(
-    report.writerSampleGuildId,
-  );
-  const witness = record?.writerRuntime;
-  if (
-    record?.mode !== input.mode ||
-    record.writerVersion !== RENEWAL_RECOVERY_WRITER_VERSION ||
-    !witness ||
-    witness.imageDigest !== input.deployment.target.imageDigest
-  )
-    return false;
-  await verifyLedgerWriterDeployment(
-    input.deployment.ecs,
-    input.deployment.target,
-    witness,
-  );
-  return true;
+  if (!input.deployment) return false;
+  const candidates = new Set([
+    ...(report.writerSampleGuildId ? [report.writerSampleGuildId] : []),
+    ...report.outcomes
+      .filter((outcome) => outcome.state === "covered")
+      .map((outcome) => outcome.guildId),
+  ]);
+  const attemptedTasks = new Set<string>();
+  let failed = false;
+  for (const guildId of candidates) {
+    const record = await getRenewalRecoveryRepository().getCurrent(guildId);
+    const witness = record?.writerRuntime;
+    if (
+      record?.mode !== input.mode ||
+      record.writerVersion !== RENEWAL_RECOVERY_WRITER_VERSION ||
+      !witness ||
+      witness.imageDigest !== input.deployment.target.imageDigest ||
+      attemptedTasks.has(witness.taskArn)
+    )
+      continue;
+    attemptedTasks.add(witness.taskArn);
+    try {
+      await verifyLedgerWriterDeployment(
+        input.deployment.ecs,
+        input.deployment.target,
+        witness,
+      );
+      report.writerSampleGuildId = guildId;
+      return true;
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed) throw new Error("Deployed renewal writer could not be verified");
+  return false;
 }
 function initialReport(input: Input): RenewalCoverageReport {
   if (!input.resume)

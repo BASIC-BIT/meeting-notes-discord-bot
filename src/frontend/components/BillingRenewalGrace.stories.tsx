@@ -90,6 +90,26 @@ export const PaymentProcessing: Story = {
     }),
   },
 };
+export const TerminalInvoice: Story = {
+  tags: ["terminal-renewal"],
+  args: {
+    initialView: renewalGraceFixture({ paymentUrl: null, amountDue: null }),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      canvas.queryByRole("link", { name: "Retry payment" }),
+    ).not.toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Cancel renewal" }),
+    ).toBeEnabled();
+  },
+};
+export const TerminalInvoiceMobile: Story = {
+  tags: ["terminal-renewal"],
+  ...TerminalInvoice,
+  parameters: { viewport: { defaultViewport: "mobile1" } },
+};
 export const CleanupPending: Story = {
   args: {
     initialView: renewalGraceFixture({

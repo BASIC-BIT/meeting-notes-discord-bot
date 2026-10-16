@@ -335,6 +335,38 @@ test.each(["customer", "mode", "credited", "first_purchase", "funding"])(
     ).toBe("watching");
   },
 );
+test.each(["void", "uncollectible"] as const)(
+  "keeps an unattempted terminal %s renewal cancelable during its original grace",
+  async (status) => {
+    const f = fixture();
+    await f.track();
+    f.fail();
+    f.renewal.status = status;
+    f.renewal.attempted = false;
+    f.renewal.hosted_invoice_url = null;
+    if (status === "void") f.renewal.amount_remaining = 0;
+    const grace = await f.refresh();
+    expect(grace).toMatchObject({
+      state: "grace",
+      enforcementAccepted: true,
+      endsAt: paidEndsAt + 3600 + 172800,
+    });
+    expect(
+      await getRenewalRecoveryView({
+        stripe: f.stripe,
+        guildId: renewalSubscription.guildId,
+        payerId: f.subscription.metadata.discord_id,
+        now: paidEndsAt + 4001,
+      }),
+    ).toMatchObject({
+      status: "grace",
+      canManage: true,
+      paymentUrl: null,
+      amountDue: status === "void" ? null : 1000,
+    });
+  },
+);
+
 test("accepts a paid period funded by customer credit without requiring paid cash", async () => {
   const f = fixture();
   const invoice = f.invoices.get(fundedInvoice.id);

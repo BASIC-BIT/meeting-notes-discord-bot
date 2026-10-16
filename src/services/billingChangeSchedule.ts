@@ -9,7 +9,7 @@ import type Stripe from "stripe";
 import type { StripeClient, StripeSubscription } from "../types/stripe";
 import type { BillingChangeOperation } from "../types/billingChange";
 import {
-  isUnappliedChangeSourceEnded,
+  isUnappliedChangeSourceInvalidated,
   changeSourceFingerprint,
   changeServiceFingerprint,
   stripeId,
@@ -224,7 +224,7 @@ export async function canceledBeforeSchedule(
     operation.source.subscriptionId,
   );
   return (
-    isUnappliedChangeSourceEnded(subscription, operation, now) &&
+    isUnappliedChangeSourceInvalidated(subscription, operation, now) &&
     !subscription.schedule &&
     subscription.metadata.chronote_scheduled_change !== operation.operationId
   );

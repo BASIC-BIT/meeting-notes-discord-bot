@@ -252,7 +252,12 @@ async function observeRenewalInvoice(
       pointer,
     );
   }
-  if (!invoice.attempted) return postpone(input, record, pointer);
+  if (
+    !invoice.attempted &&
+    invoice.status !== "void" &&
+    invoice.status !== "uncollectible"
+  )
+    return postpone(input, record, pointer);
   return saveRecovery(
     renewalRecoverySchema.parse({
       ...record,
