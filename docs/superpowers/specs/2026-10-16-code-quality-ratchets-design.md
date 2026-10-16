@@ -12,15 +12,15 @@ No product behavior, stored data, public URLs, authentication, or deployment aut
 
 ## Decisions and scope
 
-| Status | Decision |
-| --- | --- |
-| Confirmed | One PR-wide exception label plus rationale. Keep it active across pushes. Always show current findings. |
-| Approved | Use Git as the baseline, with no checked-in inventory of grandfathered violations. |
-| Approved | Start with complexity 15, file size below 1,000 physical lines, and token duplicates of at least 8 lines and 50 tokens. |
-| Approved | Include authored tests, mocks, fixtures, and stories in the same checks. |
-| Approved | Make one dedicated Actions check required and require branches to be up to date. |
-| Approved | Retain scc and Lizard as diagnostic reports, replacing the blocking Lizard whitelist policy. |
-| Deferred | Rust, Terraform, CSS, shell, prose, semantic similarity, custom per-file allowances, pre-commit scanning, and shared tooling packaging. |
+| Status    | Decision                                                                                                                                |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Confirmed | One PR-wide exception label plus rationale. Keep it active across pushes. Always show current findings.                                 |
+| Approved  | Use Git as the baseline, with no checked-in inventory of grandfathered violations.                                                      |
+| Approved  | Start with complexity 15, file size below 1,000 physical lines, and token duplicates of at least 8 lines and 50 tokens.                 |
+| Approved  | Include authored tests, mocks, fixtures, and stories in the same checks.                                                                |
+| Approved  | Make one dedicated Actions check required and require branches to be up to date.                                                        |
+| Approved  | Retain scc and Lizard as diagnostic reports, replacing the blocking Lizard whitelist policy.                                            |
+| Deferred  | Rust, Terraform, CSS, shell, prose, semantic similarity, custom per-file allowances, pre-commit scanning, and shared tooling packaging. |
 
 The initial source set is authored `.js`, `.jsx`, `.cjs`, `.mjs`, `.ts`, `.tsx`, `.cts`, and `.mts` files throughout the repository. This includes bot, API, frontend, desktop, docs-site code, scripts, tests, and root configuration files. In particular, `vite.config.mts` must be checked.
 
@@ -82,14 +82,14 @@ The exception is PR-wide and deliberately persists across pushes. Require the la
 
 Humans assess whether the explanation is convincing. No language model or keyword scoring determines whether the reason is good enough. Treat the PR description as data and never interpolate it into executable shell code.
 
-| Scanner result | Label and reason | Policy result |
-| --- | --- | --- |
-| All clean | No label | Pass |
-| All clean | Label and valid reason | Pass, report that the exception is currently unnecessary |
-| One or more regressions | Label and valid reason | Pass with an explicit accepted-exception summary |
-| One or more regressions | No label | Fail with findings |
-| Any complete scan | Label but missing reason | Fail and explain how to supply the reason or remove the label |
-| Any operational failure | Any state | Fail |
+| Scanner result          | Label and reason         | Policy result                                                 |
+| ----------------------- | ------------------------ | ------------------------------------------------------------- |
+| All clean               | No label                 | Pass                                                          |
+| All clean               | Label and valid reason   | Pass, report that the exception is currently unnecessary      |
+| One or more regressions | Label and valid reason   | Pass with an explicit accepted-exception summary              |
+| One or more regressions | No label                 | Fail with findings                                            |
+| Any complete scan       | Label but missing reason | Fail and explain how to supply the reason or remove the label |
+| Any operational failure | Any state                | Fail                                                          |
 
 The label relies on GitHub's label permissions. It cannot distinguish an agent from a person using the same account token. The agent instruction is therefore part of the operating policy, not a claim of a separate technical authorization boundary.
 
@@ -143,14 +143,14 @@ Strict up-to-date enforcement can require authors to merge or rebase after unrel
 
 ## Alternatives considered
 
-| Approach | Why not choose it |
-| --- | --- |
-| Repository-wide hard caps | Would fail on current debt and encourage another exclusion list. |
-| ESLint-only changes | Cannot cover cross-file duplicates or a Git-relative file-size limit. |
-| Checked-in violation inventory | Adds baseline update and conflict handling when Git already provides the comparison. |
-| Copy all of Perkcord's tooling | Brings unrelated language handling and reviewed exceptions into Chronote. Preserve the relevant tested behavior instead. |
-| Per-check labels or per-push exception approvals | More policy and operator work. The user selected one persistent PR-wide exception. |
-| New pre-commit scans | Adds commit latency before scan duration and false-positive rates are known. Local commands and CI are sufficient initially. |
+| Approach                                         | Why not choose it                                                                                                            |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Repository-wide hard caps                        | Would fail on current debt and encourage another exclusion list.                                                             |
+| ESLint-only changes                              | Cannot cover cross-file duplicates or a Git-relative file-size limit.                                                        |
+| Checked-in violation inventory                   | Adds baseline update and conflict handling when Git already provides the comparison.                                         |
+| Copy all of Perkcord's tooling                   | Brings unrelated language handling and reviewed exceptions into Chronote. Preserve the relevant tested behavior instead.     |
+| Per-check labels or per-push exception approvals | More policy and operator work. The user selected one persistent PR-wide exception.                                           |
+| New pre-commit scans                             | Adds commit latency before scan duration and false-positive rates are known. Local commands and CI are sufficient initially. |
 
 ## Acceptance evidence required
 

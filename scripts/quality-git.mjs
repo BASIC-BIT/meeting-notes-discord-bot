@@ -95,45 +95,48 @@ export function isRepoSourcePath(repo, path) {
     return false;
   }
 }
+function decodeGitEscapes(s) {
+  let decoded = "";
+  for (let index = 0; index < s.length; index += 1) {
+    if (s[index] !== "\\" || index + 1 >= s.length) {
+      decoded += s[index];
+      continue;
+    }
+    const octalBytes = [];
+    while (s[index] === "\\" && /[0-7]/.test(s[index + 1] ?? "")) {
+      const match = /^[0-7]{1,3}/.exec(s.slice(index + 1));
+      octalBytes.push(Number.parseInt(match[0], 8));
+      index += match[0].length + 1;
+    }
+    if (octalBytes.length) {
+      decoded += Buffer.from(octalBytes).toString("utf8");
+      index -= 1;
+      continue;
+    }
+    const escaped = s[++index];
+    const escapes = {
+      a: "\x07",
+      b: "\b",
+      t: "\t",
+      n: "\n",
+      v: "\v",
+      f: "\f",
+      r: "\r",
+      '"': '"',
+      "\\": "\\",
+    };
+    decoded += Object.hasOwn(escapes, escaped)
+      ? escapes[escaped]
+      : `\\${escaped}`;
+  }
+  return decoded;
+}
 export function parseDiffPath(rest) {
   let s = rest;
   if (s.startsWith('"')) {
     const end = s.lastIndexOf('"');
     if (end > 0) s = s.slice(1, end);
-    let decoded = "";
-    for (let index = 0; index < s.length; index += 1) {
-      if (s[index] !== "\\" || index + 1 >= s.length) {
-        decoded += s[index];
-        continue;
-      }
-      const octalBytes = [];
-      while (s[index] === "\\" && /[0-7]/.test(s[index + 1] ?? "")) {
-        const match = /^[0-7]{1,3}/.exec(s.slice(index + 1));
-        octalBytes.push(Number.parseInt(match[0], 8));
-        index += match[0].length + 1;
-      }
-      if (octalBytes.length) {
-        decoded += Buffer.from(octalBytes).toString("utf8");
-        index -= 1;
-        continue;
-      }
-      const escaped = s[++index];
-      const escapes = {
-        a: "\x07",
-        b: "\b",
-        t: "\t",
-        n: "\n",
-        v: "\v",
-        f: "\f",
-        r: "\r",
-        '"': '"',
-        "\\": "\\",
-      };
-      decoded += Object.hasOwn(escapes, escaped)
-        ? escapes[escaped]
-        : `\\${escaped}`;
-    }
-    s = decoded;
+    s = decodeGitEscapes(s);
   } else {
     const tab = s.indexOf("\t");
     if (tab !== -1) s = s.slice(0, tab);
@@ -156,12 +159,35 @@ export function parseDiffPath(rest) {
  * whole bug class rather than another instance of it: no matter what a line
  * looks like, it cannot be read as a header while we are inside a hunk.
  */
+function isFileHeader(line, prev, inHunk) {
+  return (
+    !inHunk &&
+    line.startsWith("+++ ") &&
+    prev.startsWith("--- ") &&
+    (/^\+\+\+ "?b\//.test(line) || line.slice(4).trim() === "/dev/null")
+  );
+}
+function addDiffHunk(map, file, h) {
+  const oldStart = Number(h[1]),
+    oldCount = h[2] === undefined ? 1 : Number(h[2]);
+  const start = Number(h[3]),
+    count = h[4] === undefined ? 1 : Number(h[4]);
+  if (!map.has(file)) map.set(file, []);
+  if (!map.hunks.has(file)) map.hunks.set(file, []);
+  map.hunks
+    .get(file)
+    .push({ oldStart, oldCount, newStart: start, newCount: count });
+  if (count === 0) {
+    const boundary = Math.max(1, start);
+    map.get(file).push([Math.max(1, boundary - 1), boundary]);
+  } else map.get(file).push([start, start + count - 1]);
+}
 export function parseUnifiedDiff(out) {
   const map = new Map();
   Object.defineProperty(map, "hunks", { value: new Map() });
-  let file = null;
-  let inHunk = false;
-  let prev = "";
+  let file = null,
+    inHunk = false,
+    prev = "";
   for (const line of out.split("\n")) {
     if (line.startsWith("diff --git ")) {
       inHunk = false;
@@ -169,42 +195,17 @@ export function parseUnifiedDiff(out) {
       prev = line;
       continue;
     }
-
-    const isHeader =
-      !inHunk &&
-      line.startsWith("+++ ") &&
-      prev.startsWith("--- ") &&
-      (/^\+\+\+ "?b\//.test(line) || line.slice(4).trim() === "/dev/null");
+    const header = isFileHeader(line, prev, inHunk);
     prev = line;
-
-    if (isHeader) {
+    if (header) {
       const p = parseDiffPath(line.slice(4).replace(/\r$/, ""));
       file = p ? norm(p) : null;
       continue;
     }
-
     const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (!h) continue;
     inHunk = true;
-    if (file) {
-      const oldStart = Number(h[1]);
-      const oldCount = h[2] === undefined ? 1 : Number(h[2]);
-      const start = Number(h[3]);
-      const count = h[4] === undefined ? 1 : Number(h[4]);
-      if (!map.has(file)) map.set(file, []);
-      if (!map.hunks.has(file)) map.hunks.set(file, []);
-      map.hunks
-        .get(file)
-        .push({ oldStart, oldCount, newStart: start, newCount: count });
-      if (count === 0) {
-        // Deleting the only differing statement can make two surviving blocks
-        // clones. Mark both sides of the deletion boundary in the new file.
-        const boundary = Math.max(1, start);
-        map.get(file).push([Math.max(1, boundary - 1), boundary]);
-        continue;
-      }
-      map.get(file).push([start, start + count - 1]);
-    }
+    if (file) addDiffHunk(map, file, h);
   }
   return map;
 }
@@ -225,38 +226,62 @@ export function parseRenameStatus(out) {
   return renames;
 }
 
-function isEligiblePath(path) {
-  return isSourcePath(path);
+function applyTrackedRenames(map, out) {
+  for (const { oldPath, newPath } of parseRenameStatus(out)) {
+    if (isSourcePath(oldPath) && isSourcePath(newPath))
+      map.renames.set(newPath, oldPath);
+    if (isSourcePath(newPath)) map.set(newPath, [[1, Number.MAX_SAFE_INTEGER]]);
+  }
 }
-
-/**
- * Changed line ranges as { file -> [[start,end], ...] }.
- *
- * Diffs a single ref (the merge base) against the WORKING TREE, not HEAD, so
- * the ranges describe the same bytes the clone scanners read. Comparing to HEAD
- * while scanning the worktree silently desynchronises the two whenever anything
- * is uncommitted -- and "check before committing" is the documented workflow.
- */
-export function changedRanges(repo, mergeBase, opts = {}) {
-  const args = [
-    "-c",
-    "core.quotePath=false",
-    "diff",
-    "--unified=0",
-    "--no-color",
-    "--diff-filter=d",
-  ];
-  if (mergeBase) args.push(mergeBase);
-  const out = shQuiet("git", args, { cwd: repo });
-  if (out === null) return null;
-  const map = parseUnifiedDiff(out);
-  map.renames = new Map();
-  // Endpoint matching needs every path's hunks, not only rename hunks: an
-  // ordinary deletion before an unchanged clone shifts its current location.
-  map.renames.hunks = map.hunks;
-  map.renames.newPaths = new Set();
-
-  const renameOut = shQuiet(
+function pathsByBlob(repo, paths, base) {
+  const grouped = new Map();
+  for (const path of paths) {
+    const args = base
+      ? ["rev-parse", base + ":" + path]
+      : ["hash-object", "--path=" + path, "--", path];
+    const hash = shQuiet("git", args, { cwd: repo })?.trim();
+    if (!hash) continue;
+    if (!grouped.has(hash)) grouped.set(hash, []);
+    grouped.get(hash).push(path);
+  }
+  return grouped;
+}
+function filesystemRenames(repo, mergeBase, deleted, untracked) {
+  const oldByHash = pathsByBlob(repo, deleted, mergeBase),
+    newByHash = pathsByBlob(repo, untracked, null);
+  const pairs = new Map();
+  for (const [hash, newPaths] of newByHash) {
+    const oldPaths = oldByHash.get(hash) ?? [];
+    if (oldPaths.length === 1 && newPaths.length === 1)
+      pairs.set(newPaths[0], oldPaths[0]);
+  }
+  return pairs;
+}
+function addUntrackedPaths(map, untracked, pairs) {
+  for (const path of untracked) {
+    const old = pairs.get(path);
+    if (old && isSourcePath(old) && isSourcePath(path))
+      map.renames.set(path, old);
+    if (!old) map.renames.newPaths.add(path);
+    if (!map.has(path)) map.set(path, [[1, Number.MAX_SAFE_INTEGER]]);
+  }
+}
+// Read the worktree and untracked files without touching the author's index.
+export function changedRanges(repo, mergeBase) {
+  const out = shQuiet(
+    "git",
+    [
+      "-c",
+      "core.quotePath=false",
+      "diff",
+      "--unified=0",
+      "--no-color",
+      "--diff-filter=d",
+      mergeBase,
+    ],
+    { cwd: repo },
+  );
+  const renames = shQuiet(
     "git",
     [
       "-c",
@@ -270,41 +295,12 @@ export function changedRanges(repo, mergeBase, opts = {}) {
     ],
     { cwd: repo },
   );
-  if (renameOut === null) return null;
-  for (const { oldPath, newPath } of parseRenameStatus(renameOut)) {
-    const oldEligible = isEligiblePath(oldPath, opts);
-    const newEligible = isEligiblePath(newPath, opts);
-    if (oldEligible && newEligible) {
-      map.renames.set(newPath, oldPath);
-    }
-    if (newEligible) {
-      // A hunkless rename from tests/generated output into authored source
-      // changes gate eligibility even though no line content changed. Eligible
-      // renames are also scanned, then mapped to their base path below.
-      map.set(newPath, [[1, Number.MAX_SAFE_INTEGER]]);
-    }
-  }
-
-  // `git diff` never mentions untracked files, and a brand-new file is the
-  // most common thing an agent adds. Pull them in separately (read-only; using
-  // `git add -N` to make them visible to diff would mutate the caller's index)
-  // and treat the whole file as introduced.
   const untracked = shQuiet(
     "git",
     ["ls-files", "--others", "--exclude-standard", "-z"],
-    {
-      cwd: repo,
-    },
+    { cwd: repo },
   );
-  if (untracked === null) return null;
-  const untrackedPaths = untracked.split("\0").filter(Boolean).map(norm);
-
-  // A filesystem rename (`mv`, Explorer, an editor) appears as a tracked
-  // deletion plus an untracked file until staged, so Git's rename detection
-  // cannot pair it. Match unique exact blobs without mutating the index. This
-  // preserves the documented pre-commit workflow while refusing ambiguous
-  // many-to-many matches.
-  const deletedOut = shQuiet(
+  const deleted = shQuiet(
     "git",
     [
       "diff",
@@ -316,47 +312,19 @@ export function changedRanges(repo, mergeBase, opts = {}) {
     ],
     { cwd: repo },
   );
-  if (deletedOut === null) return null;
-  const deletedByHash = new Map();
-  for (const raw of deletedOut.split("\0")) {
-    if (!raw) continue;
-    const oldPath = norm(raw);
-    const hash = shQuiet("git", ["rev-parse", `${mergeBase}:${oldPath}`], {
-      cwd: repo,
-    })?.trim();
-    if (!hash) continue;
-    if (!deletedByHash.has(hash)) deletedByHash.set(hash, []);
-    deletedByHash.get(hash).push(oldPath);
-  }
-  const untrackedByHash = new Map();
-  for (const newPath of untrackedPaths) {
-    const hash = shQuiet(
-      "git",
-      ["hash-object", `--path=${newPath}`, "--", newPath],
-      {
-        cwd: repo,
-      },
-    )?.trim();
-    if (!hash) continue;
-    if (!untrackedByHash.has(hash)) untrackedByHash.set(hash, []);
-    untrackedByHash.get(hash).push(newPath);
-  }
-  const filesystemRenames = new Map();
-  for (const [hash, newPaths] of untrackedByHash) {
-    const oldPaths = deletedByHash.get(hash) ?? [];
-    if (oldPaths.length === 1 && newPaths.length === 1) {
-      filesystemRenames.set(newPaths[0], oldPaths[0]);
-    }
-  }
-
-  for (const f of untrackedPaths) {
-    const oldPath = filesystemRenames.get(f);
-    if (oldPath && isEligiblePath(oldPath, opts) && isEligiblePath(f, opts)) {
-      map.renames.set(f, oldPath);
-    }
-    if (!oldPath) map.renames.newPaths.add(f);
-    if (!map.has(f)) map.set(f, [[1, Number.MAX_SAFE_INTEGER]]);
-  }
+  if ([out, renames, untracked, deleted].includes(null)) return null;
+  const map = parseUnifiedDiff(out);
+  map.renames = new Map();
+  map.renames.hunks = map.hunks;
+  map.renames.newPaths = new Set();
+  applyTrackedRenames(map, renames);
+  const paths = untracked.split("\0").filter(Boolean).map(norm);
+  const removed = deleted.split("\0").filter(Boolean).map(norm);
+  addUntrackedPaths(
+    map,
+    paths,
+    filesystemRenames(repo, mergeBase, removed, paths),
+  );
   for (const file of map.keys())
     if (!isRepoSourcePath(repo, file)) map.delete(file);
   return map;

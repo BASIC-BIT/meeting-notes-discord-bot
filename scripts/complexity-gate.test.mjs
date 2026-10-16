@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { candidates, joinMessages, verdicts } from "./complexity-gate.mjs";
 import { SetupError } from "./quality-git.mjs";
 import {
-  assertRatchetJson,
   commit,
   git,
   runGate,

@@ -4,13 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { classify, physicalLines } from "./file-size-gate.mjs";
-import {
-  assertRatchetJson,
-  commit,
-  runGate,
-  withRepo,
-  write,
-} from "./ratchet-test-helpers.mjs";
+import { commit, runGate, withRepo, write } from "./ratchet-test-helpers.mjs";
 
 const GATE = fileURLToPath(new URL("./file-size-gate.mjs", import.meta.url));
 const run = (dir, ...extra) => runGate(GATE, dir, ["--base", "main", ...extra]);

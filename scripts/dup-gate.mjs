@@ -13,14 +13,12 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { startRatchet } from "./ratchet-common.mjs";
 import { tokenize } from "@jscpd/tokenizer";
 import ts from "typescript";
 import {
   SetupError,
   norm,
-  shQuiet,
-  changedRanges,
-  resolveMergeBase,
   touchesDiff,
   overlaps,
   isSourcePath,
@@ -690,60 +688,18 @@ export function render(findings, meta) {
   return L.join("\n");
 }
 
-function parseArgs(argv) {
-  const o = { ...DEFAULTS, base: null, repo: process.cwd(), json: false };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--base" || a === "--repo") {
-      const value = argv[++i];
-      if (!value || value.startsWith("--")) {
-        o.error = a + " requires a value";
-        break;
-      }
-      o[a.slice(2)] = value;
-    } else if (a === "--json") o.json = true;
-    else if (a === "-h" || a === "--help") o.help = true;
-    else {
-      o.error = "unknown argument '" + a + "'";
-      break;
-    }
-  }
-  return o;
-}
 const HELP =
   "dup-gate: Git-relative duplication. --base <ref> --repo <path> --json. Exit 0 clean, 1 regression, 2 setup failure.";
 export async function main(argv = process.argv.slice(2)) {
-  const opts = parseArgs(argv);
-  if (opts.error) {
-    console.error(`dup-gate: ${opts.error}.`);
-    return 2;
-  }
-  if (opts.help) {
-    console.log(HELP);
-    return 0;
-  }
-  opts.repo = resolve(opts.repo);
-
-  if (!shQuiet("git", ["rev-parse", "--git-dir"], { cwd: opts.repo })) {
-    console.error(`dup-gate: ${opts.repo} is not a git repository.`);
-    return 2;
-  }
-
-  const resolved = resolveMergeBase(opts.repo, opts.base);
-  if (!resolved) {
-    console.error(
-      opts.base
-        ? `dup-gate: cannot find a merge base between '${opts.base}' and HEAD.`
-        : "dup-gate: cannot determine a base ref (tried origin/HEAD, origin/main, origin/master, main, master). Pass --base.",
-    );
-    return 2;
-  }
-
-  const ranges = changedRanges(opts.repo, resolved.mergeBase, opts);
-  if (!ranges) {
-    console.error("dup-gate: could not read git diff.");
-    return 2;
-  }
+  const started = startRatchet("dup-gate", {
+    argv,
+    defaults: DEFAULTS,
+    help: HELP,
+  });
+  if (started.exit !== undefined) return started.exit;
+  const { opts, ctx } = started;
+  const resolved = ctx,
+    ranges = ctx.ranges;
   if (ranges.size === 0) {
     if (opts.json) {
       console.log(

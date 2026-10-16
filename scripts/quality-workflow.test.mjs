@@ -1,5 +1,7 @@
 import { createRequire } from "node:module";
 import { qualityReport } from "./ratchet-test-helpers.mjs";
+import { existsSync } from "node:fs";
+import { extractRationale } from "./quality-policy.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
@@ -230,13 +232,15 @@ test(
       "core",
       script,
     );
-    try {
-      await run(
+    const applyPolicy = () =>
+      run(
         createRequire(import.meta.url),
         github,
         { repo: { owner: "example", repo: "repo" }, issue: { number: 1 } },
         core,
       );
+    try {
+      await applyPolicy();
       assert.equal(failures.length, 0);
       assert.equal(
         JSON.parse(readFileSync(join(dir, "quality-evidence.json"), "utf8"))
@@ -244,24 +248,14 @@ test(
         "exception",
       );
       liveBase = "advanced";
-      await run(
-        createRequire(import.meta.url),
-        github,
-        { repo: { owner: "example", repo: "repo" }, issue: { number: 1 } },
-        core,
-      );
+      await applyPolicy();
       assert.equal(
         JSON.parse(readFileSync(join(dir, "quality-evidence.json"), "utf8"))
           .result.outcome,
         "stale",
       );
       rmSync(join(dir, "quality-results.json"));
-      await run(
-        createRequire(import.meta.url),
-        github,
-        { repo: { owner: "example", repo: "repo" }, issue: { number: 1 } },
-        core,
-      );
+      await applyPolicy();
       assert.equal(
         JSON.parse(readFileSync(join(dir, "quality-evidence.json"), "utf8"))
           .result.exitCode,
@@ -275,3 +269,37 @@ test(
     }
   }),
 );
+
+test("local parity and deployments use the new policy without old suppressions", () => {
+  const root = new URL("../", import.meta.url);
+  const read = (name) => readFileSync(new URL(name, root), "utf8");
+  const pkg = JSON.parse(read("package.json"));
+  for (const command of ["check:parallel", "check:ci"]) {
+    assert.match(pkg.scripts[command], /check:quality/);
+    assert.match(pkg.scripts[command], /test:quality/);
+  }
+  assert.equal(pkg.scripts["check:quality"], "node scripts/check-quality.mjs");
+  assert.match(pkg.scripts["code:stats"], /lizard -i -1/);
+  assert.doesNotMatch(pkg.scripts["code:stats"], /-W/);
+  assert.equal(existsSync(new URL("whitelizard.txt", root)), false);
+  for (const name of [
+    ".github/workflows/ci-core.yml",
+    ".github/workflows/deploy-staging.yml",
+  ]) {
+    const text = read(name);
+    assert.match(text, /lizard -i -1/);
+    assert.doesNotMatch(text, /lizard -W/);
+    assert.doesNotMatch(text, /run:.*check:quality/);
+  }
+  assert.match(
+    read(".github/workflows/ci-core.yml"),
+    /unittest discover -s analysis\/hallucination-audit/,
+  );
+  assert.match(
+    read(".github/workflows/deploy.yml"),
+    /uses: \.\/.github\/workflows\/ci-core.yml/,
+  );
+  const template = read(".github/pull_request_template.md");
+  assert.match(template, /^## Quality exception$/m);
+  assert.equal(extractRationale(template), null);
+});

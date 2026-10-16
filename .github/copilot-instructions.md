@@ -172,7 +172,7 @@ Why each check exists:
 - Build (TypeScript + Vite) validates type safety and ensures the frontend bundles. Docs: https://www.typescriptlang.org/docs/handbook/compiler-options.html and https://vite.dev/guide/
 - Docs build (Docusaurus) validates docs compile and link integrity. Command: `yarn docs:check`. Docs: https://docusaurus.io/docs
 - E2E (Playwright) validates core user flows against the UI. Docs: https://playwright.dev/docs/running-tests
-- Code stats and complexity (scc + lizard) keep size and complexity visible in CI. Lizard uses its default warning thresholds (CCN > 15, length > 1000, nloc > 1000000, parameter_count > 100). Use `.sccignore` for scc exclusions and `whitelizard.txt` to suppress known complexity offenders. Docs: https://github.com/boyter/scc and https://github.com/terryyin/lizard
+- Code quality: run `yarn check:quality` before committing. Git-relative duplication, complexity, and file-size checks include tests. `yarn code:stats` reports scc and Lizard diagnostics without suppressions. See `docs/engineering/code-quality.md`.
 - Markdown lint (markdownlint-cli2) enforces consistent Markdown style across all repo `.md` files. Config in `.markdownlint-cli2.jsonc`. Command: `yarn markdownlint:check` (or `yarn markdownlint:fix` to auto-fix). Docs: https://github.com/DavidAnson/markdownlint-cli2 and https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
 - IaC scan (Checkov via uvx) catches Terraform misconfigurations. Docs: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html and https://docs.astral.sh/uv/concepts/tools/
 - Prompt sync (Langfuse) keeps repo prompt files aligned with Langfuse. Command: `yarn prompts:check`.
@@ -312,3 +312,7 @@ Never use apologies.
 
 - Keep this file aligned with AGENTS.md and avoid pasting full prompt content.
 - After changes that affect behavior, config, prompts, infra, or user flows, update docs and prompts as required by AGENTS.md.
+
+## Code quality exceptions
+
+Run `yarn check:quality` before committing. Reuse existing code and simplify findings before proposing an exception. Never add suppressions or raise thresholds to make a PR pass. Obtain explicit user authorization before applying `quality-exception`; a reason under `## Quality exception` is required and stays applicable across pushes. Scanner failures cannot be exempted. See `docs/engineering/code-quality.md`.

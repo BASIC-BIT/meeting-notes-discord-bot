@@ -110,7 +110,7 @@ jobs:
             scc --ci --by-file --sort lines /pwd
           lizard_version=$(python3 -c 'import tomllib; lock = tomllib.load(open("uv.lock", "rb")); print(next(package["version"] for package in lock["package"] if package["name"] == "lizard"))')
           python3 -m pip install --quiet "lizard==$lizard_version"
-          lizard -W whitelizard.txt -l ts -l tsx -l js -l jsx src test
+          lizard -i -1 -l ts -l tsx -l js -l jsx src test
 
   # Prompts Check and LLM Connections Check are intentionally absent here.
   # They describe external Langfuse state rather than code quality, ci.yml

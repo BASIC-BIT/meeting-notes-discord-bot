@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+
 import {
   mkdirSync,
-  readFileSync,
   renameSync,
   mkdtempSync,
   rmSync,
@@ -15,7 +14,6 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  tempRepo,
   withRepo,
   write as writeFile,
   git,
@@ -31,6 +29,11 @@ const write = (dir, name, text) => writeFile(dir, "src/" + name, text);
 const exec = (dir, args) => runGate(GATE, dir, args);
 const run = (dir, ...args) => exec(dir, ["--base", "main~1", ...args]);
 const maybe = test;
+function seedExistingPair(dir) {
+  write(dir, "a.js", body("alpha"));
+  write(dir, "b.js", body("beta"));
+  commit(dir, "base with existing duplication");
+}
 function assertFlags(dir, pattern, ...args) {
   const r = run(dir, ...args);
   assert.equal(r.code, 1, r.stdout + r.stderr);
@@ -171,9 +174,7 @@ maybe(
 maybe(
   "rewriting both sides in place creates a new clone identity",
   withRepo((dir) => {
-    write(dir, "a.js", body("alpha"));
-    write(dir, "b.js", body("beta"));
-    commit(dir, "base with existing duplication");
+    seedExistingPair(dir);
     write(dir, "a.js", replacementBody("alpha"));
     write(dir, "b.js", replacementBody("beta"));
     commit(dir, "replace both implementations with a new duplicate");
@@ -184,9 +185,7 @@ maybe(
 maybe(
   "shortening a pre-existing clone does not create duplication",
   withRepo((dir) => {
-    write(dir, "a.js", body("alpha"));
-    write(dir, "b.js", body("beta"));
-    commit(dir, "base with existing duplication");
+    seedExistingPair(dir);
     write(
       dir,
       "b.js",
@@ -214,9 +213,7 @@ maybe(
 maybe(
   "pre-existing duplication is NOT reported when the diff does not touch it",
   withRepo((dir) => {
-    write(dir, "a.js", body("alpha"));
-    write(dir, "b.js", body("beta"));
-    commit(dir, "base with existing duplication");
+    seedExistingPair(dir);
     write(dir, "unrelated.js", "export const x = 1;\n");
     commit(dir, "unrelated change");
     assertClean(dir);
@@ -324,9 +321,7 @@ maybe(
 maybe(
   "whitespace-only edits to a pre-existing clone do not fail the ratchet",
   withRepo((dir) => {
-    write(dir, "a.js", body("alpha"));
-    write(dir, "b.js", body("beta"));
-    commit(dir, "base with existing duplication");
+    seedExistingPair(dir);
     write(
       dir,
       "b.js",
@@ -571,7 +566,11 @@ test(
     write(dir, "new.js", body("beta"));
     const harness = mkdtempSync(join(tmpdir(), "quality-scanner-"));
     try {
-      for (const name of ["dup-gate.mjs", "quality-git.mjs"])
+      for (const name of [
+        "dup-gate.mjs",
+        "quality-git.mjs",
+        "ratchet-common.mjs",
+      ])
         copyFileSync(join(dirname(GATE), name), join(harness, name));
       mkdirSync(join(harness, "node_modules", "jscpd"), { recursive: true });
       const modules = join(dirname(dirname(GATE)), "node_modules");

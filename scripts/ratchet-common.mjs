@@ -1,7 +1,7 @@
 // Shared CLI and git context for the diff-scoped ratchets
 // (complexity-gate.mjs, file-size-gate.mjs).
 //
-// Reuses dup-gate's merge-base resolution, diff ranges, untracked-file
+// Reuses quality-git's merge-base resolution, diff ranges, untracked-file
 // handling and path filters so every gate agrees on what "this change" means.
 // Nothing here decides pass or fail; each gate owns its own verdicts.
 
@@ -39,7 +39,7 @@ export function parseRatchetArgs(argv) {
       if (!value || value.startsWith("--")) o.error = `${flag} needs a value`;
       else o[VALUE_FLAGS[flag]] = value;
     } else {
-      o.error = `unknown argument: ${flag}`;
+      o.error = `unknown argument '${flag}'`;
     }
   }
   return o;
@@ -60,7 +60,7 @@ export function resolveRatchetContext(opts) {
         : "cannot determine a base ref (tried origin/HEAD, origin/main, origin/master, main, master). Pass --base.",
     );
   }
-  const ranges = changedRanges(repo, resolved.mergeBase, opts);
+  const ranges = changedRanges(repo, resolved.mergeBase);
   if (!ranges) throw new SetupError("could not read git diff.");
   return { repo, base: resolved.base, mergeBase: resolved.mergeBase, ranges };
 }
@@ -85,6 +85,7 @@ export function startRatchet(name, { argv, defaults, help }) {
     return { exit: 0 };
   }
   const ctx = resolveRatchetContext(opts);
+  opts.repo = ctx.repo;
   return {
     opts,
     ctx,

@@ -8,15 +8,15 @@ This is a research proposal. No checks, dependencies, labels, or repository sett
 
 ## Recommendation and decisions
 
-| Decision | Recommended default | Tradeoff |
-| --- | --- | --- |
-| Baseline | Compare with Git history, without a checked-in debt inventory | Improvements become the new limit after merge. Approved regressions also become the new baseline. |
-| Complexity | Perkcord's cyclomatic and cognitive checks, threshold 15 | Measures branches and difficulty following control flow, but cannot judge whether an abstraction is useful. |
-| File size | Fewer than 1,000 physical lines for new authored JavaScript/TypeScript files | Existing large files may stay unchanged or shrink. Growing one, or crossing the limit, fails. |
-| Duplication | Perkcord's token checker, initially 8 lines and 50 tokens | Finds substantial repeated blocks, including copies of unchanged code. It does not establish semantic equivalence. |
-| Tests | Include tests, fixtures, mocks, and stories in all three CI checks | Stops test sprawl too, but repeated test setup may need extraction or a deliberate exception. |
-| Escape hatch | One PR label, `quality-exception`, with a reason in the PR description | Simple to operate, but waives all reported quality regressions on that PR. Findings stay visible. |
-| Rollout | Calibrate on representative changes, then enforce in the first implementation PR | Avoids an indefinite warning-only phase. Threshold adjustments must be justified by actual false positives. |
+| Decision     | Recommended default                                                              | Tradeoff                                                                                                           |
+| ------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Baseline     | Compare with Git history, without a checked-in debt inventory                    | Improvements become the new limit after merge. Approved regressions also become the new baseline.                  |
+| Complexity   | Perkcord's cyclomatic and cognitive checks, threshold 15                         | Measures branches and difficulty following control flow, but cannot judge whether an abstraction is useful.        |
+| File size    | Fewer than 1,000 physical lines for new authored JavaScript/TypeScript files     | Existing large files may stay unchanged or shrink. Growing one, or crossing the limit, fails.                      |
+| Duplication  | Perkcord's token checker, initially 8 lines and 50 tokens                        | Finds substantial repeated blocks, including copies of unchanged code. It does not establish semantic equivalence. |
+| Tests        | Include tests, fixtures, mocks, and stories in all three CI checks               | Stops test sprawl too, but repeated test setup may need extraction or a deliberate exception.                      |
+| Escape hatch | One PR label, `quality-exception`, with a reason in the PR description           | Simple to operate, but waives all reported quality regressions on that PR. Findings stay visible.                  |
+| Rollout      | Calibrate on representative changes, then enforce in the first implementation PR | Avoids an indefinite warning-only phase. Threshold adjustments must be justified by actual false positives.        |
 
 The initial enforced scope is authored JavaScript/TypeScript across the bot, API, frontend, desktop app, docs-site code, scripts, and tests. Exclude dependency folders, build output, generated Tauri files, declarations, lockfiles, and local worktree directories. Rust, Terraform, prose, and semantic similarity checks are deferred. Scanning local worktrees would otherwise count other checkouts as source.
 
@@ -91,11 +91,11 @@ No runtime behavior, user data, product analytics, or public product documentati
 
 Research date: October 16, 2026. Findings come from local source reads, Git snapshot checks, the tracked-file inventory, an installed Lizard scan, and upstream documentation. No remote branch fetch or hosted workflow execution was performed.
 
-| Repository | Inspected snapshot | Evidence |
-| --- | --- | --- |
-| Chronote | `7157db5f941d13adf528067b787505a2ae47071d` with unrelated working-tree changes | `package.json`, `whitelizard.txt`, CI/deploy/docs-policy workflows, tracked source |
-| Perkcord | `9242ae028830eb405b265184522050e9c09bed3f`, matching the locally recorded `origin/main`; checker files had no local changes | [Complexity and size policy](https://github.com/Perkcord/perkcord/blob/9242ae028830eb405b265184522050e9c09bed3f/docs/agentic/complexity-and-size-ratchets.md), [duplication policy](https://github.com/Perkcord/perkcord/blob/9242ae028830eb405b265184522050e9c09bed3f/docs/agentic/duplication-ratchet.md), checker source and tests |
-| Loominist | `9fb793f26ec15d32189f7af3c7eed2caa77afe5b`; recorded `origin/main` is newer, but the two inspected checker scripts match it | [File-size checker](https://github.com/BASIC-BIT/loominist/blob/9fb793f26ec15d32189f7af3c7eed2caa77afe5b/scripts/check-file-size.mjs), duplication checker and local CI |
+| Repository | Inspected snapshot                                                                                                          | Evidence                                                                                                                                                                                                                                                                                                                              |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chronote   | `7157db5f941d13adf528067b787505a2ae47071d` with unrelated working-tree changes                                              | `package.json`, `whitelizard.txt`, CI/deploy/docs-policy workflows, tracked source                                                                                                                                                                                                                                                    |
+| Perkcord   | `9242ae028830eb405b265184522050e9c09bed3f`, matching the locally recorded `origin/main`; checker files had no local changes | [Complexity and size policy](https://github.com/Perkcord/perkcord/blob/9242ae028830eb405b265184522050e9c09bed3f/docs/agentic/complexity-and-size-ratchets.md), [duplication policy](https://github.com/Perkcord/perkcord/blob/9242ae028830eb405b265184522050e9c09bed3f/docs/agentic/duplication-ratchet.md), checker source and tests |
+| Loominist  | `9fb793f26ec15d32189f7af3c7eed2caa77afe5b`; recorded `origin/main` is newer, but the two inspected checker scripts match it | [File-size checker](https://github.com/BASIC-BIT/loominist/blob/9fb793f26ec15d32189f7af3c7eed2caa77afe5b/scripts/check-file-size.mjs), duplication checker and local CI                                                                                                                                                               |
 
 ESLint documents its branching metric in the [complexity rule reference](https://eslint.org/docs/latest/rules/complexity). Scanner output is a review aid, not proof of elegant design. A small function can still have a poor interface, and mechanically extracting helpers can make code harder to follow.
 

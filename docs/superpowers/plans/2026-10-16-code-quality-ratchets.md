@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 24.15.0, ESM JavaScript, Node test runner, ESLint 10, typescript-eslint, SonarJS, jscpd, Yarn classic, GitHub Actions. Reuse the installed YAML dependency for workflow contract tests.
 
-**Spec:** [Approved design](../specs/2026-10-16-code-quality-ratchets-design.md), approved in chat on October 16, 2026. This plan is awaiting user review and execution-method selection.
+**Spec:** [Approved design](../specs/2026-10-16-code-quality-ratchets-design.md), approved in chat on October 16, 2026. The user approved Native execution with a fresh whole-branch review.
 
 ## Global constraints
 
@@ -37,20 +37,20 @@ Continue in the attached managed worktree on `codex/code-quality-ratchets-design
 
 Port from Perkcord commit `9242ae028830eb405b265184522050e9c09bed3f`, using Git reads of that snapshot rather than assuming another chat's working tree is unchanged. The source is `D:/bench/perkcord`; its relevant implementation files and policy links are recorded in the design.
 
-| Files | Responsibility | Owner task |
-| --- | --- | --- |
-| `scripts/quality-git.mjs`, `scripts/quality-git.test.mjs` | Reused Git, diff ranges, rename mapping, and eligible-source policy | 1 |
-| `scripts/dup-gate.mjs`, `scripts/dup-gate.test.mjs`, `scripts/dup-gate.integration.test.mjs` | Token clones, baseline suppression, and duplication process tests | 1 |
-| `scripts/ratchet-test-helpers.mjs` | Shared temporary repositories and fixture/process helpers | 1 |
-| `scripts/ratchet-common.mjs`, `scripts/complexity-gate.mjs`, `scripts/file-size-gate.mjs`, their two `*.test.mjs` suites | Shared scanner CLI/reporting and the other two scanners | 2 |
-| `scripts/check-quality.mjs`, `scripts/check-quality.test.mjs` | Three-scanner collection, validated reports, strict local CLI | 3 |
-| `scripts/quality-policy.mjs`, `scripts/quality-policy.test.mjs` | Exception parsing, freshness checks, and final policy decision | 3 |
-| `.github/workflows/code-quality.yml`, `scripts/quality-workflow.test.mjs` | PR orchestration and workflow contracts | 4 |
-| `package.json`, `yarn.lock` | Pinned dependencies in task 1; public aliases/check integration in task 5 | 1, 5 |
-| `eslint.config.mjs`, `.github/workflows/ci-core.yml`, `.github/workflows/deploy-staging.yml`, `whitelizard.txt` | Lint the new modules, retire whitelist enforcement, retain diagnostic tools | 5 |
-| `AGENTS.md`, `.github/copilot-instructions.md`, `README.md`, `.github/PULL_REQUEST_TEMPLATE.md` | Author/agent instructions and rationale entry point | 5 |
-| `docs/engineering/code-quality.md`, `docs/adr-20261016-code-quality-ratchets.md` | Operational policy and concise ADR linking to the design | 5 |
-| `docs/analysis/2026-10-16-code-quality-acceptance.md` | Sanitized calibration, hosted results, and activation evidence | 6 |
+| Files                                                                                                                    | Responsibility                                                              | Owner task |
+| ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ---------- |
+| `scripts/quality-git.mjs`, `scripts/quality-git.test.mjs`                                                                | Reused Git, diff ranges, rename mapping, and eligible-source policy         | 1          |
+| `scripts/dup-gate.mjs`, `scripts/dup-gate.test.mjs`, `scripts/dup-gate.integration.test.mjs`                             | Token clones, baseline suppression, and duplication process tests           | 1          |
+| `scripts/ratchet-test-helpers.mjs`                                                                                       | Shared temporary repositories and fixture/process helpers                   | 1          |
+| `scripts/ratchet-common.mjs`, `scripts/complexity-gate.mjs`, `scripts/file-size-gate.mjs`, their two `*.test.mjs` suites | Shared scanner CLI/reporting and the other two scanners                     | 2          |
+| `scripts/check-quality.mjs`, `scripts/check-quality.test.mjs`                                                            | Three-scanner collection, validated reports, strict local CLI               | 3          |
+| `scripts/quality-policy.mjs`, `scripts/quality-policy.test.mjs`                                                          | Exception parsing, freshness checks, and final policy decision              | 3          |
+| `.github/workflows/code-quality.yml`, `scripts/quality-workflow.test.mjs`                                                | PR orchestration and workflow contracts                                     | 4          |
+| `package.json`, `yarn.lock`                                                                                              | Pinned dependencies in task 1; public aliases/check integration in task 5   | 1, 5       |
+| `eslint.config.mjs`, `.github/workflows/ci-core.yml`, `.github/workflows/deploy-staging.yml`, `whitelizard.txt`          | Lint the new modules, retire whitelist enforcement, retain diagnostic tools | 5          |
+| `AGENTS.md`, `.github/copilot-instructions.md`, `README.md`, `.github/pull_request_template.md`                          | Author/agent instructions and rationale entry point                         | 5          |
+| `docs/engineering/code-quality.md`, `docs/adr-20261016-code-quality-ratchets.md`                                         | Operational policy and concise ADR linking to the design                    | 5          |
+| `docs/analysis/2026-10-16-code-quality-acceptance.md`                                                                    | Sanitized calibration, hosted results, and activation evidence              | 6          |
 
 Review `ci.yml` and `deploy.yml` when changing their reusable core, but do not edit them merely to repeat the dedicated workflow. No pre-commit hook change is planned.
 
@@ -86,11 +86,22 @@ A report describes exactly three distinct scanner results. For each successful s
 
 ```js
 test("source eligibility includes modules and tests but excludes output", () => {
-  for (const path of ["vite.config.mts", "src/run.cts", "test/a.test.ts", "src/A.stories.tsx"])
+  for (const path of [
+    "vite.config.mts",
+    "src/run.cts",
+    "test/a.test.ts",
+    "src/A.stories.tsx",
+  ])
     assert.equal(isSourcePath(path), true, path);
-  for (const path of ["src/api.d.ts", "src/api.d.mts", "src/api.d.cts",
-    "apps/desktop/src-tauri/gen/a.ts", ".worktrees/other/src/a.ts",
-    "node_modules/pkg/index.js", "build/app.js"])
+  for (const path of [
+    "src/api.d.ts",
+    "src/api.d.mts",
+    "src/api.d.cts",
+    "apps/desktop/src-tauri/gen/a.ts",
+    ".worktrees/other/src/a.ts",
+    "node_modules/pkg/index.js",
+    "build/app.js",
+  ])
     assert.equal(isSourcePath(path), false, path);
 });
 ```
@@ -149,14 +160,26 @@ Keep Perkcord's executable tests proving complexity 15 passes, 16 fails, unchang
 
 ```js
 test("an exception cannot waive an unavailable scanner", () => {
-  const scans = ["duplication", "complexity", "file-size"].map(name => ({
-    name, exitCode: 2, report: null, error: "scanner unavailable",
+  const scans = ["duplication", "complexity", "file-size"].map((name) => ({
+    name,
+    exitCode: 2,
+    report: null,
+    error: "scanner unavailable",
   }));
-  const revision = {headSha: "a", baseRef: "master", baseSha: "b", treeSha: "t"};
+  const revision = {
+    headSha: "a",
+    baseRef: "master",
+    baseSha: "b",
+    treeSha: "t",
+  };
   const result = evaluatePolicy({
-    report: {schemaVersion: 1, scanners: scans, strictExitCode: 2},
-    scanned: revision, current: {...revision,
-      labels: ["quality-exception"], body: "## Quality exception\nReason."},
+    report: { schemaVersion: 1, scanners: scans, strictExitCode: 2 },
+    scanned: revision,
+    current: {
+      ...revision,
+      labels: ["quality-exception"],
+      body: "## Quality exception\nReason.",
+    },
     checkerTestsPassed: true,
   });
   assert.equal(result.exitCode, 2);
@@ -182,15 +205,33 @@ Add table-driven assertions for every design policy row. Assert missing/duplicat
 - [x] **Step 3: Implement preparation.** Use `pull_request` only, Node 24.15.0, and existing action versions. Check out the event head with persisted credentials disabled, fetch the live base tip, and perform `git merge --no-commit --no-ff` before dependency installation. For already-up-to-date branches, use the checked-out tree and resolved base correctly. Record the scanned head, target ref/tip, and index tree. Never manufacture a baseline at the first checker commit.
 - [x] **Step 4: Implement scanning, validation, and reporting.** Run all checker suites through the task-5 alias. Capture the runner's expected 0/1/2 outcome without globally ignoring errors. Re-read PR metadata and the actual target branch tip through the read-only API, then call `evaluatePolicy`. Upload reports and write a summary even on a failure where data exists. Missing data remains blocking. Pass PR body/labels as API data, not generated shell source.
 - [x] **Step 5: Verify green and metadata races.** Run `node --test scripts/quality-workflow.test.mjs scripts/quality-policy.test.mjs`. Pin these assertions:
+
 ```js
-assert.equal(evaluatePolicy({...cleanInput,
-  current: {...cleanInput.current, baseSha: "advanced"}}).outcome, "stale");
-assert.equal(evaluatePolicy({...cleanInput,
-  current: {...cleanInput.current, headSha: "new-push"}}).outcome, "stale");
-assert.equal(evaluatePolicy({...cleanInput,
-  current: {...cleanInput.current, baseRef: "other"}}).outcome, "stale");
+assert.equal(
+  evaluatePolicy({
+    ...cleanInput,
+    current: { ...cleanInput.current, baseSha: "advanced" },
+  }).outcome,
+  "stale",
+);
+assert.equal(
+  evaluatePolicy({
+    ...cleanInput,
+    current: { ...cleanInput.current, headSha: "new-push" },
+  }).outcome,
+  "stale",
+);
+assert.equal(
+  evaluatePolicy({
+    ...cleanInput,
+    current: { ...cleanInput.current, baseRef: "other" },
+  }).outcome,
+  "stale",
+);
 ```
+
 Define `cleanInput` once in the policy suite as a complete valid three-scanner input. Add real temporary-Git preparation tests for a live-base merge, an already-current branch, a conflict, and a comparison predating the checker. The metadata adapter must fetch the live branch tip, not treat the event's recorded base SHA as current.
+
 - [x] **Step 6: Commit.** Commit workflow/contracts as `ci: enforce PR code-quality policy`. The workflow intentionally depends on the aliases completed in task 5 before pushing.
 
 ### Task 5: Integrate local checks and retire whitelist enforcement
@@ -199,13 +240,13 @@ Define `cleanInput` once in the policy suite as a complete valid three-scanner i
 
 **Interfaces:** Expose `check:duplication`, `check:complexity`, `check:file-size`, and `check:quality` as direct Node script commands. Add `test:dup-gate`, `test:complexity-gate`, `test:file-size-gate`, and `test:quality`. The last lists all eight new test files explicitly so shell glob behavior does not differ between Windows and Linux.
 
-- [ ] **Step 1: Add failing integration contracts.** Assert `check:parallel` and `check:ci` include `check:quality` and `test:quality`. Assert the two workflow Lizard invocations and local `code:stats` use `-i -1` without `-W`, the suppression file is absent, and core CI retains the offline Python audit step. Assert production continues to call reusable core CI and neither deployment runs the strict PR-relative scanner. Assert the PR template's untouched exception section extracts no rationale.
-- [ ] **Step 2: Observe red.** Run `node --test scripts/quality-workflow.test.mjs scripts/quality-policy.test.mjs`; expected failures identify the old commands/template.
-- [ ] **Step 3: Integrate commands and lint coverage.** Add the aliases and parity hooks. Extend the existing Node-script ESLint override to `.mjs`; append only the new quality/gate/common/helper module patterns to `lint:check` so the new implementation is checked without expanding to unrelated legacy scripts. Keep the existing `lint` fixer and pre-commit hook scope unchanged.
-- [ ] **Step 4: Retire the absolute gate.** Replace each Lizard warning policy with its supported `-i -1`, keep existing locked-version installation and scc output, and delete the whitelist after searching for remaining consumers. Preserve subprocess/tool failure propagation. Review `ci.yml`, `ci-core.yml`, `deploy.yml`, and `deploy-staging.yml` together.
-- [ ] **Step 5: Update author guidance.** Document commands, thresholds, supported paths, exit codes, known rename/callback limits, local failures on exempt PRs, and the ban on agents self-exempting. Add the exact `## Quality exception` heading with an HTML comment prompt to the PR template. Keep contributor README edits short. Write the ADR with Status, Date, Owners, Context, Decision, Consequences, Alternatives Considered, and Notes, linking to the approved design.
-- [ ] **Step 6: Verify green.** Run `yarn test:quality`, `yarn lint:check`, and `yarn prettier:check`, then lint the changed Markdown with `npx --no-install markdownlint-cli2 <changed-markdown-paths>`. Fix new-file findings through simplification/reuse, not source exclusions. Run `yarn check:quality --base origin/master` on the full implementation diff. If an intentional violation remains, retain the failing result and request user authorization before self-exempting the implementation PR.
-- [ ] **Step 7: Commit.** Commit integration/docs as `chore: replace whitelist enforcement with quality ratchets`.
+- [x] **Step 1: Add failing integration contracts.** Assert `check:parallel` and `check:ci` include `check:quality` and `test:quality`. Assert the two workflow Lizard invocations and local `code:stats` use `-i -1` without `-W`, the suppression file is absent, and core CI retains the offline Python audit step. Assert production continues to call reusable core CI and neither deployment runs the strict PR-relative scanner. Assert the PR template's untouched exception section extracts no rationale.
+- [x] **Step 2: Observe red.** Run `node --test scripts/quality-workflow.test.mjs scripts/quality-policy.test.mjs`; expected failures identify the old commands/template.
+- [x] **Step 3: Integrate commands and lint coverage.** Add the aliases and parity hooks. Extend the existing Node-script ESLint override to `.mjs`; append only the new quality/gate/common/helper module patterns to `lint:check` so the new implementation is checked without expanding to unrelated legacy scripts. Keep the existing `lint` fixer and pre-commit hook scope unchanged.
+- [x] **Step 4: Retire the absolute gate.** Replace each Lizard warning policy with its supported `-i -1`, keep existing locked-version installation and scc output, and delete the whitelist after searching for remaining consumers. Preserve subprocess/tool failure propagation. Review `ci.yml`, `ci-core.yml`, `deploy.yml`, and `deploy-staging.yml` together.
+- [x] **Step 5: Update author guidance.** Document commands, thresholds, supported paths, exit codes, known rename/callback limits, local failures on exempt PRs, and the ban on agents self-exempting. Add the exact `## Quality exception` heading with an HTML comment prompt to the PR template. Keep contributor README edits short. Write the ADR with Status, Date, Owners, Context, Decision, Consequences, Alternatives Considered, and Notes, linking to the approved design.
+- [x] **Step 6: Verify green.** Run `yarn test:quality`, `yarn lint:check`, and `yarn prettier:check`, then lint the changed Markdown with `npx --no-install markdownlint-cli2 <changed-markdown-paths>`. Fix new-file findings through simplification/reuse, not source exclusions. Run `yarn check:quality --base origin/master` on the full implementation diff. If an intentional violation remains, retain the failing result and request user authorization before self-exempting the implementation PR.
+- [x] **Step 7: Commit.** Commit integration/docs as `chore: replace whitelist enforcement with quality ratchets`.
 
 ### Task 6: Calibrate, prove hosted behavior, and activate enforcement
 
@@ -226,6 +267,6 @@ Define `cleanInput` once in the policy suite as a complete valid three-scanner i
 
 Recommended execution: **Native**, with one fresh whole-branch reviewer after implementation. The six tasks share the Git and report contracts, and most scanner behavior already has tests to port; keeping implementation in one session avoids repeated context transfer. Subagent-driven execution remains an option for a fresh implementer/reviewer per task at higher context cost.
 
-This plan does not authorize implementation until the user reviews it and chooses an execution method. Repository-rule activation and exception use retain the concrete checks described in task 6.
+The user approved this plan and selected Native execution with a fresh whole-branch review. Repository-rule activation and exception use retain the concrete checks described in task 6.
 
 Self-review completed: every design section maps to a task; all five review-focus risks have tests; cross-task names, reports, CLI commands, and exit codes agree. The design's original inventory is historical evidence, not a threshold to bake into tests. Operational acceptance remains unchecked until execution.

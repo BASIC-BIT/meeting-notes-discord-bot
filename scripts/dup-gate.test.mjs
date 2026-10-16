@@ -1,17 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import {
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-  rmSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   classify,
@@ -22,14 +10,6 @@ import {
   sliceScannerSource,
   wasFindingPresentAtBase,
 } from "./dup-gate.mjs";
-import {
-  isGeneratedArtifact,
-  isTestPath,
-  parseDiffPath,
-  parseRenameStatus,
-  parseUnifiedDiff,
-  touchesDiff,
-} from "./quality-git.mjs";
 
 test("sliceScannerSource honors exact zero-based scanner columns", () => {
   const source = "prefix cloned start\ncloned middle\ncloned end suffix";
@@ -358,4 +338,15 @@ test("filterPreExisting keeps new findings and counts merge-base matches", () =>
   const result = filterPreExisting([existing, introduced], [existing]);
   assert.equal(result.preExisting, 1);
   assert.deepEqual(result.findings, [introduced]);
+});
+
+test("fingerprints ignore comments while preserving literal contents", () => {
+  assert.equal(
+    fingerprintCloneSource('const value="alpha"; // first', "javascript"),
+    fingerprintCloneSource('const value = "alpha"; // second', "javascript"),
+  );
+  assert.notEqual(
+    fingerprintCloneSource('const value="alpha";', "javascript"),
+    fingerprintCloneSource('const value="beta";', "javascript"),
+  );
 });
