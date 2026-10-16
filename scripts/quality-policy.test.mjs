@@ -88,3 +88,28 @@ test("only a real exact heading with non-comment content supplies a rationale", 
   const literal = "$(echo should-never-run); `literal`";
   assert.equal(extractRationale("## Quality exception\n" + literal), literal);
 });
+
+test("all Markdown section boundaries stop an empty exception", () => {
+  for (const heading of [
+    "  ## Summary",
+    "   # Summary",
+    "##",
+    "Summary\n=======",
+    "Summary\n  -------",
+  ]) {
+    const input = qualityInput([1, 0, 0]);
+    input.current.body =
+      "## Quality exception\n<!-- Template -->\n\n" +
+      heading +
+      "\nUnrelated summary.";
+    assert.equal(extractRationale(input.current.body), null, heading);
+    assert.equal(evaluatePolicy(input).outcome, "invalid-exception", heading);
+    assert.equal(
+      extractRationale(
+        "## Quality exception\nReason.\n\n" + heading + "\nOther.",
+      ),
+      "Reason.",
+      heading,
+    );
+  }
+});

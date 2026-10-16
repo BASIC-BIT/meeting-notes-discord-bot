@@ -1,7 +1,15 @@
+import { fileURLToPath } from "node:url";
 import { symlinkSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { tempRepo, write, commit, git } from "./ratchet-test-helpers.mjs";
+import {
+  tempRepo,
+  withRepo,
+  write,
+  commit,
+  git,
+  runGate,
+} from "./ratchet-test-helpers.mjs";
 import { changedRanges, isRepoSourcePath } from "./quality-git.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -176,3 +184,31 @@ test("an external directory junction is excluded without changing the index", ()
     rmSync(external, { recursive: true, force: true });
   }
 });
+
+test(
+  "tracked regressions survive user-configured Git diff prefixes",
+  withRepo((dir) => {
+    write(dir, "src/base.ts", "export const seed = 1;\n");
+    commit(dir, "base");
+    write(dir, "src/heavy.ts", "export const regression = 1;\n".repeat(1000));
+    commit(dir, "regression");
+    for (const [option, value] of [
+      ["diff.noprefix", "true"],
+      ["diff.noprefix", "false"],
+      ["diff.mnemonicPrefix", "true"],
+    ]) {
+      git(dir, "config", option, value);
+      assert.deepEqual(
+        changedRanges(dir, "HEAD~1").get("src/heavy.ts"),
+        [[1, 1000]],
+        option + value,
+      );
+      const result = runGate(
+        fileURLToPath(new URL("./file-size-gate.mjs", import.meta.url)),
+        dir,
+        ["--base", "HEAD~1"],
+      );
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+    }
+  }),
+);

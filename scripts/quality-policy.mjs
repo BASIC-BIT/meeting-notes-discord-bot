@@ -14,20 +14,34 @@ function nextFence(line, current) {
 export function extractRationale(body) {
   const lines = body.replace(/<!--[\s\S]*?(?:-->|$)/g, "").split(/\r?\n/);
   let fence = null,
+    paragraph = null,
     start = null,
     end = lines.length;
   for (let i = 0; i < lines.length; i++) {
     const before = fence;
     fence = nextFence(lines[i], fence);
-    if (before || fence) continue;
-    if (start === null && lines[i].trimEnd() === "## Quality exception") {
-      start = i + 1;
+    if (before || fence) {
+      paragraph = null;
       continue;
     }
-    if (start !== null && /^#{1,2}\s/.test(lines[i])) {
+    if (start === null && lines[i].trimEnd() === "## Quality exception") {
+      start = i + 1;
+      paragraph = null;
+      continue;
+    }
+    if (start !== null && /^ {0,3}#{1,2}(?:[ \t]|$)/.test(lines[i])) {
       end = i;
       break;
     }
+    if (
+      start !== null &&
+      paragraph !== null &&
+      /^ {0,3}(?:=+|-+)[ \t]*$/.test(lines[i])
+    ) {
+      end = paragraph;
+      break;
+    }
+    paragraph = lines[i].trim() ? (paragraph ?? i) : null;
   }
   return start === null
     ? null

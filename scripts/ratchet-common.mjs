@@ -89,7 +89,7 @@ export function startRatchet(name, { argv, defaults, help }) {
   return {
     opts,
     ctx,
-    files: [...ctx.ranges.keys()].filter((f) => isSourcePath(f, opts)),
+    files: [...ctx.ranges.keys()].filter((f) => isSourcePath(f)),
   };
 }
 
