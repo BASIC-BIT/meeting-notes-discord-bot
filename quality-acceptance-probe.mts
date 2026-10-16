@@ -1,4 +1,4 @@
-export const qualityAcceptanceProbe0000 = 0;
+export const qualityAcceptanceProbe0000 = 10000;
 export const qualityAcceptanceProbe0001 = 1;
 export const qualityAcceptanceProbe0002 = 2;
 export const qualityAcceptanceProbe0003 = 3;
