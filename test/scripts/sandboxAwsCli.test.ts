@@ -25,6 +25,7 @@ jest.mock("node:child_process", () => {
       ) => {
         expect(file).toBe("aws");
         expect(args).not.toContain("--endpoint-url");
+        expect(args).toContain("--no-paginate");
         return execute(
           process.execPath,
           ["-e", generatedCli, ...args],

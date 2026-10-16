@@ -372,16 +372,16 @@ function observationFixture() {
     }
     throw new Error("Unexpected generated observation operation");
   }
-  const collect = () =>
+  const collect = (provider = aws) =>
     collectSandboxObservation({
       manifest,
       expectedSha256: manifestHash(manifest),
-      aws,
+      aws: provider,
       since: "2026-10-15T10:00:00.000Z",
       until: "2026-10-15T11:00:00.000Z",
       now: () => Date.parse("2026-10-15T12:00:00.000Z"),
     });
-  return { data, groups, projections, collect };
+  return { data, groups, projections, collect, aws };
 }
 
 test("successful summary send and edit outcomes stay distinct from absent metadata", async () => {
@@ -480,4 +480,28 @@ test("interrupted recording without a live lease remains eligible for stale inve
     { timestamp: "2026-10-15T10:01:00.000Z", status: "interrupted" },
   ];
   expect((await f.collect()).history.staleCandidates).toBe(1);
+});
+
+test("an unfinished scan at the page bound refuses a complete observation", async () => {
+  const f = observationFixture();
+  let pages = 0;
+  await expect(
+    f.collect(
+      async (
+        service: string,
+        operation: string,
+        input: Record<string, unknown>,
+      ) => {
+        if (service === "dynamodb" && operation === "scan") {
+          pages++;
+          return {
+            Items: [],
+            LastEvaluatedKey: { guildId: { S: "generated-next-page" } },
+          };
+        }
+        return f.aws(service, operation, input);
+      },
+    ),
+  ).rejects.toThrow("Observation scan incomplete");
+  expect(pages).toBe(100);
 });

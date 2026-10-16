@@ -91,6 +91,7 @@ function awsCaller(region) {
         "--output",
         "json",
         "--no-cli-pager",
+        "--no-paginate",
       ],
       {
         maxBuffer: 8 * 1024 * 1024,
