@@ -4,7 +4,7 @@
 
 Add local and required PR checks that stop agents from introducing substantial duplication, overly complex functions, or oversized source files. Existing debt may stay unchanged or improve. Reuse Perkcord's implementation and tests, with a JavaScript/TypeScript scope suited to Chronote.
 
-The user has approved one PR-wide `quality-exception` label plus a written rationale, remaining active across pushes. The rest of this document is proposed for review. Approval permits writing the implementation plan, not implementation or repository-setting changes.
+The user approved this design in chat on October 16, 2026, including one PR-wide `quality-exception` label plus a written rationale remaining active across pushes. That approval authorizes writing the implementation plan. Implementation and repository-setting changes await plan review and selection of an execution method.
 
 The main tradeoffs are deliberate. Tests receive the same checks as production code. Exceptions waive every reported regression on the PR, including later commits. Required checks will also require an up-to-date branch so another merge cannot silently invalidate the comparison.
 
@@ -15,11 +15,11 @@ No product behavior, stored data, public URLs, authentication, or deployment aut
 | Status | Decision |
 | --- | --- |
 | Confirmed | One PR-wide exception label plus rationale. Keep it active across pushes. Always show current findings. |
-| Proposed | Use Git as the baseline, with no checked-in inventory of grandfathered violations. |
-| Proposed | Start with complexity 15, file size below 1,000 physical lines, and token duplicates of at least 8 lines and 50 tokens. |
-| Proposed | Include authored tests, mocks, fixtures, and stories in the same checks. |
-| Proposed | Make one dedicated Actions check required and require branches to be up to date. |
-| Proposed | Retain scc and Lizard as diagnostic reports, replacing the blocking Lizard whitelist policy. |
+| Approved | Use Git as the baseline, with no checked-in inventory of grandfathered violations. |
+| Approved | Start with complexity 15, file size below 1,000 physical lines, and token duplicates of at least 8 lines and 50 tokens. |
+| Approved | Include authored tests, mocks, fixtures, and stories in the same checks. |
+| Approved | Make one dedicated Actions check required and require branches to be up to date. |
+| Approved | Retain scc and Lizard as diagnostic reports, replacing the blocking Lizard whitelist policy. |
 | Deferred | Rust, Terraform, CSS, shell, prose, semantic similarity, custom per-file allowances, pre-commit scanning, and shared tooling packaging. |
 
 The initial source set is authored `.js`, `.jsx`, `.cjs`, `.mjs`, `.ts`, `.tsx`, `.cts`, and `.mts` files throughout the repository. This includes bot, API, frontend, desktop, docs-site code, scripts, tests, and root configuration files. In particular, `vite.config.mts` must be checked.
@@ -134,7 +134,7 @@ Update `AGENTS.md`, `.github/copilot-instructions.md`, the contributor check ref
 Repository source and hosted enforcement are separate acceptance steps. The live rulesets currently have no required Actions status-check rule, so shipping a workflow alone would not block merges.
 
 1. Build the checkers, regression tests, policy, workflow, and documentation in the implementation PR.
-2. Calibrate on actual Chronote changes and intentional regressions across backend, React, desktop, scripts, and tests. Start with the proposed thresholds. Correct false positives before enforcement, and document any proposed threshold change for review.
+2. Calibrate on actual Chronote changes and intentional regressions across backend, React, desktop, scripts, and tests. Start with the approved thresholds. Correct false positives before enforcement, and document any proposed threshold change for review.
 3. Exercise hosted PR behavior, including label addition/removal, rationale edits, further pushes under an exception, and operational failure with the label present. Confirm the exact emitted check context.
 4. Add `Code quality ratchet` as a required Actions check for the default branch, with strict up-to-date checking. Preserve existing repository rules. Inspect the exact settings change before applying it during implementation, then read it back.
 5. Confirm the implementation PR has a terminal passing check and the rule really requires it before merging. Enforce from rollout rather than leaving an indefinite warning-only phase.
