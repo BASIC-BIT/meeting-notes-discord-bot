@@ -177,11 +177,11 @@ Add table-driven assertions for every design policy row. Assert missing/duplicat
 
 **Interfaces:** Consume `runQuality`'s report and `evaluatePolicy`. The workflow's GitHub-script adapters populate `ScannedRevision` and `CurrentPr`; they do not reimplement policy. Persist `quality-results.json` and `quality-evidence.json` as artifacts. Evidence includes revision identities, installed scanner versions, checker-test result, and final policy outcome.
 
-- [ ] **Step 1: Write failing workflow contracts using the existing `yaml` package.** Parse the YAML and assert the exact job name, seven approved PR events, absence of path filters, read-only permissions, PR concurrency cancellation, exact-head checkout, full history, and existing dependency installer. Assert no privileged trigger or inherited secrets. Assert final policy/reporting still runs after scanner or checker-test failure and cannot replace preparation/test failures with success.
-- [ ] **Step 2: Observe red.** Run `node --test scripts/quality-workflow.test.mjs`; expect the workflow file to be absent.
-- [ ] **Step 3: Implement preparation.** Use `pull_request` only, Node 24.15.0, and existing action versions. Check out the event head with persisted credentials disabled, fetch the live base tip, and perform `git merge --no-commit --no-ff` before dependency installation. For already-up-to-date branches, use the checked-out tree and resolved base correctly. Record the scanned head, target ref/tip, and index tree. Never manufacture a baseline at the first checker commit.
-- [ ] **Step 4: Implement scanning, validation, and reporting.** Run all checker suites through the task-5 alias. Capture the runner's expected 0/1/2 outcome without globally ignoring errors. Re-read PR metadata and the actual target branch tip through the read-only API, then call `evaluatePolicy`. Upload reports and write a summary even on a failure where data exists. Missing data remains blocking. Pass PR body/labels as API data, not generated shell source.
-- [ ] **Step 5: Verify green and metadata races.** Run `node --test scripts/quality-workflow.test.mjs scripts/quality-policy.test.mjs`. Pin these assertions:
+- [x] **Step 1: Write failing workflow contracts using the existing `yaml` package.** Parse the YAML and assert the exact job name, seven approved PR events, absence of path filters, read-only permissions, PR concurrency cancellation, exact-head checkout, full history, and existing dependency installer. Assert no privileged trigger or inherited secrets. Assert final policy/reporting still runs after scanner or checker-test failure and cannot replace preparation/test failures with success.
+- [x] **Step 2: Observe red.** Run `node --test scripts/quality-workflow.test.mjs`; expect the workflow file to be absent.
+- [x] **Step 3: Implement preparation.** Use `pull_request` only, Node 24.15.0, and existing action versions. Check out the event head with persisted credentials disabled, fetch the live base tip, and perform `git merge --no-commit --no-ff` before dependency installation. For already-up-to-date branches, use the checked-out tree and resolved base correctly. Record the scanned head, target ref/tip, and index tree. Never manufacture a baseline at the first checker commit.
+- [x] **Step 4: Implement scanning, validation, and reporting.** Run all checker suites through the task-5 alias. Capture the runner's expected 0/1/2 outcome without globally ignoring errors. Re-read PR metadata and the actual target branch tip through the read-only API, then call `evaluatePolicy`. Upload reports and write a summary even on a failure where data exists. Missing data remains blocking. Pass PR body/labels as API data, not generated shell source.
+- [x] **Step 5: Verify green and metadata races.** Run `node --test scripts/quality-workflow.test.mjs scripts/quality-policy.test.mjs`. Pin these assertions:
 ```js
 assert.equal(evaluatePolicy({...cleanInput,
   current: {...cleanInput.current, baseSha: "advanced"}}).outcome, "stale");
@@ -191,7 +191,7 @@ assert.equal(evaluatePolicy({...cleanInput,
   current: {...cleanInput.current, baseRef: "other"}}).outcome, "stale");
 ```
 Define `cleanInput` once in the policy suite as a complete valid three-scanner input. Add real temporary-Git preparation tests for a live-base merge, an already-current branch, a conflict, and a comparison predating the checker. The metadata adapter must fetch the live branch tip, not treat the event's recorded base SHA as current.
-- [ ] **Step 6: Commit.** Commit workflow/contracts as `ci: enforce PR code-quality policy`. The workflow intentionally depends on the aliases completed in task 5 before pushing.
+- [x] **Step 6: Commit.** Commit workflow/contracts as `ci: enforce PR code-quality policy`. The workflow intentionally depends on the aliases completed in task 5 before pushing.
 
 ### Task 5: Integrate local checks and retire whitelist enforcement
 
