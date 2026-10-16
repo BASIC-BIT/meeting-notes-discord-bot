@@ -16,7 +16,7 @@ The payer reviews the exact amount, unused paid-time credit, account balance, ta
 
 Each server can use the $6 monthly offer for three months and the $60 first-year offer once each, in either order. Leaving an offer ends its remaining duration. Returning never restarts it. Pro uses its regular price. Enrollment has no invented deadline.
 
-The user has approved implementation and owned Sandbox tests. Production activation is outside this continuation. The tested finalized-invoice adapter is the selected starting point. Nonzero automatic tax remains an explicit provider-contract gap to investigate before claiming that coverage. Unsupported financial states must preserve the current plan and provide recovery.
+The user has approved implementation and owned Sandbox tests. Production activation is outside this continuation. The tested finalized-invoice adapter is the selected starting point. Owned Sandbox probes have verified nonzero inclusive automatic tax in both billing modes. Unsupported financial states must preserve the current plan and provide recovery.
 
 ## Global constraints
 
@@ -26,7 +26,7 @@ The user has approved implementation and owned Sandbox tests. Production activat
 - Basic monthly to annual and Basic to Pro are immediate after confirmed payment. A cadence change starts a full new paid period.
 - Pro to Basic, annual to monthly within a tier, and paid to Free take effect at renewal. Pro monthly to annual is an immediate cadence change.
 - Offer use is finalized only after verified application and settlement. Reservations survive unknown outcomes, and cancellation releases them only after provider proof.
-- Preserve provider billing mode, subscription/item identity, unrelated subscriptions, balance changes, and pending items.
+- Preserve provider billing mode and subscription identity. Immediate updates preserve the item; deferred phases verify Stripe's actual target item, which Stripe replaces during a price change. Preserve unrelated subscriptions, balance changes and pending items.
 - Finalized funding and application are separate invoices. Do not collect an application invoice a second time. Recover residual debt without erasing later balance transactions.
 - Keep acquisition metadata distinct from transition metadata. No new analytics identifiers or events in this phase.
 - Keep production gates off. Deploy only to the existing Sandbox with its active-recording guard and rollback.
@@ -135,3 +135,11 @@ flowchart TD
 ## Evidence appendix
 
 Starting source: current remote master `7ef341791db82aa04ceb0ba609c77f872d94d74b`. The previously deployed renewal implementation is preserved. Prior independent-invoice provider evidence includes 18 accepted owned Sandbox cases and verified cleanup. Native probes remain separate from integrated signed-in application acceptance.
+
+## Implementation checkpoint
+
+The source now connects the real review, payment recovery and scheduled-change views. The full functional suite passed 3,032 tests across 354 suites. The affected billing slice passed 407 tests, five connected Storybook flows passed, mobile scrolling was asserted, screenshots were reviewed and the public docs build passed.
+
+Owned native Sandbox probes separately verified nonzero automatic tax, both offer orders, scheduled cancellation, three $6 monthly renewals followed by $10, and subsequent unused annual credit based on the $60 paid value. Fixtures were cleaned up. Stripe's deferred phase replaces the old item while retaining the subscription; the implementation verifies the actual paid target item. SDK 22.4.0 matches the pinned API contract.
+
+Independent source review, CI coverage and the final readiness audit remain. Integrated signed-in acceptance needs the guarded Sandbox deployment bootstrap being prepared by the recording work. Native provider proof does not establish deployment or signed-in acceptance.
