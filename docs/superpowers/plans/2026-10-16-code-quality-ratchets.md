@@ -113,7 +113,7 @@ Port the existing tests for new copies, same-file copies, formatting-only old cl
 - Preserve `physicalLines(text)`, `classify(file, lines, baseLines, cap = 1000)`, `functionName(node, sourceCode)`, `joinMessages(records,messages,filePath)`, `candidates(functions,ranges,threshold)`, and `verdicts(candidates,base)` from Perkcord.
 - Produce the two CLI entry points, each returning the shared `GateReport` and exit-code contract.
 
-- [ ] **Step 1: Write failing boundaries and port the original function-identity tests.**
+- [x] **Step 1: Write failing boundaries and port the original function-identity tests.**
 
 ```js
 test("file-size boundaries retain reduced legacy debt", () => {
@@ -128,10 +128,10 @@ test("file-size boundaries retain reduced legacy debt", () => {
 
 Keep Perkcord's executable tests proving complexity 15 passes, 16 fails, unchanged complex functions pass, either metric increasing fails, and parse errors return 2. Retain method/getter/setter identity, duplicate names, callback ordinals, inline-disable resistance, and nested-function position tests. Add real `.cts`/`.mts` files and CommonJS top-level return parsing. Test renamed legacy files and inclusion of tests/stories.
 
-- [ ] **Step 2: Observe red.** Run `node --test scripts/complexity-gate.test.mjs scripts/file-size-gate.test.mjs`. Expect missing scanners before implementation.
-- [ ] **Step 3: Adapt the scanners and reporting.** Reuse the existing ESLint/TypeScript stack, install the pinned SonarJS dependency, and verify compatibility with the actual locked versions. Use script-owned configuration and `noInlineConfig`; keep known function-matching limitations. Include tests by default without the source implementation's false-default override.
-- [ ] **Step 4: Verify green.** Rerun step 2, then task 1's suites. In each CLI, compare clean, regression, invalid arguments, parser failure, and missing-baseline exit behavior. Check same scanner/base metadata on both sides.
-- [ ] **Step 5: Commit.** Commit only the two scanners, common code, tests, and dependency changes as `feat: add complexity and file-size checks`.
+- [x] **Step 2: Observe red.** Run `node --test scripts/complexity-gate.test.mjs scripts/file-size-gate.test.mjs`. Expect missing scanners before implementation.
+- [x] **Step 3: Adapt the scanners and reporting.** Reuse the existing ESLint/TypeScript stack, install the pinned SonarJS dependency, and verify compatibility with the actual locked versions. Use script-owned configuration and `noInlineConfig`; keep known function-matching limitations. Include tests by default without the source implementation's false-default override.
+- [x] **Step 4: Verify green.** Rerun step 2, then task 1's suites. In each CLI, compare clean, regression, invalid arguments, parser failure, and missing-baseline exit behavior. Check same scanner/base metadata on both sides.
+- [x] **Step 5: Commit.** Commit only the two scanners, common code, tests, and dependency changes as `feat: add complexity and file-size checks`.
 
 ### Task 3: Add the strict runner and exception policy
 
