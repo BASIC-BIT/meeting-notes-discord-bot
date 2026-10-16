@@ -219,7 +219,7 @@ export async function saveAutoRecordSetting(params: {
       params.textChannelId,
       params.createdBy,
     );
-  } else {
+  } else if (params.textChannelId === null) {
     await clearConfigOverrideForScope(scope, CONFIG_KEYS.notes.channelId);
   }
   if (params.tags) {
@@ -261,7 +261,6 @@ export async function removeAutoRecordSetting(
   const scope = { scope: "channel", guildId, channelId } as const;
   await Promise.all([
     clearConfigOverrideForScope(scope, CONFIG_KEYS.autorecord.enabled),
-    clearConfigOverrideForScope(scope, CONFIG_KEYS.notes.channelId),
     clearConfigOverrideForScope(scope, CONFIG_KEYS.notes.tags),
   ]);
 }

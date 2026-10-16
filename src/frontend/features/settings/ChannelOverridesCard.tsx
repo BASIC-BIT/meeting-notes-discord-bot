@@ -9,19 +9,25 @@ import {
 } from "@mantine/core";
 import {
   IconBroadcast,
+  IconPencil,
   IconPlus,
   IconRefresh,
   IconTrash,
 } from "@tabler/icons-react";
 import Surface from "../../components/Surface";
 import { uiOverlays } from "../../uiTokens";
-import type { ChannelOverride } from "../../utils/settingsChannels";
-import { formatChannelLabel } from "../../utils/settingsChannels";
+import type {
+  ChannelOption,
+  ChannelOverride,
+} from "../../utils/settingsChannels";
 
 type ChannelOverridesCardProps = {
   busy: boolean;
   refreshing: boolean;
   overrides: ChannelOverride[];
+  voiceChannels: ChannelOption[];
+  defaultNotesChannelId: string | null;
+  defaultNotesLabel?: string;
   availableVoiceChannels: {
     value: string;
     label: string;
@@ -42,7 +48,16 @@ export function ChannelOverridesCard({
   onSelect,
   onRemove,
   availableVoiceChannels,
+  voiceChannels,
+  defaultNotesChannelId,
+  defaultNotesLabel,
 }: ChannelOverridesCardProps) {
+  const channelIds = Array.from(
+    new Set([
+      ...voiceChannels.map((channel) => channel.value),
+      ...overrides.map((override) => override.channelId),
+    ]),
+  );
   return (
     <Surface
       p="lg"
@@ -85,7 +100,7 @@ export function ChannelOverridesCard({
           </Group>
         </Group>
 
-        {overrides.length === 0 ? (
+        {channelIds.length === 0 ? (
           <Surface tone="soft" p="md">
             <Text c="dimmed" size="sm">
               No channel overrides yet. Add one to customize recording,
@@ -94,67 +109,86 @@ export function ChannelOverridesCard({
           </Surface>
         ) : (
           <Stack gap="xs">
-            {overrides.map((override) => (
-              <Surface
-                key={override.channelId}
-                p="sm"
-                withBorder
-                style={{ cursor: "pointer" }}
-                onClick={() => onSelect(override.channelId)}
-                data-testid="settings-override"
-              >
-                <Group justify="space-between" align="center" wrap="nowrap">
-                  <Stack gap={2}>
-                    <Text fw={600}>{override.voiceLabel}</Text>
-                    <Text size="xs" c="dimmed">
-                      Status/notes:{" "}
-                      {override.textLabel
-                        ? formatChannelLabel({
-                            value: override.channelId,
-                            label: override.textLabel,
-                            botAccess: true,
-                            missingPermissions: [],
-                          })
-                        : "Defaults"}
-                    </Text>
-                  </Stack>
-                  <Stack gap={2} align="flex-end">
-                    <Text size="xs" c="dimmed">
-                      {override.autoRecordEnabled
-                        ? "Auto-record on"
-                        : "Auto-record off"}
-                    </Text>
-                    <Text size="xs" c="dimmed">
-                      {override.chatTtsEnabled === undefined
-                        ? "Chat TTS default"
-                        : override.chatTtsEnabled
-                          ? "Chat TTS on"
-                          : "Chat TTS off"}
-                    </Text>
-                    <Text size="xs" c="dimmed">
-                      {override.chatTtsTtsOnlyEnabled === undefined
-                        ? "TTS-only default"
-                        : override.chatTtsTtsOnlyEnabled
-                          ? "TTS-only on"
-                          : "TTS-only off"}
-                    </Text>
-                  </Stack>
-                  {onRemove ? (
+            {channelIds.map((channelId) => {
+              const override = overrides.find(
+                (entry) => entry.channelId === channelId,
+              );
+              const voiceLabel =
+                override?.voiceLabel ??
+                voiceChannels.find((channel) => channel.value === channelId)
+                  ?.label ??
+                "Unknown channel";
+              const hasNotesOverride = override?.textChannelId !== undefined;
+              const textLabel =
+                override?.textLabel ??
+                (defaultNotesChannelId
+                  ? (defaultNotesLabel ?? "Unavailable notes channel")
+                  : undefined);
+              return (
+                <Surface
+                  key={channelId}
+                  p="sm"
+                  withBorder
+                  data-testid="settings-override"
+                >
+                  <Group justify="space-between" align="center" wrap="nowrap">
+                    <Stack gap={2}>
+                      <Text fw={600}>{voiceLabel}</Text>
+                      <Text size="xs" c="dimmed">
+                        {textLabel ??
+                          "No notes channel configured. Manually started meetings use the command channel."}
+                        {hasNotesOverride
+                          ? " \u00b7 Voice channel override"
+                          : defaultNotesChannelId
+                            ? " \u00b7 Server default"
+                            : ""}
+                      </Text>
+                    </Stack>
+                    <Stack gap={2} align="flex-end">
+                      <Text size="xs" c="dimmed">
+                        {override?.autoRecordEnabled
+                          ? "Auto-record on"
+                          : "Auto-record off"}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {override?.chatTtsEnabled === undefined
+                          ? "Chat TTS default"
+                          : override?.chatTtsEnabled
+                            ? "Chat TTS on"
+                            : "Chat TTS off"}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {override?.chatTtsTtsOnlyEnabled === undefined
+                          ? "TTS-only default"
+                          : override?.chatTtsTtsOnlyEnabled
+                            ? "TTS-only on"
+                            : "TTS-only off"}
+                      </Text>
+                    </Stack>
                     <ActionIcon
                       variant="subtle"
-                      color="red"
-                      aria-label="Remove override"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onRemove(override);
-                      }}
+                      aria-label={`Edit ${voiceLabel}`}
+                      onClick={() => onSelect(channelId)}
                     >
-                      <IconTrash size={16} />
+                      <IconPencil size={16} />
                     </ActionIcon>
-                  ) : null}
-                </Group>
-              </Surface>
-            ))}
+                    {onRemove && override ? (
+                      <ActionIcon
+                        variant="subtle"
+                        color="red"
+                        aria-label="Remove override"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onRemove(override);
+                        }}
+                      >
+                        <IconTrash size={16} />
+                      </ActionIcon>
+                    ) : null}
+                  </Group>
+                </Surface>
+              );
+            })}
           </Stack>
         )}
       </Stack>

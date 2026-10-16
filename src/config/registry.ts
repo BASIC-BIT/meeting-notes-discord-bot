@@ -710,8 +710,9 @@ export const CONFIG_REGISTRY: ConfigEntry[] = [
   },
   {
     key: "notes.channelId",
-    label: "Notes channel",
-    description: "Default notes channel for meetings and auto-recording.",
+    label: "Default notes channel",
+    description:
+      "Recording controls and notes appear here unless you choose another channel for a voice channel or meeting.",
     category: "Notes",
     group: "Recommended",
     valueType: "string",
