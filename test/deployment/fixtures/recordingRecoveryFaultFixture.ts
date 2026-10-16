@@ -177,6 +177,7 @@ export async function recoveryFaultFixture(
     reader,
     signal: new AbortController().signal,
     now: () => now,
+    nowMs: () => now * 1000,
     effect: (run) => run(),
     notes,
     summaries,

@@ -259,6 +259,7 @@ async function exerciseAutoExport(mode: Mode) {
     recover: recoverMeeting,
     now: () => Math.floor(Date.now() / 1000),
     content: {
+      nowMs: Date.now,
       reader: f.reader,
       upload: f.upload,
       transcript: recoverTranscript,

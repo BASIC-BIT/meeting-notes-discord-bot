@@ -39,6 +39,18 @@ it.each([
     processingFailed: true,
   },
   { cancelled: true, generationEnabled: true, deliveryFailed: true },
+  {
+    cancelled: true,
+    generationEnabled: true,
+    deliveryFailed: false,
+    timingInvalid: true,
+  },
+  {
+    cancelled: false,
+    generationEnabled: true,
+    deliveryFailed: false,
+    timingInvalid: true,
+  },
   { cancelled: false, generationEnabled: false, deliveryFailed: false },
 ])(
   "persists processing independently ($cancelled, $generationEnabled, $deliveryFailed)",
@@ -47,6 +59,7 @@ it.each([
     generationEnabled,
     deliveryFailed,
     processingFailed,
+    timingInvalid,
   }) => {
     const meeting = {
       guildId: "guild",
@@ -66,6 +79,14 @@ it.each([
         notes: "generated",
         summary: processingFailed ? "failed" : "generated",
       },
+      notesDeliveryTiming: timingInvalid
+        ? JSON.parse('{"kind":"legacy"}')
+        : {
+            kind: "first",
+            notesVersion: 1,
+            path: "live",
+            firstAcknowledgedAt: "2026-09-05T20:00:30.000Z",
+          },
       transcriptS3Key: "transcript",
       audioS3Key: "audio",
       cancelled,
@@ -94,6 +115,9 @@ it.each([
       meeting,
       expect.objectContaining({
         generateNotes: generationEnabled,
+        notesDeliveryTiming: timingInvalid
+          ? undefined
+          : meeting.notesDeliveryTiming,
         ...(cancelled
           ? {}
           : {

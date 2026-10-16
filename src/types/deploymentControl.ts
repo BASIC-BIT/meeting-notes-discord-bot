@@ -1,3 +1,4 @@
+import { notesDeliveryTimingSchema } from "./meetingNotesTiming";
 import { completionPolicySchema } from "./meetingCompletionPolicy";
 import {
   recordingCheckpointSchema,
@@ -493,6 +494,7 @@ export const HISTORY_TRANSITION_FIELDS = [
   "summaryMessageId",
   "notesMessageIds",
   "notesChannelId",
+  "notesDeliveryTiming",
   "notesVersion",
   "notesLastEditedBy",
   "notesLastEditedAt",
@@ -518,6 +520,7 @@ export const RECORDING_DELIVERY_FIELDS = [
   "summaryMessageId",
   "notesMessageIds",
   "notesChannelId",
+  "notesDeliveryTiming",
 ] as const;
 export type RecordingDeliveryProof = {
   kind: "recording_delivery";
@@ -577,6 +580,8 @@ export function validateHistoryTransition(input: HistoryTransition): void {
     captureCoverageSummarySchema.parse(input.patch.captureCoverage);
   if (input.patch.recovery)
     recoveryDispositionSchema.parse(input.patch.recovery);
+  if (input.patch.notesDeliveryTiming !== undefined)
+    notesDeliveryTimingSchema.parse(input.patch.notesDeliveryTiming);
   if (input.recordingDelivery) validateRecordingDelivery(input);
   if (input.initialTerminalDisposition)
     validateInitialTerminalDisposition(input);
@@ -682,6 +687,7 @@ function validateDeliveryPatch(
   if (proof.phase === "acknowledgment")
     validatePriorDeliveryMarker(proof, recovery.disposition);
   validateAcknowledgedDeliveryIds(input, proof);
+  validateAcknowledgedNotesTiming(input, proof);
 }
 function validateDeliveryRecovery(
   input: HistoryTransition,
@@ -753,6 +759,25 @@ function validateAcknowledgedDeliveryIds(
   )
     throw new Error("Acknowledged delivery IDs cannot be discarded");
 }
+function validateAcknowledgedNotesTiming(
+  input: HistoryTransition,
+  proof: RecordingDeliveryProof,
+) {
+  const previous = notesDeliveryTimingSchema.safeParse(
+    proof.previous.notesDeliveryTiming,
+  );
+  const next = input.patch.notesDeliveryTiming;
+  if (!previous.success || !next) return;
+  if (
+    next.firstAcknowledgedAt !== previous.data.firstAcknowledgedAt ||
+    next.path !== previous.data.path ||
+    (previous.data.kind === "complete" &&
+      (next.kind !== "complete" ||
+        next.completeAcknowledgedAt !== previous.data.completeAcknowledgedAt))
+  )
+    throw new Error("Acknowledged notes timing cannot be replaced");
+}
+
 function validateCheckpointPublication(input: HistoryTransition) {
   const proof = input.checkpointPublication!;
   const owner = proof.ownership;

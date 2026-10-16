@@ -14,6 +14,7 @@ import type {
   PersonalRecordingSegmentRecord,
 } from "../types/db";
 import {
+  RECORDING_DELIVERY_FIELDS,
   admissionContextSchema,
   promotionInputSchema,
   voiceRecordSchema,
@@ -695,24 +696,15 @@ function recordingDeliveryCondition(
   values: NonNullable<UpdateItemCommandInput["ExpressionAttributeValues"]>,
 ): string {
   if (!input.recordingDelivery) return "";
-  return (
-    [
-      "recovery",
-      "summaryMessageId",
-      "notesMessageIds",
-      "notesChannelId",
-    ] as const
-  )
-    .map((field, index) => {
-      const name = `#delivery${index}`;
-      const value = `:delivery${index}`;
-      names[name] = field;
-      const previous = input.recordingDelivery!.previous[field];
-      if (previous === undefined) return ` AND attribute_not_exists(${name})`;
-      Object.assign(values, marshall({ [value]: previous }));
-      return ` AND ${name} = ${value}`;
-    })
-    .join("");
+  return RECORDING_DELIVERY_FIELDS.map((field, index) => {
+    const name = `#delivery${index}`;
+    const value = `:delivery${index}`;
+    names[name] = field;
+    const previous = input.recordingDelivery!.previous[field];
+    if (previous === undefined) return ` AND attribute_not_exists(${name})`;
+    Object.assign(values, marshall({ [value]: previous }));
+    return ` AND ${name} = ${value}`;
+  }).join("");
 }
 export function buildHistoryTransition(
   input: HistoryTransition,

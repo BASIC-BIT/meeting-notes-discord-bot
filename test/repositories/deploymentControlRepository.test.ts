@@ -3,6 +3,9 @@ import {
   createMockDeploymentControlRepository,
   classifyDeploymentTransactionError,
 } from "../../src/repositories/deploymentControlRepository";
+import { buildHistoryTransition } from "../../src/services/deploymentControlTransactions";
+import type { ActiveMeetingLease, MeetingHistory } from "../../src/types/db";
+import type { HistoryTransition } from "../../src/types/deploymentControl";
 import { parseDeploymentControlRecord } from "../../src/types/deploymentControl";
 import {
   context,
@@ -359,3 +362,188 @@ test("history patch cannot replace unrelated data or rewind status", async () =>
     }),
   ).rejects.toThrow("not allowed");
 });
+
+function notesTimingFixture() {
+  const timing = {
+    kind: "first",
+    notesVersion: 1,
+    path: "live",
+    firstAcknowledgedAt: "2026-10-16T12:00:30.000Z",
+  } as const;
+  const recovery = {
+    disposition: "needs_reconciliation",
+    reason: "delivery_uncertain",
+    stage: "delivery",
+    attempt: 0,
+    executionVersion: 1,
+    retry: { maxAttempts: 3, nextAttemptAt: null },
+  } as const;
+  const row: MeetingHistory = {
+    ...history,
+    status: "processing",
+    notesDeliveryTiming: timing,
+    recovery,
+  };
+  const ownership = {
+    guildId: "guild",
+    meetingId: "meeting",
+    ownerInstanceId: "old",
+    executionVersion: 1,
+    voiceOperationAttemptId: "voice",
+    sessionMode: "meeting" as const,
+  };
+  const lease: ActiveMeetingLease = {
+    ...ownership,
+    voiceChannelId: "channel",
+    textChannelId: "text",
+    isAutoRecording: false,
+    leaseExpiresAt: 200,
+    expiresAt: 300,
+    createdAt: "2026-10-16T12:00:00.000Z",
+    updatedAt: "2026-10-16T12:00:00.000Z",
+  };
+  const repository = createMockDeploymentControlRepository(
+    new Map(),
+    new Map([["guild", [row]]]),
+    new Map([["guild", lease]]),
+  );
+  const input: HistoryTransition = {
+    key: { guildId: row.guildId, channelId_timestamp: row.channelId_timestamp },
+    expectedMeetingId: "meeting",
+    expectedOwnerInstanceId: "old",
+    expectedExecutionVersion: 1,
+    expectedStatus: "processing",
+    expectedCheckpointRevision: 0,
+    signal: new AbortController().signal,
+    recordingDelivery: {
+      kind: "recording_delivery",
+      phase: "acknowledgment",
+      ownership,
+      now: 100,
+      previous: {
+        recovery,
+        summaryMessageId: undefined,
+        notesMessageIds: undefined,
+        notesChannelId: undefined,
+        notesDeliveryTiming: timing,
+      },
+    },
+    patch: {
+      recovery,
+      notesMessageIds: ["notes"],
+      notesChannelId: "text",
+      notesDeliveryTiming: {
+        ...timing,
+        kind: "complete",
+        completeAcknowledgedAt: "2026-10-16T12:00:45.000Z",
+      },
+    },
+  };
+  return { timing, row, input, repository };
+}
+
+test("Dynamo timing condition compares the exact previous value and absence", () => {
+  const { input, timing } = notesTimingFixture();
+  const tables = { deploymentControl: "control", meetingHistory: "history" };
+  const update = buildHistoryTransition(input, tables);
+  expect(update.ExpressionAttributeNames).toMatchObject({
+    "#delivery0": "recovery",
+    "#delivery1": "summaryMessageId",
+    "#delivery2": "notesMessageIds",
+    "#delivery3": "notesChannelId",
+    "#delivery4": "notesDeliveryTiming",
+  });
+  expect(update.ConditionExpression).toContain(" AND #delivery4 = :delivery4");
+  expect(update.ExpressionAttributeValues?.[":delivery4"]).toEqual({
+    M: {
+      kind: { S: timing.kind },
+      notesVersion: { N: "1" },
+      path: { S: "live" },
+      firstAcknowledgedAt: { S: timing.firstAcknowledgedAt },
+    },
+  });
+  const absent = buildHistoryTransition(
+    {
+      ...input,
+      recordingDelivery: {
+        ...input.recordingDelivery!,
+        previous: {
+          ...input.recordingDelivery!.previous,
+          notesDeliveryTiming: undefined,
+        },
+      },
+    },
+    tables,
+  );
+  expect(absent.ConditionExpression).toContain(
+    " AND attribute_not_exists(#delivery4)",
+  );
+  expect(absent.ExpressionAttributeValues).not.toHaveProperty(":delivery4");
+});
+
+test("mock timing comparison rejects a stale prior value including missing proof field", async () => {
+  const { input, row, repository } = notesTimingFixture();
+  const stale: HistoryTransition = {
+    ...input,
+    recordingDelivery: {
+      ...input.recordingDelivery!,
+      previous: {
+        ...input.recordingDelivery!.previous,
+        notesDeliveryTiming: undefined,
+      },
+    },
+  };
+  expect(await repository.transitionMeetingHistory(stale)).toBe("stale");
+  delete stale.recordingDelivery!.previous.notesDeliveryTiming;
+  expect(await repository.transitionMeetingHistory(stale)).toBe("stale");
+  expect(row.notesDeliveryTiming?.kind).toBe("first");
+  expect(await repository.transitionMeetingHistory(input)).toBe("applied");
+  expect(row.notesDeliveryTiming?.kind).toBe("complete");
+});
+
+test("timed notes acknowledgement retains the original lease owner fence", async () => {
+  const { input, row, repository } = notesTimingFixture();
+  expect(
+    await repository.transitionMeetingHistory({
+      ...input,
+      expectedOwnerInstanceId: "former-owner",
+      recordingDelivery: {
+        ...input.recordingDelivery!,
+        ownership: {
+          ...input.recordingDelivery!.ownership,
+          ownerInstanceId: "former-owner",
+        },
+      },
+    }),
+  ).toBe("stale");
+  expect(row.notesDeliveryTiming?.kind).toBe("first");
+});
+
+test.each(["replace", "clear", "rewind"] as const)(
+  "complete notes timing cannot %s on an acknowledgement",
+  async (change) => {
+    const { input, row, repository } = notesTimingFixture();
+    const timing = input.patch.notesDeliveryTiming;
+    if (timing?.kind !== "complete")
+      throw new Error("Expected complete timing fixture");
+    row.notesDeliveryTiming = timing;
+    input.recordingDelivery!.previous.notesDeliveryTiming =
+      row.notesDeliveryTiming;
+    if (change === "replace")
+      input.patch.notesDeliveryTiming = {
+        ...timing,
+        kind: "complete",
+        completeAcknowledgedAt: "2026-10-16T12:01:00.000Z",
+      };
+    if (change === "clear")
+      input.patch.notesDeliveryTiming = JSON.parse("null");
+    if (change === "rewind")
+      input.patch.notesDeliveryTiming = {
+        kind: "first",
+        notesVersion: 1,
+        path: "live",
+        firstAcknowledgedAt: "2026-10-16T12:00:30.000Z",
+      };
+    await expect(repository.transitionMeetingHistory(input)).rejects.toThrow();
+  },
+);
