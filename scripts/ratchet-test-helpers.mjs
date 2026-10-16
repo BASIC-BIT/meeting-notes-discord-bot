@@ -34,10 +34,10 @@ export function commit(dir, msg) {
   git(dir, "commit", "-q", "-m", msg);
 }
 
-export const withRepo = (fn) => () => {
+export const withRepo = (fn) => async () => {
   const dir = tempRepo();
   try {
-    fn(dir);
+    return await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -132,3 +132,44 @@ export function ${tag}(input) {
   return { ok: status === "finite", summary };
 }
 `;
+
+export function qualityReport(codes = [0, 0, 0]) {
+  const names = ["duplication", "complexity", "file-size"];
+  return {
+    schemaVersion: 1,
+    scanners: names.map((name, i) => ({
+      name,
+      exitCode: codes[i],
+      report:
+        codes[i] === 2
+          ? null
+          : {
+              base: "b",
+              mergeBase: "b",
+              changedFiles: 1,
+              scanned: 1,
+              findings: codes[i] === 1 ? [{ file: "src/a.ts" }] : [],
+            },
+      error: codes[i] === 2 ? "scanner unavailable" : null,
+    })),
+    strictExitCode: Math.max(...codes),
+  };
+}
+export function qualityInput(codes = [0, 0, 0]) {
+  const scanned = {
+    headSha: "a",
+    baseRef: "master",
+    baseSha: "b",
+    treeSha: "t",
+  };
+  return {
+    report: qualityReport(codes),
+    scanned,
+    current: {
+      ...scanned,
+      labels: ["quality-exception"],
+      body: "## Quality exception\nReviewed boundary.",
+    },
+    checkerTestsPassed: true,
+  };
+}

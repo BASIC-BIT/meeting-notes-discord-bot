@@ -145,7 +145,7 @@ Keep Perkcord's executable tests proving complexity 15 passes, 16 fails, unchang
 - `evaluatePolicy({report, scanned, current, checkerTestsPassed}) -> PolicyResult`. `scanned` and `current` use the shared revision contracts; local strict execution does not call this PR policy.
 - Runner CLI: `node scripts/check-quality.mjs [--repo path] [--base ref] [--json]`. JSON mode emits only one `QualityReport` to stdout, including operational error outcomes; human diagnostics go to stderr.
 
-- [ ] **Step 1: Write the failing policy test with literal scanner results.**
+- [x] **Step 1: Write the failing policy test with literal scanner results.**
 
 ```js
 test("an exception cannot waive an unavailable scanner", () => {
@@ -166,10 +166,10 @@ test("an exception cannot waive an unavailable scanner", () => {
 
 Add table-driven assertions for every design policy row. Assert missing/duplicate scanners, malformed JSON, wrong counts, mismatched baselines, unexpected exits, and exit-0-with-findings become 2. Assert comment-only/template rationale is absent, headings in fenced examples do not open sections, actual sections stop at the next real level-one/two heading, and shell-looking text remains inert data.
 
-- [ ] **Step 2: Observe red.** Run `node --test scripts/check-quality.test.mjs scripts/quality-policy.test.mjs`.
-- [ ] **Step 3: Implement the runner and pure policy.** Keep scanner order fixed, collect all three even after a regression or process failure, validate child-process output before using it, and derive strict exit precedence 2, then 1, then 0. Require the complete scanner set. Use the explicit policy table, not truthiness of an empty findings collection. Fail freshness mismatches and checker-test failure before considering a label.
-- [ ] **Step 4: Verify green and real-process behavior.** Rerun step 2. In a shared temporary repository, introduce one oversized file, one complex function, and one duplicate and assert `runQuality` reports all three. Verify the CLI returns 1 while retaining all reports. A missing ref returns 2. Repeated calls with a persistent label/current head retain the exception; removing the label returns a regression. No test invokes a shell using the rationale.
-- [ ] **Step 5: Commit.** Commit the runner, policy, and tests as `feat: add persistent PR quality exceptions`.
+- [x] **Step 2: Observe red.** Run `node --test scripts/check-quality.test.mjs scripts/quality-policy.test.mjs`.
+- [x] **Step 3: Implement the runner and pure policy.** Keep scanner order fixed, collect all three even after a regression or process failure, validate child-process output before using it, and derive strict exit precedence 2, then 1, then 0. Require the complete scanner set. Use the explicit policy table, not truthiness of an empty findings collection. Fail freshness mismatches and checker-test failure before considering a label.
+- [x] **Step 4: Verify green and real-process behavior.** Rerun step 2. In a shared temporary repository, introduce one oversized file, one complex function, and one duplicate and assert `runQuality` reports all three. Verify the CLI returns 1 while retaining all reports. A missing ref returns 2. Repeated calls with a persistent label/current head retain the exception; removing the label returns a regression. No test invokes a shell using the rationale.
+- [x] **Step 5: Commit.** Commit the runner, policy, and tests as `feat: add persistent PR quality exceptions`.
 
 ### Task 4: Wire the dedicated PR workflow
 
