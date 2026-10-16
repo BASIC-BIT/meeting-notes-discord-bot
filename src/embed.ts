@@ -417,6 +417,26 @@ async function deliverMeetingSummary(
   return { summary, notes };
 }
 
+async function acknowledgeMeetingNotes(
+  meeting: MeetingData,
+  messageId: string,
+  complete: boolean,
+): Promise<void> {
+  const timing = meeting.notesText?.trim()
+    ? recordNotesAcknowledgement(meeting.notesDeliveryTiming, {
+        acknowledgedAt: new Date().toISOString(),
+        complete,
+        path: "live",
+      })
+    : undefined;
+  await acknowledgeRecordingDeliveryMessage(
+    meeting,
+    "notes",
+    messageId,
+    timing,
+  );
+}
+
 async function sendMeetingNotes(
   meeting: MeetingData,
   noteEmbeds: EmbedBuilder[],
@@ -445,18 +465,10 @@ async function sendMeetingNotes(
       if (finalization) getMeetingProcessingSignal(meeting).throwIfAborted();
       const message = await meeting.textChannel.send(payload);
       if (finalization) {
-        const timing = meeting.notesText?.trim()
-          ? recordNotesAcknowledgement(meeting.notesDeliveryTiming, {
-              acknowledgedAt: new Date().toISOString(),
-              complete: embeds === noteEmbedBatches.at(-1),
-              path: "live",
-            })
-          : undefined;
-        await acknowledgeRecordingDeliveryMessage(
+        await acknowledgeMeetingNotes(
           meeting,
-          "notes",
           message.id,
-          timing,
+          embeds === noteEmbedBatches.at(-1),
         );
       }
       noteMessages.push(message);

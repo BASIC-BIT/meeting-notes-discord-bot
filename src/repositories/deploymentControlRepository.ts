@@ -938,16 +938,14 @@ export function createMockDeploymentControlRepository(
       });
       const row = getHistory(input.key);
       if (!checkpointLeaseAllowed(input, records, leases)) return "stale";
+      const { recordingDelivery } = input;
       if (
-        input.recordingDelivery &&
-        !RECORDING_DELIVERY_FIELDS.every(
-          (field) =>
-            JSON.stringify(row?.[field]) ===
-            JSON.stringify(input.recordingDelivery!.previous[field]),
-        )
-      )
-        return "stale";
-      if (
+        (recordingDelivery &&
+          !RECORDING_DELIVERY_FIELDS.every(
+            (field) =>
+              JSON.stringify(row?.[field]) ===
+              JSON.stringify(recordingDelivery.previous[field]),
+          )) ||
         !row ||
         row.meetingId !== input.expectedMeetingId ||
         row.ownerInstanceId !== input.expectedOwnerInstanceId ||

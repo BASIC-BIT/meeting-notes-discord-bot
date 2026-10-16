@@ -91,6 +91,26 @@ function buildNotesHistory(options: {
   ];
 }
 
+function buildDeliveryMetadata(
+  meeting: MeetingData,
+  notesDeliveryTiming: MeetingHistory["notesDeliveryTiming"],
+) {
+  return {
+    startReason: meeting.startReason,
+    startTriggeredByUserId: meeting.startTriggeredByUserId,
+    autoRecordRule: meeting.autoRecordRule,
+    endReason: meeting.endReason,
+    endTriggeredByUserId: meeting.endTriggeredByUserId,
+    cancellationReason: meeting.cancellationReason,
+    summaryMessageId:
+      meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
+    notesMessageIds: meeting.notesMessageIds,
+    notesDeliveryTiming,
+    delivery: meeting.delivery,
+    notesChannelId: meeting.notesChannelId,
+  };
+}
+
 export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
   meeting.historySaved = false;
   if (meeting.sessionMode === "tts_only") return;
@@ -126,18 +146,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
         isAutoRecording: meeting.isAutoRecording,
         status: MEETING_STATUS.CANCELLED,
         processing: meeting.processing,
-        startReason: meeting.startReason,
-        startTriggeredByUserId: meeting.startTriggeredByUserId,
-        autoRecordRule: meeting.autoRecordRule,
-        endReason: meeting.endReason,
-        endTriggeredByUserId: meeting.endTriggeredByUserId,
-        cancellationReason: meeting.cancellationReason,
-        summaryMessageId:
-          meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
-        notesMessageIds: meeting.notesMessageIds,
-        notesDeliveryTiming,
-        delivery: meeting.delivery,
-        notesChannelId: meeting.notesChannelId,
+        ...buildDeliveryMetadata(meeting, notesDeliveryTiming),
         transcriptS3Key: meeting.transcriptS3Key,
         audioS3Key: meeting.audioS3Key,
         chatS3Key: meeting.chatS3Key,
@@ -178,18 +187,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       meetingCreatorId: meeting.creator.id,
       isAutoRecording: meeting.isAutoRecording,
       status: MEETING_STATUS.COMPLETE,
-      startReason: meeting.startReason,
-      startTriggeredByUserId: meeting.startTriggeredByUserId,
-      autoRecordRule: meeting.autoRecordRule,
-      endReason: meeting.endReason,
-      endTriggeredByUserId: meeting.endTriggeredByUserId,
-      cancellationReason: meeting.cancellationReason,
-      summaryMessageId:
-        meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
-      notesMessageIds: meeting.notesMessageIds,
-      notesDeliveryTiming,
-      delivery: meeting.delivery,
-      notesChannelId: meeting.notesChannelId,
+      ...buildDeliveryMetadata(meeting, notesDeliveryTiming),
       notesVersion,
       notesLastEditedBy,
       notesLastEditedAt,
