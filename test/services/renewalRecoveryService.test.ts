@@ -61,6 +61,14 @@ function fixture() {
       data: fundedInvoice.lines.data.map((line) => ({
         ...line,
         period: { ...line.period },
+        pricing: line.pricing
+          ? {
+              ...line.pricing,
+              price_details: line.pricing.price_details
+                ? { ...line.pricing.price_details }
+                : null,
+            }
+          : null,
       })),
     },
   };
@@ -376,4 +384,17 @@ test("recognizes a scheduled downgrade but treats its old metadata as ordinary n
     state: "grace",
     scheduledOperationId: null,
   });
+});
+
+test("accepts the provider's expanded price reference on a renewal service line", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const pricing = f.renewal.lines.data[0].pricing;
+  if (!pricing?.price_details) throw new Error("Missing price fixture");
+  pricing.price_details = {
+    ...pricing.price_details,
+    price: f.subscription.items.data[0].price,
+  };
+  expect(await f.refresh()).toMatchObject({ state: "grace" });
 });

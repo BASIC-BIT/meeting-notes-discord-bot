@@ -85,7 +85,7 @@ function serviceLine(
     lines.length !== 1 ||
     subscription.items.has_more ||
     subscription.items.data.length !== 1 ||
-    lines[0].pricing?.price_details?.price !== item.price.id ||
+    stripeId(lines[0].pricing?.price_details?.price) !== item.price.id ||
     lines[0].period.end !== item.current_period_end ||
     lines[0].period.start !== item.current_period_start ||
     lines[0].period.end <= lines[0].period.start
@@ -156,11 +156,11 @@ export async function verifyRenewalInvoice(
   const scheduledOperationId = await scheduledRenewalOperation(
     invoice,
     recovery,
-    line.pricing?.price_details?.price,
+    stripeId(line.pricing?.price_details?.price),
   );
   if (
     !scheduledOperationId &&
-    line.pricing?.price_details?.price !== recovery.paid.priceId
+    stripeId(line.pricing?.price_details?.price) !== recovery.paid.priceId
   )
     throw changeUnavailable();
   return { line, scheduledOperationId };
