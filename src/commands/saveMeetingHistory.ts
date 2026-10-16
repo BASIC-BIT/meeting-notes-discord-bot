@@ -1,6 +1,7 @@
 import { getMeetingProcessingSignal } from "../services/meetingProcessingLifetime";
 import { assertNotionOutcomeKnown } from "../services/notionOperationLifetime";
 import { assertMeetingProcessingSucceeded } from "../utils/meetingProcessing";
+import { notesDeliveryTimingSchema } from "../types/meetingNotesTiming";
 import { MeetingData } from "../types/meeting-data";
 import { MeetingHistory } from "../types/db";
 import { MEETING_STATUS } from "../types/meetingLifecycle";
@@ -96,6 +97,9 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
 
   try {
     assertMeetingProcessingSucceeded(meeting);
+    const timing = notesDeliveryTimingSchema.safeParse(
+      meeting.notesDeliveryTiming,
+    );
     const timestamp = meeting.startTime.toISOString();
     const duration = meeting.endTime
       ? Math.floor(
@@ -130,6 +134,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
         summaryMessageId:
           meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
         notesMessageIds: meeting.notesMessageIds,
+        notesDeliveryTiming: timing.success ? timing.data : undefined,
         delivery: meeting.delivery,
         notesChannelId: meeting.notesChannelId,
         transcriptS3Key: meeting.transcriptS3Key,
@@ -181,6 +186,7 @@ export async function saveMeetingHistoryToDatabase(meeting: MeetingData) {
       summaryMessageId:
         meeting.summaryMessageId ?? meeting.startMessageId ?? undefined,
       notesMessageIds: meeting.notesMessageIds,
+      notesDeliveryTiming: timing.success ? timing.data : undefined,
       delivery: meeting.delivery,
       notesChannelId: meeting.notesChannelId,
       notesVersion,

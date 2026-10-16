@@ -37,6 +37,7 @@ import {
   retirementSnapshotCondition,
 } from "../services/deploymentControlTransactions";
 import {
+  RECORDING_DELIVERY_FIELDS,
   admissionContextSchema,
   controlRecordSchema,
   parseDeploymentControlRecord,
@@ -939,10 +940,10 @@ export function createMockDeploymentControlRepository(
       if (!checkpointLeaseAllowed(input, records, leases)) return "stale";
       if (
         input.recordingDelivery &&
-        !Object.entries(input.recordingDelivery.previous).every(
-          ([field, value]) =>
-            JSON.stringify(row?.[field as keyof MeetingHistory]) ===
-            JSON.stringify(value),
+        !RECORDING_DELIVERY_FIELDS.every(
+          (field) =>
+            JSON.stringify(row?.[field]) ===
+            JSON.stringify(input.recordingDelivery!.previous[field]),
         )
       )
         return "stale";

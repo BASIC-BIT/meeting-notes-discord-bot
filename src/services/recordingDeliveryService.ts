@@ -8,6 +8,10 @@ import {
   type RecordingDeliveryProof,
   type SessionReservation,
 } from "../types/deploymentControl";
+import {
+  notesDeliveryTimingSchema,
+  type NotesDeliveryTiming,
+} from "../types/meetingNotesTiming";
 import type { RecoveryDisposition } from "../types/recordingCheckpoint";
 import { getMeetingProcessingSignal } from "./meetingProcessingLifetime";
 
@@ -63,6 +67,7 @@ function snapshot(row: MeetingHistory): RecordingDeliveryProof["previous"] {
     summaryMessageId: row.summaryMessageId,
     notesMessageIds: row.notesMessageIds,
     notesChannelId: row.notesChannelId,
+    notesDeliveryTiming: row.notesDeliveryTiming,
   };
 }
 async function write(
@@ -151,6 +156,7 @@ export async function acknowledgeRecordingDeliveryMessage(
   meeting: MeetingData,
   phase: "summary" | "notes",
   messageId: string,
+  notesTiming?: NotesDeliveryTiming,
 ): Promise<void> {
   const delivery = owner(meeting);
   const row = await readOwned(delivery);
@@ -161,6 +167,11 @@ export async function acknowledgeRecordingDeliveryMessage(
     patch.summaryMessageId = messageId;
     meeting.summaryMessageId = messageId;
   } else {
+    const timing = notesDeliveryTimingSchema.safeParse(notesTiming);
+    if (timing.success) {
+      patch.notesDeliveryTiming = timing.data;
+      meeting.notesDeliveryTiming = timing.data;
+    }
     patch.notesMessageIds = [
       ...new Set([...(row.notesMessageIds ?? []), messageId]),
     ];

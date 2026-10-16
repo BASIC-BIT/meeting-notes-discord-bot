@@ -141,3 +141,138 @@ test("all actual message ACKs plus terminal history allow exact delivery done", 
     stage: "delivery",
   });
 });
+
+afterEach(() => {
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+});
+
+test("timestamps Discord acknowledgement before the durable write", async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(125000);
+  const { meeting, row, send } = fixture();
+  const firstAcknowledgedAt = new Date(150000).toISOString();
+  const completeAcknowledgedAt = new Date(165000).toISOString();
+  const getHistory = mockRepository.getMeetingHistory.getMockImplementation()!;
+  mockRepository.getMeetingHistory.mockImplementation(async () => {
+    jest.setSystemTime(Date.now() + 10000);
+    return getHistory();
+  });
+  mockRepository.transitionMeetingHistory.mockImplementation(async (input) => {
+    if (input.patch.summaryMessageId) {
+      expect(input.patch.notesDeliveryTiming).toBeUndefined();
+      expect(meeting.notesDeliveryTiming).toBeUndefined();
+    }
+    jest.setSystemTime(Date.now() + 10000);
+    Object.assign(row, input.patch);
+    return "applied";
+  });
+  send
+    .mockImplementationOnce(async () => {
+      jest.setSystemTime(150000);
+      return { id: "first-notes" };
+    })
+    .mockImplementationOnce(async () => {
+      expect(row.notesDeliveryTiming).toEqual({
+        kind: "first",
+        notesVersion: 1,
+        path: "live",
+        firstAcknowledgedAt,
+      });
+      jest.setSystemTime(165000);
+      return { id: "second-notes" };
+    });
+  await updateMeetingSummaryMessage(meeting, { finalization: true });
+  expect(meeting.notesDeliveryTiming).toEqual({
+    kind: "complete",
+    notesVersion: 1,
+    path: "live",
+    firstAcknowledgedAt,
+    completeAcknowledgedAt,
+  });
+  expect(row.notesDeliveryTiming).toEqual(meeting.notesDeliveryTiming);
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(mockRepository.transitionMeetingHistory).toHaveBeenCalledTimes(4);
+});
+
+test("retains first timing after a later batch fails", async () => {
+  const { meeting, row, send } = fixture();
+  send
+    .mockResolvedValueOnce({ id: "first-notes" })
+    .mockRejectedValueOnce(new Error("second batch failed"));
+  await expect(
+    updateMeetingSummaryMessage(meeting, { finalization: true }),
+  ).rejects.toThrow("second batch failed");
+  expect(meeting.notesDeliveryTiming?.kind).toBe("first");
+  expect(row.notesDeliveryTiming).toEqual(meeting.notesDeliveryTiming);
+  expect(row.recovery?.disposition).toBe("needs_reconciliation");
+  expect(send).toHaveBeenCalledTimes(2);
+});
+
+test.each([
+  ["never resends after an uncertain acknowledgement", false],
+  [
+    "accepts exact durable timing after a lost acknowledgement without resending",
+    true,
+  ],
+] as const)("%s", async (_name, committed) => {
+  const { meeting, row, send } = fixture();
+  meeting.notesText = "One batch";
+  send.mockResolvedValueOnce({ id: "notes" });
+  mockRepository.transitionMeetingHistory.mockImplementation(async (input) => {
+    if (input.patch.notesMessageIds) {
+      if (committed) Object.assign(row, input.patch);
+      throw new Error("uncertain notes metadata");
+    }
+    Object.assign(row, input.patch);
+    return "applied";
+  });
+  const actual = updateMeetingSummaryMessage(meeting, { finalization: true });
+  if (committed) await expect(actual).resolves.toBeDefined();
+  else await expect(actual).rejects.toThrow("uncertain notes metadata");
+  expect(meeting.notesDeliveryTiming?.kind).toBe("complete");
+  expect(row.notesDeliveryTiming?.kind).toBe(
+    committed ? "complete" : undefined,
+  );
+  expect(row.recovery?.disposition).toBe("needs_reconciliation");
+  expect(send).toHaveBeenCalledTimes(1);
+  await expect(
+    updateMeetingSummaryMessage({ ...meeting }, { finalization: true }),
+  ).rejects.toThrow("replayed");
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+test("malformed optional legacy timing does not prevent live delivery", async () => {
+  const { meeting, row, send } = fixture();
+  Object.assign(meeting, { notesDeliveryTiming: { kind: "legacy" } });
+  Object.assign(row, { notesDeliveryTiming: { kind: "legacy" } });
+  meeting.notesText = "One batch";
+  send.mockResolvedValue({ id: "notes" });
+  await expect(
+    updateMeetingSummaryMessage(meeting, { finalization: true }),
+  ).resolves.toBeDefined();
+  expect(row.notesDeliveryTiming?.kind).toBe("complete");
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+test("an invalid later clock retains the valid first observation", async () => {
+  jest.useFakeTimers();
+  const { meeting, row, send } = fixture();
+  send
+    .mockImplementationOnce(async () => {
+      jest.setSystemTime(165000);
+      return { id: "first-notes" };
+    })
+    .mockImplementationOnce(async () => {
+      jest.setSystemTime(150000);
+      return { id: "second-notes" };
+    });
+  await updateMeetingSummaryMessage(meeting, { finalization: true });
+  expect(row.notesDeliveryTiming).toEqual({
+    kind: "first",
+    notesVersion: 1,
+    path: "live",
+    firstAcknowledgedAt: new Date(165000).toISOString(),
+  });
+  expect(meeting.notesDeliveryTiming).toEqual(row.notesDeliveryTiming);
+});

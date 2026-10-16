@@ -3,6 +3,7 @@ import {
   runMeetingProcessingEffect,
   runMeetingNoticeMutation,
 } from "./services/meetingProcessingLifetime";
+import { recordNotesAcknowledgement } from "./observability/meetingNotesLatency";
 import {
   beginRecordingDelivery,
   acknowledgeRecordingDeliveryMessage,
@@ -443,8 +444,19 @@ async function sendMeetingNotes(
     try {
       if (finalization) getMeetingProcessingSignal(meeting).throwIfAborted();
       const message = await meeting.textChannel.send(payload);
-      if (finalization)
-        await acknowledgeRecordingDeliveryMessage(meeting, "notes", message.id);
+      if (finalization) {
+        const timing = recordNotesAcknowledgement(meeting.notesDeliveryTiming, {
+          acknowledgedAt: new Date().toISOString(),
+          complete: embeds === noteEmbedBatches.at(-1),
+          path: "live",
+        });
+        await acknowledgeRecordingDeliveryMessage(
+          meeting,
+          "notes",
+          message.id,
+          timing,
+        );
+      }
       noteMessages.push(message);
       if (upgradeUrl && embeds === noteEmbedBatches.at(-1)) {
         captureEvent("upgrade_offer_delivered", {
