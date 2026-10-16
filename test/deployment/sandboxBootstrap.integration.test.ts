@@ -874,6 +874,9 @@ test("read-only promotion readiness waits for ALB health and ignores replaced ru
     now: () => 1000,
   });
   await expect(bootstrap.readiness()).resolves.toEqual({ kind: "waiting" });
+  await expect(bootstrap.promote()).rejects.toMatchObject({
+    code: "candidate_not_ready",
+  });
   expect((await f.get("CONTROL"))?.servingGeneration).toBe(0);
   expect((await f.get("BOOTSTRAP#" + f.manifest.operationId))?.stage).toBe(
     "launched",

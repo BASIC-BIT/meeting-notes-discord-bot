@@ -74,7 +74,6 @@ function fixture() {
     historyCount: 0,
     lostStop: false,
     lostRoute: false,
-    foreignTasks: false,
   };
   const calls = [];
   const action = () =>
@@ -208,9 +207,26 @@ function fixture() {
         },
       }),
       "describe-services": () => ({ services: [service()], failures: [] }),
-      "list-tasks": () => ({ taskArns: state.foreignTasks ? ["foreign"] : [] }),
-      "describe-tasks": () => ({
-        tasks: [{ lastStatus: "RUNNING" }],
+      "list-tasks": (p) => ({
+        taskArns:
+          p.desiredStatus === "RUNNING" && !state.stopped ? ["legacy"] : [],
+      }),
+      "describe-tasks": (p) => ({
+        tasks: p.tasks.map((taskArn) => ({
+          taskArn,
+          lastStatus: "RUNNING",
+          taskDefinitionArn: m.legacyTaskDefinition,
+          containers: [
+            {
+              name: m.containerName,
+              networkInterfaces: [{ privateIpv4Address: "10.0.0.1" }],
+            },
+          ],
+        })),
+        failures: [],
+      }),
+      "get-task-protection": (p) => ({
+        protectedTasks: [{ taskArn: p.tasks[0], protectionEnabled: false }],
         failures: [],
       }),
       "update-service": () => {
@@ -248,7 +264,17 @@ function fixture() {
         Attributes: [{ Key: "stickiness.enabled", Value: "false" }],
       }),
       "describe-rules": () => ({ Rules: [{ IsDefault: true }] }),
-      "describe-target-health": () => ({ TargetHealthDescriptions: [] }),
+      "describe-target-health": (p) => ({
+        TargetHealthDescriptions:
+          p.TargetGroupArn === m.targetGroupA && !state.stopped
+            ? [
+                {
+                  Target: { Id: "10.0.0.1", Port: 3001 },
+                  TargetHealth: { State: "healthy" },
+                },
+              ]
+            : [],
+      }),
       "modify-listener": () => {
         expect(state.stage.stage).toBe("routing_submitted");
         if (state.lostRoute) throw Error("ACK unknown");
@@ -673,4 +699,94 @@ test("does not promote when a read-only readiness check exceeds its warmup deadl
     }).activate(),
   ).rejects.toThrow();
   expect(f.bootstrap.promote).not.toHaveBeenCalled();
+});
+
+test.each([
+  "foreign-target",
+  "protected-legacy",
+  "aging-proof",
+  "slow-preflight",
+])("refuses %s without reserving or stopping", async (kind) => {
+  const f = fixture();
+  let time = kind === "aging-proof" ? 1500 : 1000;
+  const aws = async (service, operation, input) => {
+    const response = await f.aws(service, operation, input);
+    if (
+      kind === "foreign-target" &&
+      service === "elbv2" &&
+      operation === "describe-target-health" &&
+      input.TargetGroupArn === f.m.targetGroupA &&
+      !f.state.stopped
+    )
+      response.TargetHealthDescriptions.push({
+        Target: { Id: "foreign", Port: 3001 },
+        TargetHealth: { State: "healthy" },
+      });
+    if (
+      kind === "protected-legacy" &&
+      service === "ecs" &&
+      operation === "get-task-protection"
+    )
+      response.protectedTasks[0].protectionEnabled = true;
+    if (kind === "slow-preflight" && operation === "get-task-protection")
+      time = 1400;
+    return response;
+  };
+  await expect(
+    createIntroduction({
+      manifest: f.m,
+      expectedSha256: f.hash,
+      aws,
+      bootstrap: f.bootstrap,
+      now: () => time,
+      pause: async () => {},
+    }).activate(),
+  ).rejects.toThrow();
+  expect(
+    f.calls.some((c) =>
+      ["transact-write-items", "update-service", "modify-listener"].includes(
+        c.o,
+      ),
+    ),
+  ).toBe(false);
+});
+
+test("resumes read-only readiness after a pre-write promotion race", async () => {
+  const f = fixture();
+  const finish = f.bootstrap.promote.getMockImplementation();
+  f.bootstrap.promote
+    .mockImplementationOnce(async () => {
+      throw Object.assign(new Error("candidate replaced"), {
+        code: "candidate_not_ready",
+      });
+    })
+    .mockImplementation(finish);
+  await expect(
+    createIntroduction({
+      manifest: f.m,
+      expectedSha256: f.hash,
+      aws: f.aws,
+      bootstrap: f.bootstrap,
+      now: () => 1000,
+      pause: async () => {},
+    }).activate(),
+  ).resolves.toEqual({ kind: "complete", generation: 1 });
+  expect(f.bootstrap.readiness).toHaveBeenCalledTimes(2);
+  expect(f.bootstrap.promote).toHaveBeenCalledTimes(2);
+});
+
+test("never retries an unknown promotion write outcome", async () => {
+  const f = fixture();
+  f.bootstrap.promote.mockRejectedValue(new Error("write outcome unknown"));
+  const intro = createIntroduction({
+    manifest: f.m,
+    expectedSha256: f.hash,
+    aws: f.aws,
+    bootstrap: f.bootstrap,
+    now: () => 1000,
+    pause: async () => {},
+  });
+  await expect(intro.activate()).rejects.toThrow();
+  await expect(intro.activate()).rejects.toThrow();
+  expect(f.bootstrap.promote).toHaveBeenCalledTimes(1);
 });

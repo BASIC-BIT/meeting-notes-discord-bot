@@ -303,7 +303,7 @@ function createIntroduction(options) {
       await aws("elbv2", "describe-target-health", { TargetGroupArn: group })
     ).TargetHealthDescriptions;
   }
-  async function noLiveTasks() {
+  async function liveTasks() {
     const arns = new Set();
     for (const desiredStatus of ["RUNNING", "STOPPED"]) {
       let nextToken;
@@ -320,6 +320,7 @@ function createIntroduction(options) {
       } while (nextToken);
     }
     const all = [...arns];
+    const live = [];
     for (let i = 0; i < all.length; i += 100) {
       const batch = all.slice(i, i + 100);
       const response = await aws("ecs", "describe-tasks", {
@@ -328,18 +329,60 @@ function createIntroduction(options) {
       });
       assert.deepEqual(response.failures, []);
       assert.equal(response.tasks.length, batch.length);
-      if (response.tasks.some((task) => task.lastStatus !== "STOPPED"))
-        return false;
+      live.push(
+        ...response.tasks.filter((task) => task.lastStatus !== "STOPPED"),
+      );
     }
-    return true;
+    return live;
   }
-  async function wait(check) {
-    const deadline = now() + 900;
+  async function assertLegacyTarget() {
+    const tasks = await liveTasks();
+    assert.equal(tasks.length, 1);
+    const task = tasks[0];
+    assert.equal(task.lastStatus, "RUNNING");
+    assert.equal(task.taskDefinitionArn, m.legacyTaskDefinition);
+    const container = task.containers.find((c) => c.name === m.containerName);
+    assert.equal(container.networkInterfaces.length, 1);
+    const health = await targets(m.targetGroupA);
+    assert.equal(health.length, 1);
+    assert.equal(
+      health[0].Target.Id,
+      container.networkInterfaces[0].privateIpv4Address,
+    );
+    assert.equal(health[0].Target.Port, m.containerPort);
+    assert.equal(health[0].TargetHealth.State, "healthy");
+    const protection = await aws("ecs", "get-task-protection", {
+      cluster: m.cluster,
+      tasks: [task.taskArn],
+    });
+    assert(!protection.failures?.length);
+    assert.equal(protection.protectedTasks.length, 1);
+    assert.equal(protection.protectedTasks[0].taskArn, task.taskArn);
+    assert.equal(protection.protectedTasks[0].protectionEnabled, false);
+  }
+  function stopBudget() {
+    const expiresAt = Date.parse(m.maintenance.confirmedAt) / 1000 + 900;
+    // Reserve eight minutes for shutdown and two for routing/initialization.
+    assert(
+      expiresAt - now() >= 600,
+      "Maintenance proof has insufficient remaining lifetime",
+    );
+  }
+  async function wait(check, { complete, timeoutSeconds = 900 } = {}) {
+    const deadline = now() + timeoutSeconds;
     for (let i = 0; i < 180; i++) {
       if (now() >= deadline) break;
       const ready = await check();
       if (now() >= deadline) break;
-      if (ready) return;
+      if (ready) {
+        if (!complete) return;
+        try {
+          return await complete();
+        } catch (error) {
+          // This code is emitted only by promotion checks before any write.
+          if (error.code !== "candidate_not_ready") throw error;
+        }
+      }
       await sleep();
     }
     throw new Error("Bounded wait expired; preserve operation");
@@ -449,6 +492,8 @@ function createIntroduction(options) {
       true,
     );
     assert.equal((await targets(m.targetGroupB)).length, 0);
+    await assertLegacyTarget();
+    stopBudget();
     await aws("dynamodb", "transact-write-items", {
       TransactItems: [
         {
@@ -475,6 +520,7 @@ function createIntroduction(options) {
       ],
     });
     await stage("reserved", "stop_submitted");
+    stopBudget();
     const stopped = (
       await aws("ecs", "update-service", {
         cluster: m.cluster,
@@ -486,18 +532,21 @@ function createIntroduction(options) {
     assert.equal(stopped.taskDefinition, m.legacyTaskDefinition);
     assert.equal(stopped.desiredCount, 0);
     await stage("stop_submitted", "stop_acknowledged");
-    await wait(async () => {
-      const current = await service();
-      assert.equal(current.taskDefinition, m.legacyTaskDefinition);
-      assert.equal(current.desiredCount, 0);
-      return (
-        current.runningCount === 0 &&
-        current.pendingCount === 0 &&
-        (await noLiveTasks()) &&
-        (await targets(m.targetGroupA)).length === 0 &&
-        (await targets(m.targetGroupB)).length === 0
-      );
-    });
+    await wait(
+      async () => {
+        const current = await service();
+        assert.equal(current.taskDefinition, m.legacyTaskDefinition);
+        assert.equal(current.desiredCount, 0);
+        return (
+          current.runningCount === 0 &&
+          current.pendingCount === 0 &&
+          (await liveTasks()).length === 0 &&
+          (await targets(m.targetGroupA)).length === 0 &&
+          (await targets(m.targetGroupB)).length === 0
+        );
+      },
+      { timeoutSeconds: 480 },
+    );
     await workSettled();
     assert(
       same((await listener()).DefaultActions, before.DefaultActions),
@@ -521,8 +570,10 @@ function createIntroduction(options) {
     await stage("routing_submitted", "routing_acknowledged");
     await bootstrap.initialize();
     await bootstrap.launch();
-    await wait(async () => (await bootstrap.readiness()).kind === "ready");
-    const result = await bootstrap.promote();
+    const result = await wait(
+      async () => (await bootstrap.readiness()).kind === "ready",
+      { complete: () => bootstrap.promote() },
+    );
     await wait(() => runtimeReady());
     await stage("routing_acknowledged", "complete");
     return result;
