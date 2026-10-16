@@ -1,17 +1,28 @@
-import type { StripeClient, StripeSubscription } from "../types/stripe";
+import type {
+  StripeClient,
+  StripeSubscription,
+  StripeInvoice,
+} from "../types/stripe";
 import type { FirstYearPayment } from "../types/pricing";
 import { getBillingChangeRepository } from "../repositories/billingChangeRepository";
 import { verifyChangeFunding } from "./billingChangeFunding";
 import { stripeId } from "./billingChangeProvider";
 import { assertRecurringOfferInvoice } from "./firstOfferInvoiceEvidence";
 function isPaidAnnualInvoice(
-  invoice: import("../types/stripe").StripeInvoice,
-  customerId: string,
-) {
+  invoice: StripeInvoice,
+  subscription: StripeSubscription,
+): invoice is StripeInvoice & {
+  billing_reason: "subscription_cycle" | "subscription_update";
+} {
   return (
+    (invoice.billing_reason === "subscription_cycle" ||
+      invoice.billing_reason === "subscription_update") &&
     invoice.status === "paid" &&
     invoice.amount_remaining === 0 &&
-    stripeId(invoice.customer) === customerId
+    invoice.pre_payment_credit_notes_amount === 0 &&
+    invoice.post_payment_credit_notes_amount === 0 &&
+    invoice.livemode === subscription.livemode &&
+    stripeId(invoice.customer) === stripeId(subscription.customer)
   );
 }
 export async function readChangedAnnualPayment(
@@ -41,13 +52,14 @@ export async function readChangedAnnualPayment(
     if (!verifyChangeFunding(invoice, operation, operation.funding))
       return { status: "unavailable" };
   } else {
+    if (!isPaidAnnualInvoice(invoice, subscription))
+      return { status: "unavailable" };
     assertRecurringOfferInvoice(
       invoice,
       subscription.id,
       operation.target.offer.terms,
+      invoice.billing_reason,
     );
-    if (!isPaidAnnualInvoice(invoice, operation.source.customerId))
-      return { status: "unavailable" };
   }
   return {
     status: "available",

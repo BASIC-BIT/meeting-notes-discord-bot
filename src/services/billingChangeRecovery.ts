@@ -195,8 +195,8 @@ async function reverseServiceCredit(
       {
         invoice: invoice.id,
         amount: invoice.total,
-        refund_amount: amounts.serviceRefund,
-        credit_amount: amounts.serviceCredit,
+        refund_amount: amounts.serviceRefund || undefined,
+        credit_amount: amounts.serviceCredit || undefined,
         reason: "order_change",
         email_type: "none",
         metadata: changeMetadata(operation),

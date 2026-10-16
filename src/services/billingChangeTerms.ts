@@ -259,7 +259,9 @@ export async function settleChangeOffer(
             ? (invoice.lines.data.find(
                 (line) =>
                   line.pricing?.price_details?.price ===
-                  operation.target.priceId,
+                    operation.target.priceId &&
+                  line.parent?.subscription_item_details?.subscription ===
+                    operation.source.subscriptionId,
               )?.parent?.subscription_item_details?.subscription_item ?? "")
             : operation.source.itemId,
         invoiceId: invoice.id,

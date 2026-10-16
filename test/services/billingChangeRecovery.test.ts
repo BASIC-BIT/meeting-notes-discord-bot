@@ -166,6 +166,7 @@ it("reverses service before old debt, restores only that debt, and resumes witho
     if (path === "/v1/credit_notes" && method === "POST") {
       journal.push("service");
       expect(fields.get("refund_amount")).toBe("5700");
+      expect(fields.has("credit_amount")).toBe(false);
       note = {
         id: "cn_owned",
         invoice: "in_funding",

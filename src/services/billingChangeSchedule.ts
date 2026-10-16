@@ -373,6 +373,8 @@ function isScheduledInvoice(
   return (
     invoice.status === "paid" &&
     invoice.amount_remaining === 0 &&
+    invoice.pre_payment_credit_notes_amount === 0 &&
+    invoice.post_payment_credit_notes_amount === 0 &&
     invoice.livemode === (operation.mode === "live") &&
     stripeId(invoice.customer) === operation.source.customerId &&
     stripeId(details?.subscription) === operation.source.subscriptionId &&

@@ -573,21 +573,7 @@ async function settleScheduled(
     consent: operation.consent,
     ...(result.kind === "paid"
       ? {
-          service: {
-            invoiceId: result.invoice.id,
-            periodStart:
-              result.invoice.lines.data.find(
-                (line) =>
-                  line.pricing?.price_details?.price ===
-                  operation.target.priceId,
-              )?.period.start ?? operation.source.periodEnd,
-            periodEnd:
-              result.invoice.lines.data.find(
-                (line) =>
-                  line.pricing?.price_details?.price ===
-                  operation.target.priceId,
-              )?.period.end ?? operation.source.periodEnd,
-          },
+          service: scheduledServiceReceipt(operation, result.invoice),
         }
       : {}),
   });
@@ -597,6 +583,23 @@ async function settleScheduled(
       : undefined;
   const completed = await persist(next, operation, usage);
   return finishReconciliation(context, completed);
+}
+function scheduledServiceReceipt(
+  operation: BillingChangeOperation,
+  invoice: import("../types/stripe").StripeInvoice,
+) {
+  const line = invoice.lines.data.find(
+    (line) =>
+      line.pricing?.price_details?.price === operation.target.priceId &&
+      line.parent?.subscription_item_details?.subscription ===
+        operation.source.subscriptionId,
+  );
+  if (!line) throw changeUnavailable();
+  return {
+    invoiceId: invoice.id,
+    periodStart: line.period.start,
+    periodEnd: line.period.end,
+  };
 }
 async function finishCancellation(
   context: Context,

@@ -194,83 +194,206 @@ it("shows actual annual switch payment and coverage, then stops showing it after
   ).toBeNull();
 });
 
-it("shows a paid scheduled annual offer invoice with a separate one-off item", async () => {
-  seed();
-  if (
-    operation.state !== "succeeded" ||
-    !operation.service ||
-    !operation.target.offer
-  )
-    throw Error("Expected annual offer");
-  const scheduled = { ...operation, funding: null };
+it.each(["subscription_cycle", "subscription_update"] as const)(
+  "shows a paid scheduled annual offer invoice with a separate one-off item: %s",
+  async (reason) => {
+    seed();
+    if (
+      operation.state !== "succeeded" ||
+      !operation.service ||
+      !operation.target.offer
+    )
+      throw Error("Expected annual offer");
+    const scheduled = { ...operation, funding: null };
+    getMockStore().billingChangeOperations.set(
+      billingChangeOperationKey(operation.guildId, operation.operationId),
+      scheduled,
+    );
+    const terms = operation.target.offer.terms;
+    const item = {
+      ...sourceSubscription.items.data[0],
+      price: { ...sourceSubscription.items.data[0].price, id: terms.priceId },
+      current_period_start: operation.service.periodStart,
+      current_period_end: operation.service.periodEnd,
+    };
+    const native = {
+      ...sourceSubscription,
+      id: operation.source.subscriptionId,
+      customer: operation.source.customerId,
+      metadata: {
+        guild_id: operation.guildId,
+        chronote_change_operation: operation.operationId,
+      },
+      items: { ...sourceSubscription.items, data: [item] },
+    };
+    const invoiceId = operation.service.invoiceId;
+    const service = {
+      ...fundedInvoice.lines.data[0],
+      invoice: invoiceId,
+      amount: 10000,
+      quantity: 1,
+      period: {
+        start: item.current_period_start,
+        end: item.current_period_end,
+      },
+      pricing: { price_details: { price: terms.priceId } },
+      discount_amounts: [{ amount: 4000, discount: "di_annual" }],
+      parent: {
+        type: "subscription_item_details",
+        subscription_item_details: {
+          subscription: native.id,
+          subscription_item: item.id,
+          proration: false,
+        },
+      },
+    };
+    const oneOff = {
+      ...fundedInvoice.lines.data[0],
+      invoice: invoiceId,
+      amount: 200,
+      pricing: null,
+      discount_amounts: [],
+      parent: {
+        type: "invoice_item_details",
+        invoice_item_details: { invoice_item: "ii_pending", proration: false },
+      },
+    };
+    const paid = {
+      ...fundedInvoice,
+      id: invoiceId,
+      customer: operation.source.customerId,
+      billing_reason: reason,
+      total: 6200,
+      amount_paid: 6200,
+      amount_due: 6200,
+      amount_remaining: 0,
+      discounts: [
+        { id: "di_annual", source: { type: "coupon", coupon: terms.couponId } },
+      ],
+      lines: { ...fundedInvoice.lines, data: [service, oneOff] },
+    };
+    const f = stripeTransport(() => paid);
+    expect(await readChangedAnnualPayment(f.stripe, native)).toMatchObject({
+      status: "available",
+      amountPaid: 6200,
+      discountedSubtotal: 6000,
+    });
+  },
+);
+
+it.each([
+  "empty",
+  "paid",
+  "open",
+  "nonempty",
+  "automatic",
+  "wrong role",
+  "subscription",
+])("classifies an abandoned unbound funding draft safely: %s", async (kind) => {
+  const canceled = {
+    ...billingChangeBase(operation),
+    draftInvoiceId: null,
+    state: "canceled" as const,
+    completedAt: operation.createdAt + 10,
+  };
   getMockStore().billingChangeOperations.set(
     billingChangeOperationKey(operation.guildId, operation.operationId),
-    scheduled,
+    billingChangeOperationSchema.parse(canceled),
   );
-  const terms = operation.target.offer.terms;
-  const item = {
-    ...sourceSubscription.items.data[0],
-    price: { ...sourceSubscription.items.data[0].price, id: terms.priceId },
-    current_period_start: operation.service.periodStart,
-    current_period_end: operation.service.periodEnd,
-  };
-  const native = {
-    ...sourceSubscription,
-    id: operation.source.subscriptionId,
-    customer: operation.source.customerId,
+  const abandoned = {
+    ...invoice,
+    id: "in_unbound_empty",
+    status:
+      kind === "paid"
+        ? ("paid" as const)
+        : kind === "open"
+          ? ("open" as const)
+          : ("draft" as const),
+    total: 0,
+    subtotal: 0,
+    amount_paid: 0,
+    amount_due: 0,
+    amount_remaining: 0,
+    auto_advance: kind === "automatic",
+    parent: kind === "subscription" ? fundedInvoice.parent : null,
     metadata: {
-      guild_id: operation.guildId,
-      chronote_change_operation: operation.operationId,
+      ...invoice.metadata,
+      chronote_invoice_role: kind === "wrong role" ? "other" : "funding",
     },
-    items: { ...sourceSubscription.items, data: [item] },
+    lines: {
+      ...invoice.lines,
+      data: kind === "nonempty" ? invoice.lines.data : [],
+    },
   };
-  const invoiceId = operation.service.invoiceId;
+  expect(await classifyChangeHistory(abandoned, scope)).toMatchObject({
+    kind: kind === "empty" ? "ordinary" : "unresolved",
+  });
+});
+
+it("settles the owned service item when a one-off item uses the same price first", async () => {
+  seed();
+  if (!operation.target.offer) throw Error("Expected offer");
+  const key = offerUsageKey(
+    operation.guildId,
+    operation.target.offer.id,
+    operation.mode,
+  );
+  const used = getMockStore().offerUsages.get(key);
+  if (used?.state !== "used") throw Error("Expected usage");
+  const { usedAt, settlement, ...reserved } = used;
+  void usedAt;
+  void settlement;
+  getMockStore().offerUsages.set(
+    key,
+    offerUsageSchema.parse({ ...reserved, state: "reserved" }),
+  );
   const service = {
     ...fundedInvoice.lines.data[0],
-    invoice: invoiceId,
-    amount: 10000,
-    quantity: 1,
-    period: { start: item.current_period_start, end: item.current_period_end },
-    pricing: { price_details: { price: terms.priceId } },
-    discount_amounts: [{ amount: 4000, discount: "di_annual" }],
+    pricing: {
+      ...fundedInvoice.lines.data[0].pricing,
+      price_details: {
+        price: operation.target.priceId ?? "",
+        product: "prod_owned",
+      },
+    },
     parent: {
-      type: "subscription_item_details",
+      type: "subscription_item_details" as const,
+      invoice_item_details: null,
       subscription_item_details: {
-        subscription: native.id,
-        subscription_item: item.id,
+        ...fundedInvoice.lines.data[0].parent?.subscription_item_details,
+        subscription: operation.source.subscriptionId,
+        subscription_item: "si_owned_service",
+        invoice_item: null,
         proration: false,
+        proration_details: null,
       },
     },
   };
   const oneOff = {
-    ...fundedInvoice.lines.data[0],
-    invoice: invoiceId,
-    amount: 200,
-    pricing: null,
-    discount_amounts: [],
+    ...service,
     parent: {
-      type: "invoice_item_details",
-      invoice_item_details: { invoice_item: "ii_pending", proration: false },
+      type: "invoice_item_details" as const,
+      subscription_item_details: null,
+      invoice_item_details: {
+        invoice_item: "ii_owned",
+        proration: false,
+        proration_details: null,
+        subscription: null,
+      },
     },
   };
-  const paid = {
-    ...fundedInvoice,
-    id: invoiceId,
-    customer: operation.source.customerId,
-    billing_reason: "subscription_cycle",
-    total: 6200,
-    amount_paid: 6200,
-    amount_due: 6200,
-    amount_remaining: 0,
-    discounts: [
-      { id: "di_annual", source: { type: "coupon", coupon: terms.couponId } },
-    ],
-    lines: { ...fundedInvoice.lines, data: [service, oneOff] },
-  };
-  const f = stripeTransport(() => paid);
-  expect(await readChangedAnnualPayment(f.stripe, native)).toMatchObject({
-    status: "available",
-    amountPaid: 6200,
-    discountedSubtotal: 6000,
+  const { settleChangeOffer } =
+    await import("../../src/services/billingChangeTerms");
+  const result = await settleChangeOffer(
+    { ...operation, timing: "renewal" },
+    {
+      ...fundedInvoice,
+      lines: { ...fundedInvoice.lines, data: [oneOff, service] },
+    },
+    operation.createdAt + 20,
+  );
+  expect(result?.next).toMatchObject({
+    state: "used",
+    settlement: { subscriptionItemId: "si_owned_service" },
   });
 });

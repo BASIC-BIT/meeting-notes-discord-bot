@@ -138,15 +138,41 @@ Starting source: current remote master `7ef341791db82aa04ceb0ba609c77f872d94d74b
 
 ## Implementation checkpoint
 
-Tasks 1 through 5 are implemented on PR #412. The latest complete functional run passed 3,063 tests across 358 suites. The connected UI previously passed 48 browser tests and six Storybook flows, including mobile scrolling and terminal-subscription recovery. Screenshots were reviewed. TypeScript, ESLint, pinned complexity checks, the API build and public docs build pass.
+The core implementation for Tasks 1 through 5 is on PR #412. Failed-renewal cancellation remains open below. The latest complete functional run passed 3,074 tests across 358 suites. The connected UI previously passed 48 browser tests and six Storybook flows, including mobile scrolling and terminal-subscription recovery. Screenshots were reviewed. TypeScript, ESLint, pinned complexity checks, the API build and public docs build pass.
 
 Review fixes keep expired preparation recoverable, reject credits from reversed invoices, and retain the server control until entitlement reconciliation succeeds. Schedule creation saves its native receipt before configuration. If that acknowledgement is lost, recovery verifies Stripe's exact creation idempotency key through its event record. Stripe retains those records for 30 days; an older unacknowledged creation requires operator reconciliation rather than adopting an unproven schedule. Canceling a scheduled change restores the cancellation captured from the original subscription.
 
-Native Sandbox tests using the current services verified both offer orders in classic and flexible modes. They covered explicit confirmation of a zero-dollar annual switch and a scheduled monthly offer with an unrelated invoice item. The annual coupon is verified on the application invoice after Stripe consumes it. The first invoice after a scheduled phase change can be a subscription-update invoice; acceptance still requires the exact target line, offer, period and operation owner. Test clocks and coupons were cleaned up.
+Native Sandbox tests using the current services verified both offer orders in classic and flexible modes. They covered explicit confirmation of a zero-dollar annual switch and a scheduled monthly offer with an unrelated invoice item. The annual coupon is verified on the application invoice after Stripe consumes it. The first invoice after a scheduled phase change can be a subscription-update invoice; acceptance still requires the exact target line, offer, period and operation owner. Native recovery tests also verified card declines, required authentication, same-invoice retry, unpaid immediate cancellation, and compensation of cash-funded and customer-credit-funded changes. Refund requests omit zero amounts, as required by Stripe. Test clocks, attached test payment methods and coupons were cleaned up.
 
 These native tests use an in-memory operation store and explicitly simulated eligibility authority. They do not prove the deployed writer, history import or signed-in application. Hosted acceptance still needs the guarded Sandbox deployment bootstrap and its separately reviewed deployment identity. Production activation remains outside scope. The latest pushed commit needs a fresh CI/review audit after the required 30-minute window.
 
 ### Provider references
 
+- [Stripe credit notes and payment allocation](https://docs.stripe.com/api/credit_notes/create)
 - [Stripe event request identity and retention](https://docs.stripe.com/api/events/object)
 - [Schedule release and cancellation-date preservation](https://docs.stripe.com/api/subscription_schedules/release)
+
+## Open decision: canceling a failed renewal
+
+**Proposed:** If a scheduled change reaches renewal and payment fails, let the payer resume that payment or cancel the unpaid renewal. Canceling returns the server to Free, because its previous paid period has ended. The payer can then choose another plan. This is awaiting the user's answer and is not implemented.
+
+Canceling must remove only the new plan's charge, return any account credit allocated to that charge, and preserve unrelated invoice items. Verify the credit note and canceled native subscription before releasing the operation and unused offer reservation. An already used offer stays used. A partially paid or otherwise ambiguous result must retain recovery until its money is reconciled.
+
+The alternative is to keep the change pending until payment succeeds. That avoids this cancellation path but leaves the server unable to select another plan during failed-payment recovery. Returning to the previous paid plan would require a new review and payment for its new period.
+
+### How can the payer leave a failed renewal?
+
+```mermaid
+flowchart TD
+    A[Scheduled plan reaches renewal] --> B{Payment settled?}
+    B -->|Yes| C[Apply paid plan and finish change]
+    B -->|No| D[Payment required]
+    D --> E[Resume the same payment]
+    E --> B
+    D --> F[Cancel unpaid renewal]
+    F --> G[Credit only the unpaid plan charge]
+    G --> H[Verify cancellation and show Free]
+    H --> I[Choose another plan]
+```
+
+Owned native provider investigation verified the proposed financial sequence in classic and flexible billing: a plan-only credit note removed the unpaid plan charge, restored allocated customer credit, and retained a separate invoice item. Subscription cancellation then succeeded. This proves the provider mechanism, not completed application behavior. The current application deadlock is reproduced and remains an open PR finding until this decision and its implementation are complete.

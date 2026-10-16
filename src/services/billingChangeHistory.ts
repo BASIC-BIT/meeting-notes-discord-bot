@@ -31,7 +31,11 @@ export async function classifyChangeHistory(
   if (!operation || !historyIdentityMatches(invoice, scope, operation))
     return unresolved;
   const funding = invoice.id === operation.draftInvoiceId;
-  if (operation.state === "canceled" && funding) return { kind: "ordinary" };
+  if (
+    operation.state === "canceled" &&
+    (funding || isAbandonedEmptyDraft(invoice, operation))
+  )
+    return { kind: "ordinary" };
   if (operation.state !== "succeeded") return unresolved;
   if (
     !funding &&
@@ -56,6 +60,27 @@ export async function classifyChangeHistory(
   )
     return unresolved;
   return { kind: "ordinary" };
+}
+
+function isAbandonedEmptyDraft(
+  invoice: StripeInvoice,
+  operation: BillingChangeOperation,
+) {
+  // An unacknowledged creation can leave an unchargeable draft after preparation expires.
+  return (
+    operation.draftInvoiceId === null &&
+    invoice.status === "draft" &&
+    !invoice.auto_advance &&
+    !invoice.parent?.subscription_details &&
+    invoice.metadata?.guild_id === operation.guildId &&
+    invoice.metadata.chronote_invoice_role === "funding" &&
+    invoice.lines.data.length === 0 &&
+    invoice.subtotal === 0 &&
+    invoice.total === 0 &&
+    invoice.amount_due === 0 &&
+    invoice.amount_paid === 0 &&
+    invoice.amount_remaining === 0
+  );
 }
 
 function historyIdentityMatches(

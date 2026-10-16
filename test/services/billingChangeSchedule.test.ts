@@ -346,13 +346,15 @@ it("settles the actual target item when Stripe replaces the old item at renewal"
 });
 
 it.each([
-  [true, "subscription_cycle"],
-  [false, "subscription_cycle"],
-  [true, "subscription_update"],
-  [false, "subscription_update"],
+  [true, "subscription_cycle", "none"],
+  [false, "subscription_cycle", "none"],
+  [true, "subscription_update", "none"],
+  [false, "subscription_update", "none"],
+  [true, "subscription_cycle", "pre"],
+  [true, "subscription_cycle", "post"],
 ] as const)(
   "settles a paid scheduled offer with a separate pending invoice item: valid discount %s, reason %s",
-  async (valid, reason) => {
+  async (valid, reason, credit) => {
     const terms = {
       interval: "month" as const,
       currency: "usd" as const,
@@ -422,7 +424,7 @@ it.each([
       id: "il_pending",
       invoice: "in_scheduled",
       amount: 200,
-      pricing: null,
+      pricing: { price_details: { price: terms.priceId } },
       discount_amounts: [],
       parent: {
         type: "invoice_item_details",
@@ -434,6 +436,8 @@ it.each([
       id: "in_scheduled",
       customer: operation.source.customerId,
       billing_reason: reason,
+      pre_payment_credit_notes_amount: credit === "pre" ? 100 : 0,
+      post_payment_credit_notes_amount: credit === "post" ? 100 : 0,
       subtotal: 1200,
       total: 800,
       amount_due: 800,
@@ -448,7 +452,7 @@ it.each([
           metadata: { chronote_change_operation: operation.operationId },
         },
       },
-      lines: { ...original.lines, data: [service, pending] },
+      lines: { ...original.lines, data: [pending, service] },
     };
     const native = {
       ...sourceSubscription,
@@ -470,7 +474,7 @@ it.each([
     });
     expect(
       await readScheduledChangeSettlement(f.stripe, selected),
-    ).toMatchObject({ kind: valid ? "paid" : "waiting" });
+    ).toMatchObject({ kind: valid && credit === "none" ? "paid" : "waiting" });
   },
 );
 
