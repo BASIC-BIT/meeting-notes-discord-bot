@@ -29,6 +29,7 @@ const HISTORY_FIELDS = [
   "delivery.notes.intended",
   "delivery.summary.outcome",
   "recovery.disposition",
+  "recovery.reason",
   "recovery.stage",
   "recovery.attempt",
 ];
@@ -58,7 +59,7 @@ function outcomeCounts(rows, read, allowed) {
   return counts;
 }
 
-async function inspectRunningTasks(aws, m, service) {
+async function inspectRunningTasks(aws, m, service, now) {
   const arns = new Set();
   let nextToken;
   do {
@@ -105,7 +106,7 @@ async function inspectRunningTasks(aws, m, service) {
     )
       throw new Error("Native protection inventory incomplete");
     nativeProtectedTasks += response.protectedTasks.filter(
-      (p) => p.protectionEnabled && Date.parse(p.expirationDate) > Date.now(),
+      (p) => p.protectionEnabled && Date.parse(p.expirationDate) > now,
     ).length;
   }
   return {
@@ -198,6 +199,7 @@ async function collectSandboxObservation(options) {
     "workCounts.voice_operation",
     "workCounts.ancillary_delivery",
     "deployment.phase",
+    "stage",
   ]);
   const controls = await scan("MeetingControlCommandTable", [
     "queueStatus",
@@ -216,6 +218,7 @@ async function collectSandboxObservation(options) {
     requestedNotes: 0,
     deliveredNotes: 0,
     uncertainDelivery: 0,
+    recoveryNeedsReconciliation: 0,
     recoveryRecords: 0,
   };
   for (const row of cohort) {
@@ -226,12 +229,14 @@ async function collectSandboxObservation(options) {
         l.meetingId === row.meetingId &&
         l.ownerInstanceId === row.ownerInstanceId &&
         l.executionVersion === row.executionVersion &&
-        l.leaseExpiresAt >= end / 1000,
+        l.leaseExpiresAt >= now / 1000,
     );
     if (
-      ["starting", "in_progress", "processing"].includes(row.status) &&
+      ["starting", "in_progress", "processing", "interrupted"].includes(
+        row.status,
+      ) &&
       !active &&
-      progress <= end - 900000
+      progress <= now - 900000
     )
       result.staleCandidates++;
     if (row.processing?.transcription === "partial")
@@ -241,12 +246,15 @@ async function collectSandboxObservation(options) {
     if (row.transcribeMeeting === true) result.requestedTranscription++;
     if (row.generateNotes === true) result.requestedNotes++;
     if (row.delivery?.notes?.outcome === "complete") result.deliveredNotes++;
-    if (row.recovery?.disposition === "needs_reconciliation")
-      result.uncertainDelivery++;
+    if (row.recovery?.disposition === "needs_reconciliation") {
+      result.recoveryNeedsReconciliation++;
+      if (row.recovery.reason === "delivery_uncertain")
+        result.uncertainDelivery++;
+    }
     if (row.recovery) result.recoveryRecords++;
   }
   const service = svc.services[0];
-  const inventory = await inspectRunningTasks(aws, m, service);
+  const inventory = await inspectRunningTasks(aws, m, service, now);
   const health = {};
   for (const TargetGroupArn of [m.targetGroupA, m.targetGroupB]) {
     const response = await aws("elbv2", "describe-target-health", {
@@ -280,8 +288,8 @@ async function collectSandboxObservation(options) {
       : undefined;
   const routing =
     weights?.length === 2 &&
-    weights.every((g) =>
-      [m.targetGroupA, m.targetGroupB].includes(g.TargetGroupArn),
+    [m.targetGroupA, m.targetGroupB].every(
+      (arn) => weights.filter((g) => g.TargetGroupArn === arn).length === 1,
     )
       ? {
           a: weights.find((g) => g.TargetGroupArn === m.targetGroupA)?.Weight,
@@ -294,6 +302,7 @@ async function collectSandboxObservation(options) {
     manifestSha256: options.expectedSha256,
     since: options.since,
     until: options.until,
+    collectedAt: new Date(now).toISOString(),
     identityMatched: true,
     history: {
       ...result,
@@ -316,12 +325,26 @@ async function collectSandboxObservation(options) {
         notesDelivery: outcomeCounts(
           cohort,
           (r) => r.delivery?.notes?.outcome,
-          ["complete", "partial", "failed", "not_applicable"],
+          [
+            "edited_existing",
+            "sent_fallback",
+            "complete",
+            "partial",
+            "failed",
+            "not_applicable",
+          ],
         ),
         summaryDelivery: outcomeCounts(
           cohort,
           (r) => r.delivery?.summary?.outcome,
-          ["complete", "partial", "failed", "not_applicable"],
+          [
+            "edited_existing",
+            "sent_fallback",
+            "complete",
+            "partial",
+            "failed",
+            "not_applicable",
+          ],
         ),
       },
     },
@@ -338,13 +361,17 @@ async function collectSandboxObservation(options) {
         (r) =>
           r.recordType === "runtime" &&
           r.role === "serving" &&
-          r.readiness?.expiresAt <= end / 1000,
+          r.readiness?.expiresAt <= now / 1000,
       ).length,
       deploymentIncomplete: runtimes.some(
-        (r) => r.deployment && r.deployment.phase !== "complete",
+        (r) =>
+          (r.deployment && r.deployment.phase !== "complete") ||
+          (r.pk === "ENV" &&
+            r.sk?.startsWith("BOOTSTRAP#") &&
+            r.stage !== "complete"),
       ),
       unexpiredQueuedControls: controls.filter(
-        (r) => r.queueStatus === "pending" && r.expiresAt >= end / 1000,
+        (r) => r.queueStatus === "pending" && r.expiresAt >= now / 1000,
       ).length,
     },
     evidence: {

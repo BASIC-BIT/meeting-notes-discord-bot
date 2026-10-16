@@ -381,7 +381,13 @@ function createBootstrap(options) {
         .length !== 1 ||
       container.environment.find((v) => v.name === "TRANSCRIPTS_BUCKET")
         ?.value !== m.bucket ||
-      container.secrets?.some((v) => v.name === "TRANSCRIPTS_BUCKET") ||
+      container.secrets?.some((v) =>
+        [
+          "TRANSCRIPTS_BUCKET",
+          "DDB_TABLE_PREFIX",
+          "DEPLOYMENT_CANDIDATE_ID",
+        ].includes(v.name),
+      ) ||
       container.entryPoint?.length ||
       !same(container.command, commands[m.runtimeMode]) ||
       container.environment.filter((v) => v.name === "DDB_TABLE_PREFIX")

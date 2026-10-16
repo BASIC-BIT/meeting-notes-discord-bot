@@ -655,3 +655,49 @@ test.each([false, true])(
     }
   },
 );
+
+test.each(["DDB_TABLE_PREFIX", "DEPLOYMENT_CANDIDATE_ID"])(
+  "secret override of %s refuses launch before provider mutation",
+  async (name) => {
+    const f = await fixture();
+    await f.bootstrap.initialize();
+    const bootstrap = createBootstrap({
+      manifest: f.manifest,
+      expectedSha256: f.hash,
+      builders,
+      types,
+      now: () => 1000,
+      aws: async (
+        service: string,
+        operation: string,
+        input: Record<string, never>,
+      ) => {
+        const result = await f.aws(service, operation, input);
+        if (
+          operation === "describe-task-definition" &&
+          "taskDefinition" in result &&
+          result.taskDefinition
+        )
+          return {
+            ...result,
+            taskDefinition: {
+              ...result.taskDefinition,
+              containerDefinitions:
+                result.taskDefinition.containerDefinitions.map((container) => ({
+                  ...container,
+                  secrets: [{ name, valueFrom: "generated-secret-reference" }],
+                })),
+            },
+          };
+        return result;
+      },
+    });
+    await expect(bootstrap.launch()).rejects.toThrow(
+      "Prepared candidate definition mismatch",
+    );
+    expect(f.state.updates).toBe(0);
+    expect((await f.get("BOOTSTRAP#" + f.manifest.operationId))?.stage).toBe(
+      "initialized",
+    );
+  },
+);

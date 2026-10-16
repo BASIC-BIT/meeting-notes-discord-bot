@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { marshall } from "@aws-sdk/util-dynamodb";
 import { collectSandboxObservation } from "../../scripts/deployment/observe-sandbox.cjs";
 import { manifestHash } from "../../scripts/deployment/sandbox-manifest.cjs";
 
@@ -304,4 +305,179 @@ test("generation and delivery failures are preserved as distinct observation out
     notesDelivery: { failed: 1, not_applicable: 1, partial: 1 },
     summaryDelivery: { partial: 1, unknown: 2 },
   });
+});
+
+type ObservationRow = Record<string, unknown>;
+function observationFixture() {
+  const data: {
+    history: ObservationRow[];
+    leases: ObservationRow[];
+    runtimes: ObservationRow[];
+    controls: ObservationRow[];
+  } = {
+    history: [],
+    leases: [],
+    runtimes: [],
+    controls: [],
+  };
+  const projections: string[] = [];
+  const groups = [
+    { TargetGroupArn: manifest.targetGroupA, Weight: 100 },
+    { TargetGroupArn: manifest.targetGroupB, Weight: 0 },
+  ];
+  async function aws(
+    service: string,
+    operation: string,
+    input: Record<string, unknown>,
+  ) {
+    if (service === "sts")
+      return { Account: account, Arn: manifest.principalArn };
+    if (operation === "describe-services")
+      return {
+        services: [
+          {
+            serviceName: manifest.service,
+            desiredCount: 0,
+            runningCount: 0,
+            pendingCount: 0,
+            taskDefinition: manifest.taskDefinition,
+          },
+        ],
+      };
+    if (operation === "list-tasks") return { taskArns: [] };
+    if (operation === "describe-target-health")
+      return { TargetHealthDescriptions: [] };
+    if (operation === "describe-listeners")
+      return {
+        Listeners: [
+          {
+            ListenerArn: manifest.listenerArn,
+            DefaultActions: [
+              { Type: "forward", ForwardConfig: { TargetGroups: groups } },
+            ],
+          },
+        ],
+      };
+    if (service === "dynamodb" && operation === "scan") {
+      projections.push(JSON.stringify(input.ExpressionAttributeNames));
+      const tables: Record<string, ObservationRow[]> = {
+        [manifest.tablePrefix + "MeetingHistoryTable"]: data.history,
+        [manifest.tablePrefix + "ActiveMeetingTable"]: data.leases,
+        [manifest.tablePrefix + "DeploymentControlTable"]: data.runtimes,
+        [manifest.tablePrefix + "MeetingControlCommandTable"]: data.controls,
+      };
+      return {
+        Items: tables[String(input.TableName)].map((row) => marshall(row)),
+      };
+    }
+    throw new Error("Unexpected generated observation operation");
+  }
+  const collect = () =>
+    collectSandboxObservation({
+      manifest,
+      expectedSha256: manifestHash(manifest),
+      aws,
+      since: "2026-10-15T10:00:00.000Z",
+      until: "2026-10-15T11:00:00.000Z",
+      now: () => Date.parse("2026-10-15T12:00:00.000Z"),
+    });
+  return { data, groups, projections, collect };
+}
+
+test("successful summary send and edit outcomes stay distinct from absent metadata", async () => {
+  const f = observationFixture();
+  f.data.history = ["edited_existing", "sent_fallback"].map((outcome) => ({
+    timestamp: "2026-10-15T10:01:00.000Z",
+    status: "complete",
+    delivery: { summary: { outcome } },
+  }));
+  expect((await f.collect()).history.outcomes.summaryDelivery).toEqual({
+    edited_existing: 1,
+    sent_fallback: 1,
+  });
+});
+
+test("delivery uncertainty does not misclassify other recovery reconciliation reasons", async () => {
+  const f = observationFixture();
+  f.data.history = [
+    "delivery_uncertain",
+    "ownership_uncertain",
+    "export_uncertain",
+    "invalid_checkpoint",
+    "invalid_payload",
+    "transcript_overlap_unknown",
+    "retry_exhausted",
+    "policy_unknown",
+  ].map((reason) => ({
+    timestamp: "2026-10-15T10:01:00.000Z",
+    status: "complete",
+    recovery: { disposition: "needs_reconciliation", reason },
+  }));
+  expect((await f.collect()).history).toMatchObject({
+    uncertainDelivery: 1,
+    recoveryNeedsReconciliation: 8,
+  });
+  expect(f.projections.join(" ")).toContain('"reason"');
+});
+
+test("current readiness, control and lease expirations use collection time, not historical window end", async () => {
+  const f = observationFixture();
+  const expiresAt = Date.parse("2026-10-15T11:30:00.000Z") / 1000;
+  f.data.runtimes = [
+    { recordType: "runtime", role: "serving", readiness: { expiresAt } },
+  ];
+  f.data.controls = [{ queueStatus: "pending", expiresAt }];
+  const identity = {
+    guildId: "generated-guild",
+    meetingId: "generated-meeting",
+    ownerInstanceId: "generated-owner",
+    executionVersion: 1,
+  };
+  f.data.leases = [{ ...identity, leaseExpiresAt: expiresAt }];
+  f.data.history = [
+    {
+      ...identity,
+      timestamp: "2026-10-15T10:50:00.000Z",
+      status: "processing",
+    },
+  ];
+  const result = await f.collect();
+  expect(result.runtime).toMatchObject({
+    staleReadiness: 1,
+    unexpiredQueuedControls: 0,
+  });
+  expect(result.history.staleCandidates).toBe(1);
+});
+
+test.each([manifest.targetGroupA, manifest.targetGroupB])(
+  "duplicate routing group %s is UNKNOWN",
+  async (TargetGroupArn) => {
+    const f = observationFixture();
+    f.groups[0].TargetGroupArn = TargetGroupArn;
+    f.groups[1].TargetGroupArn = TargetGroupArn;
+    expect((await f.collect()).routing).toBe("UNKNOWN");
+  },
+);
+
+test.each(["initialized", "launch_submitted", "launched", "complete"])(
+  "bootstrap receipt stage %s is included in deployment status",
+  async (stage) => {
+    const f = observationFixture();
+    f.data.runtimes = [
+      { pk: "ENV", sk: "CONTROL" },
+      { pk: "ENV", sk: "BOOTSTRAP#generated-operation", stage },
+    ];
+    expect((await f.collect()).runtime.deploymentIncomplete).toBe(
+      stage !== "complete",
+    );
+    expect(f.projections.join(" ")).toContain('"stage"');
+  },
+);
+
+test("interrupted recording without a live lease remains eligible for stale investigation", async () => {
+  const f = observationFixture();
+  f.data.history = [
+    { timestamp: "2026-10-15T10:01:00.000Z", status: "interrupted" },
+  ];
+  expect((await f.collect()).history.staleCandidates).toBe(1);
 });
