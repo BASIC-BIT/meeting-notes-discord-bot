@@ -160,10 +160,10 @@ async function verifyCreditNoteMoney(
   }
   return refunds;
 }
-async function inFlightPayment(
+export async function hasProcessingRenewalPayment(
   stripe: StripeClient,
   invoice: StripeInvoice,
-  record: Canceling,
+  record: Pick<RenewalRecovery, "customerId">,
 ): Promise<boolean> {
   for (const payment of await inventory(
     stripe.invoicePayments.list({
@@ -401,7 +401,7 @@ async function settleRenewalDebt(
   let note = await ownedCreditNote(stripe, invoice, record);
   if (!note && invoice.status === "paid" && invoice.amount_remaining === 0)
     return "paid";
-  if (!note && (await inFlightPayment(stripe, invoice, record)))
+  if (!note && (await hasProcessingRenewalPayment(stripe, invoice, record)))
     return "pending";
   record = await snapshotCollection(stripe, invoice, record, save);
   if (!note && invoice.status !== "void") {
@@ -419,7 +419,8 @@ async function settleRenewalDebt(
     assertInvoice(invoice, record);
     if (invoice.status === "paid" && invoice.amount_remaining === 0)
       return "paid";
-    if (await inFlightPayment(stripe, invoice, record)) return "pending";
+    if (await hasProcessingRenewalPayment(stripe, invoice, record))
+      return "pending";
     note = await createPlanCreditNote(stripe, invoice, record, write);
   }
   if (note) {

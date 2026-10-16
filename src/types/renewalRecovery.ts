@@ -207,16 +207,36 @@ export function assertRenewalRecoveryTransition(
     "customerId",
     "payerId",
     "mode",
-    "paid",
-    "writerVersion",
-    "writerRuntime",
   ] as const)
     if (!isDeepStrictEqual(next[field], previous[field]))
       throw new Error("Renewal paid source is immutable");
+  const replacingWatch = canReplaceUnboundWatch(next, previous);
+  if (
+    !replacingWatch &&
+    (["paid", "writerVersion", "writerRuntime"] as const).some(
+      (field) => !isDeepStrictEqual(next[field], previous[field]),
+    )
+  )
+    throw new Error("Renewal paid source is immutable");
   if (previous.enforcementAccepted && !next.enforcementAccepted)
     throw new Error("Accepted renewal recovery cannot be disabled");
   if (previous.state === "canceling") assertRecoveryReceipts(next, previous);
   assertBoundRenewalRecovery(next, previous);
+}
+function canReplaceUnboundWatch(
+  next: RenewalRecovery,
+  previous: RenewalRecovery,
+): boolean {
+  return (
+    previous.state === "watching" &&
+    next.state === "watching" &&
+    !previous.enforcementAccepted &&
+    !next.enforcementAccepted &&
+    previous.paid.periodEnd === next.paid.periodEnd &&
+    next.paid.periodStart >= previous.paid.periodStart &&
+    (isDeepStrictEqual(next.paid, previous.paid) ||
+      next.paid.invoiceId !== previous.paid.invoiceId)
+  );
 }
 function assertBoundRenewalRecovery(
   next: RenewalRecovery,

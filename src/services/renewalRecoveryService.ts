@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { readLedgerWriterRuntime } from "./ledgerWriterRuntime";
 import { RENEWAL_RECOVERY_WRITER_VERSION } from "../types/renewalRecovery";
 import { cancelUnpaidRenewal } from "./renewalRecoveryProvider";
@@ -41,8 +42,17 @@ type Context = {
 export async function trackPaidRenewalPeriod(
   input: Context & { subscriptionId: string; invoiceId: string },
 ): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await registerPaidRenewalPeriod(input)) return;
+  }
+  throw changeUnavailable();
+}
+async function registerPaidRenewalPeriod(
+  input: Context & { subscriptionId: string; invoiceId: string },
+): Promise<boolean> {
   const saved = await getSubscriptionRepository().get(input.guildId);
-  if (!saved || saved.stripeSubscriptionId !== input.subscriptionId) return;
+  if (!saved || saved.stripeSubscriptionId !== input.subscriptionId)
+    return true;
   const subscription = await input.stripe.subscriptions.retrieve(
     input.subscriptionId,
   );
@@ -61,15 +71,19 @@ export async function trackPaidRenewalPeriod(
     input.guildId,
     input.invoiceId,
   );
+  if (saved.priceId && saved.priceId !== paid.priceId) return false;
   const current = await getRenewalRecoveryRepository().getCurrent(
     input.guildId,
   );
-  if (
-    current &&
-    current.subscriptionId === subscription.id &&
-    current.paid.periodEnd >= paid.periodEnd
-  )
-    return;
+  if (current?.subscriptionId === subscription.id) {
+    if (isDeepStrictEqual(current.paid, paid)) return true;
+    if (current.paid.periodStart > paid.periodStart) return true;
+    if (
+      current.state !== "watching" &&
+      current.paid.periodEnd >= paid.periodEnd
+    )
+      return true;
+  }
   const record = renewalRecoverySchema.parse({
     guildId: input.guildId,
     subscriptionId: subscription.id,
@@ -87,14 +101,12 @@ export async function trackPaidRenewalPeriod(
     state: "watching",
     nextCheckAt: paid.periodEnd,
   });
-  if (
-    !(await getRenewalRecoveryRepository().register({
-      record,
-      expectedSubscription: saved,
-    }))
-  )
-    throw changeUnavailable();
+  return getRenewalRecoveryRepository().register({
+    record,
+    expectedSubscription: saved,
+  });
 }
+
 async function saveRecovery(
   next: RenewalRecovery,
   previous: RenewalRecovery,

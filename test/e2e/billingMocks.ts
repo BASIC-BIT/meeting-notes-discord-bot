@@ -1,3 +1,5 @@
+import type { RenewalRecoveryView } from "../../src/types/renewalRecovery";
+import { introPlans as gracePlans } from "../../src/frontend/pages/basicIntroFixtures";
 import type { RenewalView } from "../../src/types/renewal";
 import { createRenewalFixture } from "../../src/frontend/pages/renewalFixtures";
 import type { Page, Route } from "@playwright/test";
@@ -144,4 +146,56 @@ export async function useFreeBilling(
       "billing.me": billingData,
     }),
   );
+}
+
+export async function useRenewalGrace(
+  page: Page,
+  options: { view: RenewalRecoveryView; tier?: "free" | "basic" | "pro" },
+) {
+  await page.route("**/trpc/**", async (route) => {
+    const view = options.view;
+    if (
+      new URL(route.request().url()).pathname.includes(
+        "billing.cancelRenewalPayment",
+      ) &&
+      view.status !== "none"
+    )
+      options.view = { ...view, status: "canceled", paymentUrl: null };
+    return replaceBillingResponses(route, {
+      "pricing.plans": {
+        plans: gracePlans,
+        introOffer: { status: "inactive" },
+        annualIntroOffer: { status: "inactive" },
+      },
+      "billing.change": { kind: "none", enabled: false },
+      "billing.renewal": {
+        state: { kind: "unavailable", knownEndsAt: null },
+        canManageBilling: true,
+        lifecycleAnalyticsEnabled: false,
+      },
+      "billing.cancelRenewalPayment": options.view,
+      "billing.me": {
+        tier: options.tier ?? "pro",
+        status:
+          options.view.status === "canceled"
+            ? "canceled"
+            : options.view.status === "none"
+              ? "active"
+              : "past_due",
+        stripeStatus:
+          options.view.status === "canceled"
+            ? "canceled"
+            : options.view.status === "none"
+              ? "active"
+              : "past_due",
+        billingEnabled: true,
+        hasStripeBilling: true,
+        billingSource: "stripe",
+        canManageBillingPortal: true,
+        grantTier: null,
+        renewalRecovery: options.view,
+        usage: { usedMinutes: 45, limitMinutes: null, remainingMinutes: null },
+      },
+    });
+  });
 }

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { config } from "../services/configService";
 import { getMockStore } from "./mockStore";
 import { getSubscriptionRepository } from "./subscriptionRepository";
@@ -56,6 +58,7 @@ async function write(input: {
   next: RenewalRecovery;
   expectedRevision?: string;
   expectedPointer?: RenewalRecoveryPointer;
+  supersededWatch?: Extract<RenewalRecovery, { state: "watching" }>;
   expectedSubscription: GuildSubscription;
   blocking: boolean;
 }): Promise<boolean> {
@@ -78,6 +81,24 @@ async function write(input: {
     store.renewalRecoveryRecords.get(key)?.revision !== input.expectedRevision
   )
     return false;
+  if (input.supersededWatch) {
+    const old = input.supersededWatch;
+    if (
+      store.renewalRecoveryRecords.get(renewalRecoveryKey(old))?.revision !==
+      old.revision
+    )
+      return false;
+    const { nextCheckAt, ...base } = old;
+    void nextCheckAt;
+    store.renewalRecoveryRecords.set(
+      renewalRecoveryKey(old),
+      renewalRecoverySchema.parse({
+        ...base,
+        state: "ended",
+        revision: randomUUID(),
+      }),
+    );
+  }
   store.renewalRecoveryRecords.set(key, structuredClone(next));
   store.renewalRecoveryPointers.set(next.guildId, {
     key,
@@ -85,6 +106,20 @@ async function write(input: {
     blocking: input.blocking,
   });
   return true;
+}
+function cannotReplacePaidWatch(
+  previous: RenewalRecovery,
+  next: RenewalRecovery,
+): boolean {
+  return (
+    isRenewalRecoveryBlocking(previous) ||
+    (previous.state === "paid" && previous.projection.state === "pending") ||
+    (previous.subscriptionId === next.subscriptionId &&
+      (previous.paid.periodStart > next.paid.periodStart ||
+        isDeepStrictEqual(previous.paid, next.paid) ||
+        (previous.state !== "watching" &&
+          previous.paid.periodEnd >= next.paid.periodEnd)))
+  );
 }
 export function getRenewalRecoveryRepository() {
   return {
@@ -105,20 +140,23 @@ export function getRenewalRecoveryRepository() {
       if (next.state !== "watching" || next.enforcementAccepted)
         throw new Error("New renewal recovery must start as a watch");
       const expectedPointer = await pointer(next.guildId);
+      let previous: RenewalRecovery | undefined;
       if (expectedPointer) {
-        const previous = await get(expectedPointer.key);
-        if (
-          !previous ||
-          isRenewalRecoveryBlocking(previous) ||
-          (previous.state === "paid" &&
-            previous.projection.state === "pending") ||
-          (previous.subscriptionId === next.subscriptionId &&
-            previous.paid.periodEnd >= next.paid.periodEnd)
-        )
-          return false;
+        previous = await get(expectedPointer.key);
+        if (!previous || cannotReplacePaidWatch(previous, next)) return false;
       }
+      const sameKey =
+        previous && renewalRecoveryKey(previous) === renewalRecoveryKey(next);
+      if (sameKey && previous) assertRenewalRecoveryTransition(next, previous);
       return write({
         next,
+        expectedRevision: sameKey ? previous?.revision : undefined,
+        supersededWatch:
+          !sameKey &&
+          previous?.state === "watching" &&
+          !previous.enforcementAccepted
+            ? previous
+            : undefined,
         expectedSubscription: input.expectedSubscription,
         expectedPointer,
         blocking: false,

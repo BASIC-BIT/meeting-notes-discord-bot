@@ -9,7 +9,11 @@ import {
 import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
 import { config } from "../../src/services/configService";
 import { getRenewalRecoveryRepository } from "../../src/repositories/renewalRecoveryRepository";
-import { renewalRecoverySchema } from "../../src/types/renewalRecovery";
+import {
+  renewalRecoveryKey,
+  renewalRecoveryCurrentKey,
+  renewalRecoverySchema,
+} from "../../src/types/renewalRecovery";
 import {
   scanGuildSubscriptionPage,
   getRenewalRecoveryIndexStatus,
@@ -181,4 +185,64 @@ test("native coverage inventory is bounded, resumable and excludes synthetic ope
   });
   expect(await getRenewalRecoveryIndexStatus()).toBe("ACTIVE");
   expect(send.mock.calls[1][0]).toBeInstanceOf(DescribeTableCommand);
+});
+
+test("native replacement archives the old watch in the same pointer transaction", async () => {
+  config.mock.enabled = false;
+  const old = record();
+  const oldKey = renewalRecoveryKey(old);
+  const send = jest
+    .spyOn(DynamoDBClient.prototype, "send")
+    .mockResolvedValueOnce({
+      Item: marshall({
+        guildId: renewalRecoveryCurrentKey(old.guildId),
+        key: oldKey,
+        revision: old.revision,
+        blocking: false,
+      }),
+    })
+    .mockResolvedValueOnce({
+      Item: marshall({
+        ...old,
+        guildId: oldKey,
+        ownerGuildId: old.guildId,
+        recoveryQueue: old.mode,
+        recoveryDueAt: old.paid.periodEnd,
+      }),
+    })
+    .mockResolvedValue({});
+  expect(
+    await getRenewalRecoveryRepository().register({
+      record: renewalRecoverySchema.parse({
+        ...old,
+        revision: "replacement",
+        paid: { ...old.paid, periodStart: 100, periodEnd: 500000 },
+        nextCheckAt: 500000,
+      }),
+      expectedSubscription: changePointer,
+    }),
+  ).toBe(true);
+  const command = send.mock.calls
+    .map((call) => call[0])
+    .find((value) => value instanceof TransactWriteItemsCommand);
+  if (!(command instanceof TransactWriteItemsCommand))
+    throw new Error("Expected replacement transaction");
+  const items = command.input.TransactItems ?? [];
+  expect(items).toHaveLength(4);
+  expect(items[0].Update).toMatchObject({
+    Key: marshall({ guildId: oldKey }),
+    UpdateExpression: expect.stringContaining(
+      "REMOVE nextCheckAt, recoveryQueue, recoveryDueAt",
+    ),
+    ConditionExpression: expect.stringContaining("enforcementAccepted = :no"),
+  });
+  expect(
+    unmarshall(items[0].Update?.ExpressionAttributeValues ?? {}),
+  ).toMatchObject({
+    ":revision": old.revision,
+    ":ended": "ended",
+    ":watching": "watching",
+    ":no": false,
+  });
+  expect(items[3].Put?.ConditionExpression).toBe("#revision = :revision");
 });

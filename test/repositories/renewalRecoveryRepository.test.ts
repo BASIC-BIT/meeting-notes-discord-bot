@@ -130,3 +130,60 @@ test("cannot replace an ordinary paid renewal before its access projection compl
     }),
   ).toBe(false);
 });
+
+test.each([500000, 2000000])(
+  "replaces an unbound watch and removes its old due entry (%s)",
+  async (periodEnd) => {
+    const { record, pointer } = await seed();
+    const repo = getRenewalRecoveryRepository();
+    await repo.register({ record, expectedSubscription: pointer });
+    const next = renewalRecoverySchema.parse({
+      ...record,
+      revision: "replacement",
+      paid: { ...record.paid, periodStart: 100, periodEnd },
+      nextCheckAt: periodEnd,
+    });
+    expect(
+      await repo.register({ record: next, expectedSubscription: pointer }),
+    ).toBe(true);
+    expect((await repo.getCurrent(record.guildId))?.paid.periodEnd).toBe(
+      periodEnd,
+    );
+    expect(
+      [...getMockStore().renewalRecoveryRecords.values()].find(
+        (value) => value.revision === "replacement",
+      ),
+    ).toMatchObject({ state: "watching" });
+    expect(
+      [...getMockStore().renewalRecoveryRecords.values()].find(
+        (value) => value.paid.periodEnd === record.paid.periodEnd,
+      ),
+    ).toMatchObject({ state: "ended" });
+    expect(
+      (await repo.listDue({ mode: "test", now: 3000000, limit: 100 })).keys,
+    ).toHaveLength(1);
+  },
+);
+
+test("updates a verified plan within the same unbound paid boundary", async () => {
+  const { record, pointer } = await seed();
+  const repo = getRenewalRecoveryRepository();
+  await repo.register({ record, expectedSubscription: pointer });
+  const next = renewalRecoverySchema.parse({
+    ...record,
+    revision: "upgrade",
+    paid: {
+      ...record.paid,
+      tier: "basic",
+      priceId: "price_basic",
+      invoiceId: "in_upgrade",
+      periodStart: 100,
+    },
+  });
+  expect(
+    await repo.register({ record: next, expectedSubscription: pointer }),
+  ).toBe(true);
+  expect(await repo.getCurrent(record.guildId)).toMatchObject({
+    paid: next.paid,
+  });
+});

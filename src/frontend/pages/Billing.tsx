@@ -1,3 +1,5 @@
+import BillingRenewalGrace from "../components/BillingRenewalGrace";
+import { useBillingRenewalRecovery } from "../hooks/useBillingRenewalRecovery";
 import { useBillingChange } from "../hooks/useBillingChange";
 import BillingChangePanel from "../components/BillingChangePanel";
 import { useBillingRenewal } from "../hooks/useBillingRenewal";
@@ -166,6 +168,13 @@ const formatUsageMinutes = (minutes: number) => {
   return `${minutes}m`;
 };
 
+const recoveryStatusLabel = (data: BillingData, fallback: string) => {
+  const status = data.renewalRecovery?.status;
+  if (status === "canceled") return "Access ending";
+  return status === "grace" || status === "reconciling"
+    ? "Grace period"
+    : fallback;
+};
 const formatStatusLabel = (status: string) =>
   status
     .split(/[_-\s]+/g)
@@ -311,12 +320,17 @@ const BillingPlanDescription = ({
   );
 };
 
+const showsLegacyRenewal = (data: BillingData) =>
+  Boolean(data.hasStripeBilling) && !hasRenewalRecovery(data);
+const hasRenewalRecovery = (data: BillingData) =>
+  (data.renewalRecovery?.status ?? "none") !== "none";
 const BillingPlanPaymentStatus = ({ data }: Pick<BillingPaidProps, "data">) => {
   const progress =
     data.subscriptionDetails?.status === "available"
       ? data.subscriptionDetails.paymentProgress
       : undefined;
-  return data.billingSource !== "manual_comp" &&
+  return !hasRenewalRecovery(data) &&
+    data.billingSource !== "manual_comp" &&
     progress &&
     progress !== "not_pending" ? (
     <SubscriptionDetails details={data.subscriptionDetails} />
@@ -344,7 +358,7 @@ const BillingPaidPanel = ({
           kind: "unavailable",
           knownEndsAt: data.cancellationAt ?? null,
         } as const);
-      const showRenewal = Boolean(data.hasStripeBilling);
+      const showRenewal = showsLegacyRenewal(data);
       return (
         <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
           <Stack gap="md">
@@ -361,7 +375,9 @@ const BillingPaidPanel = ({
                 </Text>
                 {(isComped || (!showRenewal && data.tier !== "free")) && (
                   <Badge color={isComped ? "teal" : "brand"}>
-                    {isComped ? "Comped by Chronote" : statusLabel}
+                    {isComped
+                      ? "Comped by Chronote"
+                      : recoveryStatusLabel(data, statusLabel)}
                   </Badge>
                 )}
               </Group>
@@ -414,8 +430,7 @@ const BillingPaidPanel = ({
 );
 
 function basicPlanCta(data: BillingData, isComped: boolean): string {
-  if (data.tier === "free" && isTerminalStripeHistory(data))
-    return "Get Basic again";
+  if (isTerminalStripeHistory(data) && !isComped) return "Get Basic again";
   const basicCta =
     data.tier === "basic"
       ? isComped
@@ -427,6 +442,8 @@ function basicPlanCta(data: BillingData, isComped: boolean): string {
   return basicCta;
 }
 function proPlanCta(data: BillingData, isComped: boolean): string {
+  if (isTerminalStripeHistory(data) && !isComped && hasRenewalRecovery(data))
+    return "Get Pro again";
   const proCta =
     data.tier === "pro"
       ? isComped
@@ -434,6 +451,22 @@ function proPlanCta(data: BillingData, isComped: boolean): string {
         : "Current plan"
       : "Upgrade to Pro";
   return proCta;
+}
+function currentBasicBlocksPurchase(
+  data: BillingData,
+  isComped: boolean,
+  canChange: boolean,
+  interval: BillingInterval,
+): boolean {
+  return (
+    (data.tier === "pro" && !canChange && !isTerminalStripeHistory(data)) ||
+    (data.tier === "basic" &&
+      !isTerminalStripeHistory(data) &&
+      !isComped &&
+      (!canChange ||
+        (data.subscriptionDetails?.status === "available" &&
+          data.subscriptionDetails.interval === interval)))
+  );
 }
 function basicPlanDisabled(
   data: BillingData,
@@ -452,12 +485,7 @@ function basicPlanDisabled(
     busy ||
     checkoutBlocked ||
     offer.status === "unavailable" ||
-    (data.tier === "pro" && !canChange) ||
-    (data.tier === "basic" &&
-      !isComped &&
-      (!canChange ||
-        (data.subscriptionDetails?.status === "available" &&
-          data.subscriptionDetails.interval === interval)));
+    currentBasicBlocksPurchase(data, isComped, canChange, interval);
   return basicDisabled;
 }
 function proPlanDisabled(
@@ -476,6 +504,7 @@ function proPlanDisabled(
     busy ||
     checkoutBlocked ||
     (data.tier === "pro" &&
+      !isTerminalStripeHistory(data) &&
       !isComped &&
       (!canChange ||
         (data.subscriptionDetails?.status === "available" &&
@@ -590,7 +619,7 @@ function BillingPlanCards({
             : { variant: "filled", onClick: checkoutBasic }
         }
         highlighted
-        badge={data.tier === "basic" ? "Current plan" : "Best value"}
+        badge={paidPlanBadge(data, "basic", "Best value")}
         billingLabel={billingLabelForInterval(interval)}
         terms={<BasicIntroTerms offer={shownOffer} />}
         introOffer={shownOffer}
@@ -609,7 +638,7 @@ function BillingPlanCards({
         cta={proCta}
         ctaDisabled={proDisabled}
         ctaProps={proDisabled ? { variant: "light" } : { onClick: checkoutPro }}
-        badge={data.tier === "pro" ? "Current plan" : "More recording time"}
+        badge={paidPlanBadge(data, "pro", "More recording time")}
         tone="default"
         borderColor={uiColors.accentBorder}
         borderWidth={uiBorders.accentWidth}
@@ -638,6 +667,26 @@ function IntroOfferAvailability({ offer }: { offer: BasicIntroOffer }) {
   );
 }
 
+function expandedPlanSelection(data: BillingData, showPlans: boolean): boolean {
+  return (
+    data.tier === "free" ||
+    data.billingSource === "manual_comp" ||
+    isTerminalStripeHistory(data) ||
+    showPlans
+  );
+}
+function paidPlanBadge(
+  data: BillingData,
+  tier: PaidTier,
+  fallback: string,
+): string {
+  return data.tier === tier && !isTerminalStripeHistory(data)
+    ? "Current plan"
+    : fallback;
+}
+function selectedIntroOffer(tier: PlanTier, offer: BasicIntroOffer) {
+  return tier === "basic" && offer.status === "available" ? offer.id : "none";
+}
 function BillingPlansSection({
   data,
   interval,
@@ -659,8 +708,7 @@ function BillingPlansSection({
   canChange,
 }: BillingPlansProps) {
   const isFreePlan = data.tier === "free";
-  const isComped = data.billingSource === "manual_comp";
-  const plansExpanded = isFreePlan || isComped ? true : showPlans;
+  const plansExpanded = expandedPlanSelection(data, showPlans);
   const hasPromo = promoCode.trim().length > 0;
   const managementOnly =
     requiresStripeManagement(data) || data.billingSource === "forced";
@@ -1196,10 +1244,22 @@ function billingChangeAccess(
   data: BillingData | null,
   sameServer: boolean,
   payerCanManage: boolean | undefined,
+  recoveryPending: boolean,
 ) {
   return {
     active: Boolean(data?.hasStripeBilling && sameServer && payerCanManage),
-    canStart: Boolean(data && !isTerminalStripeHistory(data)),
+    canStart: Boolean(
+      data && !isTerminalStripeHistory(data) && !recoveryPending,
+    ),
+  };
+}
+function billingRecoverySnapshot(
+  data: BillingData | null,
+  sameServer: boolean,
+) {
+  return {
+    active: Boolean(data?.hasStripeBilling) && sameServer,
+    view: data?.renewalRecovery,
   };
 }
 export function Billing() {
@@ -1228,8 +1288,13 @@ export function Billing() {
   const portalMutation = trpc.billing.portal.useMutation();
   const renewal = useBillingRenewal({
     serverId: selectedGuildId,
-    active:
-      Boolean(data?.hasStripeBilling) && selectedGuildId === routeServerId,
+    active: billingRecoverySnapshot(data, selectedGuildId === routeServerId)
+      .active,
+    onBillingChanged: () => billingQuery.refetch(),
+  });
+  const recovery = useBillingRenewalRecovery({
+    serverId: selectedGuildId,
+    ...billingRecoverySnapshot(data, selectedGuildId === routeServerId),
     onBillingChanged: () => billingQuery.refetch(),
   });
   const change = useBillingChange({
@@ -1238,6 +1303,7 @@ export function Billing() {
       data,
       selectedGuildId === routeServerId,
       renewal.view?.canManageBilling,
+      recovery.pending,
     ),
     onBillingChanged: () => renewal.onRetry(),
   });
@@ -1261,6 +1327,7 @@ export function Billing() {
     checkoutMutation.isPending,
     portalMutation.isPending,
     renewal.busy,
+    recovery.busy,
     change.busy,
   ].some(Boolean);
   const isPortalPending = portalMutation.isPending;
@@ -1300,13 +1367,13 @@ export function Billing() {
       offer,
     });
   const handleCheckout = async (tier: PlanTier) => {
+    if (recovery.pending) return;
     if (change.enabled) {
       if (!canSelectChange(tier)) return;
       await change.select({
         tier,
         interval,
-        expectedOffer:
-          tier === "basic" && offer.status === "available" ? offer.id : "none",
+        expectedOffer: selectedIntroOffer(tier, offer),
       });
       return;
     }
@@ -1454,6 +1521,13 @@ export function Billing() {
   return (
     <BillingShell>
       <RecordingPlanContext context={limitContext} />
+      <BillingRenewalGrace
+        key={selectedGuildId}
+        recovery={recovery}
+        serverName={serverName}
+        onUpdatePaymentMethod={handlePortal}
+        grantTier={data.grantTier}
+      />
       <BillingCurrentPlan
         data={data}
         serverName={serverName}
@@ -1464,7 +1538,9 @@ export function Billing() {
         normalPlan={normalPlan}
         renewal={renewal}
       />
-      <BillingChangePanel change={change} serverName={serverName} />
+      {!hasRenewalRecovery(data) ? (
+        <BillingChangePanel change={change} serverName={serverName} />
+      ) : null}
       <BillingPlansSection
         canChange={change.enabled}
         data={data}
@@ -1488,11 +1564,12 @@ export function Billing() {
           pricingQuery.isFetching,
           checkoutAttempt.refreshing,
         ].some(Boolean)}
-        checkoutBlocked={
-          Boolean(failedCheckout) ||
-          pricingQuery.isError ||
-          Boolean(change.pending)
-        }
+        checkoutBlocked={[
+          recovery.pending,
+          Boolean(failedCheckout),
+          pricingQuery.isError,
+          Boolean(change.pending),
+        ].some(Boolean)}
       />
       <BillingCheckoutRecovery
         offer={offer}

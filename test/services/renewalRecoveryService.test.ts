@@ -99,6 +99,7 @@ function fixture() {
     [fundedInvoice.id, { ...fundedInvoice }],
     [renewal.id, renewal],
   ]);
+  let processing = false;
   const transport = stripeTransport((request) => {
     if (request.path === `/v1/subscriptions/${subscription.id}`)
       return subscription;
@@ -107,6 +108,32 @@ function fixture() {
         id: "cus_renewal",
         livemode: false,
         metadata: { discord_id: subscription.metadata.discord_id },
+      };
+    if (request.path === "/v1/invoice_payments")
+      return {
+        object: "list",
+        has_more: false,
+        url: request.path,
+        data: processing
+          ? [
+              {
+                id: "ip_owned",
+                invoice: renewal.id,
+                status: "open",
+                livemode: false,
+                currency: "usd",
+                payment: { type: "payment_intent", payment_intent: "pi_owned" },
+              },
+            ]
+          : [],
+      };
+    if (request.path === "/v1/payment_intents/pi_owned")
+      return {
+        id: "pi_owned",
+        customer: "cus_renewal",
+        livemode: false,
+        currency: "usd",
+        status: "processing",
       };
     if (request.path.startsWith("/v1/prices/"))
       return subscription.items.data[0].price;
@@ -148,6 +175,9 @@ function fixture() {
     subscription,
     renewal,
     invoices,
+    processing(value: boolean) {
+      processing = value;
+    },
     track,
     refresh,
     fail,
@@ -824,4 +854,108 @@ test("a credit-note-paid invoice cannot project active service during cancellati
   f.renewal.pre_payment_credit_notes_amount = 1000;
   await reconcileSubscription(f.stripe, grace.guildId, grace.subscriptionId);
   expect(getMockStore().subscriptions.get(grace.guildId)).toEqual(previous);
+});
+
+test("an in-flight renewal payment exposes a quiet settlement state without retry or paid access", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const grace = await f.refresh();
+  if (!grace) throw new Error("Expected grace");
+  f.processing(true);
+  expect(
+    await getRenewalRecoveryView({
+      stripe: f.stripe,
+      guildId: grace.guildId,
+      payerId: grace.payerId,
+      now: paidEndsAt + 4001,
+    }),
+  ).toMatchObject({ status: "settlement_pending", paymentUrl: null });
+  expect(
+    (await getRenewalRecoveryRepository().getCurrent(grace.guildId))?.state,
+  ).toBe("grace");
+  f.processing(false);
+  expect(
+    await getRenewalRecoveryView({
+      stripe: f.stripe,
+      guildId: grace.guildId,
+      payerId: grace.payerId,
+      now: paidEndsAt + 4002,
+    }),
+  ).toMatchObject({ status: "grace" });
+});
+
+test("tracks the paid Pro upgrade even when its renewal date is unchanged", async () => {
+  const f = fixture();
+  await f.track();
+  const item = f.subscription.items.data[0];
+  item.price.id = "price_upgraded_pro";
+  item.price.lookup_key = "chronote_pro_monthly";
+  const invoice = {
+    ...fundedInvoice,
+    lines: {
+      ...fundedInvoice.lines,
+      data: fundedInvoice.lines.data.map((line) => ({
+        ...line,
+        pricing: line.pricing
+          ? {
+              ...line.pricing,
+              price_details: line.pricing.price_details
+                ? { ...line.pricing.price_details }
+                : null,
+            }
+          : null,
+      })),
+    },
+  };
+  invoice.id = "in_upgrade";
+  invoice.lines.data[0].invoice = invoice.id;
+  const pricing = invoice.lines.data[0].pricing?.price_details;
+  if (!pricing) throw new Error("Missing fixture pricing");
+  pricing.price = item.price.id;
+  f.invoices.set(invoice.id, invoice);
+  f.subscription.latest_invoice = invoice.id;
+  await trackPaidRenewalPeriod({
+    stripe: f.stripe,
+    guildId: renewalSubscription.guildId,
+    subscriptionId: f.subscription.id,
+    invoiceId: invoice.id,
+    now: paidEndsAt - 100,
+  });
+  expect(
+    await getRenewalRecoveryRepository().getCurrent(
+      renewalSubscription.guildId,
+    ),
+  ).toMatchObject({
+    state: "watching",
+    paid: {
+      tier: "pro",
+      priceId: item.price.id,
+      invoiceId: invoice.id,
+      periodEnd: paidEndsAt,
+    },
+  });
+});
+
+test("retries a concurrent registration using fresh ownership and paid proof", async () => {
+  const f = fixture();
+  const repository =
+    await import("../../src/repositories/renewalRecoveryRepository");
+  const repo = repository.getRenewalRecoveryRepository();
+  const register = jest
+    .fn()
+    .mockResolvedValueOnce(false)
+    .mockImplementation(repo.register);
+  const spy = jest
+    .spyOn(repository, "getRenewalRecoveryRepository")
+    .mockReturnValue({ ...repo, register });
+  try {
+    await expect(f.track()).resolves.toBeUndefined();
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(await repo.getCurrent(renewalSubscription.guildId)).toMatchObject({
+      state: "watching",
+    });
+  } finally {
+    spy.mockRestore();
+  }
 });

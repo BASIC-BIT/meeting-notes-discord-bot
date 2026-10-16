@@ -1,3 +1,4 @@
+import { hasProcessingRenewalPayment } from "./renewalRecoveryProvider";
 import type { StripeClient } from "../types/stripe";
 import type {
   RenewalRecovery,
@@ -44,7 +45,9 @@ async function baseView(
     selectedInterval,
     scheduledChange: record.scheduledOperationId !== null,
     endsAt:
-      "endsAt" in record ? new Date(record.endsAt * 1000).toISOString() : null,
+      "endsAt" in record && record.state !== "paid"
+        ? new Date(record.endsAt * 1000).toISOString()
+        : null,
     amountDue: null,
     currency: null,
     paymentUrl: null,
@@ -74,6 +77,8 @@ async function payableView(
   const invoice = await input.stripe.invoices.retrieve(record.invoice.id);
   await verifyRenewalInvoice(invoice, record, subscription);
   if (invoice.status !== "open" || invoice.amount_remaining <= 0)
+    return { ...view, status: "settlement_pending" };
+  if (await hasProcessingRenewalPayment(input.stripe, invoice, record))
     return { ...view, status: "settlement_pending" };
   const item = subscription.items.data[0];
   const interval = item.price.recurring?.interval;

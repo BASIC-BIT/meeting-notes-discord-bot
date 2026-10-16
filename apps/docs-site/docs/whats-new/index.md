@@ -7,6 +7,11 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Time to resolve a failed renewal
+
+- When renewal payment fails for an existing paid Basic or Pro subscription, the server keeps its previous paid plan for 48 hours from invoice finalization, including scheduled plan changes. Billing shows the local deadline and lets the original payer retry the same invoice, update their payment method, or cancel the unpaid renewal.
+- Cancellation preserves the remaining grace time. A new purchase becomes available after cleanup. Without payment, the server moves to Free at the original deadline, with any valid complimentary access preserved. See [Billing or plan issues](/troubleshooting/common-issues/#a-renewal-payment-failed).
+
 ### Plan-change reviews and independent Basic offers
 
 - Where plan changes are available in Billing, the original payer reviews an exact total before payment. Pro upgrades and monthly to annual changes take effect after payment; downgrades and annual to monthly changes wait until renewal.

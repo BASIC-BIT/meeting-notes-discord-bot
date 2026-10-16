@@ -19,7 +19,12 @@ const config: TestRunnerConfig = {
     await page.setViewportSize(screenshotViewport(context.id));
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(150);
-    if (context.id === "pages-upgradeplans--billing-plan-change-mobile") {
+    if (
+      [
+        "pages-upgradeplans--billing-plan-change-mobile",
+        "pages-upgradeplans--renewal-grace-scheduled-mobile",
+      ].includes(context.id)
+    ) {
       const dimensions = await page.evaluate(() => ({
         height: document.scrollingElement?.scrollHeight ?? 0,
         viewport: document.scrollingElement?.clientHeight ?? 0,

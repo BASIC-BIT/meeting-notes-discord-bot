@@ -1,3 +1,5 @@
+import type { RenewalRecoveryView } from "../../types/renewalRecovery";
+import { renewalGraceFixture } from "./renewalGraceFixtures";
 import type { BillingChangeView } from "../../types/billingChange";
 import { previewChangeReview } from "./billingChangeFixtures";
 import type { RenewalView } from "../../types/renewal";
@@ -85,6 +87,7 @@ function previewBilling(
 }
 
 type UpgradePreviewProps = {
+  recovery?: RenewalRecoveryView;
   change?: BillingChangeView;
   width?: number;
   renewal?: RenewalView;
@@ -225,6 +228,7 @@ export function UpgradePreview({
   terminalStatus,
   renewal,
   change,
+  recovery,
   width,
 }: UpgradePreviewProps) {
   const { setColorScheme } = useMantineColorScheme();
@@ -240,6 +244,7 @@ export function UpgradePreview({
       }),
   );
   const [client] = useState(() => {
+    let currentRecovery = recovery ?? { status: "none" as const };
     let currentChange: BillingChangeView = change ?? {
       kind: "none",
       enabled: false,
@@ -251,6 +256,34 @@ export function UpgradePreview({
         cancellationAt,
         terminalStatus,
       });
+    function respondToRecovery(url: string, data: Record<string, unknown>) {
+      if (currentRecovery.status !== "none") {
+        if (url.includes("billing.cancelRenewalPayment")) {
+          currentRecovery = {
+            ...currentRecovery,
+            status: "canceled",
+            paymentUrl: null,
+          };
+          data["billing.cancelRenewalPayment"] = currentRecovery;
+        }
+        data["billing.me"] = {
+          ...previewBilling(
+            tier,
+            billingSource,
+            currentRecovery.status === "canceled" ? "canceled" : undefined,
+          ),
+          status:
+            currentRecovery.status === "canceled" ? "canceled" : "past_due",
+          stripeStatus:
+            currentRecovery.status === "canceled" ? "canceled" : "past_due",
+          renewalRecovery: currentRecovery,
+        };
+        data["pricing.plans"] = {
+          plans: introPlans,
+          ...previewIntroOffers("inactive"),
+        };
+      }
+    }
     function respondToPlanChange(
       paths: string[],
       body: RequestInit["body"],
@@ -324,6 +357,7 @@ export function UpgradePreview({
               renewal: currentRenewal,
             });
             data["billing.change"] = currentChange;
+            respondToRecovery(String(url), data);
             const paths = new URL(String(url), window.location.origin).pathname
               .split("/")
               .at(-1)!
@@ -983,7 +1017,9 @@ export const CancellationPriceUnavailable: Story = {
     const current = within(
       await within(canvasElement).findByTestId("billing-current-plan"),
     );
-    await expect(current.getByText(/Your plan currently ends/)).toBeVisible();
+    await expect(
+      await current.findByText(/Your Basic plan ends/),
+    ).toBeVisible();
     await expect(current.queryByText(/next billing/)).toBeNull();
   },
 };
@@ -1283,4 +1319,68 @@ export const BillingTerminalChangeRecovery: Story = {
       ).toBeEnabled(),
     );
   },
+};
+
+async function verifyRecoveryPreview({
+  canvasElement,
+}: {
+  canvasElement: HTMLElement;
+}) {
+  await waitFor(() =>
+    expect(
+      within(canvasElement).getByTestId("billing-renewal-grace"),
+    ).toBeVisible(),
+  );
+  await expect(
+    within(canvasElement).queryByText("Something went wrong!"),
+  ).not.toBeInTheDocument();
+}
+export const RenewalGraceBasic: Story = {
+  play: verifyRecoveryPreview,
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "basic",
+    recovery: renewalGraceFixture(),
+  },
+  tags: ["renewal-grace"],
+};
+export const RenewalGraceScheduled: Story = {
+  play: verifyRecoveryPreview,
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "pro",
+    recovery: renewalGraceFixture({ priorTier: "pro", scheduledChange: true }),
+  },
+  tags: ["renewal-grace"],
+};
+export const RenewalGraceCanceled: Story = {
+  play: verifyRecoveryPreview,
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "pro",
+    recovery: renewalGraceFixture({
+      status: "canceled",
+      priorTier: "pro",
+      scheduledChange: true,
+      paymentUrl: null,
+    }),
+  },
+  tags: ["renewal-grace"],
+};
+export const RenewalGraceScheduledMobile: Story = {
+  ...RenewalGraceScheduled,
+  args: { ...RenewalGraceScheduled.args, width: 390 },
+  tags: ["renewal-grace"],
+};
+export const RenewalGraceProcessing: Story = {
+  play: verifyRecoveryPreview,
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "basic",
+    recovery: renewalGraceFixture({
+      status: "settlement_pending",
+      paymentUrl: null,
+    }),
+  },
+  tags: ["renewal-grace"],
 };

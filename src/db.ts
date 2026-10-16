@@ -4428,6 +4428,7 @@ export async function writeRenewalRecoveryRecord(input: {
   next: RenewalRecovery;
   expectedRevision?: string;
   expectedPointer?: RenewalRecoveryPointer;
+  supersededWatch?: Extract<RenewalRecovery, { state: "watching" }>;
   expectedSubscription: GuildSubscription;
   blocking: boolean;
 }): Promise<boolean> {
@@ -4435,7 +4436,35 @@ export async function writeRenewalRecoveryRecord(input: {
   if (input.expectedSubscription.stripeSubscriptionId !== next.subscriptionId)
     return false;
   const table = tableName("GuildSubscriptionTable");
+  const superseded = input.supersededWatch;
+  const archived: NonNullable<Parameters<typeof transactRenewalRecords>[0]> =
+    superseded
+      ? [
+          {
+            Update: {
+              TableName: table,
+              Key: marshall({ guildId: renewalRecoveryKey(superseded) }),
+              UpdateExpression:
+                "SET #state = :ended, #revision = :newRevision REMOVE nextCheckAt, recoveryQueue, recoveryDueAt",
+              ConditionExpression:
+                "#revision = :revision AND #state = :watching AND enforcementAccepted = :no",
+              ExpressionAttributeNames: {
+                "#state": "state",
+                "#revision": "revision",
+              },
+              ExpressionAttributeValues: marshall({
+                ":ended": "ended",
+                ":newRevision": randomUUID(),
+                ":revision": superseded.revision,
+                ":watching": "watching",
+                ":no": false,
+              }),
+            },
+          },
+        ]
+      : [];
   return transactRenewalRecords([
+    ...archived,
     {
       ConditionCheck: subscriptionRevisionFence(
         next.guildId,

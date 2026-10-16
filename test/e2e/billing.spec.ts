@@ -1,4 +1,9 @@
-import { useFreeBilling, useIntroBilling } from "./billingMocks";
+import { renewalGraceFixture } from "../../src/frontend/pages/renewalGraceFixtures";
+import {
+  useFreeBilling,
+  useIntroBilling,
+  useRenewalGrace,
+} from "./billingMocks";
 import {
   annualSubscriber,
   monthlySubscriber,
@@ -1097,3 +1102,103 @@ for (const width of [390, 1280]) {
     ).toHaveCount(0);
   });
 }
+
+for (const width of [390, 1280]) {
+  test(`renewal grace confirms cancellation and allows repurchase at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const options = {
+      view: renewalGraceFixture({ priorTier: "pro", scheduledChange: true }),
+    };
+    await useRenewalGrace(page, options);
+    await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+    const notice = page.getByTestId("billing-renewal-grace");
+    await expect(notice).toContainText("scheduled change to Basic");
+    await expect(notice).toContainText("keep using Pro until");
+    await expect(
+      notice.getByRole("link", { name: "Retry payment" }),
+    ).toHaveAttribute("href", options.view.paymentUrl!);
+    await expect(page.getByTestId("billing-current-plan")).not.toContainText(
+      "Check status",
+    );
+    await notice.getByRole("button", { name: "Cancel renewal" }).click();
+    const dialog = page.getByRole("dialog", { name: "Cancel this renewal?" });
+    await expect(dialog).toContainText("unpaid plan charge will be removed");
+    await expect(dialog).toContainText("Other charges stay payable");
+    await dialog.getByRole("button", { name: "Cancel renewal" }).click();
+    await expect(notice).toContainText("Renewal canceled");
+    await expect(notice).toContainText("keep using Pro until");
+    await expect(
+      page.getByRole("button", { name: "Get Basic again" }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Get Pro again" }),
+    ).toBeEnabled();
+    if (width === 390) {
+      const cards = await page
+        .locator('[data-testid^="billing-plan-"]')
+        .evaluateAll((elements) =>
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { top: rect.top, bottom: rect.bottom };
+          }),
+        );
+      expect(cards).toHaveLength(3);
+      expect(cards[1].top).toBeGreaterThanOrEqual(cards[0].bottom);
+      expect(cards[2].top).toBeGreaterThanOrEqual(cards[1].bottom);
+      const scroll = await page.getByRole("main").evaluate((element) => {
+        element.scrollTop = 0;
+        const canScroll = element.scrollHeight > element.clientHeight;
+        element.scrollTop = 200;
+        return { canScroll, top: element.scrollTop };
+      });
+      expect(scroll.canScroll).toBe(true);
+      expect(scroll.top).toBeGreaterThan(0);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+    }
+  });
+}
+test("renewal payment processing stays quiet and refreshes after actual settlement", async ({
+  page,
+}) => {
+  const options: {
+    view: import("../../src/types/renewalRecovery").RenewalRecoveryView;
+  } = {
+    view: renewalGraceFixture({
+      status: "settlement_pending",
+      paymentUrl: null,
+    }),
+  };
+  await useRenewalGrace(page, options);
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+  const notice = page.getByTestId("billing-renewal-grace");
+  await expect(notice).toContainText("payment is still being settled");
+  await expect(notice.getByRole("link", { name: "Retry payment" })).toHaveCount(
+    0,
+  );
+  options.view = { status: "none" };
+  await notice.getByRole("button", { name: "Refresh status" }).click();
+  await expect(notice).toHaveCount(0);
+});
+test("renewal grace removes payment actions at the exact deadline", async ({
+  page,
+}) => {
+  const view = renewalGraceFixture();
+  await page.clock.install({ time: new Date(Date.parse(view.endsAt!) - 1000) });
+  await useRenewalGrace(page, { view });
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
+  const notice = page.getByTestId("billing-renewal-grace");
+  await expect(
+    notice.getByRole("link", { name: "Retry payment" }),
+  ).toBeVisible();
+  await page.clock.runFor(1000);
+  await expect(notice.getByRole("link", { name: "Retry payment" })).toHaveCount(
+    0,
+  );
+  await expect(notice).toContainText("Your server is now on Free");
+});
