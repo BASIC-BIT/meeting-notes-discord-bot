@@ -1545,6 +1545,16 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
     Version = "2012-10-17",
     Statement = [
       {
+        Sid    = "DescribeSubscriptionReadiness"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeTable"
+        ]
+        Resource = [
+          aws_dynamodb_table.guild_subscription_table.arn
+        ]
+      },
+      {
         Effect = "Allow",
         Action = [
           "dynamodb:GetItem",

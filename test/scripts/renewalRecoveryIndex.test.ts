@@ -67,3 +67,25 @@ test("Terraform exposes only the exact recovery due index to the task role", () 
   );
   expect(source).toContain('projection_type = "KEYS_ONLY"');
 });
+
+test("the task can describe only the subscription table for renewal readiness", () => {
+  const source = readFileSync("_infra/main.tf", "utf8");
+  const policy = source.match(
+    /resource "aws_iam_policy" "dynamodb_access_policy" \{([\s\S]*?)\n\}/,
+  )?.[1];
+  expect(policy).toBeDefined();
+  const statements =
+    policy?.match(
+      /\{\s*(?:Sid\s*=\s*"[^"]*"\s*)?Effect\s*=\s*"Allow"[\s\S]*?Resource\s*=\s*\[[^\]]*\]\s*\}/g,
+    ) ?? [];
+  const describe = statements.filter((statement) =>
+    statement.includes('"dynamodb:DescribeTable"'),
+  );
+  expect(describe).toHaveLength(1);
+  expect(describe[0]).toMatch(
+    /Action\s*=\s*\[\s*"dynamodb:DescribeTable"\s*,?\s*\]/,
+  );
+  expect(describe[0]).toMatch(
+    /Resource\s*=\s*\[\s*aws_dynamodb_table\.guild_subscription_table\.arn\s*,?\s*\]/,
+  );
+});
