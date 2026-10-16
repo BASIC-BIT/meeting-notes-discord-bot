@@ -944,6 +944,7 @@ async function repairFixture() {
     stopped: false,
     lostStop: false,
     lostTransfer: false,
+    lostCompletion: "",
     raceReservation: false,
     slowIntent: false,
     slowTransfer: false,
@@ -1107,7 +1108,13 @@ async function repairFixture() {
         new PutItemCommand({ TableName: f.table, Item: marshall(control) }),
       );
     }
+    const completing = JSON.stringify(input).includes('"complete"');
+    const lostCompletion = completing ? state.lostCompletion : "";
+    if (completing) state.lostCompletion = "";
+    if (lostCompletion === "before") throw new Error("completion not applied");
     const out = await f.aws("dynamodb", "transact-write-items", input);
+    if (lostCompletion === "after")
+      throw new Error("completion acknowledgment lost");
     if (state.lostTransfer && state.stopped)
       throw new Error("transfer acknowledgment lost");
     return out;
@@ -1216,6 +1223,65 @@ async function repairFixture() {
   };
 }
 
+test.each(["before", "after"])(
+  "repair reconciles completion-only after an uncertain %s acknowledgment",
+  async (kind) => {
+    const f = await repairFixture();
+    f.repairState.lostCompletion = kind;
+    await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+    expect(await f.get("CONTROL")).toMatchObject({ servingGeneration: 1 });
+    const stops = f.calls.filter(
+      (c) => c.operation === "update-service",
+    ).length;
+    const launches = f.state.updates;
+    await expect(
+      f.intro.repair(f.previous, f.previousHash),
+    ).resolves.toMatchObject({ kind: "complete" });
+    expect(await f.get("INTRODUCTION")).toMatchObject({ stage: "complete" });
+    expect(await f.get("REPAIR#" + f.manifest.operationId)).toMatchObject({
+      stage: "complete",
+    });
+    expect(
+      f.calls.filter((c) => c.operation === "update-service"),
+    ).toHaveLength(stops);
+    expect(f.state.updates).toBe(launches);
+  },
+);
+
+test.each(["foreign-lineage", "changed-generation", "stale-runtime"])(
+  "completion-only reconciliation refuses %s",
+  async (kind) => {
+    const f = await repairFixture();
+    f.repairState.lostCompletion = "before";
+    await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+    const sk =
+      kind === "foreign-lineage"
+        ? "REPAIR#" + f.manifest.operationId
+        : kind === "changed-generation"
+          ? "CONTROL"
+          : "RUNTIME#runtime";
+    const row = await f.get(sk);
+    if (kind === "foreign-lineage") row!.previousOperationId = randomUUID();
+    if (kind === "changed-generation") row!.servingGeneration = 2;
+    if (kind === "stale-runtime") row!.readiness.expiresAt = 999;
+    await client.send(
+      new PutItemCommand({ TableName: f.table, Item: marshall(row) }),
+    );
+    const writes = f.calls.filter((c) =>
+      ["transact-write-items", "update-service"].includes(c.operation),
+    ).length;
+    await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+    expect(
+      f.calls.filter((c) =>
+        ["transact-write-items", "update-service"].includes(c.operation),
+      ),
+    ).toHaveLength(writes);
+    expect(await f.get("INTRODUCTION")).toMatchObject({
+      stage: "routing_acknowledged",
+    });
+  },
+);
+
 test("repair conditionally supersedes an acknowledged failed unserved bootstrap and reuses promotion", async () => {
   const f = await repairFixture();
   await expect(
@@ -1238,7 +1304,9 @@ test("repair conditionally supersedes an acknowledged failed unserved bootstrap 
     servingGeneration: 1,
     coordinatorToken: f.manifest.operationId,
   });
-  await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  await expect(
+    f.intro.repair(f.previous, f.previousHash),
+  ).resolves.toMatchObject({ kind: "complete" });
   expect(f.calls.filter((c) => c.operation === "update-service")).toHaveLength(
     1,
   );

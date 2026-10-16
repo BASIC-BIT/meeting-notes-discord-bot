@@ -596,6 +596,7 @@ function createIntroduction(options) {
       ],
     });
     await stage("reserved", "stop_submitted");
+    await assertLegacyTarget();
     stopBudget();
     const stopped = (
       await aws("ecs", "update-service", {
@@ -647,21 +648,16 @@ function createIntroduction(options) {
     await bootstrap.initialize();
     return finish();
   }
-  async function finish(repairKey) {
+  async function finish(
+    complete = () => stage("routing_acknowledged", "complete"),
+  ) {
     await bootstrap.launch();
     const result = await wait(
       async () => (await bootstrap.readiness()).kind === "ready",
       { complete: (deadline) => bootstrap.promote(deadline) },
     );
     await wait(() => runtimeReady());
-    if (repairKey)
-      await aws("dynamodb", "transact-write-items", {
-        TransactItems: [
-          { Update: stageUpdate("routing_acknowledged", "complete") },
-          { Update: stageUpdate("initialized", "complete", repairKey) },
-        ],
-      });
-    else await stage("routing_acknowledged", "complete");
+    await complete();
     return result;
   }
 
@@ -677,21 +673,21 @@ function createIntroduction(options) {
       names["#deployment"] = "deployment";
       conditions.push("attribute_not_exists(#deployment)");
     }
-    const changes = Object.entries(patch).map(([field, value], i) => {
+    const changes = Object.entries(patch ?? {}).map(([field, value], i) => {
       names["#u" + i] = field;
       values[":u" + i] = value;
       return "#u" + i + " = :u" + i;
     });
-    return {
-      Update: {
-        TableName: table,
-        Key: marshall({ pk: before.pk, sk: before.sk }),
-        ConditionExpression: conditions.join(" AND "),
-        UpdateExpression: "SET " + changes.join(", "),
-        ExpressionAttributeNames: names,
-        ExpressionAttributeValues: marshall(values),
-      },
+    const input = {
+      TableName: table,
+      Key: marshall({ pk: before.pk, sk: before.sk }),
+      ConditionExpression: conditions.join(" AND "),
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: marshall(values),
     };
+    return patch
+      ? { Update: { ...input, UpdateExpression: "SET " + changes.join(", ") } }
+      : { ConditionCheck: input };
   }
   async function previousState(previous, previousHash) {
     const control = await read("CONTROL"),
@@ -713,6 +709,72 @@ function createIntroduction(options) {
     assert.equal(introduction.principalArn, previous.principalArn);
     assert.equal(introduction.stage, "routing_acknowledged");
     return { control, receipt, introduction };
+  }
+  async function completeRepair(previous, previousHash) {
+    const [control, old, bootstrapReceipt, introduction, repairReceipt] =
+      await Promise.all([
+        read("CONTROL"),
+        read("BOOTSTRAP#" + previous.operationId),
+        read("BOOTSTRAP#" + m.operationId),
+        read(),
+        read("REPAIR#" + m.operationId),
+      ]);
+    for (const [row, id, hash] of [
+      [old, previous.operationId, previousHash],
+      [bootstrapReceipt, m.operationId, options.expectedSha256],
+      [introduction, m.operationId, options.expectedSha256],
+      [repairReceipt, m.operationId, options.expectedSha256],
+    ]) {
+      assert.equal(row?.operationId, id);
+      assert.equal(row.manifestSha256, hash);
+    }
+    assert.equal(old.stage, "superseded");
+    assert.equal(old.supersededBy, m.operationId);
+    assert.equal(bootstrapReceipt.stage, "complete");
+    assert.equal(introduction.principalArn, m.principalArn);
+    for (const row of [introduction, repairReceipt]) {
+      assert.equal(row.previousOperationId, previous.operationId);
+      assert.equal(row.previousManifestSha256, previousHash);
+    }
+    const candidate = bootstrapReceipt.candidate;
+    assert.equal(candidate?.kind, "ecs");
+    assert.equal(candidate.protocolVersion, 1);
+    assert.equal(candidate.candidateId, m.operationId);
+    assert.equal(candidate.imageDigest, m.imageDigest);
+    assert(sameEcsTaskArn(candidate.taskArn, candidate.taskArn));
+    assert(
+      candidate.taskArn.startsWith(
+        `arn:aws:ecs:${m.region}:${m.accountId}:task/${m.cluster}/`,
+      ),
+    );
+    assert.equal(control?.runtimeEnvironment, "ecs");
+    assert.equal(control.protocolVersion, 1);
+    assert.equal(control.coordinatorToken, m.operationId);
+    assert.equal(control.coordinatorEpoch, 1);
+    assert.equal(control.coordinatorExpiresAt, 0);
+    assert.equal(control.servingGeneration, 1);
+    assert.equal(control.deployment, undefined);
+    assert.deepEqual(control.servingMembers, {
+      [candidate.instanceId]: candidate,
+    });
+    const completed = repairReceipt.stage === "complete";
+    assert.equal(repairReceipt.stage, completed ? "complete" : "initialized");
+    assert.equal(
+      introduction.stage,
+      completed ? "complete" : "routing_acknowledged",
+    );
+    assert(await runtimeReady(), "Fresh serving confirmation required");
+    if (!completed)
+      await aws("dynamodb", "transact-write-items", {
+        TransactItems: [
+          snapshotChange(control),
+          snapshotChange(old),
+          snapshotChange(bootstrapReceipt),
+          snapshotChange(introduction, { stage: "complete" }),
+          snapshotChange(repairReceipt, { stage: "complete" }),
+        ],
+      });
+    return { kind: "complete", generation: 1 };
   }
   async function repair(previousInput, previousHash) {
     const previous = parseManifest(previousInput, previousHash);
@@ -740,7 +802,7 @@ function createIntroduction(options) {
     assert.equal(actor.Account, m.accountId);
     assert.equal(actor.Arn, m.principalArn);
     const repairKey = "REPAIR#" + m.operationId;
-    assert(!(await read(repairKey)), "Repair cannot be replayed");
+    if (await read(repairKey)) return completeRepair(previous, previousHash);
     const prior = await previousState(previous, previousHash);
     assert.equal(await count(table), 3, "Foreign runtime or ownership remains");
     await workSettled();
@@ -781,13 +843,7 @@ function createIntroduction(options) {
       previousManifestSha256: previousHash,
       stage: "reserved",
     };
-    const guards = Object.values(prior).map((row) => {
-      const change = snapshotChange(row, { stage: "unused" }).Update;
-      delete change.UpdateExpression;
-      delete change.ExpressionAttributeNames["#u0"];
-      delete change.ExpressionAttributeValues[":u0"];
-      return { ConditionCheck: change };
-    });
+    const guards = Object.values(prior).map((row) => snapshotChange(row));
     await aws("dynamodb", "transact-write-items", {
       TransactItems: [
         ...guards,
@@ -875,7 +931,7 @@ function createIntroduction(options) {
         },
       ],
     });
-    return finish(repairKey);
+    return finish(() => completeRepair(previous, previousHash));
   }
   return { activate, repair };
 }

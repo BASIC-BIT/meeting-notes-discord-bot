@@ -74,8 +74,12 @@ function fixture() {
     historyCount: 0,
     lostStop: false,
     lostRoute: false,
+    lateLegacy: "",
   };
   const calls = [];
+  function lateLegacy(kind) {
+    return state.lateLegacy === kind && state.stage?.stage === "stop_submitted";
+  }
   const action = () =>
     state.routed
       ? [
@@ -228,7 +232,12 @@ function fixture() {
         failures: [],
       }),
       "get-task-protection": (p) => ({
-        protectedTasks: [{ taskArn: p.tasks[0], protectionEnabled: false }],
+        protectedTasks: [
+          {
+            taskArn: p.tasks[0],
+            protectionEnabled: lateLegacy("protected"),
+          },
+        ],
         failures: [],
       }),
       "update-service": () => {
@@ -271,7 +280,10 @@ function fixture() {
           p.TargetGroupArn === m.targetGroupA && !state.stopped
             ? [
                 {
-                  Target: { Id: "10.0.0.1", Port: 3001 },
+                  Target: {
+                    Id: lateLegacy("target") ? "10.0.0.99" : "10.0.0.1",
+                    Port: 3001,
+                  },
                   TargetHealth: { State: "healthy" },
                 },
               ]
@@ -307,6 +319,26 @@ function fixture() {
   };
   return { m, hash, env, state, calls, aws, bootstrap };
 }
+test.each(["protected", "target"])(
+  "activation revalidates late legacy %s before stopping",
+  async (kind) => {
+    const f = fixture();
+    f.state.lateLegacy = kind;
+    await expect(
+      createIntroduction({
+        manifest: f.m,
+        expectedSha256: f.hash,
+        aws: f.aws,
+        bootstrap: f.bootstrap,
+        now: () => 1000,
+        pause: async () => {},
+      }).activate(),
+    ).rejects.toThrow();
+    expect(f.calls.filter((c) => c.o === "update-service")).toHaveLength(0);
+    expect(f.state.stage.stage).toBe("stop_submitted");
+  },
+);
+
 test("binds the reviewed operation session before execution", () => {
   const f = fixture();
   expect(bindJob(f.env).sessionName).toBe(f.m.principalArn.split("/").at(-1));
