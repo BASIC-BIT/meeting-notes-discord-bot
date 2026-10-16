@@ -142,7 +142,11 @@ it("uses real Dynamo transactions to fence the source, renewal operation and pla
     const command = send.mock.calls[0][0];
     if (!(command instanceof TransactWriteItemsCommand))
       throw new Error("Expected Dynamo transaction");
-    const entries = command.input.TransactItems ?? [];
+    const allEntries = command.input.TransactItems ?? [];
+    expect(unmarshall(allEntries[0].ConditionCheck?.Key ?? {})).toEqual({
+      guildId: `RENEWAL_RECOVERY_CURRENT#${changeOperation.guildId}`,
+    });
+    const entries = allEntries.slice(1);
     expect(entries).toHaveLength(5);
     expect(unmarshall(entries[0].ConditionCheck?.Key ?? {})).toEqual({
       guildId: changeOperation.guildId,

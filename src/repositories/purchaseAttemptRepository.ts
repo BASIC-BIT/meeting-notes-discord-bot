@@ -33,9 +33,10 @@ function isBlockedNewPurchase(
   return (
     next.state === "preparing" &&
     next.attemptId !== expected?.attemptId &&
-    getMockStore().billingChangeControls.has(
-      billingChangeControlKey(next.guildId),
-    )
+    (getMockStore().renewalRecoveryPointers.get(next.guildId)?.blocking ||
+      getMockStore().billingChangeControls.has(
+        billingChangeControlKey(next.guildId),
+      ))
   );
 }
 function recordMockIncident(incident: PurchaseIncident | undefined) {

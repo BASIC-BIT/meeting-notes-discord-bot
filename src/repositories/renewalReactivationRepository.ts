@@ -75,6 +75,7 @@ export function getRenewalReactivationRepository() {
           expectedSubscription.stripeSubscriptionId ||
         pointer.stripeSyncRevision !==
           expectedSubscription.stripeSyncRevision ||
+        store.renewalRecoveryPointers.get(next.guildId)?.blocking ||
         store.renewalControls.has(controlKey) ||
         store.billingChangeControls.has(
           billingChangeControlKey(next.guildId),

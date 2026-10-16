@@ -44,7 +44,14 @@ import type {
   DiscordRole,
 } from "./types";
 
+import type {
+  RenewalRecovery,
+  RenewalRecoveryPointer,
+} from "../types/renewalRecovery";
+
 type MockStore = {
+  renewalRecoveryRecords: Map<string, RenewalRecovery>;
+  renewalRecoveryPointers: Map<string, RenewalRecoveryPointer>;
   activeMeetingLeases: Map<string, ActiveMeetingLease>;
   deploymentControlRecords: Map<string, DeploymentControlRecord>;
   billingChangeOperations: Map<string, BillingChangeOperation>;
@@ -938,6 +945,8 @@ function buildDefaultStore(): MockStore {
     subscriptions,
     paymentTransactions,
     stripeWebhookEvents,
+    renewalRecoveryRecords: new Map(),
+    renewalRecoveryPointers: new Map(),
     billingChangeOperations: new Map(),
     billingChangeControls: new Map(),
     renewalOperations: new Map(),

@@ -1583,6 +1583,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.installer_table.arn,
           aws_dynamodb_table.onboarding_state_table.arn,
           aws_dynamodb_table.guild_subscription_table.arn,
+          "${aws_dynamodb_table.guild_subscription_table.arn}/index/RenewalRecoveryDueIndex",
           aws_dynamodb_table.entitlement_grant_table.arn,
           "${aws_dynamodb_table.entitlement_grant_table.arn}/index/*"
         ]
@@ -2086,6 +2087,23 @@ resource "aws_dynamodb_table" "guild_subscription_table" {
   name         = "${local.name_prefix}-GuildSubscriptionTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "guildId"
+
+  attribute {
+    name = "recoveryQueue"
+    type = "S"
+  }
+
+  attribute {
+    name = "recoveryDueAt"
+    type = "N"
+  }
+
+  global_secondary_index {
+    name            = "RenewalRecoveryDueIndex"
+    hash_key        = "recoveryQueue"
+    range_key       = "recoveryDueAt"
+    projection_type = "KEYS_ONLY"
+  }
 
   attribute {
     name = "guildId"

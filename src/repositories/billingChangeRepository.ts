@@ -71,6 +71,7 @@ function mockClaimAvailable(
       input.expectedSubscription.stripeSubscriptionId &&
     pointer.stripeSyncRevision ===
       input.expectedSubscription.stripeSyncRevision &&
+    !store.renewalRecoveryPointers.get(next.guildId)?.blocking &&
     !store.billingChangeControls.has(billingChangeControlKey(next.guildId)) &&
     !["preparing", "open", "needs_review"].includes(
       store.purchaseAttempts.get(next.guildId)?.state ?? "",

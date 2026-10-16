@@ -205,7 +205,11 @@ describe("real renewal Dynamo transaction boundary", () => {
     const command = send.mock.calls[0][0];
     if (!(command instanceof TransactWriteItemsCommand))
       throw new Error("Expected transaction");
-    const items = command.input.TransactItems;
+    const allItems = command.input.TransactItems ?? [];
+    expect(unmarshall(allItems[0].ConditionCheck?.Key ?? {})).toEqual({
+      guildId: `RENEWAL_RECOVERY_CURRENT#${renewalGuildId}`,
+    });
+    const items = allItems.slice(1);
     expect(items).toHaveLength(4);
     expect(items?.[0].ConditionCheck?.ConditionExpression).toContain(
       "#stripeSyncRevision = :revision",

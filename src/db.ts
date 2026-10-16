@@ -116,6 +116,17 @@ import {
   buildPendingSegmentTransaction,
 } from "./services/deploymentControlTransactions";
 
+import {
+  renewalRecoveryKey,
+  renewalRecoveryCurrentKey,
+  RENEWAL_RECOVERY_DUE_INDEX,
+  readRenewalRecoveryCursor,
+  writeRenewalRecoveryCursor,
+  renewalRecoveryCursorSchema,
+  type RenewalRecovery,
+  type RenewalRecoveryPointer,
+} from "./types/renewalRecovery";
+
 const MEETING_USER_INDEX_WRITE_BATCH_SIZE = 25;
 const PERSONAL_MEDIA_UPLOAD_STATUS_UPDATED_AT_INDEX = "StatusUpdatedAtIndex";
 
@@ -3563,6 +3574,9 @@ export async function compareAndWritePurchaseAttempt(
                     undefined,
                   ),
                 },
+                {
+                  ConditionCheck: renewalRecoveryFence(next.guildId),
+                },
               ]
             : []),
           ...(usage
@@ -4194,6 +4208,7 @@ export async function claimRenewalOperation(
     values[":revision"] = expected.stripeSyncRevision;
   }
   return transactRenewalRecords([
+    { ConditionCheck: renewalRecoveryFence(operation.guildId) },
     {
       ConditionCheck: {
         TableName: table,
@@ -4270,6 +4285,7 @@ export async function claimBillingChangeOperation(
   const operation = input.operation;
   const usage = input.usage && parseChangeUsage(operation, input.usage);
   return transactRenewalRecords([
+    { ConditionCheck: renewalRecoveryFence(operation.guildId) },
     {
       ConditionCheck: subscriptionRevisionFence(
         operation.guildId,
@@ -4357,4 +4373,120 @@ export async function writeBillingChangeOperation(
       : { ConditionCheck: control },
     ...(usage ? [{ Put: offerUsagePut(usage.next, usage.expected) }] : []),
   ]);
+}
+
+export async function writeRenewalRecoveryRecord(input: {
+  next: RenewalRecovery;
+  expectedRevision?: string;
+  expectedPointer?: RenewalRecoveryPointer;
+  expectedSubscription: GuildSubscription;
+  blocking: boolean;
+}): Promise<boolean> {
+  const next = input.next;
+  if (input.expectedSubscription.stripeSubscriptionId !== next.subscriptionId)
+    return false;
+  const table = tableName("GuildSubscriptionTable");
+  return transactRenewalRecords([
+    {
+      ConditionCheck: subscriptionRevisionFence(
+        next.guildId,
+        input.expectedSubscription,
+      ),
+    },
+    {
+      Put: {
+        TableName: table,
+        Item: marshall(
+          {
+            ...next,
+            ownerGuildId: next.guildId,
+            guildId: renewalRecoveryKey(next),
+            ...("nextCheckAt" in next
+              ? { recoveryQueue: next.mode, recoveryDueAt: next.nextCheckAt }
+              : {}),
+          },
+          { removeUndefinedValues: true },
+        ),
+        ConditionExpression: input.expectedRevision
+          ? "#revision = :revision"
+          : "attribute_not_exists(guildId)",
+        ...(input.expectedRevision
+          ? {
+              ExpressionAttributeNames: { "#revision": "revision" },
+              ExpressionAttributeValues: marshall({
+                ":revision": input.expectedRevision,
+              }),
+            }
+          : {}),
+      },
+    },
+    {
+      Put: {
+        TableName: table,
+        Item: marshall({
+          guildId: renewalRecoveryCurrentKey(next.guildId),
+          key: renewalRecoveryKey(next),
+          revision: next.revision,
+          blocking: input.blocking,
+        }),
+        ConditionExpression: input.expectedPointer
+          ? "#revision = :revision"
+          : "attribute_not_exists(guildId)",
+        ...(input.expectedPointer
+          ? {
+              ExpressionAttributeNames: { "#revision": "revision" },
+              ExpressionAttributeValues: marshall({
+                ":revision": input.expectedPointer.revision,
+              }),
+            }
+          : {}),
+      },
+    },
+  ]);
+}
+function renewalRecoveryFence(guildId: string): ConditionCheck {
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId: renewalRecoveryCurrentKey(guildId) }),
+    ConditionExpression: "attribute_not_exists(guildId) OR #blocking = :no",
+    ExpressionAttributeNames: { "#blocking": "blocking" },
+    ExpressionAttributeValues: marshall({ ":no": false }),
+  };
+}
+export async function listDueRenewalRecoveries(input: {
+  mode: "test" | "live";
+  now: number;
+  limit: number;
+  cursor?: string;
+}): Promise<{ keys: string[]; cursor?: string }> {
+  const cursor = readRenewalRecoveryCursor(input.cursor);
+  if (cursor && cursor.recoveryQueue !== input.mode)
+    throw new Error("Renewal cursor mode mismatch");
+  const response = await dynamoDbClient.send(
+    new QueryCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      IndexName: RENEWAL_RECOVERY_DUE_INDEX,
+      KeyConditionExpression: "recoveryQueue = :mode AND recoveryDueAt <= :now",
+      ExpressionAttributeValues: marshall({
+        ":mode": input.mode,
+        ":now": input.now,
+      }),
+      Limit: input.limit,
+      ...(cursor ? { ExclusiveStartKey: marshall(cursor) } : {}),
+    }),
+  );
+  return {
+    keys: (response.Items ?? []).map((item) =>
+      z.string().parse(unmarshall(item).guildId),
+    ),
+    ...(response.LastEvaluatedKey
+      ? {
+          cursor: writeRenewalRecoveryCursor(
+            renewalRecoveryCursorSchema.parse(
+              unmarshall(response.LastEvaluatedKey),
+            ),
+          ),
+        }
+      : {}),
+  };
 }
