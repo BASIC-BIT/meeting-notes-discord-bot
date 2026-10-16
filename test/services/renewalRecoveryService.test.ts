@@ -23,6 +23,7 @@ import { changeOperation } from "../fixtures/billingChange";
 import {
   sourceSubscription,
   fundedInvoice,
+  remainingDiscount,
   paidEndsAt,
 } from "../fixtures/renewalStripe";
 import { renewalSubscription } from "../fixtures/renewal";
@@ -48,6 +49,25 @@ afterEach(() => {
   config.stripe.renewalGraceEnabled = original.enabled;
   config.subscription.stripeMode = original.mode;
 });
+function invoiceResponse(input: {
+  invoice: import("../../src/types/stripe").StripeInvoice | undefined;
+  fields: URLSearchParams;
+  requireCouponExpansion: boolean;
+}) {
+  const { invoice, fields, requireCouponExpansion } = input;
+  const expanded = [...fields].some(
+    ([key, value]) =>
+      key.startsWith("expand") && value === "discounts.source.coupon",
+  );
+  return invoice && requireCouponExpansion && !expanded
+    ? {
+        ...invoice,
+        discounts: invoice.discounts.map((discount) =>
+          typeof discount === "string" ? discount : discount.id,
+        ),
+      }
+    : invoice;
+}
 function fixture() {
   const subscription = {
     ...sourceSubscription,
@@ -103,6 +123,7 @@ function fixture() {
     [renewal.id, renewal],
   ]);
   let processing = false;
+  let requireCouponExpansion = false;
   const transport = stripeTransport((request) => {
     if (request.path === `/v1/subscriptions/${subscription.id}`)
       return subscription;
@@ -141,7 +162,11 @@ function fixture() {
     if (request.path.startsWith("/v1/prices/"))
       return subscription.items.data[0].price;
     if (request.path.startsWith("/v1/invoices/"))
-      return invoices.get(request.path.split("/").at(-1) ?? "");
+      return invoiceResponse({
+        invoice: invoices.get(request.path.split("/").at(-1) ?? ""),
+        fields: request.fields,
+        requireCouponExpansion,
+      });
     if (request.path === "/v1/invoices")
       return {
         object: "list",
@@ -184,6 +209,9 @@ function fixture() {
     invoices,
     processing(value: boolean) {
       processing = value;
+    },
+    requireCouponExpansion() {
+      requireCouponExpansion = true;
     },
     track,
     refresh,
@@ -745,6 +773,43 @@ test.each([
       payer.mockRestore();
       provider.mockRestore();
     }
+  },
+);
+
+test.each(["observation", "paid_basis"] as const)(
+  "expands the reserved scheduled offer evidence during %s",
+  async (path) => {
+    const { readRenewalPaidBasis } =
+      await import("../../src/services/renewalRecoveryEvidence");
+    const { f, operation } = await scheduledFixture(true);
+    f.requireCouponExpansion();
+    await f.refresh();
+    const discount = {
+      ...remainingDiscount,
+      id: "di_owned_offer",
+      source: { type: "coupon" as const, coupon: "co_monthly" },
+    };
+    f.renewal.status = "paid";
+    f.renewal.amount_remaining = 0;
+    f.renewal.amount_paid = 600;
+    f.renewal.amount_due = 600;
+    f.renewal.total = 600;
+    f.renewal.discounts = [discount];
+    f.renewal.total_discount_amounts = [{ amount: 400, discount: discount.id }];
+    f.renewal.lines.data[0].discount_amounts = [
+      { amount: 400, discount: discount.id },
+    ];
+    if (path === "observation")
+      expect(await f.refresh()).toMatchObject({ state: "paid" });
+    else
+      expect(
+        await readRenewalPaidBasis(
+          f.stripe,
+          f.subscription,
+          operation.guildId,
+          f.renewal.id,
+        ),
+      ).toMatchObject({ invoiceId: f.renewal.id, tier: "basic" });
   },
 );
 

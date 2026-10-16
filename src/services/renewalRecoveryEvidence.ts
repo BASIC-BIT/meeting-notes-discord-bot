@@ -191,10 +191,14 @@ export async function findRenewalInvoice(
 ): Promise<StripeInvoice | undefined> {
   if (recovery.state === "ended") return undefined;
   if (recovery.state !== "watching")
-    return stripe.invoices.retrieve(recovery.invoice.id);
+    return stripe.invoices.retrieve(recovery.invoice.id, {
+      expand: ["discounts.source.coupon"],
+    });
   const latest = stripeId(subscription.latest_invoice);
   if (latest && latest !== recovery.paid.invoiceId) {
-    const candidate = await stripe.invoices.retrieve(latest);
+    const candidate = await stripe.invoices.retrieve(latest, {
+      expand: ["discounts.source.coupon"],
+    });
     if (
       candidate.lines.data.some(
         (line) =>
@@ -220,7 +224,9 @@ export async function findRenewalInvoice(
           line.period.start === recovery.paid.periodEnd,
       )
     )
-      return stripe.invoices.retrieve(candidate.id);
+      return stripe.invoices.retrieve(candidate.id, {
+        expand: ["discounts.source.coupon"],
+      });
   }
   return undefined;
 }

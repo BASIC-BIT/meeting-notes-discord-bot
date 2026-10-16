@@ -337,7 +337,9 @@ export async function readPaidSourceInvoice(
   invoiceId = stripeId(subscription.latest_invoice),
 ) {
   if (!invoiceId) throw changePending();
-  const invoice = await stripe.invoices.retrieve(invoiceId);
+  const invoice = await stripe.invoices.retrieve(invoiceId, {
+    expand: ["discounts.source.coupon"],
+  });
   assertUnreversedSourceInvoice(invoice, subscription);
   if (invoice.lines.has_more || !hasCurrentServiceLine(invoice, subscription))
     throw changeUnavailable();
