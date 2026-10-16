@@ -9,6 +9,7 @@ import type {
 } from "../types/stripe";
 import {
   billingChangeSourceSchema,
+  type BillingChangeOperation,
   type BillingChangeSource,
   type BillingChangeTarget,
 } from "../types/billingChange";
@@ -20,6 +21,19 @@ import { BillingActionError } from "./billingActionError";
 
 export const stripeId = (value: string | { id: string } | null | undefined) =>
   typeof value === "string" ? value : value?.id;
+export function isTerminalUnappliedChange(
+  subscription: StripeSubscription,
+  operation: BillingChangeOperation,
+): boolean {
+  return (
+    ["canceled", "incomplete_expired"].includes(subscription.status) &&
+    subscription.id === operation.source.subscriptionId &&
+    stripeId(subscription.customer) === operation.source.customerId &&
+    subscription.metadata.guild_id === operation.guildId &&
+    subscription.livemode === (operation.mode === "live") &&
+    subscription.metadata.chronote_change_operation !== operation.operationId
+  );
+}
 export const changePending = () =>
   new BillingActionError(
     "BAD_REQUEST",

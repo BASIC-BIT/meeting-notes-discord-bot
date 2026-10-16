@@ -14,7 +14,7 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ### Plan-change reviews and independent Basic offers
 
-- Where plan changes are available in Billing, the original payer reviews an exact total before payment. Pro upgrades and monthly to annual changes take effect after payment; downgrades and annual to monthly changes wait until renewal.
+- Where plan changes are available in Billing, the original payer reviews an exact total before payment. Pro upgrades and monthly to annual changes take effect after payment; downgrades and annual to monthly changes within the same plan wait until renewal.
 - Each server can use the monthly and annual Basic introductory offers once, in either order. Leaving an offer ends it, and future changes do not restart it. Discounts on other servers do not block plan changes. See [Server plans](/features/#basic-introductory-pricing).
 
 ### Recording continuity during service handoffs

@@ -38,6 +38,7 @@ import {
 import { applyFundedBillingChange } from "./billingChangeApplication";
 import { compensateChangeFunding } from "./billingChangeRecovery";
 import {
+  canceledBeforeSchedule,
   scheduleBillingChange,
   cancelChangeSchedule,
   readScheduledChangeSettlement,
@@ -501,6 +502,8 @@ async function afterAcceptance(
   )
     return beginCancel(context, operation);
   if (operation.timing === "renewal") {
+    if (await canceledBeforeSchedule(context.stripe, operation))
+      return beginCancel(context, operation);
     await ensureScheduledRenewalWatch(context, operation);
     let latest = operation;
     const scheduleId = await scheduleBillingChange(
@@ -669,7 +672,11 @@ async function finishCancellation(
   operation: Extract<BillingChangeOperation, { state: "canceling" }>,
 ) {
   await verifyPayer(context, operation);
-  if (operation.timing === "renewal" && operation.consent) {
+  if (
+    operation.timing === "renewal" &&
+    operation.consent &&
+    !(await canceledBeforeSchedule(context.stripe, operation))
+  ) {
     const settled = await settleScheduled(context, operation);
     if (settled.state === "succeeded") return settled;
     if (

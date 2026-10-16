@@ -9,6 +9,7 @@ import type Stripe from "stripe";
 import type { StripeClient, StripeSubscription } from "../types/stripe";
 import type { BillingChangeOperation } from "../types/billingChange";
 import {
+  isTerminalUnappliedChange,
   changeSourceFingerprint,
   changeServiceFingerprint,
   stripeId,
@@ -206,6 +207,27 @@ export async function scheduleBillingChange(
   return configurePaidSchedule(stripe, operation, subscription, onCreated);
 }
 
+export async function canceledBeforeSchedule(
+  stripe: StripeClient,
+  operation: Extract<
+    BillingChangeOperation,
+    { state: "accepted" | "canceling" }
+  >,
+): Promise<boolean> {
+  const boundSchedule =
+    operation.state === "accepted"
+      ? operation.providerScheduleId
+      : operation.scheduleId;
+  if (boundSchedule) return false;
+  const subscription = await stripe.subscriptions.retrieve(
+    operation.source.subscriptionId,
+  );
+  return (
+    isTerminalUnappliedChange(subscription, operation) &&
+    !subscription.schedule &&
+    subscription.metadata.chronote_scheduled_change !== operation.operationId
+  );
+}
 export async function cancelChangeSchedule(
   stripe: StripeClient,
   operation: BillingChangeOperation,

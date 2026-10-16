@@ -377,3 +377,76 @@ it.each([true, false])(
     );
   },
 );
+
+it.each(["canceled", "incomplete_expired"] as const)(
+  "rejects a verified %s source before application so its funding can be compensated",
+  async (status) => {
+    const paid = {
+      ...fundedInvoice,
+      id: operation.funding.invoiceId,
+      parent: null,
+      customer: operation.source.customerId,
+      total: 900,
+      amount_due: 900,
+      amount_paid: 900,
+      amount_remaining: 0,
+      starting_balance: 0,
+      auto_advance: false,
+      metadata: {
+        guild_id: operation.guildId,
+        chronote_change_operation: operation.operationId,
+        chronote_invoice_role: "funding",
+      },
+    };
+    const native = {
+      ...sourceSubscription,
+      id: operation.source.subscriptionId,
+      customer: operation.source.customerId,
+      livemode: operation.mode === "live",
+      status,
+      metadata: { guild_id: operation.guildId },
+    };
+    const f = stripeTransport(({ path }) =>
+      path.startsWith("/v1/invoices/") ? paid : native,
+    );
+    expect(
+      await applyFundedBillingChange({
+        stripe: f.stripe,
+        operation,
+        now: operation.createdAt,
+      }),
+    ).toBe("rejected");
+    expect(f.requests.every((request) => request.method === "GET")).toBe(true);
+  },
+);
+it("does not compensate an unowned terminal source", async () => {
+  const paid = {
+    ...fundedInvoice,
+    id: operation.funding.invoiceId,
+    parent: null,
+    customer: operation.source.customerId,
+    total: 900,
+    amount_due: 900,
+    amount_paid: 900,
+    amount_remaining: 0,
+    starting_balance: 0,
+    auto_advance: false,
+    metadata: {
+      guild_id: operation.guildId,
+      chronote_change_operation: operation.operationId,
+      chronote_invoice_role: "funding",
+    },
+  };
+  const f = stripeTransport(({ path }) =>
+    path.startsWith("/v1/invoices/")
+      ? paid
+      : { ...sourceSubscription, status: "canceled", customer: "cus_other" },
+  );
+  expect(
+    await applyFundedBillingChange({
+      stripe: f.stripe,
+      operation,
+      now: operation.createdAt,
+    }),
+  ).toBe("unknown");
+});

@@ -40,7 +40,7 @@ enrollment remains open while the offer is available.
 When plan changes are available, review the total in Billing before confirming.
 Pro uses its regular price, with credit for unused paid Basic time. A monthly
 to annual change starts a full new year after payment. Downgrades and annual to
-monthly changes start at the next renewal. You can cancel a scheduled change
+monthly changes within the same plan start at the next renewal. You can cancel a scheduled change
 before it takes effect. An introductory discount on another server does not
 prevent these changes.
 
