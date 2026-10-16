@@ -1,3 +1,5 @@
+import type { RenewalRecoveryView } from "../../../src/types/renewalRecovery";
+import type { BillingChangeView } from "../../../src/types/billingChange";
 import type { RenewalView, RenewalResult } from "../../../src/types/renewal";
 import { jest } from "@jest/globals";
 import type {
@@ -45,6 +47,7 @@ type ChannelSummary = {
 };
 
 export type BillingData = {
+  renewalRecovery?: RenewalRecoveryView;
   introOffer?: BasicIntroOffer;
   annualIntroOffer?: BasicIntroOffer;
   billingEnabled: boolean;
@@ -299,6 +302,22 @@ export const guildQuery = buildQueryState<{
   guilds: { id: string; name: string; canManage?: boolean }[];
 } | null>(null);
 export const pricingQuery = buildQueryState<PricingPlansData>({ plans: [] });
+export const billingChangeQuery = buildQueryState<BillingChangeView>({
+  kind: "none",
+  enabled: false,
+});
+export const billingChangePrepare = buildMutationState<
+  [unknown],
+  BillingChangeView
+>({ kind: "none", enabled: false });
+export const billingChangeConfirm = buildMutationState<
+  [unknown],
+  BillingChangeView
+>({ kind: "none", enabled: false });
+export const billingChangeCancel = buildMutationState<
+  [unknown],
+  BillingChangeView
+>({ kind: "none", enabled: false });
 export const billingRenewalQuery = buildQueryState<RenewalView>({
   state: { kind: "not_applicable" },
   canManageBilling: false,
@@ -396,6 +415,10 @@ export const adminFeedbackQuery = buildQueryState<AdminFeedbackData>({
   guildsById: {},
 });
 
+export const billingRenewalCancelMutation = buildMutationState<
+  [unknown],
+  RenewalRecoveryView
+>({ status: "none" });
 export const billingCheckoutMutation = buildMutationState<
   [unknown],
   { url: string }
@@ -630,6 +653,16 @@ const resetContactFeedbackGetUploadUrlMutation = () => {
 };
 
 export const trpcUtils = {
+  billing: {
+    me: { setData: jest.fn() },
+    renewal: {
+      invalidate: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    },
+    change: {
+      setData: jest.fn(),
+      invalidate: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    },
+  },
   ask: {
     listConversations: {
       invalidate: jest.fn<Promise<void>, [unknown]>(),
@@ -681,6 +714,11 @@ export const trpcUtils = {
 };
 
 export const resetTrpcMocks = () => {
+  resetMutationState(billingRenewalCancelMutation, { status: "none" });
+  resetQueryState(billingChangeQuery, { kind: "none", enabled: false });
+  resetMutationState(billingChangePrepare, { kind: "none", enabled: false });
+  resetMutationState(billingChangeConfirm, { kind: "none", enabled: false });
+  resetMutationState(billingChangeCancel, { kind: "none", enabled: false });
   resetQueryState(authQuery, null);
   resetQueryState(guildQuery, null);
   resetQueryState(pricingQuery, { plans: [] });
@@ -1046,6 +1084,11 @@ jest.mock("../../../src/frontend/services/trpc", () => ({
     },
     pricing: { plans: { useQuery: () => pricingQuery } },
     billing: {
+      change: { useQuery: () => billingChangeQuery },
+      prepareChange: { useMutation: () => billingChangePrepare },
+      confirmChange: { useMutation: () => billingChangeConfirm },
+      cancelChange: { useMutation: () => billingChangeCancel },
+      cancelRenewalPayment: { useMutation: () => billingRenewalCancelMutation },
       renewal: { useQuery: () => billingRenewalQuery },
       reactivateRenewal: { useMutation: () => billingRenewalMutation },
       me: { useQuery: () => billingQuery },

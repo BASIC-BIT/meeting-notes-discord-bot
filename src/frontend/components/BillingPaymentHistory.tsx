@@ -39,7 +39,7 @@ export default function BillingPaymentHistory({
               ) : null}
               {firstYearPayment?.status === "available" ? (
                 <>
-                  <Text size="sm" fw={600}>
+                  <Text size="sm" fw={600} c="var(--mantine-color-text)">
                     {formatCurrency(
                       firstYearPayment.amountPaid,
                       firstYearPayment.currency,

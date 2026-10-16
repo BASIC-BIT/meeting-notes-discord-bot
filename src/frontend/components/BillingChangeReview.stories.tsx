@@ -300,7 +300,12 @@ export const ProcessingCannotBeDismissed: Story = {
     const screen = within(canvasElement.ownerDocument.body);
     await userEvent.keyboard("{Escape}");
     await expect(screen.getByRole("dialog")).toBeVisible();
-    await expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+    await expect(
+      screen.queryByRole("button", { name: "Back" }),
+    ).not.toBeInTheDocument();
+    await expect(
+      screen.getByRole("button", { name: "Check status" }),
+    ).toBeEnabled();
   },
 };
 export const CancellationNeedsVerification: Story = {
@@ -323,7 +328,9 @@ export const PaymentNeedsAttention: Story = {
     await userEvent.click(
       screen.getByRole("button", { name: /^Confirm and pay/ }),
     );
-    await expect(screen.getByText("Payment needs attention")).toBeVisible();
+    await expect(
+      screen.getByText("Complete payment", { exact: true }),
+    ).toBeVisible();
     await expect(
       screen.getByRole("heading", { name: /^Basic monthly$/ }),
     ).toBeVisible();

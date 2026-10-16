@@ -139,3 +139,20 @@ test.each(["known", "unknown", "cancelled"] as const)(
       });
   },
 );
+
+test("billing writes require durable-cycle acknowledgment after fencing, never a read-only poll acknowledgment", async () => {
+  const key = "RENEWAL_RECOVERY#synthetic#sub#100";
+  const work = beginRuntimeWorkClaim("billing", key);
+  await work.trackPromise(async () => {
+    await work.trackBillingMutation(async () => undefined);
+    work.fence();
+    work.acknowledgeReadOnlyRecoveryPoll();
+    await work.settle();
+  });
+  expect(releaseAcknowledgedRuntimeWork(key)).toBe(false);
+  expect(() =>
+    work.acknowledgeDurableBillingRecovery("another-cycle"),
+  ).toThrow();
+  work.acknowledgeDurableBillingRecovery(key);
+  expect(releaseAcknowledgedRuntimeWork(key)).toBe(true);
+});

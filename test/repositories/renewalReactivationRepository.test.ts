@@ -205,24 +205,34 @@ describe("real renewal Dynamo transaction boundary", () => {
     const command = send.mock.calls[0][0];
     if (!(command instanceof TransactWriteItemsCommand))
       throw new Error("Expected transaction");
-    const items = command.input.TransactItems;
-    expect(items).toHaveLength(3);
+    const allItems = command.input.TransactItems ?? [];
+    expect(unmarshall(allItems[0].ConditionCheck?.Key ?? {})).toEqual({
+      guildId: `RENEWAL_RECOVERY_CURRENT#${renewalGuildId}`,
+    });
+    const items = allItems.slice(1);
+    expect(items).toHaveLength(4);
     expect(items?.[0].ConditionCheck?.ConditionExpression).toContain(
       "#stripeSyncRevision = :revision",
     );
     expect(unmarshall(items?.[0].ConditionCheck?.Key ?? {})).toEqual({
       guildId: renewalGuildId,
     });
-    expect(unmarshall(items?.[1].Put?.Item ?? {}).guildId).toBe(
-      "RENEWAL_OP#111111111111111111#00000000-0000-4000-8000-000000000001",
+    expect(unmarshall(items?.[1].ConditionCheck?.Key ?? {})).toEqual({
+      guildId: "CHANGE_CONTROL#111111111111111111",
+    });
+    expect(items?.[1].ConditionCheck?.ConditionExpression).toBe(
+      "attribute_not_exists(#guildId)",
     );
     expect(unmarshall(items?.[2].Put?.Item ?? {}).guildId).toBe(
+      "RENEWAL_OP#111111111111111111#00000000-0000-4000-8000-000000000001",
+    );
+    expect(unmarshall(items?.[3].Put?.Item ?? {}).guildId).toBe(
       "RENEWAL_CONTROL#111111111111111111",
     );
-    expect(items?.[1].Put?.ConditionExpression).toBe(
+    expect(items?.[2].Put?.ConditionExpression).toBe(
       "attribute_not_exists(guildId)",
     );
-    expect(items?.[2].Put?.ConditionExpression).toBe(
+    expect(items?.[3].Put?.ConditionExpression).toBe(
       "attribute_not_exists(guildId)",
     );
   });

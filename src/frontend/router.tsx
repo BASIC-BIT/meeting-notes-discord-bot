@@ -301,6 +301,7 @@ const portalBillingRoute = new Route({
   path: "billing",
   component: Billing,
   validateSearch: z.object({
+    plan: z.enum(["basic", "pro"]).optional(),
     promo: z.string().optional(),
     offerChoice: z.enum(["automatic", "promotion"]).optional(),
     interval: z.enum(["month", "year"]).optional(),

@@ -162,12 +162,15 @@ Open your server's Billing page in the portal to review its plan and usage. The
 original payer must also have Manage Server permission to manage an existing
 Stripe subscription. Other server managers cannot open the payer's Stripe account.
 
-Existing plan changes are currently unavailable while hosted billing validation
-is completed. Your current subscription stays unchanged; contact support for help.
-When plan changes are enabled, Stripe shows a confirmation for that subscription,
-including the price and any prorations, before applying the change. Returning to
-Chronote does not itself confirm payment; the plan updates after Stripe reports
-the change. A failed confirmation does not create a second subscription.
+When your Billing page offers plan changes, choose a plan and review its exact
+total before confirming. Upgrades to Pro take effect after payment. Switching
+from monthly to annual starts a full new year, with credit for unused paid time.
+A failed or incomplete payment leaves your current plan active. Use **Continue
+payment** to resume the same change, or cancel it before choosing again.
+
+Downgrades to Basic or Free and a change from annual to monthly within the same plan take effect at
+your next renewal. You keep the plan you already paid for until that date.
+Cancel a scheduled change before choosing a different plan.
 
 Only one initial checkout can be in progress for a server. If another server
 manager has already started a purchase, wait for them to finish or for that
@@ -177,8 +180,8 @@ purchase. If billing says the purchase needs review, contact support before
 trying to purchase again.
 
 Use billing management to update payment methods or view invoice history. If a
-subscription has an unpaid invoice, a pending change, or a scheduled cancellation,
-resolve that state before changing plans. Contact support if the original payer
+subscription has an unpaid invoice or a payment is still being settled,
+resolve that payment before changing plans. Contact support if the original payer
 cannot access billing or the server's billing information needs repair.
 
 Plan tiers affect weekly meeting minutes, the number of meetings searchable by `/ask`, and access to features like image generation.

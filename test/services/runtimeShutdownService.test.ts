@@ -3,6 +3,7 @@ const mockLifecycleStop = jest.fn(async () => {});
 const mockInitStop = jest.fn(async () => {});
 const mockControlStop = jest.fn(async () => {});
 const mockPersonalStop = jest.fn(async () => {});
+const mockBillingStop = jest.fn(async () => {});
 const mockFence = jest.fn();
 const mockCloseAdmission = jest.fn();
 jest.mock("../../src/meetings", () => ({
@@ -26,6 +27,9 @@ jest.mock("../../src/services/runtimeLifecycleService", () => ({
   closeRuntimeAdmission: () => mockCloseAdmission(),
   getRuntimeWorkCounts: () => ({ ancillary_delivery: 0 }),
   shutdownRuntimeLifecycle: () => mockLifecycleStop(),
+}));
+jest.mock("../../src/services/renewalRecoveryWorkerService", () => ({
+  stopRenewalRecoveryWorker: () => mockBillingStop(),
 }));
 jest.mock("../../src/services/meetingControlWorkerService", () => ({
   stopMeetingControlCommandWorker: () => mockControlStop(),
@@ -80,6 +84,7 @@ test("composed owner seals every source synchronously and waits actual worker an
     expect(mockCloseAdmission).toHaveBeenCalledTimes(1);
     expect(mockFence).toHaveBeenCalledTimes(1);
     expect(mockPersonalStop).toHaveBeenCalledTimes(1);
+    expect(mockBillingStop).toHaveBeenCalledTimes(1);
     await Promise.resolve();
     expect(exit).not.toHaveBeenCalled();
     init.release();

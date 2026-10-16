@@ -394,6 +394,12 @@ variable "BILLING_LIFECYCLE_ANALYTICS_ENABLED" {
   default     = false
 }
 
+variable "STRIPE_RENEWAL_GRACE_ENABLED" {
+  description = "Enforce 48-hour paid-renewal grace only after indexed coverage and deployed writer acceptance"
+  type        = bool
+  default     = false
+}
+
 variable "STRIPE_RENEWAL_REACTIVATION_ENABLED" {
   description = "Enable same-subscription renewal restoration only after native acceptance"
   type        = bool
@@ -1539,6 +1545,16 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
     Version = "2012-10-17",
     Statement = [
       {
+        Sid    = "DescribeSubscriptionReadiness"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeTable"
+        ]
+        Resource = [
+          aws_dynamodb_table.guild_subscription_table.arn
+        ]
+      },
+      {
         Effect = "Allow",
         Action = [
           "dynamodb:GetItem",
@@ -1583,6 +1599,7 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           aws_dynamodb_table.installer_table.arn,
           aws_dynamodb_table.onboarding_state_table.arn,
           aws_dynamodb_table.guild_subscription_table.arn,
+          "${aws_dynamodb_table.guild_subscription_table.arn}/index/RenewalRecoveryDueIndex",
           aws_dynamodb_table.entitlement_grant_table.arn,
           "${aws_dynamodb_table.entitlement_grant_table.arn}/index/*"
         ]
@@ -1914,6 +1931,10 @@ resource "aws_ecs_task_definition" "app_task" {
           value = tostring(var.BILLING_LIFECYCLE_ANALYTICS_ENABLED)
         },
         {
+          name  = "STRIPE_RENEWAL_GRACE_ENABLED"
+          value = tostring(var.STRIPE_RENEWAL_GRACE_ENABLED)
+        },
+        {
           name  = "STRIPE_RENEWAL_REACTIVATION_ENABLED"
           value = tostring(var.STRIPE_RENEWAL_REACTIVATION_ENABLED)
         },
@@ -2086,6 +2107,23 @@ resource "aws_dynamodb_table" "guild_subscription_table" {
   name         = "${local.name_prefix}-GuildSubscriptionTable"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "guildId"
+
+  attribute {
+    name = "recoveryQueue"
+    type = "S"
+  }
+
+  attribute {
+    name = "recoveryDueAt"
+    type = "N"
+  }
+
+  global_secondary_index {
+    name            = "RenewalRecoveryDueIndex"
+    hash_key        = "recoveryQueue"
+    range_key       = "recoveryDueAt"
+    projection_type = "KEYS_ONLY"
+  }
 
   attribute {
     name = "guildId"

@@ -2,6 +2,7 @@
 
 import {
   afterAll,
+  afterEach,
   beforeEach,
   describe,
   expect,
@@ -11,6 +12,7 @@ import {
 import express from "express";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import * as renewalRecoveryService from "../../src/services/renewalRecoveryService";
 import { registerBillingRoutes } from "../../src/api/billing";
 import { getEntitlementGrantRepository } from "../../src/repositories/entitlementGrantRepository";
 import { getStripeWebhookRepository } from "../../src/repositories/stripeWebhookRepository";
@@ -27,6 +29,14 @@ jest.mock("../../src/services/analyticsService", () => ({
   captureEvent: jest.fn(),
 }));
 
+beforeEach(() => {
+  jest
+    .spyOn(renewalRecoveryService, "trackPaidRenewalPeriod")
+    .mockResolvedValue();
+});
+afterEach(() => {
+  jest.mocked(renewalRecoveryService.trackPaidRenewalPeriod).mockRestore();
+});
 const guildId = "111111111111111111";
 const basicPrice = { id: "price_basic", lookup_key: "chronote_basic_monthly" };
 const originalStripeConfig = { ...config.stripe };
@@ -107,6 +117,7 @@ const subscriptionEvent = (status: string, eventId: string) =>
     data: {
       object: {
         id: "sub_basic",
+        latest_invoice: "in_current",
         status,
         metadata: { guild_id: guildId },
         start_date: 1_767_225_600,
@@ -192,6 +203,7 @@ const checkoutCompletedEvent = {
 } as unknown as StripeEvent;
 
 const activeStripeSubscription = {
+  latest_invoice: "in_current",
   id: "sub_basic",
   created: 1_767_225_600,
   status: "active",
@@ -245,6 +257,34 @@ function invoiceDiscountFixture(variant: string) {
 }
 
 describe("billing webhook routes", () => {
+  test("recovers a deleted subscription review after its terminal state is persisted", async () => {
+    const { renewalSubscription } = await import("../fixtures/renewal");
+    getMockStore().subscriptions.set(guildId, {
+      ...renewalSubscription,
+      guildId,
+      stripeSubscriptionId: "sub_basic",
+      stripeCustomerId: "cus_basic",
+      status: "active",
+    });
+    const changeService =
+      await import("../../src/services/billingChangeService");
+    const observed: (string | undefined)[] = [];
+    const recover = jest
+      .spyOn(changeService, "reconcileBillingChangeForWebhook")
+      .mockImplementation(async () => {
+        observed.push((await getSubscriptionRepository().get(guildId))?.status);
+      });
+    const event = subscriptionEvent("canceled", "evt_terminal_review");
+    const { server, baseUrl } = createServer(createStripe(event));
+    try {
+      expect((await postWebhook(baseUrl)).statusCode).toBe(200);
+      expect(observed).toEqual(["active", "canceled"]);
+    } finally {
+      recover.mockRestore();
+      await closeServer(server);
+    }
+  });
+
   test.each([
     ["annual", "intro_discounted"],
     ["tax", "intro_discounted"],
@@ -1438,4 +1478,53 @@ describe("initial purchase webhook recovery", () => {
       await closeServer(server);
     }
   });
+});
+
+test("does not acknowledge a failed renewal webhook when durable recovery cannot be saved", async () => {
+  const previous = {
+    mock: config.mock.enabled,
+    enabled: config.stripe.renewalGraceEnabled,
+  };
+  config.mock.enabled = true;
+  config.stripe.renewalGraceEnabled = true;
+  config.stripe.webhookSecret = "whsec_test";
+  resetMockStore();
+  const refresh = jest
+    .spyOn(renewalRecoveryService, "refreshRenewalRecovery")
+    .mockRejectedValue(new Error("Recovery storage unavailable"));
+  const { server, baseUrl } = createServer(createStripe(failedInvoiceEvent));
+  try {
+    expect((await postWebhook(baseUrl)).statusCode).toBe(500);
+    expect(refresh).toHaveBeenCalled();
+    expect(
+      (await getStripeWebhookRepository().get(failedInvoiceEvent.id))?.state,
+    ).not.toBe("completed");
+  } finally {
+    await closeServer(server);
+    refresh.mockRestore();
+    config.mock.enabled = previous.mock;
+    Object.assign(config.stripe, originalStripeConfig);
+    config.stripe.renewalGraceEnabled = previous.enabled;
+  }
+});
+
+test("normal paid webhook acknowledgement waits for durable renewal coverage", async () => {
+  resetMockStore();
+  config.mock.enabled = true;
+  config.stripe.webhookSecret = "whsec_test";
+  const event = subscriptionEvent("active", "evt_paid_coverage_failure");
+  const tracking = jest
+    .mocked(renewalRecoveryService.trackPaidRenewalPeriod)
+    .mockRejectedValueOnce(new Error("Coverage registration unavailable"));
+  const { server, baseUrl } = createServer(createStripe(event));
+  try {
+    expect((await postWebhook(baseUrl)).statusCode).toBe(500);
+    expect(tracking).toHaveBeenCalled();
+    expect((await getStripeWebhookRepository().get(event.id))?.state).not.toBe(
+      "completed",
+    );
+  } finally {
+    await closeServer(server);
+    Object.assign(config.stripe, originalStripeConfig);
+  }
 });

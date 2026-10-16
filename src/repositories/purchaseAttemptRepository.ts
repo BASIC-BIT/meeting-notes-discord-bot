@@ -1,3 +1,4 @@
+import { billingChangeControlKey } from "../types/billingChange";
 import { matchesMockOfferAuthority } from "./offerUsageRepository";
 import { assertPurchaseInvoiceBinding } from "../types/purchase";
 import {
@@ -24,6 +25,32 @@ export function incidentKey(
   b: string,
 ): string {
   return `${purchaseKey(guildId)}#DUPLICATE#${mode}#${[a, b].sort().join("#")}`;
+}
+function isBlockedNewPurchase(
+  next: PurchaseAttempt,
+  expected: PurchaseAttempt | undefined,
+) {
+  return (
+    next.state === "preparing" &&
+    next.attemptId !== expected?.attemptId &&
+    (getMockStore().renewalRecoveryPointers.get(next.guildId)?.blocking ||
+      getMockStore().billingChangeControls.has(
+        billingChangeControlKey(next.guildId),
+      ))
+  );
+}
+function recordMockIncident(incident: PurchaseIncident | undefined) {
+  if (!incident) return;
+  const store = getMockStore();
+  const prior = store.purchaseIncidents.get(incident.key);
+  store.purchaseIncidents.set(
+    incident.key,
+    structuredClone({
+      ...incident,
+      firstObservedAt: prior?.firstObservedAt ?? incident.firstObservedAt,
+      incomingAttemptId: prior?.incomingAttemptId ?? incident.incomingAttemptId,
+    }),
+  );
 }
 export const getPurchaseRepository = () => ({
   async get(guildId: string): Promise<PurchaseAttempt | undefined> {
@@ -55,6 +82,7 @@ export const getPurchaseRepository = () => ({
     const store = getMockStore();
     const current = store.purchaseAttempts.get(next.guildId);
     const subscription = store.subscriptions.get(next.guildId);
+    if (isBlockedNewPurchase(next, expected)) return false;
     if (
       current?.revision !== expected?.revision ||
       Boolean(subscription) !== Boolean(pointer) ||
@@ -64,18 +92,7 @@ export const getPurchaseRepository = () => ({
       return false;
     if (usage && !writeMockUsage(usage)) return false;
     store.purchaseAttempts.set(next.guildId, structuredClone(next));
-    if (incident) {
-      const prior = store.purchaseIncidents.get(incident.key);
-      store.purchaseIncidents.set(
-        incident.key,
-        structuredClone({
-          ...incident,
-          firstObservedAt: prior?.firstObservedAt ?? incident.firstObservedAt,
-          incomingAttemptId:
-            prior?.incomingAttemptId ?? incident.incomingAttemptId,
-        }),
-      );
-    }
+    recordMockIncident(incident);
     return true;
   },
 });

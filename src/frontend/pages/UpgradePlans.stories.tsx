@@ -1,3 +1,7 @@
+import type { RenewalRecoveryView } from "../../types/renewalRecovery";
+import { renewalGraceFixture } from "./renewalGraceFixtures";
+import type { BillingChangeView } from "../../types/billingChange";
+import { previewChangeReview } from "./billingChangeFixtures";
 import type { RenewalView } from "../../types/renewal";
 import { createRenewalFixture } from "./renewalFixtures";
 import type { TerminalSubscriptionStatus } from "../utils/billingManagement";
@@ -83,6 +87,9 @@ function previewBilling(
 }
 
 type UpgradePreviewProps = {
+  recovery?: RenewalRecoveryView;
+  change?: BillingChangeView;
+  width?: number;
   renewal?: RenewalView;
   path?: string;
   tier?: "free" | "basic" | "pro";
@@ -164,6 +171,7 @@ function previewResponses({
         },
       ],
     },
+    "billing.change": { kind: "none", enabled: false },
     "billing.renewal":
       renewal ??
       createRenewalFixture({
@@ -219,6 +227,9 @@ export function UpgradePreview({
   missingPrices = false,
   terminalStatus,
   renewal,
+  change,
+  recovery,
+  width,
 }: UpgradePreviewProps) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => notifications.clean(), []);
@@ -233,6 +244,11 @@ export function UpgradePreview({
       }),
   );
   const [client] = useState(() => {
+    let currentRecovery = recovery ?? { status: "none" as const };
+    let currentChange: BillingChangeView = change ?? {
+      kind: "none",
+      enabled: false,
+    };
     let currentRenewal =
       renewal ??
       createRenewalFixture({
@@ -240,11 +256,93 @@ export function UpgradePreview({
         cancellationAt,
         terminalStatus,
       });
+    function respondToRecovery(url: string, data: Record<string, unknown>) {
+      if (currentRecovery.status !== "none") {
+        if (url.includes("billing.cancelRenewalPayment")) {
+          currentRecovery = {
+            ...currentRecovery,
+            status: "canceled",
+            paymentUrl: null,
+          };
+          data["billing.cancelRenewalPayment"] = currentRecovery;
+        }
+        data["billing.me"] = {
+          ...previewBilling(
+            tier,
+            billingSource,
+            currentRecovery.status === "canceled" ? "canceled" : undefined,
+          ),
+          status:
+            currentRecovery.status === "canceled" ? "canceled" : "past_due",
+          stripeStatus:
+            currentRecovery.status === "canceled" ? "canceled" : "past_due",
+          renewalRecovery: currentRecovery,
+        };
+        data["pricing.plans"] = {
+          plans: introPlans,
+          ...previewIntroOffers("inactive"),
+        };
+      }
+    }
+    function respondToPlanChange(
+      paths: string[],
+      body: RequestInit["body"],
+      data: Record<string, unknown>,
+    ) {
+      if (paths.includes("billing.prepareChange")) {
+        const request = JSON.parse(String(body ?? "{}"));
+        const input = request["0"]?.json ?? request["0"];
+        currentChange = previewChangeReview(input.selection);
+        data["billing.prepareChange"] = currentChange;
+      }
+      if (
+        paths.includes("billing.confirmChange") &&
+        currentChange.kind === "operation"
+      ) {
+        currentChange = {
+          ...currentChange,
+          state:
+            currentChange.quote.timing === "renewal" ? "scheduled" : "accepted",
+          revision: "confirmed",
+          paymentUrl:
+            currentChange.quote.timing === "renewal"
+              ? null
+              : "https://example.invalid/preview-payment",
+        };
+        data["billing.confirmChange"] = currentChange;
+      }
+      if (
+        paths.includes("billing.cancelChange") &&
+        currentChange.kind === "operation"
+      ) {
+        data["billing.cancelChange"] = {
+          ...currentChange,
+          state: "canceled",
+        };
+        currentChange = { kind: "none", enabled: true };
+      }
+    }
+    function respondToRenewal(paths: string[], data: Record<string, unknown>) {
+      if (paths.includes("billing.reactivateRenewal")) {
+        const state = currentRenewal.state;
+        if (state.kind === "off" && state.action.kind === "ready") {
+          const terms = state.action.terms;
+          currentRenewal = {
+            ...currentRenewal,
+            state: { kind: "on", terms },
+          };
+          data["billing.reactivateRenewal"] = {
+            kind: "confirmed",
+            terms,
+          };
+        } else data["billing.reactivateRenewal"] = { kind: "changed" };
+      }
+    }
     return trpc.createClient({
       links: [
         httpBatchLink({
           url: "/trpc",
-          fetch: async (url) => {
+          fetch: async (url, options) => {
             const data = previewResponses({
               tier,
               signedIn,
@@ -258,24 +356,14 @@ export function UpgradePreview({
               missingPrices,
               renewal: currentRenewal,
             });
+            data["billing.change"] = currentChange;
+            respondToRecovery(String(url), data);
             const paths = new URL(String(url), window.location.origin).pathname
               .split("/")
               .at(-1)!
               .split(",");
-            if (paths.includes("billing.reactivateRenewal")) {
-              const state = currentRenewal.state;
-              if (state.kind === "off" && state.action.kind === "ready") {
-                const terms = state.action.terms;
-                currentRenewal = {
-                  ...currentRenewal,
-                  state: { kind: "on", terms },
-                };
-                data["billing.reactivateRenewal"] = {
-                  kind: "confirmed",
-                  terms,
-                };
-              } else data["billing.reactivateRenewal"] = { kind: "changed" };
-            }
+            respondToPlanChange(paths, options?.body, data);
+            respondToRenewal(paths, data);
             if (errorFor && paths.includes(errorFor))
               throw new Error("Preview request failed");
             if (loadingBilling && paths.includes("billing.me"))
@@ -342,7 +430,7 @@ export function UpgradePreview({
             <div
               style={{
                 padding: 16,
-                maxWidth: 1100,
+                maxWidth: width ?? 1100,
                 marginInline: "auto",
                 background: "var(--mantine-color-body)",
                 minHeight: "100vh",
@@ -929,7 +1017,9 @@ export const CancellationPriceUnavailable: Story = {
     const current = within(
       await within(canvasElement).findByTestId("billing-current-plan"),
     );
-    await expect(current.getByText(/Your plan currently ends/)).toBeVisible();
+    await expect(
+      await current.findByText(/Your Basic plan ends/),
+    ).toBeVisible();
     await expect(current.queryByText(/next billing/)).toBeNull();
   },
 };
@@ -1073,4 +1163,224 @@ export const HomeOfferUnavailable: Story = {
     );
     await expect(canvas.getByTestId("home-cta-basic")).toBeDisabled();
   },
+};
+
+export const BillingPlanChangeReview: Story = {
+  tags: ["integration-plan-change"],
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "basic",
+    subscriptionDetails: monthlySubscriber,
+    introStatus: "available",
+    change: { kind: "none", enabled: true },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Compare plans" }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.getByTestId("billing-plans").getBoundingClientRect().bottom + 1,
+      ).toBeGreaterThanOrEqual(
+        canvas.getByTestId("billing-plan-pro").getBoundingClientRect().bottom,
+      ),
+    );
+    const root = canvasElement.ownerDocument.scrollingElement;
+    if (!root) throw new Error("Missing document scroll container");
+    root.scrollTop = root.scrollHeight;
+    const before = root.scrollTop;
+    await expect(before).toBeGreaterThan(0);
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Review Pro" }),
+    );
+    await waitFor(() => expect(root.scrollTop).toBeLessThan(before));
+    const review = await canvas.findByTestId("billing-change-review");
+    await expect(review).toHaveTextContent("Change to Pro");
+    await expect(review).toHaveTextContent("$9");
+    await expect(canvas.getByTestId("billing-current-plan")).toHaveTextContent(
+      "Basic",
+    );
+    await expect(
+      within(review).getByRole("button", { name: "Confirm and pay $9" }),
+    ).toBeEnabled();
+  },
+};
+export const BillingScheduledChange: Story = {
+  tags: ["integration-plan-change"],
+  args: {
+    ...BillingPlanChangeReview.args,
+    tier: "pro",
+    subscriptionDetails: {
+      ...monthlySubscriber,
+      priceId: "pro",
+      unitAmount: 2400,
+      discountedUnitAmount: null,
+      discount: null,
+    },
+    change: {
+      ...previewChangeReview({
+        tier: "basic",
+        interval: "month",
+        expectedOffer: "basic_intro_v1",
+      }),
+      state: "scheduled",
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText("Plan change scheduled"),
+    ).toBeVisible();
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Cancel scheduled change" }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.queryByText("Plan change scheduled"),
+      ).not.toBeInTheDocument(),
+    );
+  },
+};
+
+export const BillingPlanChangePayment: Story = {
+  tags: ["integration-plan-change"],
+  args: {
+    ...BillingPlanChangeReview.args,
+    change: {
+      ...previewChangeReview({
+        tier: "pro",
+        interval: "month",
+        expectedOffer: "none",
+      }),
+      state: "accepted",
+      paymentUrl: "https://example.invalid/preview-payment",
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const review = await canvas.findByTestId("billing-change-review");
+    await expect(
+      await within(review).findByRole("button", { name: "Continue payment" }),
+    ).toBeEnabled();
+    await expect(canvas.getByTestId("billing-current-plan")).toHaveTextContent(
+      "Basic",
+    );
+    await expect(
+      within(review).getByRole("button", { name: "Cancel change" }),
+    ).toBeEnabled();
+  },
+};
+export const BillingPlanChangeMobile: Story = {
+  tags: ["integration-plan-change"],
+  ...BillingPlanChangeReview,
+  args: { ...BillingPlanChangeReview.args, width: 390 },
+};
+export const BillingScheduledChangePending: Story = {
+  tags: ["integration-plan-change"],
+  ...BillingScheduledChange,
+  play: async ({ canvasElement }) => {
+    await expect(
+      await within(canvasElement).findByText("Plan change scheduled"),
+    ).toBeVisible();
+  },
+};
+
+export const BillingTerminalChangeRecovery: Story = {
+  tags: ["integration-plan-change"],
+  args: {
+    ...BillingPlanChangeReview.args,
+    tier: "free",
+    terminalStatus: "canceled",
+    subscriptionDetails: undefined,
+    change: previewChangeReview({
+      tier: "pro",
+      interval: "month",
+      expectedOffer: "none",
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const review = await canvas.findByTestId("billing-change-review");
+    await expect(canvas.getByTestId("billing-current-plan")).toHaveTextContent(
+      "Free",
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Back", exact: true }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.queryByTestId("billing-change-review"),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Get Basic again" }),
+      ).toBeEnabled(),
+    );
+  },
+};
+
+async function verifyRecoveryPreview({
+  canvasElement,
+}: {
+  canvasElement: HTMLElement;
+}) {
+  await waitFor(() =>
+    expect(
+      within(canvasElement).getByTestId("billing-renewal-grace"),
+    ).toBeVisible(),
+  );
+  await expect(
+    within(canvasElement).queryByText("Something went wrong!"),
+  ).not.toBeInTheDocument();
+}
+export const RenewalGraceBasic: Story = {
+  play: verifyRecoveryPreview,
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "basic",
+    recovery: renewalGraceFixture(),
+  },
+  tags: ["renewal-grace"],
+};
+export const RenewalGraceScheduled: Story = {
+  play: verifyRecoveryPreview,
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "pro",
+    recovery: renewalGraceFixture({ priorTier: "pro", scheduledChange: true }),
+  },
+  tags: ["renewal-grace"],
+};
+export const RenewalGraceCanceled: Story = {
+  play: verifyRecoveryPreview,
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "pro",
+    recovery: renewalGraceFixture({
+      status: "canceled",
+      priorTier: "pro",
+      scheduledChange: true,
+      paymentUrl: null,
+    }),
+  },
+  tags: ["renewal-grace"],
+};
+export const RenewalGraceScheduledMobile: Story = {
+  ...RenewalGraceScheduled,
+  args: { ...RenewalGraceScheduled.args, width: 390 },
+  tags: ["renewal-grace"],
+};
+export const RenewalGraceProcessing: Story = {
+  play: verifyRecoveryPreview,
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "basic",
+    recovery: renewalGraceFixture({
+      status: "settlement_pending",
+      paymentUrl: null,
+    }),
+  },
+  tags: ["renewal-grace"],
 };

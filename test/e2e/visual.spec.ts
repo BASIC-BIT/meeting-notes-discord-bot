@@ -1,4 +1,9 @@
-import { useFreeBilling, useIntroBilling } from "./billingMocks";
+import { renewalGraceFixture } from "../../src/frontend/pages/renewalGraceFixtures";
+import {
+  useFreeBilling,
+  useIntroBilling,
+  useRenewalGrace,
+} from "./billingMocks";
 import type { Page } from "@playwright/test";
 import type { Locator } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -609,6 +614,25 @@ test.describe("visual regression", () => {
   for (const viewport of marketingViewports.filter(
     (item) => item.name === "desktop" || item.name === "mobile",
   )) {
+    test(`billing renewal grace ${viewport.name} @visual`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await useRenewalGrace(page, {
+        view: renewalGraceFixture({ priorTier: "pro", scheduledChange: true }),
+      });
+      for (const mode of visualModes) {
+        await page.goto(
+          withVisualMode(`/portal/server/${mockGuilds.ddm.id}/billing`, mode),
+        );
+        await expect(page.getByTestId("billing-renewal-grace")).toContainText(
+          "keep using Pro until",
+        );
+        await expectVisualScreenshot(
+          page,
+          `billing-renewal-grace-${viewport.name}`,
+          mode,
+        );
+      }
+    });
     test(`billing canceled subscription ${viewport.name} @visual`, async ({
       page,
     }) => {
