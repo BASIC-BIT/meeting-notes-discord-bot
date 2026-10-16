@@ -40,6 +40,7 @@ afterEach(() => {
 async function fixture(
   timing: "immediate" | "renewal",
   cancellation: "at" | "period_end",
+  change: "add" | "remove",
 ) {
   const base = billingChangeBase(changeOperation);
   const original: StripeSubscription = {
@@ -49,8 +50,8 @@ async function fixture(
     status: "active",
     schedule: null,
     pending_update: null,
-    cancel_at: null,
-    cancel_at_period_end: false,
+    cancel_at: change === "remove" ? base.source.periodEnd : null,
+    cancel_at_period_end: change === "remove" && cancellation === "period_end",
     metadata: { guild_id: base.guildId, discord_id: base.payerId },
     latest_invoice: "in_original",
     items: {
@@ -83,13 +84,16 @@ async function fixture(
       ...base.source,
       fingerprint: changeSourceFingerprint(original),
       invariantFingerprint: changeServiceFingerprint(original),
-      cancellation: { at: null, atPeriodEnd: false },
+      cancellation: {
+        at: original.cancel_at,
+        atPeriodEnd: original.cancel_at_period_end,
+      },
     },
   });
   const native = {
     ...original,
-    cancel_at: base.source.periodEnd,
-    cancel_at_period_end: cancellation === "period_end",
+    cancel_at: change === "add" ? base.source.periodEnd : null,
+    cancel_at_period_end: change === "add" && cancellation === "period_end",
   };
   const paid = {
     ...fundedInvoice,
@@ -164,14 +168,18 @@ async function fixture(
 }
 
 test.each([
-  ["renewal", "at"],
-  ["renewal", "period_end"],
-  ["immediate", "at"],
-  ["immediate", "period_end"],
+  ["renewal", "at", "add"],
+  ["renewal", "period_end", "add"],
+  ["immediate", "at", "add"],
+  ["immediate", "period_end", "add"],
+  ["renewal", "at", "remove"],
+  ["renewal", "period_end", "remove"],
+  ["immediate", "at", "remove"],
+  ["immediate", "period_end", "remove"],
 ] as const)(
-  "releases %s work after a new portal cancellation (%s) without reversing the payer's intent",
-  async (timing, cancellation) => {
-    const f = await fixture(timing, cancellation);
+  "releases %s work after portal cancellation changes (%s, %s) without reversing the payer's intent",
+  async (timing, cancellation, change) => {
+    const f = await fixture(timing, cancellation, change);
     const compensation = jest
       .spyOn(fundingRecovery, "compensateChangeFunding")
       .mockImplementation(async (input) => {
@@ -197,8 +205,12 @@ test.each([
     ).toBeUndefined();
     await readBillingChange(context);
     expect(compensation).toHaveBeenCalledTimes(1);
-    expect(f.native.cancel_at).toBe(f.operation.source.periodEnd);
-    expect(f.native.cancel_at_period_end).toBe(cancellation === "period_end");
+    expect(f.native.cancel_at).toBe(
+      change === "add" ? f.operation.source.periodEnd : null,
+    );
+    expect(f.native.cancel_at_period_end).toBe(
+      change === "add" && cancellation === "period_end",
+    );
     expect(f.requests.every((request) => request.method === "GET")).toBe(true);
   },
 );

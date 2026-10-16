@@ -39,18 +39,17 @@ export function isUnappliedChangeSourceInvalidated(
   return (
     sourceStillUnapplied(subscription, operation) &&
     (now >= operation.source.periodEnd ||
-      hasNewSourceCancellation(subscription, operation))
+      hasSourceCancellationChanged(subscription, operation))
   );
 }
-function hasNewSourceCancellation(
+function hasSourceCancellationChanged(
   subscription: StripeSubscription,
   operation: BillingChangeOperation,
 ): boolean {
   const original = operation.source.cancellation;
-  return Boolean(
-    (subscription.cancel_at || subscription.cancel_at_period_end) &&
-    ((subscription.cancel_at ?? null) !== (original?.at ?? null) ||
-      subscription.cancel_at_period_end !== (original?.atPeriodEnd ?? false)),
+  return (
+    (subscription.cancel_at ?? null) !== (original?.at ?? null) ||
+    subscription.cancel_at_period_end !== (original?.atPeriodEnd ?? false)
   );
 }
 function sourceStillUnapplied(

@@ -1189,14 +1189,23 @@ test("renewal grace removes payment actions at the exact deadline", async ({
   page,
 }) => {
   const view = renewalGraceFixture();
-  await page.clock.install({ time: new Date(Date.parse(view.endsAt!) - 1000) });
+  const deadline = Date.parse(view.endsAt!);
+  await page.clock.install({ time: new Date(deadline - 60_000) });
   await useRenewalGrace(page, { view });
   await page.goto(`/portal/server/${mockGuilds.ddm.id}/billing`);
   const notice = page.getByTestId("billing-renewal-grace");
   await expect(
     notice.getByRole("link", { name: "Retry payment" }),
   ).toBeVisible();
-  await page.clock.runFor(1000);
+  await page.clock.pauseAt(new Date(deadline - 1000));
+  await expect(
+    notice.getByRole("link", { name: "Retry payment" }),
+  ).toBeVisible();
+  await page.clock.runFor(999);
+  await expect(
+    notice.getByRole("link", { name: "Retry payment" }),
+  ).toBeVisible();
+  await page.clock.runFor(1);
   await expect(notice.getByRole("link", { name: "Retry payment" })).toHaveCount(
     0,
   );
