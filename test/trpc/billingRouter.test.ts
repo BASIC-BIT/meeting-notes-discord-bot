@@ -1,6 +1,16 @@
 /** @jest-environment node */
+import { cancelRenewalRecovery } from "../../src/services/renewalRecoveryService";
+import { getRenewalRecoveryView } from "../../src/services/renewalRecoveryView";
+import { requireManageGuild } from "../../src/trpc/permissions";
 import type { Request, Response } from "express";
 import { captureEvent } from "../../src/services/analyticsService";
+jest.mock("../../src/services/renewalRecoveryService", () => ({
+  ...jest.requireActual("../../src/services/renewalRecoveryService"),
+  cancelRenewalRecovery: jest.fn(),
+}));
+jest.mock("../../src/services/renewalRecoveryView", () => ({
+  getRenewalRecoveryView: jest.fn(async () => ({ status: "none" })),
+}));
 jest.mock("../../src/services/analyticsService", () => ({
   captureEvent: jest.fn(),
 }));
@@ -352,3 +362,30 @@ test.each(["prepareChange", "confirmChange", "cancelChange"] as const)(
     await expect(work).rejects.toMatchObject({ code: "FORBIDDEN" });
   },
 );
+
+test("renewal payment cancellation enforces server permission and forwards the signed-in payer", async () => {
+  await caller().cancelRenewalPayment({ serverId: "111111111111111111" });
+  expect(requireManageGuild).toHaveBeenCalledWith(
+    expect.objectContaining({ guildId: "111111111111111111" }),
+  );
+  expect(cancelRenewalRecovery).toHaveBeenCalledWith(
+    expect.objectContaining({
+      guildId: "111111111111111111",
+      payerId: getMockUser().id,
+    }),
+  );
+  expect(getRenewalRecoveryView).toHaveBeenCalled();
+});
+test("renewal cancellation preserves the original-payer rejection", async () => {
+  jest
+    .mocked(cancelRenewalRecovery)
+    .mockRejectedValueOnce(
+      new BillingActionError(
+        "FORBIDDEN",
+        "Only the original payer can cancel this renewal.",
+      ),
+    );
+  await expect(
+    caller().cancelRenewalPayment({ serverId: "111111111111111111" }),
+  ).rejects.toMatchObject({ code: "FORBIDDEN" });
+});

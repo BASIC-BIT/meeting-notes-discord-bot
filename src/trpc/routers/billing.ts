@@ -1,3 +1,5 @@
+import { cancelRenewalRecovery } from "../../services/renewalRecoveryService";
+import { getRenewalRecoveryView } from "../../services/renewalRecoveryView";
 import {
   prepareBillingChange,
   readBillingChange,
@@ -302,9 +304,7 @@ const reactivateRenewal = manageGuildProcedure
     }
   });
 
-async function billingChangeResult(
-  work: () => Promise<BillingChangeView>,
-): Promise<BillingChangeView> {
+async function billingChangeResult<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
@@ -395,7 +395,22 @@ const cancelChange = manageGuildProcedure
     ),
   );
 
+const cancelRenewalPayment = manageGuildProcedure
+  .input(z.object({ serverId: z.string().min(1) }).strict())
+  .mutation(({ ctx, input }) =>
+    billingChangeResult(async () => {
+      const context = {
+        stripe: changeStripe(),
+        guildId: input.serverId,
+        payerId: ctx.user.id,
+        now: Math.floor(Date.now() / 1000),
+      };
+      await cancelRenewalRecovery(context);
+      return getRenewalRecoveryView(context);
+    }),
+  );
 export const billingRouter = router({
+  cancelRenewalPayment,
   change,
   prepareChange,
   confirmChange,

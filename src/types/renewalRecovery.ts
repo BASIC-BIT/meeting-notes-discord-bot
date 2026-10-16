@@ -108,6 +108,20 @@ export const renewalRecoverySchema = z
       });
   });
 export type RenewalRecovery = z.infer<typeof renewalRecoverySchema>;
+export type RenewalRecoveryView =
+  | { status: "none" }
+  | {
+      status: "settlement_pending" | "grace" | "reconciling" | "canceled";
+      priorTier: "basic" | "pro";
+      selectedTier: "free" | "basic" | "pro" | null;
+      selectedInterval: "month" | "year" | null;
+      scheduledChange: boolean;
+      endsAt: string | null;
+      amountDue: number | null;
+      currency: string | null;
+      paymentUrl: string | null;
+      canManage: boolean;
+    };
 export type RenewalRecoveryReceipts = z.infer<
   typeof renewalRecoveryReceiptsSchema
 >;

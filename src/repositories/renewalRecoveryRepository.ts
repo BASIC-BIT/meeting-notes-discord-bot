@@ -25,7 +25,9 @@ async function pointer(
   guildId: string,
 ): Promise<RenewalRecoveryPointer | undefined> {
   if (config.mock.enabled)
-    return structuredClone(getMockStore().renewalRecoveryPointers.get(guildId));
+    return renewalRecoveryPointerSchema
+      .optional()
+      .parse(getMockStore().renewalRecoveryPointers.get(guildId));
   const raw = await readRenewalRecord(renewalRecoveryCurrentKey(guildId));
   if (!raw) return undefined;
   const { guildId: key, ...value } = raw;
@@ -34,7 +36,9 @@ async function pointer(
 }
 async function get(key: string): Promise<RenewalRecovery | undefined> {
   if (config.mock.enabled)
-    return structuredClone(getMockStore().renewalRecoveryRecords.get(key));
+    return renewalRecoverySchema
+      .optional()
+      .parse(getMockStore().renewalRecoveryRecords.get(key));
   const raw = await readRenewalRecord(key);
   if (!raw) return undefined;
   const { ownerGuildId, recoveryQueue, recoveryDueAt, ...value } = raw;

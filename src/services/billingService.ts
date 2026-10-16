@@ -1,3 +1,5 @@
+import { getRenewalRecoveryView } from "./renewalRecoveryView";
+import type { RenewalRecoveryView } from "../types/renewalRecovery";
 import { assertStripePayer } from "./billingPayerService";
 import { resolveSubscriptionCancellationAt } from "../utils/stripeCancellation";
 import { getSubscriptionRepository } from "../repositories/subscriptionRepository";
@@ -39,6 +41,7 @@ import {
   verifyBasicIntroPortalConfiguration,
 } from "./basicIntroOfferService";
 export type BillingSnapshot = {
+  renewalRecovery: RenewalRecoveryView;
   introOffer?: BasicIntroOffer;
   annualIntroOffer?: BasicIntroOffer;
   subscriptionDetails?: ProviderSubscriptionDetails | null;
@@ -75,6 +78,7 @@ type StripeUser = {
 
 export function buildBillingDisabledSnapshot(): BillingSnapshot {
   return {
+    renewalRecovery: { status: "none" },
     introOffer: { status: "inactive" },
     annualIntroOffer: { status: "inactive" },
     subscriptionDetails: null,
@@ -122,17 +126,25 @@ export async function getBillingSnapshot(params: {
     subscription?.stripeSubscriptionId || subscription?.stripeCustomerId,
   );
 
-  const [introOffer, annualIntroOffer, providerState] = await Promise.all([
-    getGuildBasicIntroOffer({ stripe, guildId, payerId: params.payerId }),
-    getGuildBasicIntroOffer({
-      stripe,
-      guildId,
-      payerId: params.payerId,
-      interval: "year",
-    }),
-    loadProviderBillingState(stripe, guildId, subscription),
-  ]);
+  const [introOffer, annualIntroOffer, providerState, renewalRecovery] =
+    await Promise.all([
+      getGuildBasicIntroOffer({ stripe, guildId, payerId: params.payerId }),
+      getGuildBasicIntroOffer({
+        stripe,
+        guildId,
+        payerId: params.payerId,
+        interval: "year",
+      }),
+      loadProviderBillingState(stripe, guildId, subscription),
+      getRenewalRecoveryView({
+        stripe,
+        guildId,
+        payerId: params.payerId,
+        now: Math.floor(Date.now() / 1000),
+      }),
+    ]);
   return {
+    renewalRecovery,
     introOffer,
     annualIntroOffer,
     subscriptionDetails: providerState.details,
@@ -187,6 +199,7 @@ export async function getMockBillingSnapshot(
   );
 
   return {
+    renewalRecovery: { status: "none" },
     introOffer: { status: "inactive" },
     annualIntroOffer: { status: "inactive" },
     subscriptionDetails: null,

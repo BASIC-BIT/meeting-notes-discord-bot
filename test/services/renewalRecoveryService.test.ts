@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { getRenewalRecoveryView } from "../../src/services/renewalRecoveryView";
 import { offerUsageKey, offerUsageSchema } from "../../src/types/offerUsage";
 import { renewalRecoveryKey } from "../../src/types/renewalRecovery";
 import { classifyChangeHistory } from "../../src/services/billingChangeHistory";
@@ -659,3 +660,92 @@ test.each([false, true])(
     }
   },
 );
+
+test("billing status exposes the same verified invoice only to the original payer", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  f.renewal.hosted_invoice_url = "https://invoice.stripe.com/i/owned";
+  const grace = await f.refresh();
+  if (!grace || grace.state !== "grace") throw new Error("Expected grace");
+  const input = {
+    stripe: f.stripe,
+    guildId: grace.guildId,
+    now: paidEndsAt + 4001,
+  };
+  expect(
+    await getRenewalRecoveryView({ ...input, payerId: grace.payerId }),
+  ).toMatchObject({
+    status: "grace",
+    priorTier: "basic",
+    selectedTier: "basic",
+    amountDue: 1000,
+    paymentUrl: f.renewal.hosted_invoice_url,
+    canManage: true,
+  });
+  const other = await getRenewalRecoveryView({
+    ...input,
+    payerId: "another-payer",
+  });
+  expect(other).toMatchObject({
+    status: "grace",
+    paymentUrl: null,
+    canManage: false,
+  });
+  expect(other).not.toHaveProperty("subscriptionId");
+  expect(other).not.toHaveProperty("invoiceId");
+});
+test("billing status names the selected Basic plan separately from prior Pro access", async () => {
+  const { f, operation } = await scheduledFixture();
+  await f.refresh();
+  expect(
+    await getRenewalRecoveryView({
+      stripe: f.stripe,
+      guildId: operation.guildId,
+      payerId: operation.payerId,
+      now: paidEndsAt + 4001,
+    }),
+  ).toMatchObject({
+    status: "grace",
+    priorTier: "pro",
+    selectedTier: "basic",
+    scheduledChange: true,
+  });
+});
+test("billing status hides the payment URL after cancellation starts and at expiry", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const grace = await f.refresh();
+  if (!grace || grace.state !== "grace") throw new Error("Expected grace");
+  expect(
+    await getRenewalRecoveryView({
+      stripe: f.stripe,
+      guildId: grace.guildId,
+      payerId: grace.payerId,
+      now: grace.endsAt,
+    }),
+  ).toMatchObject({ status: "reconciling", paymentUrl: null });
+  const provider = jest
+    .spyOn(renewalProvider, "cancelUnpaidRenewal")
+    .mockRejectedValue(new Error("Provider unavailable"));
+  try {
+    await expect(
+      reconcileRenewalRecovery({
+        stripe: f.stripe,
+        guildId: grace.guildId,
+        now: grace.endsAt,
+      }),
+    ).rejects.toThrow();
+    expect(
+      await getRenewalRecoveryView({
+        stripe: f.stripe,
+        guildId: grace.guildId,
+        payerId: grace.payerId,
+        now: grace.endsAt,
+      }),
+    ).toMatchObject({ status: "reconciling", paymentUrl: null });
+  } finally {
+    provider.mockRestore();
+  }
+});
