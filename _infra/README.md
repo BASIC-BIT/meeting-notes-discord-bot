@@ -518,3 +518,25 @@ STRIPE_RENEWAL_REACTIVATION_ENABLED and BILLING_LIFECYCLE_ANALYTICS_ENABLED both
 Turning the renewal-action flag off stops new provider writes, including retries. Existing operations can still be checked and reconciled. Do not delete their control records or create replacement Checkout to escape uncertainty. Resolve source or price drift through support; do not recancel a successfully restored subscription.
 
 Publish the updated Privacy Policy and What's New notice before lifecycle capture is enabled. Baseline reconciliation and private invoice receipts run independently of capture. A first observation is not a historical cancellation. Invoice deduplication markers are eligible for deletion after 400 days; event capture is best effort, not a financial audit trail. Verify actual Sandbox event rows before production rollout, and keep saved insight configuration separate from code verification.
+
+## Sandbox backend deployment identity
+
+Sandbox backend deployments use the Terraform-managed GitHub OIDC role. Its trust requires
+this repository's immutable IDs, the `sandbox` environment and a `master` or `codex/*`
+branch. Terraform creates `SANDBOX_BACKEND_DEPLOY_ROLE_ARN` and `AWS_ACCOUNT_ID`
+environment variables and attaches the existing deployment-routing policy. The shared
+OIDC provider is read as data and remains owned by its existing configuration.
+
+Use the manual `Sandbox Deployment Identity` workflow for the first identity check.
+Its session permits only the Sandbox service metadata read. Both the canary and backend
+verify the exact account, role and run session before proceeding. The backend uses a
+three-hour session to cover bounded warmup and retirement; it has no static-key fallback.
+
+The Sandbox task-role AppConfig policy is scoped to its application, profile,
+environment, configuration and deployment strategy. Production retains its existing
+policy in this change. Frontend, docs and Terraform authentication are separate.
+
+Run the mocked policy checks with `terraform -chdir=_infra init -backend=false` and
+`terraform -chdir=_infra test`. Live introduction still requires a reviewed full saved
+plan, the existing Apply gate, the identity canary and the guarded bootstrap described
+in [sandbox-bootstrap.md](../docs/sandbox-bootstrap.md).

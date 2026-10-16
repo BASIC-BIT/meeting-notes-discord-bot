@@ -344,3 +344,13 @@ jobs:
 
       - name: Run Checkov
         run: yarn checkov
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Test Sandbox deployment permissions with mocked providers
+        run: |
+          terraform -chdir=_infra init -backend=false -input=false
+          terraform -chdir=_infra test -no-color
