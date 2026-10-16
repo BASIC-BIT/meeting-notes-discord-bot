@@ -1,4 +1,14 @@
 import {
+  prepareBillingChange,
+  readBillingChange,
+  confirmBillingChange,
+  cancelBillingChange,
+} from "../../services/billingChangeService";
+import {
+  billingChangeSelectionSchema,
+  type BillingChangeView,
+} from "../../types/billingChange";
+import {
   readRenewalState,
   restoreRenewal,
 } from "../../services/renewalReactivationService";
@@ -292,7 +302,104 @@ const reactivateRenewal = manageGuildProcedure
     }
   });
 
+async function billingChangeResult(
+  work: () => Promise<BillingChangeView>,
+): Promise<BillingChangeView> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof BillingActionError)
+      throw new TRPCError({ code: error.code, message: error.message });
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message:
+        "Unable to check this change. Check its status before trying again.",
+    });
+  }
+}
+function changeStripe() {
+  const stripe = getStripeClient();
+  if (!stripe)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Billing is unavailable.",
+    });
+  return stripe;
+}
+const change = manageGuildProcedure
+  .input(z.object({ serverId: z.string().min(1) }).strict())
+  .query(async ({ ctx, input }) => {
+    const stripe = getStripeClient();
+    if (!stripe)
+      return { kind: "none", enabled: false } satisfies BillingChangeView;
+    return billingChangeResult(() =>
+      readBillingChange({
+        stripe,
+        guildId: input.serverId,
+        payerId: ctx.user.id,
+      }),
+    );
+  });
+const prepareChange = manageGuildProcedure
+  .input(
+    z
+      .object({
+        serverId: z.string().min(1),
+        selection: billingChangeSelectionSchema,
+      })
+      .strict(),
+  )
+  .mutation(({ ctx, input }) =>
+    billingChangeResult(() =>
+      prepareBillingChange({
+        stripe: changeStripe(),
+        guildId: input.serverId,
+        payerId: ctx.user.id,
+        selection: input.selection,
+      }),
+    ),
+  );
+const confirmChange = manageGuildProcedure
+  .input(
+    z
+      .object({
+        serverId: z.string().min(1),
+        operationId: z.uuid(),
+        revision: z.string().min(1),
+      })
+      .strict(),
+  )
+  .mutation(({ ctx, input }) =>
+    billingChangeResult(() =>
+      confirmBillingChange({
+        stripe: changeStripe(),
+        guildId: input.serverId,
+        payerId: ctx.user.id,
+        operationId: input.operationId,
+        revision: input.revision,
+      }),
+    ),
+  );
+const cancelChange = manageGuildProcedure
+  .input(
+    z.object({ serverId: z.string().min(1), operationId: z.uuid() }).strict(),
+  )
+  .mutation(({ ctx, input }) =>
+    billingChangeResult(() =>
+      cancelBillingChange({
+        stripe: changeStripe(),
+        guildId: input.serverId,
+        payerId: ctx.user.id,
+        operationId: input.operationId,
+      }),
+    ),
+  );
+
 export const billingRouter = router({
+  change,
+  prepareChange,
+  confirmChange,
+  cancelChange,
   renewal,
   reactivateRenewal,
   me,

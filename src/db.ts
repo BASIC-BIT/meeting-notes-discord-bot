@@ -3554,6 +3554,17 @@ export async function compareAndWritePurchaseAttempt(
                 : {}),
             },
           },
+          ...(next.state === "preparing" &&
+          next.attemptId !== expected?.attemptId
+            ? [
+                {
+                  ConditionCheck: historicalRevisionFence(
+                    billingChangeControlKey(next.guildId),
+                    undefined,
+                  ),
+                },
+              ]
+            : []),
           ...(usage
             ? [
                 { Put: offerUsagePut(usage.next, usage.expected) },
@@ -4270,6 +4281,19 @@ export async function claimBillingChangeOperation(
         renewalControlKey(operation.guildId),
         undefined,
       ),
+    },
+    {
+      ConditionCheck: {
+        TableName: tableName("GuildSubscriptionTable"),
+        Key: marshall({ guildId: purchaseRecordKey(operation.guildId) }),
+        ConditionExpression:
+          "attribute_not_exists(#guildId) OR #state IN (:completed, :expired)",
+        ExpressionAttributeNames: { "#guildId": "guildId", "#state": "state" },
+        ExpressionAttributeValues: marshall({
+          ":completed": "completed",
+          ":expired": "expired",
+        }),
+      },
     },
     {
       Put: {

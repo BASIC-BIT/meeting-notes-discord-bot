@@ -1,3 +1,5 @@
+import type { BillingChangeView } from "../../types/billingChange";
+import { previewChangeReview } from "./billingChangeFixtures";
 import type { RenewalView } from "../../types/renewal";
 import { createRenewalFixture } from "./renewalFixtures";
 import type { TerminalSubscriptionStatus } from "../utils/billingManagement";
@@ -83,6 +85,8 @@ function previewBilling(
 }
 
 type UpgradePreviewProps = {
+  change?: BillingChangeView;
+  width?: number;
   renewal?: RenewalView;
   path?: string;
   tier?: "free" | "basic" | "pro";
@@ -164,6 +168,7 @@ function previewResponses({
         },
       ],
     },
+    "billing.change": { kind: "none", enabled: false },
     "billing.renewal":
       renewal ??
       createRenewalFixture({
@@ -219,6 +224,8 @@ export function UpgradePreview({
   missingPrices = false,
   terminalStatus,
   renewal,
+  change,
+  width,
 }: UpgradePreviewProps) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => notifications.clean(), []);
@@ -233,6 +240,10 @@ export function UpgradePreview({
       }),
   );
   const [client] = useState(() => {
+    let currentChange: BillingChangeView = change ?? {
+      kind: "none",
+      enabled: false,
+    };
     let currentRenewal =
       renewal ??
       createRenewalFixture({
@@ -244,7 +255,7 @@ export function UpgradePreview({
       links: [
         httpBatchLink({
           url: "/trpc",
-          fetch: async (url) => {
+          fetch: async (url, options) => {
             const data = previewResponses({
               tier,
               signedIn,
@@ -258,10 +269,45 @@ export function UpgradePreview({
               missingPrices,
               renewal: currentRenewal,
             });
+            data["billing.change"] = currentChange;
             const paths = new URL(String(url), window.location.origin).pathname
               .split("/")
               .at(-1)!
               .split(",");
+            if (paths.includes("billing.prepareChange")) {
+              const body = JSON.parse(String(options?.body ?? "{}"));
+              const input = body["0"]?.json ?? body["0"];
+              currentChange = previewChangeReview(input.selection);
+              data["billing.prepareChange"] = currentChange;
+            }
+            if (
+              paths.includes("billing.confirmChange") &&
+              currentChange.kind === "operation"
+            ) {
+              currentChange = {
+                ...currentChange,
+                state:
+                  currentChange.quote.timing === "renewal"
+                    ? "scheduled"
+                    : "accepted",
+                revision: "confirmed",
+                paymentUrl:
+                  currentChange.quote.timing === "renewal"
+                    ? null
+                    : "https://example.invalid/preview-payment",
+              };
+              data["billing.confirmChange"] = currentChange;
+            }
+            if (
+              paths.includes("billing.cancelChange") &&
+              currentChange.kind === "operation"
+            ) {
+              data["billing.cancelChange"] = {
+                ...currentChange,
+                state: "canceled",
+              };
+              currentChange = { kind: "none", enabled: true };
+            }
             if (paths.includes("billing.reactivateRenewal")) {
               const state = currentRenewal.state;
               if (state.kind === "off" && state.action.kind === "ready") {
@@ -342,7 +388,7 @@ export function UpgradePreview({
             <div
               style={{
                 padding: 16,
-                maxWidth: 1100,
+                maxWidth: width ?? 1100,
                 marginInline: "auto",
                 background: "var(--mantine-color-body)",
                 minHeight: "100vh",
@@ -1072,5 +1118,126 @@ export const HomeOfferUnavailable: Story = {
       expect(canvas.getByTestId("home-cta-pro")).toBeEnabled(),
     );
     await expect(canvas.getByTestId("home-cta-basic")).toBeDisabled();
+  },
+};
+
+export const BillingPlanChangeReview: Story = {
+  tags: ["integration-plan-change"],
+  args: {
+    path: "/portal/server/example/billing",
+    tier: "basic",
+    subscriptionDetails: monthlySubscriber,
+    introStatus: "available",
+    change: { kind: "none", enabled: true },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Compare plans" }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.getByTestId("billing-plans").getBoundingClientRect().bottom + 1,
+      ).toBeGreaterThanOrEqual(
+        canvas.getByTestId("billing-plan-pro").getBoundingClientRect().bottom,
+      ),
+    );
+    const root = canvasElement.ownerDocument.scrollingElement;
+    if (!root) throw new Error("Missing document scroll container");
+    root.scrollTop = root.scrollHeight;
+    const before = root.scrollTop;
+    await expect(before).toBeGreaterThan(0);
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Review Pro" }),
+    );
+    await waitFor(() => expect(root.scrollTop).toBeLessThan(before));
+    const review = await canvas.findByTestId("billing-change-review");
+    await expect(review).toHaveTextContent("Change to Pro");
+    await expect(review).toHaveTextContent("$9");
+    await expect(canvas.getByTestId("billing-current-plan")).toHaveTextContent(
+      "Basic",
+    );
+    await expect(
+      within(review).getByRole("button", { name: "Confirm and pay $9" }),
+    ).toBeEnabled();
+  },
+};
+export const BillingScheduledChange: Story = {
+  tags: ["integration-plan-change"],
+  args: {
+    ...BillingPlanChangeReview.args,
+    tier: "pro",
+    subscriptionDetails: {
+      ...monthlySubscriber,
+      priceId: "pro",
+      unitAmount: 2400,
+      discountedUnitAmount: null,
+      discount: null,
+    },
+    change: {
+      ...previewChangeReview({
+        tier: "basic",
+        interval: "month",
+        expectedOffer: "basic_intro_v1",
+      }),
+      state: "scheduled",
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText("Plan change scheduled"),
+    ).toBeVisible();
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Cancel scheduled change" }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.queryByText("Plan change scheduled"),
+      ).not.toBeInTheDocument(),
+    );
+  },
+};
+
+export const BillingPlanChangePayment: Story = {
+  tags: ["integration-plan-change"],
+  args: {
+    ...BillingPlanChangeReview.args,
+    change: {
+      ...previewChangeReview({
+        tier: "pro",
+        interval: "month",
+        expectedOffer: "none",
+      }),
+      state: "accepted",
+      paymentUrl: "https://example.invalid/preview-payment",
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const review = await canvas.findByTestId("billing-change-review");
+    await expect(
+      await within(review).findByRole("button", { name: "Continue payment" }),
+    ).toBeEnabled();
+    await expect(canvas.getByTestId("billing-current-plan")).toHaveTextContent(
+      "Basic",
+    );
+    await expect(
+      within(review).getByRole("button", { name: "Cancel change" }),
+    ).toBeEnabled();
+  },
+};
+export const BillingPlanChangeMobile: Story = {
+  tags: ["integration-plan-change"],
+  ...BillingPlanChangeReview,
+  args: { ...BillingPlanChangeReview.args, width: 390 },
+};
+export const BillingScheduledChangePending: Story = {
+  tags: ["integration-plan-change"],
+  ...BillingScheduledChange,
+  play: async ({ canvasElement }) => {
+    await expect(
+      await within(canvasElement).findByText("Plan change scheduled"),
+    ).toBeVisible();
   },
 };

@@ -1,7 +1,7 @@
+import QuoteAmounts from "./BillingChangeAmounts";
 import {
   Alert,
   Button,
-  Divider,
   Group,
   Stack,
   Text,
@@ -29,6 +29,7 @@ export type BillingChangeReviewQuote = {
   billingBalance: number;
   amountDue: number;
   remainingCredit: number;
+  balanceCarriedForward?: number;
   // Base plan rate before added tax or account credit.
   nextPlanRate: number | null;
   nextAt: string | null;
@@ -59,98 +60,6 @@ const date = (value: string) =>
     day: "numeric",
     year: "numeric",
   });
-function AmountRow({
-  label,
-  amount,
-  currency,
-}: {
-  label: string;
-  amount: number;
-  currency: string;
-}) {
-  return (
-    <Group justify="space-between" wrap="nowrap">
-      <Text size="sm">{label}</Text>
-      <Text size="sm" fw={600}>
-        {formatCurrency(amount, currency)}
-      </Text>
-    </Group>
-  );
-}
-function QuoteAmounts({ quote }: { quote: BillingChangeReviewQuote }) {
-  const { currency } = quote;
-  if (quote.timing === "renewal")
-    return (
-      <Text size="sm">
-        No charge today. Your current plan stays active until{" "}
-        {date(quote.effectiveAt)}.
-      </Text>
-    );
-  return (
-    <Stack gap="xs">
-      <AmountRow
-        label={quote.chargeLabel}
-        amount={quote.planCharge}
-        currency={currency}
-      />
-      {quote.chargePeriod && (
-        <Text size="xs" c="dimmed">
-          {quote.chargePeriod}
-        </Text>
-      )}
-      {quote.offerSavings > 0 && (
-        <AmountRow
-          label="Introductory discount"
-          amount={-quote.offerSavings}
-          currency={currency}
-        />
-      )}
-      {quote.unusedCredit > 0 && (
-        <AmountRow
-          label={quote.creditLabel}
-          amount={-quote.unusedCredit}
-          currency={currency}
-        />
-      )}
-      <AmountRow
-        label={quote.taxTreatment === "included" ? "Tax included" : "Tax added"}
-        amount={quote.taxAmount}
-        currency={currency}
-      />
-      {quote.billingBalance !== 0 && (
-        <AmountRow
-          label={
-            quote.billingBalance > 0
-              ? "Previous balance"
-              : "Billing credit applied"
-          }
-          amount={quote.billingBalance}
-          currency={currency}
-        />
-      )}
-      {quote.billingBalance > 0 && (
-        <Text size="xs" c="dimmed">
-          This balance is from your billing account, which may include other
-          servers.
-        </Text>
-      )}
-      <Divider />
-      <Group justify="space-between">
-        <Text fw={700}>Due today</Text>
-        <Text fw={700} size="lg">
-          {formatCurrency(quote.amountDue, currency)}
-        </Text>
-      </Group>
-      {quote.remainingCredit > 0 && (
-        <Text size="xs" c="dimmed">
-          {formatCurrency(quote.remainingCredit, currency)} remains as billing
-          credit. It can pay future invoices for this billing account, including
-          your other servers.
-        </Text>
-      )}
-    </Stack>
-  );
-}
 function ReviewActions({
   quote,
   status,
@@ -161,6 +70,12 @@ function ReviewActions({
   onRefreshQuote,
   onCheckStatus,
 }: Props & { status: BillingChangeReviewStatus }) {
+  if (status === "processing")
+    return (
+      <Button variant="light" onClick={onCheckStatus}>
+        Check status
+      </Button>
+    );
   if (status === "cancellation_unknown")
     return <Button onClick={onCheckStatus}>Check status</Button>;
   if (status === "quote_changed")
@@ -192,16 +107,10 @@ function ReviewActions({
         : "Confirm change";
   return (
     <Group justify="flex-end" wrap="wrap">
-      <Button
-        variant="subtle"
-        onClick={onBack}
-        disabled={status === "processing"}
-      >
+      <Button variant="subtle" onClick={onBack}>
         Back
       </Button>
-      <Button onClick={onConfirm} loading={status === "processing"}>
-        {label}
-      </Button>
+      <Button onClick={onConfirm}>{label}</Button>
     </Group>
   );
 }
@@ -233,11 +142,16 @@ export default function BillingChangeReview(props: Props) {
         </Text>
       )}
       <QuoteAmounts quote={quote} />
-      {quote.nextPlanRate !== null && quote.nextAt && (
+      {quote.nextPlanRate !== null && (
         <Text size="sm">
           {scheduled ? "Starts at " : "Renews at "}
           {formatCurrency(quote.nextPlanRate, quote.currency)}/
-          {quote.interval === "year" ? "year" : "month"} on {date(quote.nextAt)}
+          {quote.interval === "year" ? "year" : "month"}
+          {quote.nextAt
+            ? " on " + date(quote.nextAt)
+            : quote.interval === "year"
+              ? ", one year after payment"
+              : ", one month after payment"}
           .{" "}
           {quote.taxTreatment === "included"
             ? "Tax included."
@@ -251,7 +165,7 @@ export default function BillingChangeReview(props: Props) {
         </Text>
       )}
       {status === "payment_required" && (
-        <Alert color="yellow" title="Payment needs attention">
+        <Alert color="gray" title="Complete payment">
           Your current plan is still active. Complete payment to apply this
           change, or cancel it.
         </Alert>

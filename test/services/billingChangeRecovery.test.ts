@@ -119,6 +119,14 @@ it("reverses service before old debt, restores only that debt, and resumes witho
       };
       return note;
     }
+    if (path === "/v1/refunds/re_service")
+      return {
+        id: "re_service",
+        amount: 5700,
+        status: "succeeded",
+        currency: "usd",
+        charge: "ch_owned",
+      };
     if (path === "/v1/invoice_payments")
       return {
         object: "list",
@@ -207,4 +215,58 @@ it("reverses service before old debt, restores only that debt, and resumes witho
   });
   expect(journal).toEqual(["service", "debt", "restore"]);
   expect(progress.length).toBeGreaterThan(0);
+});
+
+it("holds recovery until the service refund has actually succeeded", async () => {
+  const f = stripeTransport(({ path }) => {
+    if (path === "/v1/invoices/in_funding")
+      return {
+        ...fundedInvoice,
+        id: "in_funding",
+        parent: null,
+        customer: operation.source.customerId,
+        auto_advance: false,
+        total: 5700,
+        amount_paid: 5700,
+        amount_remaining: 0,
+        metadata: {
+          guild_id: operation.guildId,
+          chronote_change_operation: operation.operationId,
+          chronote_invoice_role: "funding",
+        },
+      };
+    if (path === "/v1/credit_notes")
+      return {
+        object: "list",
+        has_more: false,
+        data: [
+          {
+            id: "cn_pending",
+            status: "issued",
+            invoice: "in_funding",
+            amount: 5700,
+            customer: operation.source.customerId,
+            livemode: false,
+            metadata: { chronote_change_operation: operation.operationId },
+            refunds: [{ refund: "re_pending", amount_refunded: 5700 }],
+          },
+        ],
+      };
+    if (path === "/v1/refunds/re_pending")
+      return {
+        id: "re_pending",
+        amount: 5700,
+        status: "pending",
+        currency: "usd",
+        livemode: false,
+      };
+    throw new Error(`Unexpected ${path}`);
+  });
+  await expect(
+    compensateChangeFunding({
+      stripe: f.stripe,
+      operation,
+      onProgress: async () => {},
+    }),
+  ).rejects.toThrow();
 });

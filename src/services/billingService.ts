@@ -33,9 +33,7 @@ import { BillingActionError } from "./billingActionError";
 export { BillingActionError } from "./billingActionError";
 import { createInitialPurchase } from "./initialPurchaseService";
 import {
-  BASIC_INTRO_PLAN_CHANGE_MESSAGE,
   getGuildBasicIntroOffer,
-  getBasicIntroCustomerRestriction,
   getProviderSubscriptionDetails,
   SUBSCRIPTION_DISCOUNT_EXPANSIONS,
   verifyBasicIntroPortalConfiguration,
@@ -471,9 +469,9 @@ export async function createCheckoutSession(
     guildId,
     checkoutPriceId,
     promotionCodeId,
-    expectedOffer: params.expectedOffer,
-    successUrl,
     cancelUrl,
+    targetTier: params.tier,
+    targetInterval: params.interval,
   });
   if (confirmationUrl) return confirmationUrl;
 
@@ -517,61 +515,18 @@ export async function createCheckoutSession(
   });
 }
 
-function assertUpdatableSubscription(subscription: StripeSubscription): void {
-  if (
-    !["active", "trialing"].includes(subscription.status) ||
-    subscription.items.data.length !== 1 ||
-    subscription.schedule ||
-    subscription.pending_update ||
-    subscription.pause_collection ||
-    subscription.cancel_at_period_end ||
-    subscription.cancel_at
-  ) {
-    throw new BillingActionError(
-      "BAD_REQUEST",
-      "Resolve the existing subscription in billing management before changing plans",
-    );
-  }
-}
-
-function assertExistingOfferQuote(
-  expectedOffer: ExpectedIntroOffer | undefined,
-  existing: GuildSubscription | undefined,
-) {
-  if (
-    expectedOffer &&
-    expectedOffer !== "none" &&
-    (existing?.stripeSubscriptionId || existing?.stripeCustomerId)
-  ) {
-    throw new BillingActionError(
-      "BAD_REQUEST",
-      "Offer terms changed. Review the current price before continuing.",
-      "offer_changed_terms",
-    );
-  }
-}
-
 async function createExistingSubscriptionConfirmation(params: {
   stripe: StripeClient;
   user: StripeUser;
   guildId: string;
   checkoutPriceId: string;
-  promotionCodeId?: string | null;
-  expectedOffer?: ExpectedIntroOffer;
-  successUrl: string;
   cancelUrl: string;
+  promotionCodeId?: string | null;
+  targetTier?: PaidTier;
+  targetInterval?: BillingInterval;
 }): Promise<string | null> {
-  const {
-    stripe,
-    user,
-    guildId,
-    checkoutPriceId,
-    promotionCodeId,
-    successUrl,
-    cancelUrl,
-  } = params;
+  const { stripe, user, guildId } = params;
   const existing = await getSubscriptionRepository().get(guildId);
-  assertExistingOfferQuote(params.expectedOffer, existing);
   if (existing?.stripeSubscriptionId) {
     const subscription = await stripe.subscriptions.retrieve(
       existing.stripeSubscriptionId,
@@ -603,40 +558,24 @@ async function createExistingSubscriptionConfirmation(params: {
         );
       }
       await assertStripePayer({ stripe, customerId, payerId: user.id });
-      assertUpdatableSubscription(subscription);
-      if (
-        await getBasicIntroCustomerRestriction(stripe, customerId, subscription)
-      ) {
+      if (!params.targetTier || !params.targetInterval)
         throw new BillingActionError(
           "BAD_REQUEST",
-          BASIC_INTRO_PLAN_CHANGE_MESSAGE,
+          "Choose a plan and billing interval before continuing.",
         );
-      }
-      const item = subscription.items.data[0];
-      const portal = await stripe.billingPortal.sessions.create({
-        customer: customerId,
-
-        return_url: cancelUrl,
-        flow_data: {
-          type: "subscription_update_confirm",
-          subscription_update_confirm: {
-            subscription: subscription.id,
-            items: [
-              { id: item.id, price: checkoutPriceId, quantity: item.quantity },
-            ],
-            ...(promotionCodeId
-              ? { discounts: [{ promotion_code: promotionCodeId }] }
-              : {}),
-          },
-          after_completion: {
-            type: "redirect",
-            redirect: { return_url: successUrl },
-          },
-        },
-      });
-      if (!portal.url)
-        throw new Error("Stripe did not return a confirmation URL");
-      return portal.url;
+      if (params.promotionCodeId)
+        throw new BillingActionError(
+          "BAD_REQUEST",
+          "Review plan changes at the listed price. Promotion codes cannot be carried into this change.",
+        );
+      const review = new URL(
+        `/portal/server/${encodeURIComponent(guildId)}/billing`,
+        config.frontend.siteUrl,
+      );
+      review.search = new URL(params.cancelUrl).search;
+      review.searchParams.set("plan", params.targetTier);
+      review.searchParams.set("interval", params.targetInterval);
+      return review.toString();
     }
   } else if (existing?.stripeCustomerId) {
     throw new BillingActionError(
@@ -685,17 +624,20 @@ export async function createPortalSession(params: {
       "Server billing information does not match Stripe; contact support",
     );
   }
-  const restricted = await getBasicIntroCustomerRestriction(
-    stripe,
-    customerId,
-    providerSubscription ?? undefined,
-  );
-  const configuration = restricted
-    ? await verifyBasicIntroPortalConfiguration(
-        stripe,
-        restricted.configurationId,
-      )
-    : undefined;
+  const managedConfiguration =
+    config.stripe.basicIntroOffer.portalConfigurationId ||
+    providerSubscription?.metadata.intro_offer_portal_configuration_id;
+  if (config.stripe.subscriptionTransitionsEnabled && !managedConfiguration)
+    throw new BillingActionError(
+      "BAD_REQUEST",
+      "Billing management is temporarily unavailable. Please try again later.",
+    );
+  const configuration =
+    managedConfiguration &&
+    (config.stripe.subscriptionTransitionsEnabled ||
+      config.stripe.introOfferLedgerEnabled)
+      ? await verifyBasicIntroPortalConfiguration(stripe, managedConfiguration)
+      : undefined;
   const portal = await stripe.billingPortal.sessions.create({
     customer: customerId,
     ...(configuration ? { configuration } : {}),
@@ -743,18 +685,15 @@ async function loadProviderBillingState(
     const canceledAt = resolveSubscriptionCancellationAt(provider);
     cancellationAt =
       canceledAt === null ? null : new Date(canceledAt * 1000).toISOString();
-    const [details, restriction] = await Promise.all([
-      getProviderSubscriptionDetails(stripe, provider),
-      getBasicIntroCustomerRestriction(stripe, customerId, provider),
-    ]);
+    const details = await getProviderSubscriptionDetails(stripe, provider);
     return {
       cancellationAt,
       details:
         details.status === "available"
           ? {
               ...details,
-              planChangesRestricted: Boolean(restriction),
-              planChangeRestrictionEndsAt: restriction?.endsAt ?? null,
+              planChangesRestricted: false,
+              planChangeRestrictionEndsAt: null,
             }
           : details,
     };

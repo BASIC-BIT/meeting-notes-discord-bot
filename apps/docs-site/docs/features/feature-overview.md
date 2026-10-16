@@ -24,7 +24,9 @@ year, then $100/year. Annual billing is one yearly payment. Prices are in US
 dollars. Tax may apply. Subscriptions renew automatically unless canceled.
 
 Each server can use the monthly offer once and the annual offer once. Using one
-does not consume the other. Regular paid subscriptions and complimentary access
+does not consume the other, and you can use them in either order. Leaving an
+introductory plan ends that offer. Returning to it does not restart the discount.
+Regular paid subscriptions and complimentary access
 do not consume either offer. Changing payer or canceling does not reset a used
 offer. The available offer is shown for the selected server before checkout.
 Pro pricing is unchanged. Introductory pricing cannot be combined with another
@@ -34,6 +36,13 @@ deadline, the offer no longer applies to new purchases. An existing checkout
 reservation keeps its agreed price while the reservation remains valid. If no
 cutoff is shown,
 enrollment remains open while the offer is available.
+
+When plan changes are available, review the total in Billing before confirming.
+Pro uses its regular price, with credit for unused paid Basic time. A monthly
+to annual change starts a full new year after payment. Downgrades and annual to
+monthly changes start at the next renewal. You can cancel a scheduled change
+before it takes effect. An introductory discount on another server does not
+prevent these changes.
 
 Billing shows the verified renewal date and rate for an existing subscription.
 If renewal is off, it shows when paid access ends. Where **Turn renewal back on**

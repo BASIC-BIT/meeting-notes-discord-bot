@@ -1,3 +1,4 @@
+import { getBillingChangeRepository } from "../repositories/billingChangeRepository";
 import {
   buildBillingLifecycleState,
   publishBillingLifecycleTransition,
@@ -142,6 +143,22 @@ export const reconcileSubscription = async (
           existing.stripeSubscriptionId,
           subscription,
         )
+      )
+        return;
+    }
+    const changeControl =
+      await getBillingChangeRepository().getControl(guildId);
+    if (changeControl) {
+      const operation = await getBillingChangeRepository().getOperation(
+        guildId,
+        changeControl.operationId,
+      );
+      if (
+        operation &&
+        operation.state !== "succeeded" &&
+        operation.state !== "canceled" &&
+        subscription.metadata.chronote_change_operation ===
+          operation.operationId
       )
         return;
     }

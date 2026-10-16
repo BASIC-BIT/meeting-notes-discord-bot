@@ -97,6 +97,9 @@ export function getBillingChangeRepository() {
         pointer.stripeSyncRevision !==
           input.expectedSubscription.stripeSyncRevision ||
         store.billingChangeControls.has(control) ||
+        ["preparing", "open", "needs_review"].includes(
+          store.purchaseAttempts.get(next.guildId)?.state ?? "",
+        ) ||
         store.billingChangeOperations.has(key) ||
         store.renewalControls.has(renewalControlKey(next.guildId)) ||
         (input.usage && !mockUsageAllowed(input.usage, next))

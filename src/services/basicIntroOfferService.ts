@@ -1,3 +1,4 @@
+import { readChangedAnnualPayment } from "./billingChangePaymentHistory";
 import { resolveSubscriptionCancellationAt } from "../utils/stripeCancellation";
 import { providerModeSchema } from "../types/offerUsage";
 import { readIntroOfferDecision } from "./introOfferEligibility";
@@ -273,7 +274,7 @@ const choiceRequired = () =>
     "discount_choice_required",
   );
 
-async function selectedOfferDecision(
+export async function selectedOfferDecision(
   stripe: StripeClient,
   guildId: string,
   interval: BillingInterval,
@@ -693,18 +694,15 @@ export async function prepareBasicIntroCheckout(
   return (await prepareBasicIntroCheckoutWithAuthority(params)).checkout;
 }
 
-export const BASIC_INTRO_PLAN_CHANGE_MESSAGE =
-  "Plan changes are available after this billing account's introductory discount ends. You can update payment details or cancel in billing management.";
-
 export function activeBasicIntroDiscount(
   subscription: Stripe.Subscription,
 ): Stripe.Discount | null {
-  const couponIds = subscription.metadata.intro_offer_coupon_id
-    ? [subscription.metadata.intro_offer_coupon_id]
-    : [
-        config.stripe.basicIntroOffer.couponId,
-        config.stripe.basicIntroOffer.annualCouponId,
-      ];
+  const couponIds = [
+    subscription.metadata.intro_offer_coupon_id,
+    subscription.metadata.chronote_change_coupon_id,
+    config.stripe.basicIntroOffer.couponId,
+    config.stripe.basicIntroOffer.annualCouponId,
+  ].filter(Boolean);
   const discounts = [
     ...(subscription.discounts ?? []),
     ...subscription.items.data.flatMap((item) => item.discounts ?? []),
@@ -913,6 +911,12 @@ export async function getAnnualIntroFirstYearPayment(
   stripe: StripeClient,
   subscription: Stripe.Subscription,
 ): Promise<FirstYearPayment | null> {
+  try {
+    const changed = await readChangedAnnualPayment(stripe, subscription);
+    if (changed !== undefined) return changed;
+  } catch {
+    return { status: "unavailable" };
+  }
   if (subscription.metadata.intro_offer_id !== BASIC_ANNUAL_INTRO_OFFER_ID)
     return null;
   try {
@@ -1113,7 +1117,7 @@ export async function getProviderSubscriptionDetails(
     unitAmount,
   );
   if (result.status === "unavailable") return { status: "unavailable" };
-  const { intro, discountDetails, discountedUnitAmount } = result;
+  const { discountDetails, discountedUnitAmount } = result;
   return {
     status: "available",
     priceId: price.id,
@@ -1134,10 +1138,8 @@ export async function getProviderSubscriptionDetails(
       stripe,
       subscription,
     ),
-    planChangesRestricted: Boolean(intro),
-    planChangeRestrictionEndsAt: intro?.end
-      ? new Date(intro.end * 1000).toISOString()
-      : null,
+    planChangesRestricted: false,
+    planChangeRestrictionEndsAt: null,
   };
 }
 
@@ -1145,72 +1147,3 @@ export const SUBSCRIPTION_DISCOUNT_EXPANSIONS = [
   "discounts.source.coupon",
   "items.data.discounts",
 ];
-
-async function customerSubscriptions(
-  stripe: StripeClient,
-  customerId: string,
-  knownSubscription: Stripe.Subscription | undefined,
-): Promise<Stripe.Subscription[]> {
-  const subscriptions: Stripe.Subscription[] = knownSubscription
-    ? [knownSubscription]
-    : [];
-  let after: string | undefined;
-  do {
-    const page = await stripe.subscriptions.list({
-      customer: customerId,
-      status: "all",
-      limit: 100,
-      expand: ["data.discounts.source.coupon", "data.items.data.discounts"],
-      ...(after ? { starting_after: after } : {}),
-    });
-    for (const subscription of page.data) {
-      const owner =
-        typeof subscription.customer === "string"
-          ? subscription.customer
-          : subscription.customer.id;
-      if (
-        owner !== customerId ||
-        subscription.livemode !== (config.subscription.stripeMode === "live")
-      )
-        throw new Error(
-          "Stripe customer subscription information does not match",
-        );
-      subscriptions.push(subscription);
-    }
-    after = page.has_more ? page.data.at(-1)?.id : undefined;
-    if (page.has_more && !after)
-      throw new Error("Stripe customer subscription page is incomplete");
-  } while (after);
-  return subscriptions;
-}
-
-export async function getBasicIntroCustomerRestriction(
-  stripe: StripeClient,
-  customerId: string,
-  knownSubscription?: Stripe.Subscription,
-): Promise<{ configurationId: string; endsAt: string | null } | null> {
-  const subscriptions = await customerSubscriptions(
-    stripe,
-    customerId,
-    knownSubscription,
-  );
-  let configurationId: string | undefined;
-  let latestEnd = 0;
-  let unknownEnd = false;
-  for (const subscription of subscriptions) {
-    if (["canceled", "incomplete_expired"].includes(subscription.status))
-      continue;
-    const discount = activeBasicIntroDiscount(subscription);
-    if (!discount) continue;
-    configurationId ??=
-      subscription.metadata.intro_offer_portal_configuration_id ||
-      config.stripe.basicIntroOffer.portalConfigurationId;
-    if (discount.end === null) unknownEnd = true;
-    else latestEnd = Math.max(latestEnd, discount.end);
-  }
-  if (configurationId === undefined) return null;
-  return {
-    configurationId,
-    endsAt: unknownEnd ? null : new Date(latestEnd * 1000).toISOString(),
-  };
-}

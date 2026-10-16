@@ -76,8 +76,8 @@ export const monthlySubscriber: Extract<
     endsAt: "2027-01-12T12:00:00Z",
     introductory: true,
   },
-  planChangesRestricted: true,
-  planChangeRestrictionEndsAt: "2027-01-12T12:00:00Z",
+  planChangesRestricted: false,
+  planChangeRestrictionEndsAt: null,
 };
 export const annualSubscriber: Extract<
   ProviderSubscriptionDetails,

@@ -1,4 +1,5 @@
-import type { StripeClient } from "../types/stripe";
+import Stripe from "stripe";
+import type { StripeClient, StripeInvoice } from "../types/stripe";
 import type {
   BillingChangeOperation,
   BillingChangeRecoveryReceipt,
@@ -40,131 +41,22 @@ export async function compensateChangeFunding(
   const receipt: BillingChangeRecoveryReceipt = { ...operation.recovery };
   const invoiceId = operation.funding?.invoiceId ?? operation.draftInvoiceId;
   if (!invoiceId) return receipt;
-  let invoice = await stripe.invoices.retrieve(invoiceId);
+  let invoice: StripeInvoice | null = await recoverableFundingInvoice(
+    input,
+    invoiceId,
+  );
+  if (!invoice) return receipt;
   assertFundingOwner(invoice, operation);
-  if (invoice.status === "draft") {
-    const deleted = await stripe.invoices.del(
-      invoice.id,
-      {},
-      changeIdempotency(operation, "delete-funding"),
-    );
-    if (!deleted.deleted) throw changeUnavailable();
-    return receipt;
-  }
-  if (invoice.status === "open") {
-    try {
-      await stripe.invoices.voidInvoice(
-        invoice.id,
-        {},
-        changeIdempotency(operation, "void-funding"),
-      );
-    } catch {
-      /* A payment may have settled concurrently. Re-read before deciding. */
-    }
-    invoice = await stripe.invoices.retrieve(invoiceId);
-    assertFundingOwner(invoice, operation);
-  }
+  invoice = await closeUnpaidFunding(input, invoice);
+  if (!invoice) return receipt;
   if (invoice.status === "void" && invoice.amount_paid === 0) return receipt;
   if (invoice.status !== "paid" || invoice.amount_remaining !== 0)
     throw changeUnavailable();
   const amounts = compensationAmounts(invoice.total, invoice.amount_paid);
-  if (invoice.total > 0) {
-    const notes = await inventory(
-      stripe.creditNotes.list({ invoice: invoice.id, limit: 100 }),
-    );
-    const owned = notes.filter(
-      (note) =>
-        note.metadata?.chronote_change_operation === operation.operationId,
-    );
-    if (owned.length > 1) throw changeUnavailable();
-    const note =
-      owned[0] ??
-      (await stripe.creditNotes.create(
-        {
-          invoice: invoice.id,
-          amount: invoice.total,
-          refund_amount: amounts.serviceRefund,
-          credit_amount: amounts.serviceCredit,
-          reason: "order_change",
-          email_type: "none",
-          metadata: changeMetadata(operation),
-        },
-        changeIdempotency(operation, "reverse-service"),
-      ));
-    if (
-      note.status !== "issued" ||
-      stripeId(note.invoice) !== invoice.id ||
-      note.amount !== invoice.total ||
-      stripeId(note.customer) !== operation.source.customerId ||
-      note.livemode !== (operation.mode === "live") ||
-      note.refunds.reduce((sum, refund) => sum + refund.amount_refunded, 0) !==
-        amounts.serviceRefund
-    )
-      throw changeUnavailable();
-    if (amounts.serviceCredit > 0) {
-      const creditId = stripeId(note.customer_balance_transaction);
-      if (!creditId) throw changeUnavailable();
-      const credit = await stripe.customers.retrieveBalanceTransaction(
-        operation.source.customerId,
-        creditId,
-      );
-      if (
-        credit.amount !== -amounts.serviceCredit ||
-        credit.currency !== invoice.currency
-      )
-        throw changeUnavailable();
-    }
-    receipt.creditNoteId = note.id;
-    await onProgress({ ...receipt });
-  }
-  if (amounts.debtRefund > 0) {
-    const payment = await fundingPayment(
-      stripe,
-      operation,
-      invoice.id,
-      invoice.amount_paid,
-    );
-    const refunds = await inventory(
-      stripe.refunds.list({ charge: payment.chargeId, limit: 100 }),
-    );
-    const owned = refunds.filter(
-      (refund) =>
-        refund.metadata?.chronote_change_operation === operation.operationId &&
-        refund.metadata.chronote_refund_role === "prior-balance",
-    );
-    if (owned.length > 1) throw changeUnavailable();
-    const refund =
-      owned[0] ??
-      (await stripe.refunds.create(
-        {
-          charge: payment.chargeId,
-          amount: amounts.debtRefund,
-          reason: "requested_by_customer",
-          metadata: {
-            ...changeMetadata(operation),
-            chronote_refund_role: "prior-balance",
-          },
-        },
-        changeIdempotency(operation, "reverse-prior-balance-cash"),
-      ));
-    if (
-      refund.status !== "succeeded" ||
-      refund.amount !== amounts.debtRefund ||
-      stripeId(refund.charge) !== payment.chargeId ||
-      refund.currency !== invoice.currency
-    )
-      throw changeUnavailable();
-    receipt.debtRefundId = refund.id;
-    await onProgress({ ...receipt });
-    receipt.balanceTransactionId = await reverseOwnedBalance(
-      stripe,
-      operation,
-      amounts.debtRefund,
-      "prior-balance",
-      invoice.id,
-    );
-    await onProgress({ ...receipt });
-  }
+  if (invoice.total > 0)
+    await reverseServiceCredit(input, invoice, amounts, receipt);
+  if (amounts.debtRefund > 0)
+    await reverseDebtCash(input, invoice, amounts, receipt);
   if (amounts.balanceReversal > 0) {
     receipt.balanceTransactionId = await reverseOwnedBalance(
       stripe,
@@ -264,4 +156,199 @@ async function reverseOwnedBalance(
   )
     throw changeUnavailable();
   return transaction.id;
+}
+
+async function recoverableFundingInvoice(
+  input: RecoveryInput,
+  invoiceId: string,
+) {
+  try {
+    return await input.stripe.invoices.retrieve(invoiceId);
+  } catch (error) {
+    if (
+      !input.operation.funding &&
+      error instanceof Stripe.errors.StripeInvalidRequestError &&
+      error.code === "resource_missing"
+    )
+      return null;
+    throw error;
+  }
+}
+async function reverseServiceCredit(
+  input: RecoveryInput,
+  invoice: StripeInvoice,
+  amounts: ReturnType<typeof compensationAmounts>,
+  receipt: BillingChangeRecoveryReceipt,
+) {
+  const { stripe, operation, onProgress } = input;
+  const notes = await inventory(
+    stripe.creditNotes.list({ invoice: invoice.id, limit: 100 }),
+  );
+  const owned = notes.filter(
+    (note) =>
+      note.metadata?.chronote_change_operation === operation.operationId,
+  );
+  if (owned.length > 1) throw changeUnavailable();
+  const note =
+    owned[0] ??
+    (await stripe.creditNotes.create(
+      {
+        invoice: invoice.id,
+        amount: invoice.total,
+        refund_amount: amounts.serviceRefund,
+        credit_amount: amounts.serviceCredit,
+        reason: "order_change",
+        email_type: "none",
+        metadata: changeMetadata(operation),
+      },
+      changeIdempotency(operation, "reverse-service"),
+    ));
+  if (
+    note.status !== "issued" ||
+    stripeId(note.invoice) !== invoice.id ||
+    note.amount !== invoice.total ||
+    stripeId(note.customer) !== operation.source.customerId ||
+    note.livemode !== (operation.mode === "live") ||
+    note.refunds.reduce((sum, refund) => sum + refund.amount_refunded, 0) !==
+      amounts.serviceRefund
+  )
+    throw changeUnavailable();
+  await verifyServiceCompensation(stripe, operation, invoice, note, amounts);
+  receipt.creditNoteId = note.id;
+  await onProgress({ ...receipt });
+}
+async function verifyServiceCompensation(
+  stripe: StripeClient,
+  operation: Canceling,
+  invoice: StripeInvoice,
+  note: Stripe.CreditNote,
+  amounts: ReturnType<typeof compensationAmounts>,
+) {
+  for (const entry of note.refunds) {
+    const refundId = stripeId(entry.refund);
+    if (!refundId) throw changeUnavailable();
+    const refund = await stripe.refunds.retrieve(refundId);
+    if (
+      refund.status !== "succeeded" ||
+      refund.amount !== entry.amount_refunded ||
+      refund.currency !== invoice.currency
+    )
+      throw changeUnavailable();
+  }
+  if (amounts.serviceRefund > 0) {
+    const payment = await fundingPayment(
+      stripe,
+      operation,
+      invoice.id,
+      invoice.amount_paid,
+    );
+    for (const entry of note.refunds) {
+      const refundId = stripeId(entry.refund);
+      if (
+        !refundId ||
+        stripeId((await stripe.refunds.retrieve(refundId)).charge) !==
+          payment.chargeId
+      )
+        throw changeUnavailable();
+    }
+  }
+  if (amounts.serviceCredit > 0) {
+    const creditId = stripeId(note.customer_balance_transaction);
+    if (!creditId) throw changeUnavailable();
+    const credit = await stripe.customers.retrieveBalanceTransaction(
+      operation.source.customerId,
+      creditId,
+    );
+    if (
+      credit.amount !== -amounts.serviceCredit ||
+      credit.currency !== invoice.currency
+    )
+      throw changeUnavailable();
+  }
+}
+async function reverseDebtCash(
+  input: RecoveryInput,
+  invoice: StripeInvoice,
+  amounts: ReturnType<typeof compensationAmounts>,
+  receipt: BillingChangeRecoveryReceipt,
+) {
+  const { stripe, operation, onProgress } = input;
+  const payment = await fundingPayment(
+    stripe,
+    operation,
+    invoice.id,
+    invoice.amount_paid,
+  );
+  const refunds = await inventory(
+    stripe.refunds.list({ charge: payment.chargeId, limit: 100 }),
+  );
+  const owned = refunds.filter(
+    (refund) =>
+      refund.metadata?.chronote_change_operation === operation.operationId &&
+      refund.metadata.chronote_refund_role === "prior-balance",
+  );
+  if (owned.length > 1) throw changeUnavailable();
+  const refund =
+    owned[0] ??
+    (await stripe.refunds.create(
+      {
+        charge: payment.chargeId,
+        amount: amounts.debtRefund,
+        reason: "requested_by_customer",
+        metadata: {
+          ...changeMetadata(operation),
+          chronote_refund_role: "prior-balance",
+        },
+      },
+      changeIdempotency(operation, "reverse-prior-balance-cash"),
+    ));
+  if (
+    refund.status !== "succeeded" ||
+    refund.amount !== amounts.debtRefund ||
+    stripeId(refund.charge) !== payment.chargeId ||
+    refund.currency !== invoice.currency
+  )
+    throw changeUnavailable();
+  receipt.debtRefundId = refund.id;
+  await onProgress({ ...receipt });
+  receipt.balanceTransactionId = await reverseOwnedBalance(
+    stripe,
+    operation,
+    amounts.debtRefund,
+    "prior-balance",
+    invoice.id,
+  );
+  await onProgress({ ...receipt });
+}
+
+async function closeUnpaidFunding(
+  input: RecoveryInput,
+  original: StripeInvoice,
+) {
+  const { stripe, operation } = input;
+  let invoice = original;
+  if (invoice.status === "draft") {
+    const deleted = await stripe.invoices.del(
+      invoice.id,
+      {},
+      changeIdempotency(operation, "delete-funding"),
+    );
+    if (!deleted.deleted) throw changeUnavailable();
+    return null;
+  }
+  if (invoice.status === "open") {
+    try {
+      await stripe.invoices.voidInvoice(
+        invoice.id,
+        {},
+        changeIdempotency(operation, "void-funding"),
+      );
+    } catch {
+      /* A payment may have settled concurrently. Re-read before deciding. */
+    }
+    invoice = await stripe.invoices.retrieve(original.id);
+    assertFundingOwner(invoice, operation);
+  }
+
+  return invoice;
 }

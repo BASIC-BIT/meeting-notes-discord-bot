@@ -321,3 +321,34 @@ test.each([
     );
   },
 );
+
+test.each(["prepareChange", "confirmChange", "cancelChange"] as const)(
+  "%s requires Manage Server before operation work",
+  async (method) => {
+    const permissions = await import("../../src/trpc/permissions");
+    const { TRPCError } = await import("@trpc/server");
+    jest
+      .mocked(permissions.requireManageGuild)
+      .mockRejectedValueOnce(new TRPCError({ code: "FORBIDDEN" }));
+    const api = caller();
+    const operationId = "00000000-0000-4000-8000-000000000011";
+    const work =
+      method === "prepareChange"
+        ? api.prepareChange({
+            serverId: "111111111111111111",
+            selection: {
+              tier: "pro",
+              interval: "month",
+              expectedOffer: "none",
+            },
+          })
+        : method === "confirmChange"
+          ? api.confirmChange({
+              serverId: "111111111111111111",
+              operationId,
+              revision: "review",
+            })
+          : api.cancelChange({ serverId: "111111111111111111", operationId });
+    await expect(work).rejects.toMatchObject({ code: "FORBIDDEN" });
+  },
+);

@@ -96,6 +96,7 @@ export async function useIntroBilling(
     };
     return replaceBillingResponses(route, {
       "pricing.plans": { plans: introPlans, ...offers },
+      "billing.change": { kind: "none", enabled: false },
       "billing.renewal": options.renewal ?? createRenewalFixture(options),
       "billing.me": { ...introBillingData(options), ...offers },
     });
@@ -135,6 +136,7 @@ export async function useFreeBilling(
   };
   await page.route("**/trpc/**", (route) =>
     replaceBillingResponses(route, {
+      "billing.change": { kind: "none", enabled: false },
       "billing.renewal": createRenewalFixture({
         terminalStatus,
         canManageBilling: Boolean(terminalStatus),

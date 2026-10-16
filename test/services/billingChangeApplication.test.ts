@@ -1,6 +1,9 @@
+import Stripe from "stripe";
+import { changeSourceFingerprint } from "../../src/services/billingChangeProvider";
 /** @jest-environment node */
 import {
   buildChangeApplicationRequest,
+  applyFundedBillingChange,
   inspectChangeApplication,
 } from "../../src/services/billingChangeApplication";
 import { changeOperation } from "../fixtures/billingChange";
@@ -80,6 +83,7 @@ it("never accepts an application invoice as an extra payment", () => {
         {
           ...sourceSubscription.items.data[0],
           id: operation.source.itemId,
+          current_period_start: operation.source.periodStart,
           current_period_end: operation.source.periodEnd,
           price: {
             ...sourceSubscription.items.data[0].price,
@@ -142,4 +146,107 @@ it("never accepts an application invoice as an extra payment", () => {
       operation,
     ),
   ).toBe("unknown");
+});
+
+it("offsets the full target value including exclusive tax when starting a new year", () => {
+  const request = buildChangeApplicationRequest({
+    ...operation,
+    target: {
+      ...operation.target,
+      taxBehavior: "exclusive",
+      selection: { ...operation.target.selection, interval: "year" },
+    },
+    funding: { ...operation.funding, targetServiceValue: 1320 },
+  });
+  expect(request.add_invoice_items?.[0].price_data?.unit_amount).toBe(-1320);
+});
+
+import { stripeTransport } from "../fixtures/stripeTransport";
+it("holds an unknown application when the source changed instead of refunding an offer that may already have run", async () => {
+  const paid = {
+    ...fundedInvoice,
+    id: operation.funding.invoiceId,
+    parent: null,
+    customer: operation.source.customerId,
+    total: 900,
+    amount_due: 900,
+    amount_paid: 900,
+    amount_remaining: 0,
+    starting_balance: 0,
+    auto_advance: false,
+    metadata: {
+      guild_id: operation.guildId,
+      chronote_change_operation: operation.operationId,
+      chronote_invoice_role: "funding",
+    },
+  };
+  const f = stripeTransport(({ path }) =>
+    path.startsWith("/v1/invoices/") ? paid : sourceSubscription,
+  );
+  expect(
+    await applyFundedBillingChange({
+      stripe: f.stripe,
+      operation,
+      now: operation.createdAt,
+    }),
+  ).toBe("unknown");
+  expect(f.requests.some((request) => request.method === "POST")).toBe(false);
+});
+
+it("can compensate a definitive rejected update while holding an ambiguous transport failure", async () => {
+  const native = {
+    ...sourceSubscription,
+    customer: operation.source.customerId,
+  };
+  const selected = {
+    ...operation,
+    source: {
+      ...operation.source,
+      fingerprint: changeSourceFingerprint(native),
+    },
+  };
+  const paid = {
+    ...fundedInvoice,
+    id: operation.funding.invoiceId,
+    parent: null,
+    customer: operation.source.customerId,
+    total: 900,
+    amount_due: 900,
+    amount_paid: 900,
+    amount_remaining: 0,
+    starting_balance: 0,
+    auto_advance: false,
+    metadata: {
+      guild_id: operation.guildId,
+      chronote_change_operation: operation.operationId,
+      chronote_invoice_role: "funding",
+    },
+  };
+  const f = stripeTransport(({ path }) =>
+    path.startsWith("/v1/invoices/") ? paid : native,
+  );
+  const update = jest.spyOn(f.stripe.subscriptions, "update");
+  update.mockRejectedValueOnce(
+    new Stripe.errors.StripeInvalidRequestError({
+      message: "Coupon is no longer available",
+      statusCode: 400,
+    }),
+  );
+  expect(
+    await applyFundedBillingChange({
+      stripe: f.stripe,
+      operation: selected,
+      now: operation.createdAt,
+    }),
+  ).toBe("rejected");
+  update.mockRejectedValueOnce(
+    new Stripe.errors.StripeConnectionError({ message: "Lost response" }),
+  );
+  await expect(
+    applyFundedBillingChange({
+      stripe: f.stripe,
+      operation: selected,
+      now: operation.createdAt,
+    }),
+  ).rejects.toThrow("Lost response");
 });

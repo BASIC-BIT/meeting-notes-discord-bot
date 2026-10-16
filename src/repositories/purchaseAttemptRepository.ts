@@ -1,3 +1,4 @@
+import { billingChangeControlKey } from "../types/billingChange";
 import { matchesMockOfferAuthority } from "./offerUsageRepository";
 import { assertPurchaseInvoiceBinding } from "../types/purchase";
 import {
@@ -55,6 +56,12 @@ export const getPurchaseRepository = () => ({
     const store = getMockStore();
     const current = store.purchaseAttempts.get(next.guildId);
     const subscription = store.subscriptions.get(next.guildId);
+    if (
+      next.state === "preparing" &&
+      next.attemptId !== expected?.attemptId &&
+      store.billingChangeControls.has(billingChangeControlKey(next.guildId))
+    )
+      return false;
     if (
       current?.revision !== expected?.revision ||
       Boolean(subscription) !== Boolean(pointer) ||

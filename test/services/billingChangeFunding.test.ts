@@ -1,7 +1,9 @@
 /** @jest-environment node */
+import { stripeTransport } from "../fixtures/stripeTransport";
 import Stripe from "stripe";
 import {
   finalizeChangeFunding,
+  createChangeFundingDraft,
   verifyChangeFunding,
 } from "../../src/services/billingChangeFunding";
 import { response } from "../fixtures/renewalStripeClient";
@@ -36,7 +38,27 @@ function invoice(status: "draft" | "open" | "paid", balance = -200) {
     amount_remaining: status === "paid" ? 0 : service + balance,
     starting_balance: balance,
     ending_balance: 0,
-    lines: { ...fundedInvoice.lines, data: [] },
+    subtotal: service,
+    lines: {
+      ...fundedInvoice.lines,
+      data:
+        status === "draft"
+          ? []
+          : [
+              {
+                ...fundedInvoice.lines.data[0],
+                amount: 1200,
+                discount_amounts: [],
+                metadata: { chronote_change_part: "target-service" },
+              },
+              {
+                ...fundedInvoice.lines.data[0],
+                amount: -300,
+                discount_amounts: [],
+                metadata: { chronote_change_part: "unused-service" },
+              },
+            ],
+    },
   };
 }
 afterEach(() => jest.restoreAllMocks());
@@ -89,9 +111,11 @@ it("finalizes one owned invoice before consent without charging or mutating the 
     startingBalance: -200,
   });
   expect(result.quote).toMatchObject({ amountDue: 700, billingBalance: -200 });
-  expect(items.mock.calls.map(([params]) => params.amount)).toEqual([
-    1200, -300,
-  ]);
+  expect(
+    items.mock.calls.map(
+      ([params]) => params.price_data?.unit_amount ?? params.amount,
+    ),
+  ).toEqual([1200, -300]);
   expect(
     items.mock.calls.every(([, options]) => Boolean(options?.idempotencyKey)),
   ).toBe(true);
@@ -139,6 +163,18 @@ it("discloses a below-minimum charge carried to a future invoice instead of call
   const native = {
     ...invoice("paid", 0),
     total: 10,
+    subtotal: 10,
+    lines: {
+      ...fundedInvoice.lines,
+      data: [
+        {
+          ...fundedInvoice.lines.data[0],
+          amount: 10,
+          discount_amounts: [],
+          metadata: { chronote_change_part: "target-service" },
+        },
+      ],
+    },
     amount_due: 0,
     amount_paid: 0,
     amount_remaining: 0,
@@ -159,4 +195,45 @@ it("discloses a below-minimum charge carried to a future invoice instead of call
     balanceCarriedForward: 10,
   });
   expect(verifyChangeFunding(native, preparing, result.funding)).toBe(true);
+});
+
+it("preserves automatic tax and the target product when preparing a funding draft", async () => {
+  const f = stripeTransport(({ path, fields }) => {
+    expect(path).toBe("/v1/invoices");
+    expect(fields.get("automatic_tax[enabled]")).toBe("true");
+    expect(fields.has("default_tax_rates[0]")).toBe(false);
+    return { ...invoice("draft"), id: "in_funding" };
+  });
+  expect(
+    await createChangeFundingDraft({
+      stripe: f.stripe,
+      operation: preparing,
+      subscription: {
+        ...sourceSubscription,
+        automatic_tax: {
+          enabled: true,
+          disabled_reason: null,
+          liability: null,
+        },
+      },
+    }),
+  ).toBe("in_funding");
+});
+
+it("does not present a finalized invoice containing an unrelated item", async () => {
+  const open = invoice("open");
+  const f = stripeTransport(() => ({
+    ...open,
+    lines: {
+      ...open.lines,
+      data: [{ ...fundedInvoice.lines.data[0], amount: 999, metadata: {} }],
+    },
+  }));
+  await expect(
+    finalizeChangeFunding({
+      stripe: f.stripe,
+      operation: preparing,
+      subscription: sourceSubscription,
+    }),
+  ).rejects.toThrow();
 });

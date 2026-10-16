@@ -34,7 +34,7 @@ export const billingChangeQuoteSchema = z
     planCharge: money.nonnegative(),
     offerSavings: money.nonnegative(),
     unusedCredit: money.nonnegative(),
-    taxAmount: money.nonnegative(),
+    taxAmount: money,
     taxTreatment: z.enum(["added", "included"]),
     billingBalance: money,
     amountDue: money.nonnegative(),
@@ -57,6 +57,10 @@ export const billingChangeSourceSchema = z
     periodStart: seconds,
     periodEnd: seconds,
     fingerprint: id,
+    invariantFingerprint: id,
+    productId: id,
+    taxBehavior: z.enum(["inclusive", "exclusive"]),
+    taxRateIds: z.array(id),
     billingMode: z.enum(["classic", "flexible"]),
     revision: z.string().nullable(),
     at: seconds,
@@ -89,6 +93,7 @@ const funding = z
     startingBalance: money,
     endingBalance: money,
     serviceValue: money,
+    targetServiceValue: money.nullable().optional(),
   })
   .strict();
 const base = z.object({
@@ -158,6 +163,10 @@ export const billingChangeOperationSchema = z.discriminatedUnion("state", [
       funding: funding.nullable(),
       scheduleId: id.nullable(),
       appliedAt: seconds,
+      service: z
+        .object({ invoiceId: id, periodStart: seconds, periodEnd: seconds })
+        .strict()
+        .optional(),
       consent: accepted,
     })
     .strict(),
@@ -219,7 +228,7 @@ const transitions: Record<
   accepted: ["applying", "scheduled", "canceling"],
   applying: ["applying", "succeeded", "canceling"],
   scheduled: ["scheduled", "succeeded", "canceling"],
-  canceling: ["canceling", "canceled"],
+  canceling: ["canceling", "canceled", "succeeded"],
   succeeded: [],
   canceled: [],
 };
@@ -228,31 +237,21 @@ export function assertBillingChangeTransition(
   previous: BillingChangeOperation,
 ) {
   if (
+    previous.state === "canceling" &&
+    next.state === "succeeded" &&
+    previous.timing !== "renewal"
+  )
+    throw new Error(
+      "Only an applied scheduled change can settle during cancellation",
+    );
+  next = billingChangeOperationSchema.parse(next);
+  previous = billingChangeOperationSchema.parse(previous);
+  if (
     !transitions[previous.state].includes(next.state) ||
     next.revision === previous.revision
   )
     throw new Error("Invalid plan change state transition");
-  const {
-    revision: oldRevision,
-    quote: oldQuote,
-    draftInvoiceId: oldDraft,
-    ...oldBase
-  } = base.parse(previous);
-  const {
-    revision: newRevision,
-    quote: newQuote,
-    draftInvoiceId: newDraft,
-    ...newBase
-  } = base.parse(next);
-  if (
-    (oldDraft !== newDraft &&
-      (previous.state !== "preparing" || oldDraft !== null)) ||
-    !isDeepStrictEqual(oldBase, newBase) ||
-    (previous.state !== "preparing" && !isDeepStrictEqual(oldQuote, newQuote))
-  )
-    throw new Error("Frozen plan change terms cannot change");
-  void oldRevision;
-  void newRevision;
+  assertFrozenChangeTerms(next,previous);
   if (
     "funding" in previous &&
     "funding" in next &&
@@ -294,9 +293,39 @@ export function parseChangeUsage(
     !isDeepStrictEqual(next.terms, operation.target.offer.terms)
   )
     throw new Error("Plan change reservation terms mismatch");
+  assertChangeOfferResult(operation,next,mutation);
+  return { next, expected, authority: mutation.authority };
+}
+
+function assertFrozenChangeTerms(next:BillingChangeOperation,previous:BillingChangeOperation) {
+  const {
+    revision: oldRevision,
+    quote: oldQuote,
+    draftInvoiceId: oldDraft,
+    ...oldBase
+  } = base.parse(previous);
+  const {
+    revision: newRevision,
+    quote: newQuote,
+    draftInvoiceId: newDraft,
+    ...newBase
+  } = base.parse(next);
+  if (
+    (oldDraft !== newDraft &&
+      (previous.state !== "preparing" || oldDraft !== null)) ||
+    !isDeepStrictEqual(oldBase, newBase) ||
+    (previous.state !== "preparing" && !isDeepStrictEqual(oldQuote, newQuote))
+  )
+    throw new Error("Frozen plan change terms cannot change");
+  void oldRevision;
+  void newRevision;
+
+}
+
+function assertChangeOfferResult(operation:BillingChangeOperation,next:ReturnType<typeof offerUsageSchema.parse>,mutation:OfferUsageMutation) {
   if (
     mutation.authority &&
-    !isDeepStrictEqual(mutation.authority, operation.target.offer.authority)
+    (!operation.target.offer || !isDeepStrictEqual(mutation.authority, operation.target.offer.authority))
   )
     throw new Error("Plan change history authority mismatch");
   if (
@@ -307,5 +336,5 @@ export function parseChangeUsage(
     throw new Error("Offer result does not match plan change");
   if (next.state === "reserved" && !mutation.authority)
     throw new Error("Fresh plan change offer requires history authority");
-  return { next, expected, authority: mutation.authority };
+
 }

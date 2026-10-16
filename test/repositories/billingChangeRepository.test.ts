@@ -143,7 +143,7 @@ it("uses real Dynamo transactions to fence the source, renewal operation and pla
     if (!(command instanceof TransactWriteItemsCommand))
       throw new Error("Expected Dynamo transaction");
     const entries = command.input.TransactItems ?? [];
-    expect(entries).toHaveLength(4);
+    expect(entries).toHaveLength(5);
     expect(unmarshall(entries[0].ConditionCheck?.Key ?? {})).toEqual({
       guildId: changeOperation.guildId,
     });
@@ -153,11 +153,14 @@ it("uses real Dynamo transactions to fence the source, renewal operation and pla
     expect(unmarshall(entries[1].ConditionCheck?.Key ?? {})).toEqual({
       guildId: `RENEWAL_CONTROL#${changeOperation.guildId}`,
     });
-    expect(unmarshall(entries[2].Put?.Item ?? {})).toMatchObject({
+    expect(unmarshall(entries[2].ConditionCheck?.Key ?? {})).toEqual({
+      guildId: `PURCHASE#${changeOperation.guildId}`,
+    });
+    expect(unmarshall(entries[3].Put?.Item ?? {})).toMatchObject({
       guildId: `CHANGE_OP#${changeOperation.guildId}#${changeOperation.operationId}`,
       state: "preparing",
     });
-    expect(unmarshall(entries[3].Put?.Item ?? {})).toEqual({
+    expect(unmarshall(entries[4].Put?.Item ?? {})).toEqual({
       guildId: `CHANGE_CONTROL#${changeOperation.guildId}`,
       operationId: changeOperation.operationId,
     });
@@ -240,4 +243,25 @@ it("atomically reserves only the destination offer and rejects invalidated histo
     ),
   ).toBeUndefined();
   expect(store.purchaseAttempts.size).toBe(0);
+});
+
+it("does not race a pending initial purchase into a plan-change claim", async () => {
+  getMockStore().purchaseAttempts.set(changeOperation.guildId, {
+    guildId: changeOperation.guildId,
+    attemptId: "pending-purchase",
+    revision: "purchase-1",
+    payerId: changeOperation.payerId,
+    mode: "test",
+    fingerprint: "purchase",
+    createdAt: 100,
+    state: "preparing",
+    checkout: { mode: "subscription" },
+  });
+  expect(
+    await getBillingChangeRepository().claim({
+      operation: changeOperation,
+      expectedSubscription: changePointer,
+    }),
+  ).toBe(false);
+  expect(getMockStore().billingChangeControls.size).toBe(0);
 });

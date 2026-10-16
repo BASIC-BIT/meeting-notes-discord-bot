@@ -399,7 +399,12 @@ describe("authoritative initial-purchase offer", () => {
       };
     });
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
     ).resolves.toContain("checkout.stripe.com");
     expect(
       await getOfferUsageRepository().get(
@@ -416,7 +421,12 @@ describe("authoritative initial-purchase offer", () => {
       new Error("lost response"),
     );
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
     ).rejects.toThrow("lost response");
     jest.setSystemTime(new Date(Date.now() + 35 * 60000));
     await expect(
@@ -474,7 +484,12 @@ describe("authoritative initial-purchase offer", () => {
       },
     }));
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
     ).rejects.toMatchObject({ reason: "purchase_expired" });
     expect(
       await getOfferUsageRepository().get(
@@ -507,7 +522,12 @@ describe("authoritative initial-purchase offer", () => {
       }),
     ).toMatchObject({ status: "available", id: "basic_intro_v1" });
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
     ).resolves.toContain("checkout.stripe.com");
     expect(stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
     expect(
@@ -536,7 +556,12 @@ describe("authoritative initial-purchase offer", () => {
       (await getPublicPricingSnapshot(request.stripe)).introOffer.status,
     ).toBe("available");
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
     ).rejects.toMatchObject({ reason: "offer_unavailable" });
     expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
     expect(stripe.customers.create).not.toHaveBeenCalled();
@@ -550,7 +575,12 @@ describe("authoritative initial-purchase offer", () => {
         new Error("lost response"),
       );
       await expect(
-        createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+        createCheckoutSession({
+          ...request,
+          expectedOffer: "basic_intro_v1",
+          tier: "basic",
+          interval: "month",
+        }),
       ).rejects.toThrow("lost response");
       jest.setSystemTime(new Date(Date.now() + minutes * 60000));
       expect(
@@ -577,7 +607,12 @@ describe("authoritative initial-purchase offer", () => {
   test("eligible Free purchase freezes native coupon and cohort, preserving promotion analytics meaning", async () => {
     const { request } = purchaseFixture();
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
     ).resolves.toContain("checkout.stripe.com");
     expect(
       getMockStore().purchaseAttempts.get(request.guildId)?.checkout,
@@ -787,7 +822,12 @@ describe("authoritative initial-purchase offer", () => {
     const { request } = purchaseFixture();
     jest.setSystemTime(Date.parse(settings.enrollmentEndsAt));
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
     ).rejects.toThrow("changed");
     expect(getMockStore().purchaseAttempts.size).toBe(0);
     await createCheckoutSession(request);
@@ -908,12 +948,17 @@ describe("existing native introductory discount", () => {
     clearGuildSubscriptionCache();
   });
 
-  test("an expected introductory offer cannot silently become an existing plan confirmation", async () => {
+  test("existing selections go to an explicit offer review before any provider change", async () => {
     const { request, stripe, subscription } = subscriberFixture();
     subscription.discounts = [];
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
-    ).rejects.toThrow("changed");
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
+    ).resolves.toContain("plan=basic");
     expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
   });
 
@@ -950,7 +995,7 @@ describe("existing native introductory discount", () => {
         endsAt: "2027-01-12T12:00:00.000Z",
         introductory: true,
       },
-      planChangesRestricted: true,
+      planChangesRestricted: false,
     });
   });
 
@@ -1229,7 +1274,8 @@ describe("existing native introductory discount", () => {
   test.each(["disabled", "rotated"])(
     "%s enrollment retains subscriber details and safe management",
     async (change) => {
-      const { request, stripe } = subscriberFixture();
+      const { request, stripe, portal } = subscriberFixture();
+      if (change === "rotated") portal.id = "bpc_next";
       Object.assign(
         config.stripe.basicIntroOffer,
         change === "disabled"
@@ -1247,28 +1293,35 @@ describe("existing native introductory discount", () => {
       expect(result.subscriptionDetails).toMatchObject({
         status: "available",
         discountedUnitAmount: 600,
-        planChangesRestricted: true,
+        planChangesRestricted: false,
       });
       await createPortalSession(request);
       expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
-        expect.objectContaining({ configuration: "bpc_intro" }),
+        expect.objectContaining({
+          configuration: change === "rotated" ? "bpc_next" : "bpc_intro",
+        }),
       );
     },
   );
 
   test.each(["price_pro", "price_annual"])(
-    "active introductory discount cannot move to %s",
+    "active introductory discount can review a move to %s",
     async (priceId) => {
       const { request, stripe } = subscriberFixture();
       await expect(
-        createCheckoutSession({ ...request, priceId }),
-      ).rejects.toThrow("discount ends");
+        createCheckoutSession({
+          ...request,
+          priceId,
+          tier: priceId === "price_pro" ? "pro" : "basic",
+          interval: priceId === "price_annual" ? "year" : "month",
+        }),
+      ).resolves.toContain("/billing?");
       expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
       expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
     },
   );
 
-  test("normal management returns at the actual discount end", async () => {
+  test("discount expiry keeps payment management separate from plan review", async () => {
     const { request, stripe, discount } = subscriberFixture();
     jest.setSystemTime(discount.end * 1000);
     const snapshot = await getBillingSnapshot({
@@ -1284,11 +1337,16 @@ describe("existing native introductory discount", () => {
     await createPortalSession(request);
     expect(
       stripe.billingPortal.sessions.create.mock.calls[0][0],
-    ).not.toHaveProperty("configuration");
-    await createCheckoutSession({ ...request, priceId: "price_pro" });
-    expect(stripe.billingPortal.sessions.create.mock.calls[1][0]).toMatchObject(
-      { flow_data: { type: "subscription_update_confirm" } },
-    );
+    ).toHaveProperty("configuration", "bpc_intro");
+    await expect(
+      createCheckoutSession({
+        ...request,
+        priceId: "price_pro",
+        tier: "pro",
+        interval: "month",
+      }),
+    ).resolves.toContain("plan=pro");
+    expect(stripe.billingPortal.sessions.create).toHaveBeenCalledTimes(1);
   });
 
   test("provider detail failure is unavailable, never a fabricated regular price", async () => {
@@ -1305,7 +1363,7 @@ describe("existing native introductory discount", () => {
     expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
   });
 
-  test("shared billing customer cannot bypass an active intro discount through a regular guild", async () => {
+  test("another server discount does not prevent this server from reviewing a change", async () => {
     const { request, stripe, subscription, discount } = subscriberFixture();
     const otherSubscription = {
       ...subscription,
@@ -1326,8 +1384,8 @@ describe("existing native introductory discount", () => {
       status: "available",
       discount: null,
       discountedUnitAmount: null,
-      planChangesRestricted: true,
-      planChangeRestrictionEndsAt: "2027-01-12T12:00:00.000Z",
+      planChangesRestricted: false,
+      planChangeRestrictionEndsAt: null,
     });
     expect(JSON.stringify(snapshot.subscriptionDetails)).not.toContain(
       "222222222222222222",
@@ -1337,15 +1395,25 @@ describe("existing native introductory discount", () => {
       expect.objectContaining({ configuration: "bpc_intro" }),
     );
     await expect(
-      createCheckoutSession({ ...request, priceId: "price_pro" }),
-    ).rejects.toThrow("discount");
+      createCheckoutSession({
+        ...request,
+        priceId: "price_pro",
+        tier: "pro",
+        interval: "month",
+      }),
+    ).resolves.toContain("plan=pro");
     expect(stripe.billingPortal.sessions.create).toHaveBeenCalledTimes(1);
     jest.setSystemTime(discount.end * 1000);
-    await createCheckoutSession({ ...request, priceId: "price_pro" });
-    expect(stripe.billingPortal.sessions.create).toHaveBeenCalledTimes(2);
+    await createCheckoutSession({
+      ...request,
+      priceId: "price_pro",
+      tier: "pro",
+      interval: "month",
+    });
+    expect(stripe.billingPortal.sessions.create).toHaveBeenCalledTimes(1);
   });
 
-  test("portal restriction scans every provider customer page", async () => {
+  test("payment management does not scan unrelated customer subscriptions", async () => {
     const { request, stripe, subscription, discount } = subscriberFixture();
     const otherSubscription = {
       ...subscription,
@@ -1358,27 +1426,31 @@ describe("existing native introductory discount", () => {
       .mockResolvedValueOnce({ data: [subscription], has_more: true })
       .mockResolvedValueOnce({ data: [otherSubscription], has_more: false });
     await createPortalSession(request);
-    expect(stripe.subscriptions.list).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        customer: "cus_intro",
-        starting_after: "sub_intro",
-      }),
-    );
+    expect(stripe.subscriptions.list).not.toHaveBeenCalled();
     expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ configuration: "bpc_intro" }),
     );
   });
 
-  test("unknown shared-customer restriction never creates an unrestricted portal", async () => {
+  test("unrelated subscription reads do not block safe payment management", async () => {
     const { request, stripe } = subscriberFixture();
     stripe.subscriptions.list.mockRejectedValue(
       new Error("provider unavailable"),
     );
-    await expect(createPortalSession(request)).rejects.toThrow();
+    await expect(createPortalSession(request)).resolves.toContain(
+      "billing.stripe.com",
+    );
     await expect(
-      createCheckoutSession({ ...request, priceId: "price_pro" }),
-    ).rejects.toThrow();
-    expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
+      createCheckoutSession({
+        ...request,
+        priceId: "price_pro",
+        tier: "pro",
+        interval: "month",
+      }),
+    ).resolves.toContain("plan=pro");
+    expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ configuration: "bpc_intro" }),
+    );
   });
 
   test.each(["invalid", "deleted", "retrieval_failed"])(
@@ -1404,8 +1476,8 @@ describe("existing native introductory discount", () => {
         expect(result.subscriptionDetails).toMatchObject({
           status: "available",
           discount: { endsAt: "2027-01-12T12:00:00.000Z", introductory: true },
-          planChangesRestricted: true,
-          planChangeRestrictionEndsAt: "2027-01-12T12:00:00.000Z",
+          planChangesRestricted: false,
+          planChangeRestrictionEndsAt: null,
         });
       else
         expect(result.subscriptionDetails).toEqual({ status: "unavailable" });
@@ -1414,8 +1486,13 @@ describe("existing native introductory discount", () => {
         expect.objectContaining({ configuration: "bpc_intro" }),
       );
       await expect(
-        createCheckoutSession({ ...request, priceId: "price_pro" }),
-      ).rejects.toThrow("discount ends");
+        createCheckoutSession({
+          ...request,
+          priceId: "price_pro",
+          tier: "pro",
+          interval: "month",
+        }),
+      ).resolves.toContain("plan=pro");
       expect(discount.end).toBe(Date.parse("2027-01-12T12:00:00Z") / 1000);
     },
   );
@@ -1529,7 +1606,12 @@ test("a native account read crossing cutoff cannot create a new introductory res
   });
   try {
     await expect(
-      createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+      createCheckoutSession({
+        ...request,
+        expectedOffer: "basic_intro_v1",
+        tier: "basic",
+        interval: "month",
+      }),
     ).rejects.toThrow("changed");
     expect(getMockStore().purchaseAttempts.size).toBe(0);
   } finally {
@@ -1690,7 +1772,12 @@ describe("open-ended introductory enrollment", () => {
         new Error("lost response"),
       );
       await expect(
-        createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+        createCheckoutSession({
+          ...request,
+          expectedOffer: "basic_intro_v1",
+          tier: "basic",
+          interval: "month",
+        }),
       ).rejects.toThrow("lost response");
       const frozen = structuredClone(
         getMockStore().purchaseAttempts.get(request.guildId)?.checkout,
@@ -1716,7 +1803,12 @@ describe("open-ended introductory enrollment", () => {
         }),
       ).resolves.toMatchObject({ status: "available", enrollmentEndsAt: null });
       await expect(
-        createCheckoutSession({ ...request, expectedOffer: "basic_intro_v1" }),
+        createCheckoutSession({
+          ...request,
+          expectedOffer: "basic_intro_v1",
+          tier: "basic",
+          interval: "month",
+        }),
       ).resolves.toContain("checkout.stripe.com");
       expect(
         getMockStore().purchaseAttempts.get(request.guildId)?.checkout,
@@ -2080,10 +2172,7 @@ describe("annual first-year offer", () => {
   );
 });
 
-import {
-  getProviderSubscriptionDetails,
-  getBasicIntroCustomerRestriction,
-} from "../../src/services/basicIntroOfferService";
+import { getProviderSubscriptionDetails } from "../../src/services/basicIntroOfferService";
 describe("consumed annual once invoice evidence", () => {
   beforeEach(() =>
     jest.useFakeTimers({ now: Date.parse("2026-10-12T12:00:00Z") }),
@@ -2240,14 +2329,9 @@ describe("consumed annual once invoice evidence", () => {
           guildId,
         }),
       ).resolves.toContain("billing.stripe.com");
-      if (unconsumed)
-        expect(sessions.create).toHaveBeenCalledWith(
-          expect.objectContaining({ configuration: "bpc_intro" }),
-        );
-      else
-        expect(sessions.create.mock.calls[0][0]).not.toHaveProperty(
-          "configuration",
-        );
+      expect(sessions.create).toHaveBeenCalledWith(
+        expect.objectContaining({ configuration: "bpc_intro" }),
+      );
     },
   );
   test("expanded invoice reference is read with native discount expansion", async () => {
@@ -2260,36 +2344,6 @@ describe("consumed annual once invoice evidence", () => {
       expand: ["discounts.source.coupon"],
     });
   });
-  test("consumed annual alone permits native portal while sibling monthly discount still restricts through pagination", async () => {
-    const f = annualInvoiceFixture();
-    const monthly = {
-      ...f.subscription,
-      id: "sub_monthly",
-      metadata: {
-        ...f.subscription.metadata,
-        intro_offer_id: "basic_intro_v1",
-        intro_offer_coupon_id: "coupon_monthly",
-      },
-      discounts: [
-        {
-          id: "di_monthly",
-          source: { coupon: "coupon_monthly" },
-          promotion_code: null,
-          end: now / 1000 + 86400,
-        },
-      ],
-    };
-    f.stripe.subscriptions.list
-      .mockResolvedValueOnce({ data: [f.subscription], has_more: true })
-      .mockResolvedValueOnce({ data: [monthly], has_more: false });
-    await expect(
-      getBasicIntroCustomerRestriction(f.client, "cus_intro", f.native),
-    ).resolves.toMatchObject({ configurationId: "bpc_intro" });
-    expect(f.stripe.subscriptions.list).toHaveBeenLastCalledWith(
-      expect.objectContaining({ starting_after: "sub_annual" }),
-    );
-  });
-
   function regularRenewalFixture() {
     const f = annualInvoiceFixture();
     f.invoice.id = "in_renewal";
@@ -2375,9 +2429,6 @@ describe("consumed annual once invoice evidence", () => {
         periodEndsAt: "2027-10-12T12:00:00.000Z",
       },
     });
-    await expect(
-      getBasicIntroCustomerRestriction(f.client, "cus_intro", f.native),
-    ).resolves.toBeNull();
   });
   test.each([
     "unpaid",

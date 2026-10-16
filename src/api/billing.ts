@@ -1,3 +1,4 @@
+import { reconcileBillingChangeForWebhook } from "../services/billingChangeService";
 import { captureBillingInvoiceOutcome } from "../services/billingLifecycleAnalytics";
 import { checkoutInvoiceHint } from "../services/purchaseSession";
 import type Stripe from "stripe";
@@ -131,7 +132,9 @@ const handleInvoicePaymentFailed: WebhookHandler = async ({
   const invoice = event.data.object as StripeInvoice;
   const guildId = await resolveGuildIdFromInvoice(stripe, invoice);
   const subscription = resolveInvoiceSubscription(invoice);
-  if (!guildId || !subscription) return;
+  if (!guildId) return;
+  await reconcileBillingChangeForWebhook(stripe, guildId);
+  if (!subscription) return;
   await reconcileSubscription(
     stripe,
     guildId,
@@ -150,6 +153,7 @@ const handleSubscriptionUpsert: WebhookHandler = async ({ stripe, event }) => {
     );
     return;
   }
+  await reconcileBillingChangeForWebhook(stripe, guildId);
   await reconcileSubscription(stripe, guildId, subscription.id);
 };
 
@@ -181,6 +185,8 @@ const handleInvoicePaymentSucceeded: WebhookHandler = async ({
     customerId:
       typeof invoice.customer === "string" ? invoice.customer : undefined,
   });
+  await reconcileBillingChangeForWebhook(stripe, guildId);
+  if (invoice.metadata?.chronote_invoice_role === "funding") return;
   const reconciled = invoiceSubscription
     ? await reconcileSubscription(
         stripe,

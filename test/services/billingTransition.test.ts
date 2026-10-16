@@ -23,8 +23,10 @@ jest.mock("../../src/services/analyticsService", () => ({
 const guildId = "111111111111111111";
 const user = { id: "payer", email: "payer@example.test" };
 const originalTransitionsEnabled = config.stripe.subscriptionTransitionsEnabled;
+const originalPortal=config.stripe.basicIntroOffer.portalConfigurationId;
 afterAll(() => {
   config.stripe.subscriptionTransitionsEnabled = originalTransitionsEnabled;
+  config.stripe.basicIntroOffer.portalConfigurationId=originalPortal;
 });
 
 function fixture() {
@@ -73,6 +75,8 @@ function fixture() {
       },
     },
     billingPortal: {
+      configurations:{retrieve:jest.fn(async()=>({id:"bpc_changes",active:true,livemode:false,features:{
+        subscription_update:{enabled:false},payment_method_update:{enabled:true},subscription_cancel:{enabled:true}}}))},
       sessions: {
         create: jest.fn(async () => ({
           url: "https://billing.stripe.com/confirm",
@@ -84,6 +88,7 @@ function fixture() {
 }
 
 beforeEach(() => {
+  config.stripe.basicIntroOffer.portalConfigurationId=originalPortal;
   jest.clearAllMocks();
   config.stripe.subscriptionTransitionsEnabled = true;
   resetMockStore();
@@ -229,10 +234,12 @@ describe("existing server subscription checkout", () => {
 
   it("returns general billing management to the selected server Billing page", async () => {
     const { stripe, client } = fixture();
+    config.stripe.basicIntroOffer.portalConfigurationId="bpc_changes";
     await createPortalSession({ stripe: client, user, guildId });
     expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
         customer: "cus_existing",
+        configuration:"bpc_changes",
         return_url: new URL(
           `/portal/server/${guildId}/billing`,
           config.frontend.siteUrl,
@@ -276,39 +283,26 @@ describe("existing server subscription checkout", () => {
     });
     expect(stripe.customers.create).not.toHaveBeenCalled();
   });
-  it("confirms a price change on the existing item without creating another subscription", async () => {
+  it("routes an existing subscription to its server review without creating a hosted update or Checkout", async () => {
     const { stripe, client } = fixture();
-    await expect(
-      createCheckoutSession({
-        stripe: client,
-        user,
-        guildId,
-        priceId: "price_pro",
-        tier: "pro",
-      }),
-    ).resolves.toBe("https://billing.stripe.com/confirm");
-    expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customer: "cus_existing",
-        flow_data: expect.objectContaining({
-          type: "subscription_update_confirm",
-          subscription_update_confirm: {
-            subscription: "sub_existing",
-            items: [{ id: "si_existing", price: "price_pro", quantity: 1 }],
-          },
-        }),
-      }),
-    );
+    const url = await createCheckoutSession({
+      stripe: client,
+      user,
+      guildId,
+      priceId: "price_pro",
+      tier: "pro",
+      interval: "year",
+    });
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe(`/portal/server/${guildId}/billing`);
+    expect(parsed.searchParams.get("plan")).toBe("pro");
+    expect(parsed.searchParams.get("interval")).toBe("year");
+    expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
     expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
-    expect(stripe.customers.create).not.toHaveBeenCalled();
     expect(getMockStore().subscriptions.get(guildId)?.tier).toBe("basic");
   });
-
-  it("does not fall back to a new subscription when Stripe cannot create the confirmation", async () => {
+  it("never falls through to Checkout when a target selection is missing", async () => {
     const { stripe, client } = fixture();
-    stripe.billingPortal.sessions.create.mockRejectedValue(
-      new Error("Portal configuration unavailable"),
-    );
     await expect(
       createCheckoutSession({
         stripe: client,
@@ -316,7 +310,7 @@ describe("existing server subscription checkout", () => {
         guildId,
         priceId: "price_pro",
       }),
-    ).rejects.toThrow("Portal configuration unavailable");
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
   });
 
@@ -443,24 +437,21 @@ describe("existing server subscription checkout", () => {
     },
   );
 
-  it("preserves a requested promotion in the confirmation flow", async () => {
+  it("does not silently apply an unreviewed promotion through the old hosted adapter", async () => {
     const { stripe, client } = fixture();
-    await createCheckoutSession({
-      stripe: client,
-      user,
-      guildId,
-      priceId: "price_pro",
-      promotionCodeId: "promo_upgrade",
-    });
-    expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        flow_data: expect.objectContaining({
-          subscription_update_confirm: expect.objectContaining({
-            discounts: [{ promotion_code: "promo_upgrade" }],
-          }),
-        }),
+    await expect(
+      createCheckoutSession({
+        stripe: client,
+        user,
+        guildId,
+        priceId: "price_pro",
+        tier: "pro",
+        interval: "month",
+        promotionCodeId: "promo_upgrade",
       }),
-    );
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
+    expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
   });
 
   it("repeated requests never create a second subscription", async () => {
@@ -472,11 +463,13 @@ describe("existing server subscription checkout", () => {
           user,
           guildId,
           priceId: "price_pro",
+          tier: "pro",
+          interval: "month",
         }),
       ),
     );
     expect(stripe.checkout.sessions.create).not.toHaveBeenCalled();
-    expect(stripe.billingPortal.sessions.create).toHaveBeenCalledTimes(2);
+    expect(stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
   });
 
   it("fails closed when a stored subscription cannot be retrieved", async () => {

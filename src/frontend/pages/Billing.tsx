@@ -1,3 +1,5 @@
+import { useBillingChange } from "../hooks/useBillingChange";
+import BillingChangePanel from "../components/BillingChangePanel";
 import { useBillingRenewal } from "../hooks/useBillingRenewal";
 import BillingRenewalStatus from "../components/BillingRenewalStatus";
 import BillingPaymentHistory from "../components/BillingPaymentHistory";
@@ -110,7 +112,8 @@ type BillingPlansProps = {
   showPlans: boolean;
   onExpandPlans: () => void;
   onTogglePlans: () => void;
-  onCheckout: (tier: PaidTier) => void;
+  onCheckout: (tier: PlanTier) => void;
+  canChange: boolean;
   promoCode: string;
   onPromoCodeChange: (value: string) => void;
   basicPlan: ReturnType<typeof resolvePaidPlan>;
@@ -439,16 +442,22 @@ function basicPlanDisabled(
   checkoutBlocked: boolean,
   offer: BasicIntroOffer,
   isComped: boolean,
+  canChange = false,
+  interval: BillingInterval = "month",
 ): boolean {
   const basicDisabled =
     !basicPlan ||
-    requiresStripeManagement(data) ||
+    (requiresStripeManagement(data) && !canChange) ||
     data.billingSource === "forced" ||
     busy ||
     checkoutBlocked ||
     offer.status === "unavailable" ||
-    data.tier === "pro" ||
-    (data.tier === "basic" && !isComped);
+    (data.tier === "pro" && !canChange) ||
+    (data.tier === "basic" &&
+      !isComped &&
+      (!canChange ||
+        (data.subscriptionDetails?.status === "available" &&
+          data.subscriptionDetails.interval === interval)));
   return basicDisabled;
 }
 function proPlanDisabled(
@@ -457,14 +466,20 @@ function proPlanDisabled(
   busy: boolean,
   checkoutBlocked: boolean,
   isComped: boolean,
+  canChange = false,
+  interval: BillingInterval = "month",
 ): boolean {
   const proDisabled =
     !proPlan ||
-    requiresStripeManagement(data) ||
+    (requiresStripeManagement(data) && !canChange) ||
     data.billingSource === "forced" ||
     busy ||
     checkoutBlocked ||
-    (data.tier === "pro" && !isComped);
+    (data.tier === "pro" &&
+      !isComped &&
+      (!canChange ||
+        (data.subscriptionDetails?.status === "available" &&
+          data.subscriptionDetails.interval === interval)));
   return proDisabled;
 }
 
@@ -478,6 +493,7 @@ type BillingPlanCardsProps = Pick<
   | "busy"
   | "checkoutBlocked"
   | "onCheckout"
+  | "canChange"
 > & { shownOffer: BasicIntroOffer };
 
 function BillingPlanCards({
@@ -490,10 +506,11 @@ function BillingPlanCards({
   checkoutBlocked,
   onCheckout,
   shownOffer,
+  canChange,
 }: BillingPlanCardsProps) {
   const isComped = data.billingSource === "manual_comp";
-  const basicCta = basicPlanCta(data, isComped);
-  const proCta = proPlanCta(data, isComped);
+  const basicCta = canChange ? "Review Basic" : basicPlanCta(data, isComped);
+  const proCta = canChange ? "Review Pro" : proPlanCta(data, isComped);
   const basicDisabled = basicPlanDisabled(
     data,
     basicPlan,
@@ -501,6 +518,8 @@ function BillingPlanCards({
     checkoutBlocked,
     offer,
     isComped,
+    canChange,
+    interval,
   );
   const proDisabled = proPlanDisabled(
     data,
@@ -508,6 +527,8 @@ function BillingPlanCards({
     busy,
     checkoutBlocked,
     isComped,
+    canChange,
+    interval,
   );
   const checkoutBasic = () => onCheckout("basic");
   const checkoutPro = () => onCheckout("pro");
@@ -523,10 +544,19 @@ function BillingPlanCards({
           "Ask across up to 5 meetings",
           "Notes, tags, and summaries",
         ]}
-        cta={data.tier === "free" ? "Current plan" : "Available"}
-        ctaDisabled={data.tier !== "free"}
+        cta={
+          data.tier === "free"
+            ? "Current plan"
+            : canChange
+              ? "Switch to Free"
+              : "Available"
+        }
+        ctaDisabled={
+          data.tier !== "free" && (!canChange || busy || checkoutBlocked)
+        }
         ctaProps={{
           variant: data.tier === "free" ? "light" : "outline",
+          onClick: () => onCheckout("free"),
         }}
         badge={data.tier === "free" ? "Current plan" : "Free forever"}
         billingLabel="Always free"
@@ -616,6 +646,7 @@ function BillingPlansSection({
   onOfferChoiceChange,
   busy,
   checkoutBlocked,
+  canChange,
 }: BillingPlansProps) {
   const isFreePlan = data.tier === "free";
   const isComped = data.billingSource === "manual_comp";
@@ -738,6 +769,7 @@ function BillingPlansSection({
             offer={offer}
             busy={busy}
             checkoutBlocked={checkoutBlocked}
+            canChange={canChange}
             onCheckout={onCheckout}
             shownOffer={shownOffer}
           />
@@ -802,7 +834,9 @@ function checkoutIsBlocked({
   data,
   tier,
   offer,
+  canChange = false,
 }: {
+  canChange?: boolean;
   busy: boolean;
   refreshing: boolean;
   failedCheckout: CheckoutRequest | null;
@@ -820,7 +854,7 @@ function checkoutIsBlocked({
     billingFetching ||
     pricingFetching ||
     pricingError ||
-    (data && requiresStripeManagement(data)) ||
+    (data && requiresStripeManagement(data) && !canChange) ||
     data?.billingSource === "forced" ||
     (tier === "basic" && offer.status === "unavailable"),
   );
@@ -1152,6 +1186,15 @@ export function Billing() {
       Boolean(data?.hasStripeBilling) && selectedGuildId === routeServerId,
     onBillingChanged: () => billingQuery.refetch(),
   });
+  const change = useBillingChange({
+    serverId: selectedGuildId,
+    active:
+      Boolean(data?.hasStripeBilling) &&
+      Boolean(data && !isTerminalStripeHistory(data)) &&
+      selectedGuildId === routeServerId &&
+      Boolean(renewal.view?.canManageBilling),
+    onBillingChanged: () => billingQuery.refetch(),
+  });
   const attemptIdentity = JSON.stringify([
     routeServerId,
     interval,
@@ -1168,7 +1211,10 @@ export function Billing() {
   const { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans } =
     useBillingPricing(pricingQuery.data, data, frozenOffer, interval);
   const busy =
-    checkoutMutation.isPending || portalMutation.isPending || renewal.busy;
+    checkoutMutation.isPending ||
+    portalMutation.isPending ||
+    renewal.busy ||
+    change.busy;
   const isPortalPending = portalMutation.isPending;
   const displayedOffer = useBillingOfferExposure({
     data,
@@ -1191,13 +1237,24 @@ export function Billing() {
     limitContext,
   });
 
-  const handleCheckout = async (tier: PaidTier) => {
+  const handleCheckout = async (tier: PlanTier) => {
+    if (change.enabled) {
+      await change.select({
+        tier,
+        interval,
+        expectedOffer:
+          tier === "basic" && offer.status === "available" ? offer.id : "none",
+      });
+      return;
+    }
+    if (tier === "free") return;
     let attempt: ReturnType<typeof checkoutAttempt.begin> | null = null;
     try {
       if (!selectedGuildId || selectedGuildId !== routeServerId) return;
       if (
         checkoutIsBlocked({
           busy,
+          canChange: change.enabled,
           refreshing: checkoutAttempt.refreshing,
           failedCheckout,
           billingFetching: billingQuery.isFetching,
@@ -1249,6 +1306,16 @@ export function Billing() {
       }
     }
   };
+
+  const routedSelection = useRef("");
+  useEffect(() => {
+    if (!search.plan || !change.enabled) return;
+    const key = JSON.stringify([routeServerId, search.plan, interval]);
+    if (routedSelection.current === key) return;
+    routedSelection.current = key;
+    void handleCheckout(search.plan);
+    void navigate({ replace: true, search: { ...search, plan: undefined } });
+  }, [search.plan, change.enabled, routeServerId, interval]);
 
   const handlePortal = async () => {
     try {
@@ -1333,7 +1400,9 @@ export function Billing() {
         normalPlan={normalPlan}
         renewal={renewal}
       />
+      <BillingChangePanel change={change} serverName={serverName} />
       <BillingPlansSection
+        canChange={change.enabled}
         data={data}
         interval={interval}
         onIntervalChange={changeInterval}
@@ -1355,7 +1424,11 @@ export function Billing() {
           pricingQuery.isFetching ||
           checkoutAttempt.refreshing
         }
-        checkoutBlocked={Boolean(failedCheckout) || pricingQuery.isError}
+        checkoutBlocked={
+          Boolean(failedCheckout) ||
+          pricingQuery.isError ||
+          Boolean(change.pending)
+        }
       />
       <BillingCheckoutRecovery
         offer={offer}

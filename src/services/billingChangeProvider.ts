@@ -1,3 +1,5 @@
+import type { GuildSubscription } from "../types/db";
+import { verifyChangeFunding } from "./billingChangeFunding";
 import { createHash } from "node:crypto";
 import type Stripe from "stripe";
 import type {
@@ -62,6 +64,7 @@ export function changeSourceFingerprint(subscription: StripeSubscription) {
           currency: item.price.currency,
           tax: item.price.tax_behavior,
           quantity: item.quantity,
+          taxRates: (item.tax_rates ?? []).map((rate) => rate.id),
           discounts: item.discounts,
           start: item.current_period_start,
           end: item.current_period_end,
@@ -74,6 +77,14 @@ export function changeSourceFingerprint(subscription: StripeSubscription) {
       }),
     )
     .digest("hex");
+}
+export function changeServiceFingerprint(subscription: StripeSubscription) {
+  return changeSourceFingerprint({
+    ...subscription,
+    schedule: null,
+    cancel_at: null,
+    cancel_at_period_end: false,
+  });
 }
 export async function readBillingChangeSource(input: {
   stripe: StripeClient;
@@ -88,14 +99,8 @@ export async function readBillingChangeSource(input: {
     { expand: ["discounts.source.coupon"] },
   );
   const customerId = stripeId(subscription.customer);
-  if (
-    !customerId ||
-    subscription.id !== saved.stripeSubscriptionId ||
-    subscription.metadata.guild_id !== input.guildId ||
-    (saved.stripeCustomerId && saved.stripeCustomerId !== customerId) ||
-    subscription.livemode !== (config.subscription.stripeMode === "live")
-  )
-    throw changeUnavailable();
+  assertSourceIdentity(subscription, saved, input.guildId);
+  if (!customerId) throw changeUnavailable();
   const customer = await input.stripe.customers.retrieve(customerId);
   if (customer.deleted || customer.livemode !== subscription.livemode)
     throw changeUnavailable();
@@ -104,88 +109,14 @@ export async function readBillingChangeSource(input: {
       "FORBIDDEN",
       "Only the original payer can change this subscription.",
     );
-  if (
-    subscription.status !== "active" ||
-    subscription.pending_update ||
-    subscription.pause_collection ||
-    subscription.pending_setup_intent
-  )
-    throw changePending();
+  assertChangeableSubscription(subscription);
   const item = subscription.items.data[0];
-  if (
-    subscription.items.has_more ||
-    subscription.items.data.length !== 1 ||
-    !item ||
-    item.quantity !== 1 ||
-    item.discounts.length ||
-    subscription.collection_method !== "charge_automatically" ||
-    subscription.trial_end
-  )
-    throw changeUnavailable();
-  const tier = resolveTierFromPrice({
-    priceId: item.price.id,
-    lookupKey: item.price.lookup_key,
-  });
-  const interval = item.price.recurring?.interval;
-  if (
-    !tier ||
-    (interval !== "month" && interval !== "year") ||
-    item.price.recurring?.interval_count !== 1 ||
-    item.price.recurring.usage_type !== "licensed" ||
-    item.price.currency !== "usd" ||
-    item.price.billing_scheme !== "per_unit" ||
-    (item.price.tax_behavior !== "inclusive" &&
-      item.price.tax_behavior !== "exclusive")
-  )
-    throw changeUnavailable();
-  const invoiceId = stripeId(subscription.latest_invoice);
-  if (!invoiceId) throw changePending();
-  const invoice = await input.stripe.invoices.retrieve(invoiceId);
-  if (
-    invoice.status !== "paid" ||
-    invoice.amount_remaining !== 0 ||
-    stripeId(invoice.customer) !== customerId ||
-    invoice.livemode !== subscription.livemode ||
-    stripeId(invoice.parent?.subscription_details?.subscription) !==
-      subscription.id
-  )
-    throw changePending();
-  const positiveService = invoice.lines.data.some(
-    (line) =>
-      line.parent?.subscription_item_details?.subscription_item === item.id &&
-      line.pricing?.price_details?.price === item.price.id &&
-      line.amount > 0,
+  const { tier, interval } = sourcePrice(item.price);
+  const invoice = await readPaidSourceInvoice(
+    input.stripe,
+    subscription,
+    input.guildId,
   );
-  if (invoice.lines.has_more || !positiveService) throw changeUnavailable();
-  if (
-    invoice.total <= 0 ||
-    (invoice.status === "paid" && invoice.amount_due === 0)
-  ) {
-    const previousId = subscription.metadata.chronote_change_operation;
-    if (previousId) {
-      const operation = await getBillingChangeRepository().getOperation(
-        input.guildId,
-        previousId,
-      );
-      if (
-        !operation ||
-        operation.state !== "succeeded" ||
-        operation.source.subscriptionId !== subscription.id ||
-        operation.target.priceId !== item.price.id ||
-        !operation.funding
-      )
-        throw changePending();
-      const funded = await input.stripe.invoices.retrieve(
-        operation.funding.invoiceId,
-      );
-      if (
-        funded.status !== "paid" ||
-        funded.amount_remaining !== 0 ||
-        funded.metadata?.chronote_change_operation !== operation.operationId
-      )
-        throw changePending();
-    } else if (invoice.total === 0) throw changePending();
-  }
   const source = billingChangeSourceSchema.parse({
     subscriptionId: subscription.id,
     customerId,
@@ -199,6 +130,13 @@ export async function readBillingChangeSource(input: {
     revision: saved.stripeSyncRevision ?? null,
     at: input.at ?? Math.floor(Date.now() / 1000),
     fingerprint: changeSourceFingerprint(subscription),
+    invariantFingerprint: changeServiceFingerprint(subscription),
+    productId: stripeId(item.price.product),
+    taxBehavior: item.price.tax_behavior,
+    taxRateIds: (item.tax_rates?.length
+      ? item.tax_rates
+      : (subscription.default_tax_rates ?? [])
+    ).map((rate) => rate.id),
   });
   if (source.at < source.periodStart || source.at >= source.periodEnd)
     throw changePending();
@@ -219,16 +157,7 @@ export function readChangePreview(
   let offerSavings = 0;
   let unusedCredit = 0;
   for (const line of invoice.lines.data) {
-    const parent = line.parent?.subscription_item_details;
-    const priceId = line.pricing?.price_details?.price;
-    if (
-      !parent ||
-      parent.subscription_item !== source.itemId ||
-      (line.amount < 0
-        ? priceId !== source.priceId
-        : priceId !== target.priceId)
-    )
-      throw changeUnavailable();
+    assertPreviewLine(line, source, target);
     const savings = (line.discount_amounts ?? []).reduce(
       (sum, discount) => sum + discount.amount,
       0,
@@ -268,7 +197,9 @@ export function changeUpdateParams(
     discounts: target.offer ? [{ coupon: target.offer.terms.couponId }] : "",
     proration_behavior: reset ? "none" : "always_invoice",
     ...(reset
-      ? { billing_cycle_anchor: "now" }
+      ? ({
+          billing_cycle_anchor: "now",
+        } satisfies Stripe.SubscriptionUpdateParams)
       : { proration_date: source.at }),
     ...(timing === "apply" ? { payment_behavior: "default_incomplete" } : {}),
   };
@@ -289,7 +220,9 @@ export async function previewBillingChange(input: {
       items: request.items,
       proration_behavior: "always_invoice",
       ...(reset
-        ? { billing_cycle_anchor: "now" }
+        ? ({
+            billing_cycle_anchor: "now",
+          } satisfies Stripe.SubscriptionUpdateParams)
         : { proration_date: input.source.at }),
     },
   });
@@ -297,4 +230,165 @@ export async function previewBillingChange(input: {
     invoice,
     amounts: readChangePreview(invoice, input.source, input.target),
   };
+}
+
+function assertSourceIdentity(
+  subscription: StripeSubscription,
+  saved: GuildSubscription,
+  guildId: string,
+) {
+  const customerId = stripeId(subscription.customer);
+  if (
+    !customerId ||
+    subscription.id !== saved.stripeSubscriptionId ||
+    subscription.metadata.guild_id !== guildId ||
+    (saved.stripeCustomerId && saved.stripeCustomerId !== customerId) ||
+    subscription.livemode !== (config.subscription.stripeMode === "live")
+  )
+    throw changeUnavailable();
+}
+function assertChangeableSubscription(subscription: StripeSubscription) {
+  if (
+    subscription.status !== "active" ||
+    subscription.pending_update ||
+    subscription.pause_collection ||
+    subscription.pending_setup_intent
+  )
+    throw changePending();
+  const item = subscription.items.data[0];
+  if (
+    subscription.items.has_more ||
+    subscription.items.data.length !== 1 ||
+    !item ||
+    item.quantity !== 1 ||
+    item.discounts.length ||
+    subscription.collection_method !== "charge_automatically" ||
+    subscription.trial_end
+  )
+    throw changeUnavailable();
+}
+function sourcePrice(price: Stripe.Price) {
+  const tier = resolveTierFromPrice({
+    priceId: price.id,
+    lookupKey: price.lookup_key,
+  });
+  const interval = price.recurring?.interval;
+  if (
+    !tier ||
+    (interval !== "month" && interval !== "year") ||
+    price.recurring?.interval_count !== 1 ||
+    price.recurring.usage_type !== "licensed" ||
+    price.currency !== "usd" ||
+    price.billing_scheme !== "per_unit" ||
+    (price.tax_behavior !== "inclusive" && price.tax_behavior !== "exclusive")
+  )
+    throw changeUnavailable();
+  return { tier, interval };
+}
+async function readPaidSourceInvoice(
+  stripe: StripeClient,
+  subscription: StripeSubscription,
+  guildId: string,
+) {
+  const invoiceId = stripeId(subscription.latest_invoice);
+  if (!invoiceId) throw changePending();
+  const invoice = await stripe.invoices.retrieve(invoiceId);
+  if (
+    invoice.amount_remaining !== 0 ||
+    stripeId(invoice.customer) !== stripeId(subscription.customer) ||
+    invoice.livemode !== subscription.livemode ||
+    stripeId(invoice.parent?.subscription_details?.subscription) !==
+      subscription.id
+  )
+    throw changePending();
+  if (invoice.lines.has_more || !hasCurrentServiceLine(invoice, subscription))
+    throw changeUnavailable();
+  if (invoice.total > 0 && invoice.status === "paid") return invoice;
+  if (
+    invoice.total !== 0 ||
+    (invoice.status !== "paid" && invoice.status !== "void")
+  )
+    throw changePending();
+  if (fullyDiscountedNativePeriod(invoice, subscription)) return invoice;
+  await assertPreviouslyFundedService(stripe, subscription, invoice, guildId);
+  return invoice;
+}
+async function assertPreviouslyFundedService(
+  stripe: StripeClient,
+  subscription: StripeSubscription,
+  invoice: StripeInvoice,
+  guildId: string,
+) {
+  const previousId = subscription.metadata.chronote_change_operation;
+  if (!previousId) throw changePending();
+  const operation = await getBillingChangeRepository().getOperation(
+    guildId,
+    previousId,
+  );
+  const item = subscription.items.data[0];
+  if (
+    !operation ||
+    operation.state !== "succeeded" ||
+    operation.source.subscriptionId !== subscription.id ||
+    operation.target.priceId !== item.price.id ||
+    !operation.funding ||
+    operation.service?.invoiceId !== invoice.id ||
+    operation.service.periodStart !== item.current_period_start ||
+    operation.service.periodEnd !== item.current_period_end
+  )
+    throw changePending();
+  const funded = await stripe.invoices.retrieve(operation.funding.invoiceId);
+  if (!verifyChangeFunding(funded, operation, operation.funding))
+    throw changePending();
+}
+
+function assertPreviewLine(
+  line: StripeInvoice["lines"]["data"][number],
+  source: BillingChangeSource,
+  target: BillingChangeTarget,
+) {
+  const parent = line.parent?.subscription_item_details;
+  const priceId = line.pricing?.price_details?.price;
+  if (
+    !parent ||
+    parent.subscription_item !== source.itemId ||
+    (line.amount < 0 ? priceId !== source.priceId : priceId !== target.priceId)
+  )
+    throw changeUnavailable();
+}
+
+function fullyDiscountedNativePeriod(
+  invoice: StripeInvoice,
+  subscription: StripeSubscription,
+) {
+  if (invoice.status !== "paid" || invoice.lines.data.length !== 1)
+    return false;
+  const line = invoice.lines.data[0];
+  const item = subscription.items.data[0];
+  const savings = (line.discount_amounts ?? []).reduce(
+    (sum, discount) => sum + discount.amount,
+    0,
+  );
+  return (
+    !line.parent?.subscription_item_details?.proration &&
+    line.period.start === item.current_period_start &&
+    line.period.end === item.current_period_end &&
+    line.amount > 0 &&
+    line.amount === savings
+  );
+}
+
+function hasCurrentServiceLine(
+  invoice: StripeInvoice,
+  subscription: StripeSubscription,
+) {
+  const item = subscription.items.data[0];
+  return invoice.lines.data.some(
+    (line) =>
+      line.parent?.subscription_item_details?.subscription_item === item.id &&
+      line.pricing?.price_details?.price === item.price.id &&
+      line.amount > 0 &&
+      line.period.end === item.current_period_end &&
+      line.period.start >= item.current_period_start,
+  );
 }
