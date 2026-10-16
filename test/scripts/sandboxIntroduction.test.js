@@ -484,3 +484,27 @@ test("unknown registration cannot be duplicated by a second preparation", async 
   await expect(prepare(p.env, p.aws)).rejects.toThrow();
   expect(p.state.registrations).toBe(1);
 });
+
+test("accepts AWS's legacy TargetGroupArn-only forward action", async () => {
+  const f = fixture();
+  const aws = async (service, operation, input) => {
+    const response = await f.aws(service, operation, input);
+    if (
+      service === "elbv2" &&
+      operation === "describe-listeners" &&
+      !f.state.routed
+    )
+      delete response.Listeners[0].DefaultActions[0].ForwardConfig;
+    return response;
+  };
+  await expect(
+    createIntroduction({
+      manifest: f.m,
+      expectedSha256: f.hash,
+      aws,
+      bootstrap: f.bootstrap,
+      now: () => 1000,
+      pause: async () => {},
+    }).activate(),
+  ).resolves.toEqual({ kind: "complete", generation: 1 });
+});

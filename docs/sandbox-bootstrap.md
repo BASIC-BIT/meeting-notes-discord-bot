@@ -1,23 +1,36 @@
 # Bootstrap an existing Sandbox runtime
 
-The normal deployment coordinator requires an already compatible serving runtime. Use the guarded bootstrap only for the separately reviewed first introduction in Sandbox, during its controlled maintenance window. It does not stop legacy tasks, register definitions, change listener actions, apply Terraform or create monitoring jobs.
+The normal deployment coordinator requires a compatible serving runtime. For the first Sandbox introduction, use the manual **Sandbox Deployment Identity** workflow with explicit `prepare` and `activate` phases during the approved maintenance window. Its default `bootstrap_phase: none` remains a read-only identity check.
+
+The preparation phase publishes a source-pinned image and registers its definition without replacing the service. Activation owns the one-time legacy stop and listener transition, then calls the existing bootstrap initializer, launcher and promotion transaction. It does not apply Terraform or create monitoring jobs.
 
 Keep exact environment identities, operator receipts, manifests and observations in the private operations repository. Never commit real resource or Discord identifiers in this public reference.
 
 ## Prepare the operation
 
-Use the private activation plan to settle the current work and establish test-only maintenance isolation. Apply the reviewed Sandbox Terraform artifact through its existing approval gate. Verify the two-group routing introduction with group A at 100 and group B at zero, no stickiness or extra rules, both groups empty and the service stopped.
+1. Apply and verify the reviewed Sandbox Terraform artifact through its existing approval gate. Keep the legacy service running at desired/running one with no pending task, bound only to group A. Keep the HTTPS listener in its legacy single-target form, pointing at group A with no extra rules or stickiness. Both AWS response forms are accepted: `TargetGroupArn` alone, or that field accompanied by a one-group `ForwardConfig`. Group B must be empty. Do not stop the service or install weighted routing manually before dispatching activation.
+2. Select a reviewed source and unique operation UUID. Dispatch the workflow from that exact source with `bootstrap_phase: prepare` and `bootstrap_operation_id`. Verify the acknowledged candidate definition and pinned image digest through provider readback. An unknown registration outcome requires reconciliation, not another attempt. The job refuses a second definition for the same candidate UUID.
+3. Establish fixture-only maintenance isolation and settle all work. Empty work scans alone cannot establish isolation. The first-activation wrapper conservatively requires empty lease, command and personal-job tables and terminal complete/cancelled histories. Preserve stale or ambiguous records. Record the separate input-isolation proof, exact source/resources and generated-fixture scope in the private packet.
+4. Prepare and review the private manifest below, using the acknowledged candidate definition and digest. Bind its `principalArn` to the Sandbox deployment role's exact activation session, `chronote-sandbox-<decimal value of the UUID without hyphens>-1`. Put the JSON in the Sandbox environment secret `SANDBOX_BOOTSTRAP_MANIFEST`. Supply its checksum and the same operation UUID to `bootstrap_phase: activate`. The manifest source must match the workflow source. Dispatch once, not a workflow rerun.
 
-Register the reviewed candidate definition through the existing deployment authority, exactly once, with an acknowledged provider receipt. Launch requires the prepared revision to remain ACTIVE. It must:
+The candidate definition must remain ACTIVE and:
 
 - Pin its image as `repository@sha256:digest`.
 - Set `stopTimeout: 120` on the selected container.
-- Use the explicit Node command for its runtime mode: `["node", "dist/index.js"]`, `["node", "dist/apps/bot/main.js"]` or `["node", "dist/apps/api/main.js"]`.
+- Use the explicit Node command for its runtime mode: `["node", "dist/index.js"]`, `["node", "dist/apps/bot/main.js"]` or `["node", "dist/apps/api/main.js"]`. The workflow preparation mode currently prepares the combined `all` runtime.
 - Set exactly one literal `DDB_TABLE_PREFIX` and one literal `DEPLOYMENT_CANDIDATE_ID`, matching the manifest prefix and operation UUID. Same-named secret references refuse launch.
 - Set exactly one literal `TRANSCRIPTS_BUCKET` matching the manifest bucket. Missing, different or duplicate values and secret overrides refuse launch.
 - Retain reviewed environment and native secret references for credentials. Do not extract or copy secret values.
 
-The bootstrap will not retry registration or reconstruct an unacknowledged registration outcome.
+## What activation does
+
+The workflow rechecks the exact STS identity, source/operation/checksum binding, prepared candidate, legacy service, work tables and listener before any shutdown. A conditional `INTRODUCTION` receipt reserves the operation while Control is absent. Durable submitted intent precedes each service or listener write.
+
+It submits desired zero once, waits for every legacy task to be STOPPED and both groups to have no targets including draining, then rechecks work and the unchanged listener. It introduces A100/B0 weighted routing with disabled stickiness once and requires acknowledgment plus exact readback. Initialization atomically verifies the same routing-acknowledged introduction receipt while creating Control and the bootstrap receipt.
+
+The existing bootstrap then launches the pinned candidate, verifies actual task identity, fresh readiness, native protection and target health, and conditionally promotes it. A fresh serving heartbeat completes the introduction. Keep maintenance in force until these checks and the approved generated-recording acceptance succeed. Use the normal coordinator for subsequent compatible handoffs.
+
+Unknown provider acknowledgments preserve submitted receipts and refuse replay, reversal and promotion. A readiness timeout after shutdown can leave Sandbox down. Keep maintenance in force and reconcile manually; do not clear ownership or assume the old image can read checkpoint-bearing histories. Use only a proven compatible fallback or repair forward.
 
 ## Manifest contract
 
@@ -37,7 +50,9 @@ Maintenance attestations describe the reviewed operator procedure. They do not r
 
 Compute the checksum over the parsed JSON using `manifestHash` from `scripts/deployment/sandbox-manifest.cjs`. It hashes `JSON.stringify(parsedManifest)`, preserving key order. Editing the manifest, including its operation identity, requires a new reviewed checksum. There is no implicit environment-file loading or endpoint override support. Child calls ignore shared-config endpoint URLs and refuse explicit endpoint environment overrides.
 
-## Run each phase explicitly
+## Low-level phases for reviewed reconciliation
+
+The workflow is the normal first-activation entry point. The commands below are lower-level components for an explicitly reviewed continuation after provider state and ownership have been reconciled. They do not stop legacy tasks, register definitions or introduce routing. Their initialization preconditions require those transitions to be complete. Never mix them into a running or ambiguous workflow operation.
 
 Build the backend protocol builders first with `yarn build`. Use the exact reviewed manifest and checksum for every phase:
 

@@ -398,13 +398,15 @@ function createIntroduction(options) {
         ["Type", "Order", "TargetGroupArn", "ForwardConfig"].includes(k),
       ),
     );
-    assert.deepEqual(actions[0].ForwardConfig.TargetGroups, [
-      { TargetGroupArn: m.targetGroupA, Weight: 1 },
-    ]);
-    assert.equal(
-      actions[0].ForwardConfig.TargetGroupStickinessConfig.Enabled,
-      false,
-    );
+    if (actions[0].ForwardConfig !== undefined) {
+      assert.deepEqual(actions[0].ForwardConfig.TargetGroups, [
+        { TargetGroupArn: m.targetGroupA, Weight: 1 },
+      ]);
+      assert.equal(
+        actions[0].ForwardConfig.TargetGroupStickinessConfig.Enabled,
+        false,
+      );
+    }
     assert.equal((await targets(m.targetGroupB)).length, 0);
     await aws("dynamodb", "transact-write-items", {
       TransactItems: [
