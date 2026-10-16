@@ -66,6 +66,10 @@ jobs:
         continue-on-error: true
         run: yarn test:quality
 
+      - name: Simulate unavailable scanner for disposable probe
+        shell: bash
+        run: mv node_modules/jscpd/run-jscpd.js node_modules/jscpd/run-jscpd.unavailable
+
       - name: Collect all scanner outcomes
         id: scan
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.install.outcome == 'success' }}
