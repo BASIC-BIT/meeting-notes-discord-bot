@@ -95,14 +95,15 @@ async function inspectRunningTasks(aws, m, service, now) {
       m.imageDigest,
   ).length;
   let nativeProtectedTasks = 0;
-  for (let i = 0; i < all.length; i += 10) {
+  const runningArns = running.map((task) => task.taskArn);
+  for (let i = 0; i < runningArns.length; i += 10) {
     const response = await aws("ecs", "get-task-protection", {
       cluster: m.cluster,
-      tasks: all.slice(i, i + 10),
+      tasks: runningArns.slice(i, i + 10),
     });
     if (
       response.failures?.length ||
-      response.protectedTasks.length !== all.slice(i, i + 10).length
+      response.protectedTasks.length !== runningArns.slice(i, i + 10).length
     )
       throw new Error("Native protection inventory incomplete");
     nativeProtectedTasks += response.protectedTasks.filter(
@@ -232,9 +233,9 @@ async function collectSandboxObservation(options) {
         l.leaseExpiresAt >= now / 1000,
     );
     if (
-      ["starting", "in_progress", "processing", "interrupted"].includes(
-        row.status,
-      ) &&
+      (["starting", "in_progress", "processing"].includes(row.status) ||
+        (row.status === "interrupted" &&
+          row.recovery?.disposition !== "done")) &&
       !active &&
       progress <= now - 900000
     )
@@ -307,6 +308,13 @@ async function collectSandboxObservation(options) {
     history: {
       ...result,
       outcomes: {
+        recovery: outcomeCounts(cohort, (r) => r.recovery?.disposition, [
+          "pending",
+          "claimed",
+          "done",
+          "failed",
+          "needs_reconciliation",
+        ]),
         transcription: outcomeCounts(
           cohort,
           (r) => r.processing?.transcription,

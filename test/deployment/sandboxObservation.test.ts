@@ -310,11 +310,13 @@ test("generation and delivery failures are preserved as distinct observation out
 type ObservationRow = Record<string, unknown>;
 function observationFixture() {
   const data: {
+    tasks: ObservationRow[];
     history: ObservationRow[];
     leases: ObservationRow[];
     runtimes: ObservationRow[];
     controls: ObservationRow[];
   } = {
+    tasks: [],
     history: [],
     leases: [],
     runtimes: [],
@@ -338,13 +340,27 @@ function observationFixture() {
           {
             serviceName: manifest.service,
             desiredCount: 0,
-            runningCount: 0,
+            runningCount: data.tasks.filter(
+              (task) => task.lastStatus === "RUNNING",
+            ).length,
             pendingCount: 0,
             taskDefinition: manifest.taskDefinition,
           },
         ],
       };
-    if (operation === "list-tasks") return { taskArns: [] };
+    if (operation === "list-tasks")
+      return { taskArns: data.tasks.map((task) => task.taskArn) };
+    if (operation === "describe-tasks") return { tasks: data.tasks };
+    if (operation === "get-task-protection")
+      return {
+        protectedTasks: data.tasks
+          .filter((task) => task.lastStatus === "RUNNING")
+          .map((task) => ({
+            taskArn: task.taskArn,
+            protectionEnabled: true,
+            expirationDate: "2026-10-15T13:00:00.000Z",
+          })),
+      };
     if (operation === "describe-target-health")
       return { TargetHealthDescriptions: [] };
     if (operation === "describe-listeners")
@@ -504,4 +520,68 @@ test("an unfinished scan at the page bound refuses a complete observation", asyn
     ),
   ).rejects.toThrow("Observation scan incomplete");
   expect(pages).toBe(100);
+});
+
+test.each([
+  "done",
+  "failed",
+  "pending",
+  "claimed",
+  "needs_reconciliation",
+  undefined,
+])(
+  "interrupted recovery disposition %s is classified by settlement",
+  async (disposition) => {
+    const f = observationFixture();
+    f.data.history = [
+      {
+        timestamp: "2026-10-15T10:01:00.000Z",
+        status: "interrupted",
+        ...(disposition ? { recovery: { disposition } } : {}),
+      },
+    ];
+    const result = await f.collect();
+    expect(result.history.staleCandidates).toBe(disposition === "done" ? 0 : 1);
+    expect(result.history.outcomes.recovery).toEqual({
+      [disposition ?? "unknown"]: 1,
+    });
+  },
+);
+
+test("native protection is queried only for running tasks during retirement", async () => {
+  const f = observationFixture();
+  const runningArn = `${ecs}:task/test-sandbox-cluster/running`;
+  f.data.tasks = [
+    {
+      taskArn: runningArn,
+      lastStatus: "RUNNING",
+      containers: [
+        { name: manifest.containerName, imageDigest: manifest.imageDigest },
+      ],
+    },
+    {
+      taskArn: `${ecs}:task/test-sandbox-cluster/recently-stopped`,
+      lastStatus: "STOPPED",
+    },
+  ];
+  let protectionQueries = 0;
+  const result = await f.collect(
+    async (
+      service: string,
+      operation: string,
+      input: Record<string, unknown>,
+    ) => {
+      if (operation === "get-task-protection") {
+        protectionQueries++;
+        expect(input.tasks).toEqual([runningArn]);
+      }
+      return f.aws(service, operation, input);
+    },
+  );
+  expect(protectionQueries).toBe(1);
+  expect(result.runtime).toMatchObject({
+    nativeProtectedTasks: 1,
+    expectedDigestTasks: 1,
+    taskInventoryComplete: false,
+  });
 });

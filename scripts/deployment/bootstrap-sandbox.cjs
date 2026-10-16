@@ -374,6 +374,7 @@ function createBootstrap(options) {
     };
     if (
       d.taskDefinitionArn !== m.taskDefinition ||
+      d.status !== "ACTIVE" ||
       !container ||
       !container.image.endsWith("@" + m.imageDigest) ||
       container.stopTimeout !== 120 ||

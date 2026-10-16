@@ -180,6 +180,7 @@ async function fixture() {
         return {
           taskDefinition: {
             taskDefinitionArn: manifest.taskDefinition,
+            status: "ACTIVE",
             containerDefinitions: [
               {
                 name: manifest.containerName,
@@ -688,6 +689,45 @@ test.each(["DDB_TABLE_PREFIX", "DEPLOYMENT_CANDIDATE_ID"])(
                   secrets: [{ name, valueFrom: "generated-secret-reference" }],
                 })),
             },
+          };
+        return result;
+      },
+    });
+    await expect(bootstrap.launch()).rejects.toThrow(
+      "Prepared candidate definition mismatch",
+    );
+    expect(f.state.updates).toBe(0);
+    expect((await f.get("BOOTSTRAP#" + f.manifest.operationId))?.stage).toBe(
+      "initialized",
+    );
+  },
+);
+
+test.each(["INACTIVE", "DELETE_IN_PROGRESS", undefined])(
+  "unusable candidate definition status %s refuses before claiming launch",
+  async (status) => {
+    const f = await fixture();
+    await f.bootstrap.initialize();
+    const bootstrap = createBootstrap({
+      manifest: f.manifest,
+      expectedSha256: f.hash,
+      builders,
+      types,
+      now: () => 1000,
+      aws: async (
+        service: string,
+        operation: string,
+        input: Record<string, never>,
+      ) => {
+        const result = await f.aws(service, operation, input);
+        if (
+          operation === "describe-task-definition" &&
+          "taskDefinition" in result &&
+          result.taskDefinition
+        )
+          return {
+            ...result,
+            taskDefinition: { ...result.taskDefinition, status },
           };
         return result;
       },
