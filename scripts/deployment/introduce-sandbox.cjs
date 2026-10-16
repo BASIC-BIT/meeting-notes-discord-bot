@@ -518,7 +518,7 @@ function createIntroduction(options) {
     const actor = await aws("sts", "get-caller-identity", {});
     assert.equal(actor.Account, m.accountId);
     assert.equal(actor.Arn, m.principalArn);
-    assert(!(await read()), "Introduction cannot be replayed");
+    if (await read()) return completeIntroduction();
     assert(
       now() >= Date.parse(m.maintenance.confirmedAt) / 1000 &&
         now() - Date.parse(m.maintenance.confirmedAt) / 1000 <= 900,
@@ -648,9 +648,7 @@ function createIntroduction(options) {
     await bootstrap.initialize();
     return finish();
   }
-  async function finish(
-    complete = () => stage("routing_acknowledged", "complete"),
-  ) {
+  async function finish(complete = () => completeIntroduction()) {
     await bootstrap.launch();
     const result = await wait(
       async () => (await bootstrap.readiness()).kind === "ready",
@@ -710,32 +708,30 @@ function createIntroduction(options) {
     assert.equal(introduction.stage, "routing_acknowledged");
     return { control, receipt, introduction };
   }
-  async function completeRepair(previous, previousHash) {
+  async function completeIntroduction(previous, previousHash) {
     const [control, old, bootstrapReceipt, introduction, repairReceipt] =
       await Promise.all([
         read("CONTROL"),
-        read("BOOTSTRAP#" + previous.operationId),
+        previous ? read("BOOTSTRAP#" + previous.operationId) : undefined,
         read("BOOTSTRAP#" + m.operationId),
         read(),
         read("REPAIR#" + m.operationId),
       ]);
     for (const [row, id, hash] of [
-      [old, previous.operationId, previousHash],
       [bootstrapReceipt, m.operationId, options.expectedSha256],
       [introduction, m.operationId, options.expectedSha256],
-      [repairReceipt, m.operationId, options.expectedSha256],
+      ...(previous
+        ? [
+            [old, previous.operationId, previousHash],
+            [repairReceipt, m.operationId, options.expectedSha256],
+          ]
+        : []),
     ]) {
       assert.equal(row?.operationId, id);
       assert.equal(row.manifestSha256, hash);
     }
-    assert.equal(old.stage, "superseded");
-    assert.equal(old.supersededBy, m.operationId);
     assert.equal(bootstrapReceipt.stage, "complete");
     assert.equal(introduction.principalArn, m.principalArn);
-    for (const row of [introduction, repairReceipt]) {
-      assert.equal(row.previousOperationId, previous.operationId);
-      assert.equal(row.previousManifestSha256, previousHash);
-    }
     const candidate = bootstrapReceipt.candidate;
     assert.equal(candidate?.kind, "ecs");
     assert.equal(candidate.protocolVersion, 1);
@@ -757,21 +753,45 @@ function createIntroduction(options) {
     assert.deepEqual(control.servingMembers, {
       [candidate.instanceId]: candidate,
     });
-    const completed = repairReceipt.stage === "complete";
-    assert.equal(repairReceipt.stage, completed ? "complete" : "initialized");
+    const completed = introduction.stage === "complete";
     assert.equal(
       introduction.stage,
       completed ? "complete" : "routing_acknowledged",
     );
+    if (previous) {
+      assert.equal(old.stage, "superseded");
+      assert.equal(old.supersededBy, m.operationId);
+      for (const row of [introduction, repairReceipt]) {
+        assert.equal(row.previousOperationId, previous.operationId);
+        assert.equal(row.previousManifestSha256, previousHash);
+      }
+      assert.equal(repairReceipt.stage, completed ? "complete" : "initialized");
+    } else {
+      assert.equal(introduction.previousOperationId, undefined);
+      assert.equal(introduction.previousManifestSha256, undefined);
+      assert.equal(repairReceipt, undefined);
+    }
     assert(await runtimeReady(), "Fresh serving confirmation required");
     if (!completed)
       await aws("dynamodb", "transact-write-items", {
         TransactItems: [
           snapshotChange(control),
-          snapshotChange(old),
           snapshotChange(bootstrapReceipt),
           snapshotChange(introduction, { stage: "complete" }),
-          snapshotChange(repairReceipt, { stage: "complete" }),
+          ...(previous
+            ? [
+                snapshotChange(old),
+                snapshotChange(repairReceipt, { stage: "complete" }),
+              ]
+            : [
+                {
+                  ConditionCheck: {
+                    TableName: table,
+                    Key: marshall({ pk: "ENV", sk: "REPAIR#" + m.operationId }),
+                    ConditionExpression: "attribute_not_exists(pk)",
+                  },
+                },
+              ]),
         ],
       });
     return { kind: "complete", generation: 1 };
@@ -802,7 +822,8 @@ function createIntroduction(options) {
     assert.equal(actor.Account, m.accountId);
     assert.equal(actor.Arn, m.principalArn);
     const repairKey = "REPAIR#" + m.operationId;
-    if (await read(repairKey)) return completeRepair(previous, previousHash);
+    if (await read(repairKey))
+      return completeIntroduction(previous, previousHash);
     const prior = await previousState(previous, previousHash);
     assert.equal(await count(table), 3, "Foreign runtime or ownership remains");
     await workSettled();
@@ -931,7 +952,7 @@ function createIntroduction(options) {
         },
       ],
     });
-    return finish(() => completeRepair(previous, previousHash));
+    return finish(() => completeIntroduction(previous, previousHash));
   }
   return { activate, repair };
 }

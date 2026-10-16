@@ -148,6 +148,38 @@ function fixture() {
       Count: state.stage ? 1 : 0,
     };
   }
+  function getRecord(p) {
+    const sk = unmarshall(p.Key).sk;
+    if (sk === "CONTROL")
+      return {
+        Item: marshall({
+          coordinatorToken: m.operationId,
+          coordinatorEpoch: 1,
+          coordinatorExpiresAt: 0,
+          runtimeEnvironment: "ecs",
+          protocolVersion: 1,
+          servingGeneration: 1,
+          servingMembers: { runtime: runtimeIdentity },
+          pk: "ENV",
+          sk,
+        }),
+      };
+    if (sk === "BOOTSTRAP#" + m.operationId)
+      return state.launched
+        ? {
+            Item: marshall({
+              pk: "ENV",
+              sk,
+              operationId: m.operationId,
+              manifestSha256: hash,
+              stage: state.serving ? "complete" : "launched",
+              candidate: runtimeIdentity,
+            }),
+          }
+        : {};
+    if (sk === "REPAIR#" + m.operationId) return {};
+    return state.stage ? { Item: marshall(state.stage) } : {};
+  }
   const handlers = {
     ecr: {
       "describe-images": () => ({
@@ -161,8 +193,14 @@ function fixture() {
     },
     dynamodb: {
       "transact-write-items": (p) => {
+        const put = p.TransactItems.find((x) => x.Put);
+        if (!put) {
+          expect(state.serving).toBe(true);
+          state.stage.stage = "complete";
+          return {};
+        }
         if (state.stage) throw Error("exists");
-        state.stage = unmarshall(p.TransactItems.find((x) => x.Put).Put.Item);
+        state.stage = unmarshall(put.Put.Item);
         return {};
       },
       "put-item": (p) => {
@@ -174,18 +212,7 @@ function fixture() {
         state.stage.stage = unmarshall(p.ExpressionAttributeValues)[":next"];
         return {};
       },
-      "get-item": (p) =>
-        unmarshall(p.Key).sk === "CONTROL"
-          ? {
-              Item: marshall({
-                coordinatorToken: m.operationId,
-                servingGeneration: 1,
-                servingMembers: { runtime: runtimeIdentity },
-              }),
-            }
-          : state.stage
-            ? { Item: marshall(state.stage) }
-            : {},
+      "get-item": getRecord,
       scan,
     },
     ecs: {

@@ -892,6 +892,93 @@ test("read-only promotion readiness waits for ALB health and ignores replaced ru
   });
 });
 
+async function promotedIntroduction() {
+  const f = await fixture();
+  await f.bootstrap.initialize();
+  await f.bootstrap.launch();
+  await f.bootstrap.promote();
+  const runtime = await f.get("RUNTIME#runtime");
+  runtime!.readiness.observedGeneration = 1;
+  await client.send(
+    new PutItemCommand({ TableName: f.table, Item: marshall(runtime) }),
+  );
+  await client.send(
+    new PutItemCommand({
+      TableName: f.table,
+      Item: marshall({
+        pk: "ENV",
+        sk: "INTRODUCTION",
+        operationId: f.manifest.operationId,
+        manifestSha256: f.hash,
+        principalArn: f.manifest.principalArn,
+        stage: "routing_acknowledged",
+      }),
+    }),
+  );
+  return f;
+}
+
+test.each(["before", "after"])(
+  "activation reconciles completion-only after an uncertain %s acknowledgment",
+  async (mode) => {
+    const f = await promotedIntroduction();
+    let lost = mode;
+    const aws = async (
+      service: string,
+      operation: string,
+      input: Record<string, never>,
+    ) => {
+      const completing =
+        service === "dynamodb" &&
+        operation === "transact-write-items" &&
+        JSON.stringify(input).includes('"complete"');
+      const failure = completing ? lost : "";
+      if (completing) lost = "";
+      if (failure === "before") throw new Error("completion not applied");
+      const out = await f.aws(service, operation, input);
+      if (failure === "after")
+        throw new Error("completion acknowledgment lost");
+      return out;
+    };
+    const intro = createIntroduction({
+      manifest: f.manifest,
+      expectedSha256: f.hash,
+      aws,
+      now: () => 1000,
+    });
+    await expect(intro.activate()).rejects.toThrow();
+    const launches = f.state.updates;
+    await expect(intro.activate()).resolves.toMatchObject({ kind: "complete" });
+    expect(await f.get("INTRODUCTION")).toMatchObject({ stage: "complete" });
+    expect(f.state.updates).toBe(launches);
+  },
+);
+
+test.each(["repair-lineage", "repair-receipt"])(
+  "activation completion refuses foreign %s",
+  async (kind) => {
+    const f = await promotedIntroduction();
+    const row =
+      kind === "repair-lineage"
+        ? await f.get("INTRODUCTION")
+        : { pk: "ENV", sk: "REPAIR#" + f.manifest.operationId };
+    row!.previousOperationId = randomUUID();
+    await client.send(
+      new PutItemCommand({ TableName: f.table, Item: marshall(row) }),
+    );
+    const intro = createIntroduction({
+      manifest: f.manifest,
+      expectedSha256: f.hash,
+      aws: f.aws,
+      now: () => 1000,
+    });
+    await expect(intro.activate()).rejects.toThrow();
+    expect(await f.get("INTRODUCTION")).toMatchObject({
+      stage: "routing_acknowledged",
+    });
+  },
+);
+
 async function repairFixture() {
   const f = await fixture();
   const previous = {
