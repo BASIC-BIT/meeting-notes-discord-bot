@@ -11,6 +11,7 @@ import {
 } from "./billingChangeProvider";
 import { resolveTierFromPrice } from "./pricingService";
 import { getBillingChangeRepository } from "../repositories/billingChangeRepository";
+import { isScheduledInvoice } from "./billingChangeSchedule";
 
 export function assertRenewalOwner(
   subscription: StripeSubscription,
@@ -56,6 +57,19 @@ export async function readRenewalPaidBasis(
     subscription,
     guildId,
     invoiceId,
+  );
+  const customerId = stripeId(subscription.customer);
+  if (!customerId) throw changeUnavailable();
+  await scheduledRenewalOperation(
+    invoice,
+    {
+      guildId,
+      subscriptionId: subscription.id,
+      customerId,
+      mode: subscription.livemode ? "live" : "test",
+      paid: { periodEnd: item.current_period_start },
+    },
+    item.price.id,
   );
   return {
     invoiceId: invoice.id,
@@ -109,9 +123,13 @@ function assertRenewalInvoiceOwner(
   )
     throw changeUnavailable();
 }
+type ScheduledRenewalBoundary = Pick<
+  RenewalRecovery,
+  "guildId" | "subscriptionId" | "customerId" | "mode"
+> & { paid: Pick<RenewalRecovery["paid"], "periodEnd"> };
 async function scheduledRenewalOperation(
   invoice: StripeInvoice,
-  recovery: RenewalRecovery,
+  recovery: ScheduledRenewalBoundary,
   priceId: string | undefined,
 ): Promise<string | null> {
   const operationId =
@@ -136,6 +154,8 @@ async function scheduledRenewalOperation(
     !("consent" in operation) ||
     !operation.consent
   )
+    throw changeUnavailable();
+  if (invoice.status === "paid" && !isScheduledInvoice(invoice, operation))
     throw changeUnavailable();
   return operationId;
 }

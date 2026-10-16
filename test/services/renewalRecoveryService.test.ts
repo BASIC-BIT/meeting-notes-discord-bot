@@ -93,6 +93,7 @@ function fixture() {
   renewal.status_transitions.finalized_at = paidEndsAt + 3600;
   renewal.created = paidEndsAt;
   renewal.lines.data[0].id = "il_renewal";
+  renewal.lines.data[0].invoice = renewal.id;
   renewal.lines.data[0].period = {
     start: paidEndsAt,
     end: paidEndsAt + 2592000,
@@ -585,6 +586,7 @@ async function scheduledFixture(withOffer = false) {
     target: {
       ...changeOperation.target,
       priceId: "price_basic",
+      unitAmount: 1000,
       selection: {
         tier: "basic" as const,
         interval: "month" as const,
@@ -745,6 +747,37 @@ test.each([
     }
   },
 );
+
+test("does not adopt or grant an underpaid scheduled target through renewal recovery", async () => {
+  const { readRenewalPaidBasis } =
+    await import("../../src/services/renewalRecoveryEvidence");
+  const { f, operation } = await scheduledFixture();
+  operation.target.unitAmount = 1000;
+  await f.refresh();
+  f.renewal.status = "paid";
+  f.renewal.amount_remaining = 0;
+  f.renewal.amount_paid = 800;
+  f.renewal.total = 800;
+  f.renewal.total_discount_amounts = [
+    { amount: 200, discount: "di_unreviewed" },
+  ];
+  f.renewal.lines.data[0].invoice = f.renewal.id;
+  f.renewal.lines.data[0].discount_amounts = [
+    { amount: 200, discount: "di_unreviewed" },
+  ];
+  await expect(f.refresh()).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  await expect(
+    readRenewalPaidBasis(
+      f.stripe,
+      f.subscription,
+      operation.guildId,
+      f.renewal.id,
+    ),
+  ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  expect(
+    await getRenewalRecoveryRepository().getCurrent(operation.guildId),
+  ).toMatchObject({ state: "grace" });
+});
 
 test("billing status exposes the same verified invoice only to the original payer", async () => {
   const f = fixture();

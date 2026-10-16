@@ -433,9 +433,9 @@ async function firstScheduledInvoice(
   }
   return null;
 }
-function isScheduledInvoice(
+export function isScheduledInvoice(
   invoice: import("../types/stripe").StripeInvoice,
-  operation: Scheduled,
+  operation: ScheduledInvoiceOperation,
   periodStart = operation.source.periodEnd,
 ) {
   if (operation.target.offer) {
@@ -478,9 +478,13 @@ function isScheduledInvoice(
   );
 }
 
+type ScheduledInvoiceOperation = Pick<
+  BillingChangeOperation,
+  "source" | "target" | "mode" | "operationId"
+>;
 function isUndiscountedScheduledInvoice(
   invoice: import("../types/stripe").StripeInvoice,
-  operation: Scheduled,
+  operation: ScheduledInvoiceOperation,
 ): boolean {
   if (
     invoice.currency !== operation.target.currency ||
