@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { ledgerWriterRuntimeSchema } from "./ledgerWriterRuntime";
+export const RENEWAL_RECOVERY_WRITER_VERSION = "renewal-grace-v1";
 import { isDeepStrictEqual } from "node:util";
 
 const seconds = z.number().int().nonnegative();
@@ -29,6 +31,8 @@ const base = z
     paid,
     scheduledOperationId: id.nullable(),
     enforcementAccepted: z.boolean(),
+    writerVersion: z.literal(RENEWAL_RECOVERY_WRITER_VERSION).optional(),
+    writerRuntime: ledgerWriterRuntimeSchema.optional(),
   })
   .strict();
 const bound = base.extend({
@@ -49,6 +53,7 @@ export const renewalRecoveryReceiptsSchema = z
     refundIds: z.array(id),
     canceled: z.boolean(),
     collectionRestored: z.boolean().default(false),
+    collectionToRestore: z.array(id).nullable().default(null),
     unrelatedInvoices: z
       .array(z.object({ id, autoAdvance: z.boolean() }).strict())
       .default([]),
@@ -91,7 +96,11 @@ export const renewalRecoverySchema = z
   .superRefine((record, context) => {
     if (
       record.state === "canceled" &&
-      !(record.receipts.canceled && record.receipts.collectionRestored)
+      !(
+        record.receipts.canceled &&
+        record.receipts.collectionRestored &&
+        record.receipts.collectionToRestore !== null
+      )
     )
       context.addIssue({
         code: "custom",
@@ -151,7 +160,8 @@ export function isRenewalCancellationComplete(
     record &&
     (record.state === "canceling" || record.state === "canceled") &&
     record.receipts.canceled &&
-    record.receipts.collectionRestored,
+    record.receipts.collectionRestored &&
+    record.receipts.collectionToRestore !== null,
   );
 }
 export const renewalRecoveryNextCheck = (
@@ -198,6 +208,8 @@ export function assertRenewalRecoveryTransition(
     "payerId",
     "mode",
     "paid",
+    "writerVersion",
+    "writerRuntime",
   ] as const)
     if (!isDeepStrictEqual(next[field], previous[field]))
       throw new Error("Renewal paid source is immutable");
@@ -240,6 +252,20 @@ function assertRecoveryReceipts(
     !isDeepStrictEqual(before.unrelatedInvoices, after.unrelatedInvoices)
   )
     throw new Error("Collection snapshot is immutable");
+  if (
+    before.collectionToRestore !== null &&
+    !isDeepStrictEqual(before.collectionToRestore, after.collectionToRestore)
+  )
+    throw new Error("Collection restoration targets are immutable");
+  if (
+    after.collectionToRestore?.some(
+      (id) =>
+        !after.unrelatedInvoices.some(
+          (invoice) => invoice.id === id && invoice.autoAdvance,
+        ),
+    )
+  )
+    throw new Error("Collection restoration must match its original snapshot");
   if (before.refundIds.some((id) => !after.refundIds.includes(id)))
     throw new Error("Refund receipts cannot be removed");
   if (next.state === "canceled" && !isRenewalCancellationComplete(next))

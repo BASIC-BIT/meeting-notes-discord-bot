@@ -2,6 +2,7 @@
 
 import {
   afterAll,
+  afterEach,
   beforeEach,
   describe,
   expect,
@@ -28,6 +29,14 @@ jest.mock("../../src/services/analyticsService", () => ({
   captureEvent: jest.fn(),
 }));
 
+beforeEach(() => {
+  jest
+    .spyOn(renewalRecoveryService, "trackPaidRenewalPeriod")
+    .mockResolvedValue();
+});
+afterEach(() => {
+  jest.mocked(renewalRecoveryService.trackPaidRenewalPeriod).mockRestore();
+});
 const guildId = "111111111111111111";
 const basicPrice = { id: "price_basic", lookup_key: "chronote_basic_monthly" };
 const originalStripeConfig = { ...config.stripe };
@@ -108,6 +117,7 @@ const subscriptionEvent = (status: string, eventId: string) =>
     data: {
       object: {
         id: "sub_basic",
+        latest_invoice: "in_current",
         status,
         metadata: { guild_id: guildId },
         start_date: 1_767_225_600,
@@ -193,6 +203,7 @@ const checkoutCompletedEvent = {
 } as unknown as StripeEvent;
 
 const activeStripeSubscription = {
+  latest_invoice: "in_current",
   id: "sub_basic",
   created: 1_767_225_600,
   status: "active",
@@ -1494,5 +1505,26 @@ test("does not acknowledge a failed renewal webhook when durable recovery cannot
     config.mock.enabled = previous.mock;
     Object.assign(config.stripe, originalStripeConfig);
     config.stripe.renewalGraceEnabled = previous.enabled;
+  }
+});
+
+test("normal paid webhook acknowledgement waits for durable renewal coverage", async () => {
+  resetMockStore();
+  config.mock.enabled = true;
+  config.stripe.webhookSecret = "whsec_test";
+  const event = subscriptionEvent("active", "evt_paid_coverage_failure");
+  const tracking = jest
+    .mocked(renewalRecoveryService.trackPaidRenewalPeriod)
+    .mockRejectedValueOnce(new Error("Coverage registration unavailable"));
+  const { server, baseUrl } = createServer(createStripe(event));
+  try {
+    expect((await postWebhook(baseUrl)).statusCode).toBe(500);
+    expect(tracking).toHaveBeenCalled();
+    expect((await getStripeWebhookRepository().get(event.id))?.state).not.toBe(
+      "completed",
+    );
+  } finally {
+    await closeServer(server);
+    Object.assign(config.stripe, originalStripeConfig);
   }
 });

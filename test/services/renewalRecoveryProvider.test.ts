@@ -21,7 +21,7 @@ beforeEach(() => {
 afterEach(() => {
   config.subscription.stripeMode = originalMode;
 });
-function fixture(cash = 0, post = 0, tax = 0) {
+function fixture(cash = 0, post = 0, tax = 0, extra = 0) {
   const native = {
     ...sourceSubscription,
     metadata: { ...sourceSubscription.metadata },
@@ -43,9 +43,9 @@ function fixture(cash = 0, post = 0, tax = 0) {
     metadata: {},
     status: "open" as typeof fundedInvoice.status,
     amount_paid: cash,
-    amount_remaining: 1000 + tax - cash,
-    amount_due: 1000 + tax,
-    total: 1000 + tax,
+    amount_remaining: 1000 + tax + extra - cash,
+    amount_due: 1000 + tax + extra,
+    total: 1000 + tax + extra,
     auto_advance: true,
     lines: {
       ...fundedInvoice.lines,
@@ -60,9 +60,21 @@ function fixture(cash = 0, post = 0, tax = 0) {
       finalized_at: paidEndsAt + 3600,
     },
   };
+  if (extra)
+    invoice.lines.data.push({
+      ...invoice.lines.data[0],
+      id: "il_unrelated",
+      amount: extra,
+    });
   const other = {
     ...fundedInvoice,
     id: "in_other",
+    parent: {
+      type: "subscription_details" as const,
+      quote_details: null,
+      subscription_details: { metadata: {}, subscription: "sub_other" },
+    },
+    metadata: {},
     status: "open" as const,
     auto_advance: true,
     amount_remaining: 200,
@@ -106,6 +118,8 @@ function fixture(cash = 0, post = 0, tax = 0) {
   let processing = false;
   let payOnPause = false;
   let processingOnPause = false;
+  let manualCollectionStop = false;
+  let loseRestoreAck = false;
   type Request = { path: string; method: string; fields: URLSearchParams };
   function subscriptionRequest({ path, method, fields }: Request): unknown {
     if (path === "/v1/customers/cus_renewal")
@@ -148,17 +162,34 @@ function fixture(cash = 0, post = 0, tax = 0) {
       return invoice;
     if (path === `/v1/invoices/${other.id}` && method === "GET") return other;
     if (path.startsWith("/v1/invoices/") && method === "POST") {
-      const target = path.endsWith(other.id) ? other : invoice;
-      if (fields.has("auto_advance"))
-        target.auto_advance = fields.get("auto_advance") === "true";
-      if (payOnPause && target.id === invoice.id) {
-        invoice.status = "paid";
-        invoice.amount_remaining = 0;
-      }
-      if (processingOnPause && target.id === invoice.id) processing = true;
-      return target;
+      return updateInvoice(path.endsWith(other.id) ? other : invoice, fields);
     }
     return undefined;
+  }
+  function updateInvoice(
+    target: Pick<typeof invoice, "id" | "auto_advance" | "metadata">,
+    fields: URLSearchParams,
+  ): unknown {
+    if (fields.has("auto_advance"))
+      target.auto_advance = fields.get("auto_advance") === "true";
+    if (payOnPause && target.id === invoice.id) {
+      invoice.status = "paid";
+      invoice.amount_remaining = 0;
+    }
+    if (processingOnPause && target.id === invoice.id) processing = true;
+    for (const [key, value] of fields) {
+      const match = /^metadata\[(.+)\]$/.exec(key);
+      if (match) target.metadata = { ...target.metadata, [match[1]]: value };
+    }
+    if (
+      loseRestoreAck &&
+      target.id === other.id &&
+      fields.get("auto_advance") === "true"
+    ) {
+      loseRestoreAck = false;
+      throw new Error("Lost collection restoration acknowledgement");
+    }
+    return target;
   }
   function createNote(fields: URLSearchParams): unknown {
     const refund = Number(fields.get("refund_amount") ?? 0);
@@ -190,11 +221,12 @@ function fixture(cash = 0, post = 0, tax = 0) {
       refunds: refund ? [{ refund: "re_owned", amount_refunded: refund }] : [],
       customer_balance_transaction: credit ? "cbt_owned" : null,
     };
+    if (manualCollectionStop) other.auto_advance = false;
     notes.push(note);
     invoice.pre_payment_credit_notes_amount = note.pre_payment_amount;
     invoice.post_payment_credit_notes_amount = post;
-    invoice.amount_remaining = 0;
-    invoice.status = "paid";
+    invoice.amount_remaining = extra;
+    invoice.status = extra ? "open" : "paid";
     if (loseNoteAck) {
       loseNoteAck = false;
       throw new Error("Lost credit note acknowledgement");
@@ -292,6 +324,12 @@ function fixture(cash = 0, post = 0, tax = 0) {
     },
     set recovery(value: RenewalRecovery) {
       recovery = value;
+    },
+    loseRestore() {
+      loseRestoreAck = true;
+    },
+    manualCollectionStop() {
+      manualCollectionStop = true;
     },
     processingOnPause() {
       processingOnPause = true;
@@ -439,7 +477,7 @@ test("holds cleanup when payment starts processing during invoice pause", async 
   expect(f.notes).toHaveLength(0);
   expect(f.requests.some((request) => request.method === "DELETE")).toBe(false);
 });
-test.each([1, 2, 3, 4])(
+test.each([1, 2, 3, 4, 5])(
   "resumes safely after receipt %s cannot persist",
   async (stage) => {
     const f = fixture();
@@ -453,3 +491,73 @@ test.each([1, 2, 3, 4])(
     });
   },
 );
+
+test.each([1, 2, 3, 4, 5])(
+  "fences every native mutation boundary after write %s and resumes from receipts",
+  async (stage) => {
+    const f = fixture();
+    const controller = new AbortController();
+    let writes = 0;
+    const result = cancelUnpaidRenewal({
+      stripe: f.stripe,
+      recovery: f.recovery,
+      now: paidEndsAt + 4000,
+      signal: controller.signal,
+      onReceipt: async (next) => {
+        f.recovery = next;
+      },
+      effect: async (run) => {
+        const value = await run();
+        if (++writes === stage) controller.abort();
+        return value;
+      },
+    });
+    if (stage < 5) await expect(result).rejects.toThrow();
+    else expect(await result).toBe("canceled");
+    expect(writes).toBe(stage);
+    expect(await f.run()).toBe("canceled");
+    expect(f.notes).toHaveLength(1);
+    expect(f.other.auto_advance).toBe(true);
+  },
+);
+
+test("does not re-enable an unrelated invoice manually stopped during financial cleanup", async () => {
+  const f = fixture();
+  f.manualCollectionStop();
+  expect(await f.run()).toBe("canceled");
+  expect(f.other.auto_advance).toBe(false);
+});
+test("a recovery replay preserves a later manual collection change", async () => {
+  const f = fixture();
+  expect(await f.run()).toBe("canceled");
+  f.other.auto_advance = false;
+  expect(await f.run()).toBe("canceled");
+  expect(f.other.auto_advance).toBe(false);
+});
+
+test("preserves unrelated debt on the same invoice and restores its own paused collection", async () => {
+  const f = fixture(300, 500, 0, 200);
+  expect(await f.run()).toBe("canceled");
+  expect(f.invoice).toMatchObject({
+    status: "open",
+    amount_remaining: 200,
+    auto_advance: true,
+  });
+  expect(
+    f.invoice.lines.data.find((line) => line.id === "il_unrelated")?.amount,
+  ).toBe(200);
+  expect(f.other.parent.subscription_details.subscription).toBe("sub_other");
+  expect(
+    f.requests
+      .filter((request) => request.method === "DELETE")
+      .map((request) => request.path),
+  ).toEqual([`/v1/subscriptions/${f.native.id}`]);
+});
+test("native restoration marker survives a lost acknowledgment and preserves a later manual stop", async () => {
+  const f = fixture();
+  f.loseRestore();
+  await expect(f.run()).rejects.toThrow();
+  f.other.auto_advance = false;
+  expect(await f.run()).toBe("canceled");
+  expect(f.other.auto_advance).toBe(false);
+});

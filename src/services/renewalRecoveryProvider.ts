@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type Stripe from "stripe";
 import type {
   StripeClient,
   StripeInvoice,
   StripeSubscription,
+  StripeEffect,
 } from "../types/stripe";
 import {
   renewalRecoveryKey,
@@ -21,6 +22,8 @@ type Input = {
   stripe: StripeClient;
   recovery: RenewalRecovery;
   now: number;
+  signal?: AbortSignal;
+  effect?: StripeEffect;
   onReceipt(next: RenewalRecovery): Promise<void>;
 };
 function assertInvoice(invoice: StripeInvoice, record: Canceling): void {
@@ -218,6 +221,7 @@ async function createPlanCreditNote(
   stripe: StripeClient,
   invoice: StripeInvoice,
   record: Canceling,
+  write: StripeEffect,
 ): Promise<Stripe.CreditNote> {
   const lines: Stripe.CreditNoteCreateParams.Line[] = [
     {
@@ -239,29 +243,32 @@ async function createPlanCreditNote(
   const cash = Math.min(invoice.amount_paid, preview.post_payment_amount);
   const credit = preview.post_payment_amount - cash;
   if (cash > 0) await paidCharge(stripe, invoice, record);
-  return stripe.creditNotes.create(
-    {
-      invoice: invoice.id,
-      lines,
-      refund_amount: cash || undefined,
-      credit_amount: credit || undefined,
-      reason: "order_change",
-      email_type: "none",
-      metadata: {
-        chronote_renewal_recovery: renewalRecoveryKey(record),
-        chronote_recovery_refund: String(cash),
-        chronote_recovery_credit: String(credit),
+  return write(() =>
+    stripe.creditNotes.create(
+      {
+        invoice: invoice.id,
+        lines,
+        refund_amount: cash || undefined,
+        credit_amount: credit || undefined,
+        reason: "order_change",
+        email_type: "none",
+        metadata: {
+          chronote_renewal_recovery: renewalRecoveryKey(record),
+          chronote_recovery_refund: String(cash),
+          chronote_recovery_credit: String(credit),
+        },
       },
-    },
-    {
-      idempotencyKey: `${renewalRecoveryKey(record)}:credit:${cash}:${credit}`,
-    },
+      {
+        idempotencyKey: `${renewalRecoveryKey(record)}:credit:${cash}:${credit}`,
+      },
+    ),
   );
 }
 async function releaseRenewalSchedule(
   stripe: StripeClient,
   subscription: StripeSubscription,
   record: Canceling,
+  write: StripeEffect,
 ): Promise<void> {
   const scheduleId = stripeId(subscription.schedule);
   if (!scheduleId) return;
@@ -277,34 +284,71 @@ async function releaseRenewalSchedule(
     operation.mode !== record.mode
   )
     throw changeUnavailable();
-  if (!(await releaseOwnedSchedule(stripe, operation, scheduleId)))
+  if (!(await releaseOwnedSchedule(stripe, operation, scheduleId, write)))
     throw changeUnavailable();
+}
+function collectionMarker(record: Canceling): string {
+  return (
+    "chronote_collection_" +
+    createHash("sha256")
+      .update(renewalRecoveryKey(record))
+      .digest("hex")
+      .slice(0, 16)
+  );
 }
 async function restoreCollection(
   stripe: StripeClient,
   record: Canceling,
+  write: StripeEffect,
 ): Promise<void> {
-  for (const before of record.receipts.unrelatedInvoices) {
-    if (!before.autoAdvance) continue;
-    let invoice = await stripe.invoices.retrieve(before.id);
+  if (record.receipts.collectionRestored) return;
+  if (record.receipts.collectionToRestore === null) throw changeUnavailable();
+  const marker = collectionMarker(record);
+  for (const id of record.receipts.collectionToRestore) {
+    let invoice = await stripe.invoices.retrieve(id);
     if (
       stripeId(invoice.customer) !== record.customerId ||
       invoice.livemode !== (record.mode === "live")
     )
       throw changeUnavailable();
     if (
-      invoice.status !== "open" ||
-      invoice.amount_remaining <= 0 ||
-      invoice.auto_advance
+      !["open", "draft"].includes(invoice.status ?? "") ||
+      invoice.metadata?.[marker] === "restored"
     )
       continue;
-    invoice = await stripe.invoices.update(
-      invoice.id,
-      { auto_advance: true },
-      { idempotencyKey: `${renewalRecoveryKey(record)}:restore:${invoice.id}` },
+    if (invoice.auto_advance) continue;
+    invoice = await write(() =>
+      stripe.invoices.update(
+        id,
+        { auto_advance: true, metadata: { [marker]: "restored" } },
+        { idempotencyKey: `${renewalRecoveryKey(record)}:restore:${id}` },
+      ),
     );
-    if (!invoice.auto_advance) throw changeUnavailable();
+    if (!invoice.auto_advance || invoice.metadata?.[marker] !== "restored")
+      throw changeUnavailable();
   }
+}
+async function collectionBeforeCancellation(
+  stripe: StripeClient,
+  record: Canceling,
+  save: (receipts: Canceling["receipts"]) => Promise<Canceling>,
+): Promise<Canceling> {
+  if (record.receipts.collectionToRestore !== null) return record;
+  const ids: string[] = [];
+  for (const before of record.receipts.unrelatedInvoices) {
+    if (!before.autoAdvance) continue;
+    const invoice = await stripe.invoices.retrieve(before.id);
+    if (
+      stripeId(invoice.customer) !== record.customerId ||
+      invoice.livemode !== (record.mode === "live")
+    )
+      throw changeUnavailable();
+    const ownPause =
+      invoice.id === record.invoice.id &&
+      invoice.metadata?.chronote_renewal_pause === renewalRecoveryKey(record);
+    if (invoice.auto_advance || ownPause) ids.push(invoice.id);
+  }
+  return save({ ...record.receipts, collectionToRestore: ids });
 }
 export async function cancelUnpaidRenewal(
   input: Input,
@@ -315,6 +359,10 @@ export async function cancelUnpaidRenewal(
   )
     throw changeUnavailable();
   const stripe = input.stripe;
+  const write: StripeEffect = (run) => {
+    input.signal?.throwIfAborted();
+    return input.effect ? input.effect(run) : run();
+  };
   let record = input.recovery;
   const save = async (receipts: Canceling["receipts"]) => {
     const next = { ...record, revision: randomUUID(), receipts };
@@ -333,11 +381,11 @@ export async function cancelUnpaidRenewal(
     customer.metadata.discord_id !== record.payerId
   )
     throw changeUnavailable();
-  const debt = await settleRenewalDebt(stripe, record, save);
+  const debt = await settleRenewalDebt(stripe, record, save, write);
   if (debt !== "cleared") return debt;
-  await cancelVerifiedSubscription(stripe, subscription, record);
+  await cancelVerifiedSubscription(stripe, subscription, record, write, save);
   await save({ ...record.receipts, canceled: true });
-  await restoreCollection(stripe, record);
+  await restoreCollection(stripe, record, write);
   await save({ ...record.receipts, collectionRestored: true });
   return "canceled";
 }
@@ -346,6 +394,7 @@ async function settleRenewalDebt(
   stripe: StripeClient,
   record: Canceling,
   save: (receipts: Canceling["receipts"]) => Promise<Canceling>,
+  write: StripeEffect,
 ): Promise<"paid" | "pending" | "cleared"> {
   let invoice = await stripe.invoices.retrieve(record.invoice.id);
   assertInvoice(invoice, record);
@@ -356,17 +405,22 @@ async function settleRenewalDebt(
     return "pending";
   record = await snapshotCollection(stripe, invoice, record, save);
   if (!note && invoice.status !== "void") {
-    await stripe.invoices.update(
-      invoice.id,
-      { auto_advance: false },
-      { idempotencyKey: `${renewalRecoveryKey(record)}:pause-invoice` },
+    await write(() =>
+      stripe.invoices.update(
+        invoice.id,
+        {
+          auto_advance: false,
+          metadata: { chronote_renewal_pause: renewalRecoveryKey(record) },
+        },
+        { idempotencyKey: `${renewalRecoveryKey(record)}:pause-invoice` },
+      ),
     );
     invoice = await stripe.invoices.retrieve(invoice.id);
     assertInvoice(invoice, record);
     if (invoice.status === "paid" && invoice.amount_remaining === 0)
       return "paid";
     if (await inFlightPayment(stripe, invoice, record)) return "pending";
-    note = await createPlanCreditNote(stripe, invoice, record);
+    note = await createPlanCreditNote(stripe, invoice, record, write);
   }
   if (note) {
     assertCreditNote(note, invoice, record);
@@ -409,21 +463,28 @@ async function cancelVerifiedSubscription(
   stripe: StripeClient,
   subscription: StripeSubscription,
   record: Canceling,
+  write: StripeEffect,
+  save: (receipts: Canceling["receipts"]) => Promise<Canceling>,
 ): Promise<void> {
-  await releaseRenewalSchedule(stripe, subscription, record);
+  await releaseRenewalSchedule(stripe, subscription, record, write);
   subscription = await stripe.subscriptions.retrieve(record.subscriptionId);
   assertRenewalOwner(subscription, record);
   if (subscription.status !== "canceled") {
-    subscription = await stripe.subscriptions.update(
-      subscription.id,
-      { metadata: { chronote_renewal_recovery: renewalRecoveryKey(record) } },
-      { idempotencyKey: `${renewalRecoveryKey(record)}:mark-cancellation` },
+    subscription = await write(() =>
+      stripe.subscriptions.update(
+        subscription.id,
+        { metadata: { chronote_renewal_recovery: renewalRecoveryKey(record) } },
+        { idempotencyKey: `${renewalRecoveryKey(record)}:mark-cancellation` },
+      ),
     );
     assertRenewalOwner(subscription, record);
-    subscription = await stripe.subscriptions.cancel(
-      subscription.id,
-      { invoice_now: false, prorate: false },
-      { idempotencyKey: `${renewalRecoveryKey(record)}:cancel` },
+    record = await collectionBeforeCancellation(stripe, record, save);
+    subscription = await write(() =>
+      stripe.subscriptions.cancel(
+        subscription.id,
+        { invoice_now: false, prorate: false },
+        { idempotencyKey: `${renewalRecoveryKey(record)}:cancel` },
+      ),
     );
   }
   assertRenewalOwner(subscription, record);

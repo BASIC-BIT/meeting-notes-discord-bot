@@ -33,7 +33,10 @@ import {
 
 import { BillingActionError } from "./billingActionError";
 export { BillingActionError } from "./billingActionError";
-import { createInitialPurchase } from "./initialPurchaseService";
+import {
+  createInitialPurchase,
+  recoverAcceptedPurchase,
+} from "./initialPurchaseService";
 import {
   getGuildBasicIntroOffer,
   getProviderSubscriptionDetails,
@@ -558,6 +561,13 @@ async function createExistingSubscriptionConfirmation(params: {
         "Server billing information does not match Stripe; contact support",
       );
     }
+    const recovered = await recoverAcceptedPurchase({
+      stripe,
+      guildId,
+      payerId: user.id,
+      subscription,
+    });
+    if (recovered) return recovered;
     // Only provider-confirmed terminal subscriptions can start a new purchase.
     // A failed read or unsupported state must never fall through to Checkout.
     if (

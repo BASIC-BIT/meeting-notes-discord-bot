@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { StripeClient } from "../types/stripe";
+import type { StripeClient, StripeEffect } from "../types/stripe";
 import {
   billingChangeOperationSchema,
   billingChangeBase,
@@ -55,6 +55,7 @@ type Context = {
   guildId: string;
   payerId: string;
   now?: number;
+  effect?: StripeEffect;
 };
 const at = (context: Context) => context.now ?? Math.floor(Date.now() / 1000);
 const repo = () => getBillingChangeRepository();
@@ -464,10 +465,7 @@ async function ensureScheduledRenewalWatch(
   context: Context,
   operation: Extract<BillingChangeOperation, { state: "accepted" }>,
 ): Promise<void> {
-  if (
-    config.stripe.renewalGraceEnabled &&
-    operation.target.selection.tier !== "free"
-  ) {
+  if (operation.target.selection.tier !== "free") {
     const recovery = await getRenewalRecoveryRepository().getCurrent(
       context.guildId,
     );
@@ -622,7 +620,11 @@ async function settleScheduled(
       ? beginCancel(context, operation)
       : operation;
   }
-  const result = await readScheduledChangeSettlement(context.stripe, operation);
+  const result = await readScheduledChangeSettlement(
+    context.stripe,
+    operation,
+    context.effect,
+  );
   if (result.kind === "waiting") return operation;
   const next = billingChangeOperationSchema.parse({
     ...billingChangeBase(operation),
@@ -726,10 +728,14 @@ async function finishReconciliation(
 export async function reconcileBillingChangeForWebhook(
   stripe: StripeClient,
   guildId: string,
+  effect?: StripeEffect,
 ) {
   const control = await repo().getControl(guildId);
   if (!control) return;
   const operation = await repo().getOperation(guildId, control.operationId);
   if (!operation) throw changeUnavailable();
-  await resume({ stripe, guildId, payerId: operation.payerId }, operation);
+  await resume(
+    { stripe, guildId, payerId: operation.payerId, effect },
+    operation,
+  );
 }

@@ -16,6 +16,11 @@ import {
   startRuntimeHealthServer,
   type RuntimeHealthServer,
 } from "../services/runtimeHealthServer";
+import { getStripeClient } from "../services/stripeClient";
+import {
+  startRenewalRecoveryWorker,
+  verifyRenewalRecoveryReadiness,
+} from "../services/renewalRecoveryWorkerService";
 import { createRuntimeShutdown } from "../services/runtimeShutdownService";
 
 export type AppBootstrapMode = "all" | "bot" | "api";
@@ -54,7 +59,10 @@ export function bootstrapApp(mode: AppBootstrapMode): Promise<void> {
       owner.startupSignal.throwIfAborted();
       if (mode !== "bot") await setupWebServer(healthServer);
       owner.startupSignal.throwIfAborted();
+      const stripe = mode !== "bot" ? getStripeClient() : null;
+      if (stripe) await verifyRenewalRecoveryReadiness(stripe);
       await runtime.ready();
+      if (stripe) startRenewalRecoveryWorker(stripe);
     } catch (error) {
       void owner.request("startup_failure");
       runtime?.failed();

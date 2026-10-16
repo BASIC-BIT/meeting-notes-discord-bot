@@ -3,12 +3,16 @@ import {
   DynamoDBClient,
   TransactWriteItemsCommand,
   QueryCommand,
+  ScanCommand,
+  DescribeTableCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
 import { config } from "../../src/services/configService";
 import { getRenewalRecoveryRepository } from "../../src/repositories/renewalRecoveryRepository";
 import { renewalRecoverySchema } from "../../src/types/renewalRecovery";
 import {
+  scanGuildSubscriptionPage,
+  getRenewalRecoveryIndexStatus,
   claimBillingChangeOperation,
   claimRenewalOperation,
   compareAndWritePurchaseAttempt,
@@ -143,4 +147,38 @@ test("all three native billing claims check the financial recovery fence", async
     ).toBe(true);
   }
   expect(send).toHaveBeenCalledTimes(3);
+});
+
+test("native coverage inventory is bounded, resumable and excludes synthetic operation keys", async () => {
+  config.mock.enabled = false;
+  const send = jest
+    .spyOn(DynamoDBClient.prototype, "send")
+    .mockResolvedValueOnce({
+      Items: [
+        marshall({ guildId: changePointer.guildId }),
+        marshall({ guildId: "CHANGE_OP#synthetic" }),
+      ],
+      LastEvaluatedKey: marshall({ guildId: "RENEWAL_RECOVERY#cursor" }),
+    });
+  expect(await scanGuildSubscriptionPage("previous")).toEqual({
+    guildIds: [changePointer.guildId],
+    cursor: "RENEWAL_RECOVERY#cursor",
+  });
+  const command = send.mock.calls[0][0];
+  if (!(command instanceof ScanCommand)) throw new Error("Expected scan");
+  expect(command.input).toMatchObject({
+    Limit: 100,
+    ConsistentRead: true,
+    ProjectionExpression: "guildId",
+    ExclusiveStartKey: marshall({ guildId: "previous" }),
+  });
+  send.mockResolvedValueOnce({
+    Table: {
+      GlobalSecondaryIndexes: [
+        { IndexName: "RenewalRecoveryDueIndex", IndexStatus: "ACTIVE" },
+      ],
+    },
+  });
+  expect(await getRenewalRecoveryIndexStatus()).toBe("ACTIVE");
+  expect(send.mock.calls[1][0]).toBeInstanceOf(DescribeTableCommand);
 });

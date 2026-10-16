@@ -55,6 +55,7 @@ function viewStatus(
   record: RenewalRecovery,
   now: number,
 ): RecoveryDetails["status"] {
+  if (!record.enforcementAccepted) return "settlement_pending";
   if (record.state === "canceled") return "canceled";
   if (record.state === "canceling") return "reconciling";
   if (record.state === "grace")

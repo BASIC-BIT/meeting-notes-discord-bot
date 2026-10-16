@@ -20,7 +20,7 @@ import type { GuildSubscription } from "../types/db";
 import type { PurchaseAttempt } from "../types/purchase";
 import type { ExpectedIntroOffer, IntroOfferChoice } from "../types/pricing";
 import { prepareBasicIntroCheckoutWithAuthority } from "./basicIntroOfferService";
-import type { StripeClient } from "../types/stripe";
+import type { StripeClient, StripeSubscription } from "../types/stripe";
 import { BillingActionError } from "./billingActionError";
 import { captureEvent } from "./analyticsService";
 import {
@@ -309,6 +309,32 @@ async function completedSessionOutcome(
   return currentOutcome(attempt);
 }
 
+export async function recoverAcceptedPurchase(input: {
+  stripe: StripeClient;
+  guildId: string;
+  payerId: string;
+  subscription: StripeSubscription;
+}): Promise<string | null> {
+  const attempt = await getPurchaseRepository().get(input.guildId);
+  if (
+    input.subscription.status !== "active" ||
+    !attempt ||
+    !["open", "preparing"].includes(attempt.state) ||
+    input.subscription.metadata.purchase_attempt_id !== attempt.attemptId
+  )
+    return null;
+  if (attempt.payerId !== input.payerId)
+    throw new BillingActionError(
+      "FORBIDDEN",
+      "Only the original payer can manage this purchase.",
+    );
+  await reconcileSubscription(
+    input.stripe,
+    input.guildId,
+    input.subscription.id,
+  );
+  return currentOutcome(attempt);
+}
 export async function createInitialPurchase(
   input: PurchaseInput,
 ): Promise<string> {

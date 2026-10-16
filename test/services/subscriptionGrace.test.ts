@@ -108,6 +108,7 @@ function seed(
                   refundIds: [],
                   canceled: state === "canceled",
                   collectionRestored: state === "canceled",
+                  collectionToRestore: state === "canceled" ? [] : null,
                 },
               }),
         },

@@ -55,6 +55,7 @@ import {
   DeleteItemCommand,
   QueryCommand,
   ScanCommand,
+  DescribeTableCommand,
   UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
@@ -146,6 +147,53 @@ const dynamoDbClient = new DynamoDBClient(
 
 const tablePrefix = config.database.tablePrefix ?? "";
 const tableName = (name: string) => `${tablePrefix}${name}`;
+export async function getRenewalRecoveryIndexStatus(): Promise<
+  string | undefined
+> {
+  if (config.mock.enabled) return "ACTIVE";
+  const result = await dynamoDbClient.send(
+    new DescribeTableCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+    }),
+  );
+  return result.Table?.GlobalSecondaryIndexes?.find(
+    (index) => index.IndexName === "RenewalRecoveryDueIndex",
+  )?.IndexStatus;
+}
+export async function scanGuildSubscriptionPage(
+  cursor?: string,
+): Promise<{ guildIds: string[]; cursor?: string }> {
+  if (config.mock.enabled) {
+    const keys = [...getMockStore().subscriptions.keys()]
+      .sort()
+      .filter((key) => !cursor || key > cursor)
+      .slice(0, 100);
+    return {
+      guildIds: keys.filter((key) => /^\d{17,20}$/.test(key)),
+      cursor: keys.length === 100 ? keys.at(-1) : undefined,
+    };
+  }
+  const result = await dynamoDbClient.send(
+    new ScanCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      ConsistentRead: true,
+      Limit: 100,
+      ProjectionExpression: "guildId",
+      ExclusiveStartKey: cursor
+        ? marshall({ guildId: z.string().min(1).parse(cursor) })
+        : undefined,
+    }),
+  );
+  const guildIds = (result.Items ?? [])
+    .map((item) => z.string().parse(unmarshall(item).guildId))
+    .filter((key) => /^\d{17,20}$/.test(key));
+  return {
+    guildIds,
+    cursor: result.LastEvaluatedKey
+      ? z.string().parse(unmarshall(result.LastEvaluatedKey).guildId)
+      : undefined,
+  };
+}
 export function getDeploymentControlRepository() {
   if (config.mock.enabled) {
     const store = getMockStore();

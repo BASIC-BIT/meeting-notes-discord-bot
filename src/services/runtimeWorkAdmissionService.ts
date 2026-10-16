@@ -20,7 +20,8 @@ type Domain =
   | "recovery"
   | "interaction"
   | "ancillary"
-  | "api_correction";
+  | "api_correction"
+  | "billing";
 type ClaimCheckpoint = {
   claimId: string;
   instanceId: string;
@@ -43,6 +44,8 @@ type Checkpoint = {
   terminalAcknowledgedDomain?: Domain;
   apiOutcomeKnown?: boolean;
   recoveryPollAcknowledged?: boolean;
+  billingMutationStarted?: boolean;
+  billingRecoveryAcknowledged?: boolean;
   interactionReceiptAcknowledged?: boolean;
   interactionDeferAcknowledged?: boolean;
   interactionStopAcknowledged?: boolean;
@@ -247,7 +250,30 @@ export function beginRuntimeWorkClaim(
       checkpoint.interactionStopAcknowledged = true;
       return true;
     },
+    trackBillingMutation<T>(run: () => Promise<T>): Promise<T> {
+      if (checkpoint.domain !== "billing")
+        throw new Error("Billing mutation requires billing ownership");
+      return ownEffect(
+        () => {
+          checkpoint.billingMutationStarted = true;
+          return run();
+        },
+        () => checkpoint.controller.signal.throwIfAborted(),
+      );
+    },
+    acknowledgeDurableBillingRecovery(key: string) {
+      if (checkpoint.domain !== "billing" || checkpoint.id !== key)
+        throw new Error(
+          "Billing recovery acknowledgment requires its exact durable cycle",
+        );
+      checkpoint.billingRecoveryAcknowledged = true;
+    },
     acknowledgeReadOnlyRecoveryPoll() {
+      if (checkpoint.domain === "billing") {
+        if (!checkpoint.billingMutationStarted)
+          checkpoint.recoveryPollAcknowledged = true;
+        return;
+      }
       if (checkpoint.domain !== "recovery" || checkpoint.claim)
         throw new Error("Recovery poll cannot acknowledge a processing claim");
       checkpoint.recoveryPollAcknowledged = true;
@@ -369,6 +395,11 @@ function sameClaim(left: ClaimCheckpoint, right: ClaimCheckpoint): boolean {
   );
 }
 function acknowledgedWithoutClaim(entry: Checkpoint) {
+  if (entry.domain === "billing")
+    return (
+      entry.billingRecoveryAcknowledged ||
+      (!entry.billingMutationStarted && entry.recoveryPollAcknowledged)
+    );
   if (entry.domain === "api_correction") return entry.apiOutcomeKnown;
   if (entry.domain === "interaction") return entry.interactionStopAcknowledged;
   return entry.domain === "recovery" && entry.recoveryPollAcknowledged;

@@ -224,6 +224,12 @@ it("keeps Basic through review and incomplete payment, then applies one settled 
   const application = {
     ...fundedInvoice,
     id: "in_application",
+    lines: {
+      ...fundedInvoice.lines,
+      data: [
+        { ...debit, period: { start: now, end: baseItem.current_period_end } },
+      ],
+    },
     total: 0,
     amount_due: 0,
     amount_remaining: 0,
@@ -415,6 +421,7 @@ it("finishes accepted schedule creation before cancellation releases control", a
         id: operation.source.customerId,
         metadata: { discord_id: operation.payerId },
       };
+    if (path === `/v1/invoices/${fundedInvoice.id}`) return fundedInvoice;
     if (path.includes("subscriptions"))
       return { ...sourceSubscription, schedule: null };
     throw Error(`Unexpected ${path}`);

@@ -1,3 +1,4 @@
+import type { StripeEffect } from "../types/stripe";
 import { getRenewalRecoveryRepository } from "../repositories/renewalRecoveryRepository";
 import {
   isRenewalCancellationComplete,
@@ -286,6 +287,7 @@ async function restoreOriginalCancellation(
 export async function readScheduledChangeSettlement(
   stripe: StripeClient,
   operation: Scheduled,
+  write: StripeEffect = (run) => run(),
 ) {
   const subscription = await stripe.subscriptions.retrieve(
     operation.source.subscriptionId,
@@ -310,6 +312,7 @@ export async function readScheduledChangeSettlement(
       stripe,
       operation,
       operation.scheduleId,
+      write,
     );
     if (!released) return { kind: "waiting" as const };
   }
@@ -334,14 +337,17 @@ export async function releaseOwnedSchedule(
   stripe: StripeClient,
   operation: BillingChangeOperation,
   scheduleId: string,
+  write: StripeEffect = (run) => run(),
 ) {
   let schedule = await stripe.subscriptionSchedules.retrieve(scheduleId);
   assertOwnedSchedule(schedule, operation);
   if (schedule.status === "active" || schedule.status === "not_started")
-    schedule = await stripe.subscriptionSchedules.release(
-      scheduleId,
-      { preserve_cancel_date: true },
-      changeIdempotency(operation, "release-schedule"),
+    schedule = await write(() =>
+      stripe.subscriptionSchedules.release(
+        scheduleId,
+        { preserve_cancel_date: true },
+        changeIdempotency(operation, "release-schedule"),
+      ),
     );
   return (
     schedule.status === "released" &&

@@ -1,3 +1,5 @@
+import { readLedgerWriterRuntime } from "./ledgerWriterRuntime";
+import { RENEWAL_RECOVERY_WRITER_VERSION } from "../types/renewalRecovery";
 import { cancelUnpaidRenewal } from "./renewalRecoveryProvider";
 import { reconcileBillingChangeForWebhook } from "./billingChangeService";
 import { reconcileSubscription } from "./subscriptionReconciliation";
@@ -8,6 +10,7 @@ import type {
   StripeClient,
   StripeSubscription,
   StripeInvoice,
+  StripeEffect,
 } from "../types/stripe";
 import type { GuildSubscription } from "../types/db";
 import {
@@ -28,7 +31,13 @@ import { config } from "./configService";
 import { stripeId, changeUnavailable } from "./billingChangeProvider";
 import { clearGuildSubscriptionCache } from "./subscriptionCache";
 
-type Context = { stripe: StripeClient; guildId: string; now: number };
+type Context = {
+  stripe: StripeClient;
+  guildId: string;
+  now: number;
+  signal?: AbortSignal;
+  effect?: StripeEffect;
+};
 export async function trackPaidRenewalPeriod(
   input: Context & { subscriptionId: string; invoiceId: string },
 ): Promise<void> {
@@ -71,6 +80,10 @@ export async function trackPaidRenewalPeriod(
     revision: randomUUID(),
     scheduledOperationId: null,
     enforcementAccepted: false,
+    writerVersion: RENEWAL_RECOVERY_WRITER_VERSION,
+    writerRuntime: await readLedgerWriterRuntime(
+      process.env.ECS_CONTAINER_METADATA_URI_V4,
+    ),
     state: "watching",
     nextCheckAt: paid.periodEnd,
   });
@@ -180,18 +193,31 @@ async function observeRenewalInvoice(
       pointer,
     );
   }
-  if (record.state !== "watching") return record;
-  if (!invoice.attempted || !config.stripe.renewalGraceEnabled)
-    return postpone(input, record, pointer);
+  if (record.state === "grace") {
+    if (record.enforcementAccepted) return record;
+    if (!config.stripe.renewalGraceEnabled)
+      return postpone(input, record, pointer);
+    return saveRecovery(
+      {
+        ...record,
+        enforcementAccepted: true,
+        revision: randomUUID(),
+        nextCheckAt: record.endsAt,
+      },
+      record,
+      pointer,
+    );
+  }
+  if (!invoice.attempted) return postpone(input, record, pointer);
   return saveRecovery(
     renewalRecoverySchema.parse({
       ...record,
       ...bound,
       scheduledOperationId: evidence.scheduledOperationId,
       state: "grace",
-      enforcementAccepted: true,
+      enforcementAccepted: config.stripe.renewalGraceEnabled,
       revision: randomUUID(),
-      nextCheckAt: bound.endsAt,
+      nextCheckAt: Math.max(bound.endsAt, input.now + 60),
     }),
     record,
     pointer,
@@ -283,6 +309,7 @@ export async function cancelRenewalRecovery(
     customerId: record.customerId,
     payerId: input.payerId,
   });
+  if (!record.enforcementAccepted) throw changeUnavailable();
   if (record.state === "grace")
     await beginRenewalCancellation(input, record, "payer");
   else if (!["canceling", "paid", "canceled"].includes(record.state))
@@ -293,7 +320,11 @@ async function repairRenewalPaidAccess(
   input: Context,
   record: Extract<RenewalRecovery, { state: "paid" }>,
 ): Promise<void> {
-  await reconcileBillingChangeForWebhook(input.stripe, input.guildId);
+  await reconcileBillingChangeForWebhook(
+    input.stripe,
+    input.guildId,
+    input.effect,
+  );
   await reconcileSubscription(
     input.stripe,
     input.guildId,
@@ -346,7 +377,11 @@ async function finishRenewalCancellation(
     if (next.state !== "paid") throw changeUnavailable();
     return repairRenewalPaidAccess(input, next);
   }
-  await reconcileBillingChangeForWebhook(input.stripe, input.guildId);
+  await reconcileBillingChangeForWebhook(
+    input.stripe,
+    input.guildId,
+    input.effect,
+  );
   await reconcileSubscription(
     input.stripe,
     input.guildId,
@@ -379,7 +414,11 @@ export async function reconcileRenewalRecovery(
   if (!record) return;
   if (record.state === "paid" && record.projection.state === "pending")
     return repairRenewalPaidAccess(input, record);
-  if (record.state === "grace" && input.now >= record.endsAt)
+  if (
+    record.state === "grace" &&
+    record.enforcementAccepted &&
+    input.now >= record.endsAt
+  )
     record = await beginRenewalCancellation(input, record, "expired");
   if (record.state !== "canceling") return;
   input.signal?.throwIfAborted();

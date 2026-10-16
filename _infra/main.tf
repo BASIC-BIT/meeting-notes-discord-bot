@@ -394,6 +394,12 @@ variable "BILLING_LIFECYCLE_ANALYTICS_ENABLED" {
   default     = false
 }
 
+variable "STRIPE_RENEWAL_GRACE_ENABLED" {
+  description = "Enforce 48-hour paid-renewal grace only after indexed coverage and deployed writer acceptance"
+  type        = bool
+  default     = false
+}
+
 variable "STRIPE_RENEWAL_REACTIVATION_ENABLED" {
   description = "Enable same-subscription renewal restoration only after native acceptance"
   type        = bool
@@ -1913,6 +1919,10 @@ resource "aws_ecs_task_definition" "app_task" {
         {
           name  = "BILLING_LIFECYCLE_ANALYTICS_ENABLED"
           value = tostring(var.BILLING_LIFECYCLE_ANALYTICS_ENABLED)
+        },
+        {
+          name  = "STRIPE_RENEWAL_GRACE_ENABLED"
+          value = tostring(var.STRIPE_RENEWAL_GRACE_ENABLED)
         },
         {
           name  = "STRIPE_RENEWAL_REACTIVATION_ENABLED"

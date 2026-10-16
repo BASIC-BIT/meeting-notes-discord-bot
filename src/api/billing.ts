@@ -134,12 +134,11 @@ const handleInvoicePaymentFailed: WebhookHandler = async ({
   const guildId = await resolveGuildIdFromInvoice(stripe, invoice);
   const subscription = resolveInvoiceSubscription(invoice);
   if (!guildId) return;
-  if (config.stripe.renewalGraceEnabled)
-    await refreshRenewalRecovery({
-      stripe,
-      guildId,
-      now: Math.floor(Date.now() / 1000),
-    });
+  await refreshRenewalRecovery({
+    stripe,
+    guildId,
+    now: Math.floor(Date.now() / 1000),
+  });
   await reconcileBillingChangeForWebhook(stripe, guildId);
   if (!subscription) return;
   await reconcileSubscription(

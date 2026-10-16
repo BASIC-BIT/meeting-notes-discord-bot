@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import { reconcileSubscription } from "../../src/services/subscriptionReconciliation";
 import { getRenewalRecoveryView } from "../../src/services/renewalRecoveryView";
 import { offerUsageKey, offerUsageSchema } from "../../src/types/offerUsage";
 import { renewalRecoveryKey } from "../../src/types/renewalRecovery";
@@ -209,7 +210,7 @@ test("does not adopt a new grace or block billing while the flag is off", async 
   f.fail();
   config.stripe.renewalGraceEnabled = false;
   expect(await f.refresh()).toMatchObject({
-    state: "watching",
+    state: "grace",
     enforcementAccepted: false,
   });
   expect(
@@ -395,6 +396,7 @@ test("explicit cancellation keeps its grace deadline and releases billing only a
           ...input.recovery.receipts,
           canceled: true,
           collectionRestored: true,
+          collectionToRestore: [],
         },
       });
       f.subscription.status = "canceled";
@@ -605,6 +607,7 @@ test.each([false, true])(
             creditNoteId: "cn_owned",
             canceled: true,
             collectionRestored: true,
+            collectionToRestore: [],
           },
         });
         return "canceled";
@@ -748,4 +751,77 @@ test("billing status hides the payment URL after cancellation starts and at expi
   } finally {
     provider.mockRestore();
   }
+});
+
+test("disabled coverage binds the original deadline without access enforcement or financial cleanup", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  config.stripe.renewalGraceEnabled = false;
+  const record = await f.refresh();
+  if (!record || record.state !== "grace")
+    throw new Error("Expected bound coverage");
+  const provider = jest.spyOn(renewalProvider, "cancelUnpaidRenewal");
+  await reconcileRenewalRecovery({
+    stripe: f.stripe,
+    guildId: record.guildId,
+    now: record.endsAt + 500,
+  });
+  expect(provider).not.toHaveBeenCalled();
+  provider.mockRestore();
+  config.stripe.renewalGraceEnabled = true;
+  expect(await f.refresh(record.endsAt + 1000)).toMatchObject({
+    state: "grace",
+    enforcementAccepted: true,
+    endsAt: record.endsAt,
+  });
+});
+
+test("the normal paid writer records coverage before acknowledgment while enforcement is off", async () => {
+  const f = fixture();
+  config.stripe.renewalGraceEnabled = false;
+  await reconcileSubscription(
+    f.stripe,
+    renewalSubscription.guildId,
+    f.subscription.id,
+  );
+  expect(
+    await getRenewalRecoveryRepository().getCurrent(
+      renewalSubscription.guildId,
+    ),
+  ).toMatchObject({
+    state: "watching",
+    writerVersion: "renewal-grace-v1",
+    enforcementAccepted: false,
+    paid: { invoiceId: fundedInvoice.id },
+  });
+});
+
+test("a credit-note-paid invoice cannot project active service during cancellation", async () => {
+  const f = fixture();
+  await f.track();
+  f.fail();
+  const grace = await f.refresh();
+  if (!grace || grace.state !== "grace") throw new Error("Expected grace");
+  const provider = jest
+    .spyOn(renewalProvider, "cancelUnpaidRenewal")
+    .mockRejectedValue(new Error("Cancellation unavailable"));
+  try {
+    await expect(
+      reconcileRenewalRecovery({
+        stripe: f.stripe,
+        guildId: grace.guildId,
+        now: grace.endsAt,
+      }),
+    ).rejects.toThrow();
+  } finally {
+    provider.mockRestore();
+  }
+  const previous = { ...getMockStore().subscriptions.get(grace.guildId) };
+  f.subscription.status = "active";
+  f.renewal.status = "paid";
+  f.renewal.amount_remaining = 0;
+  f.renewal.pre_payment_credit_notes_amount = 1000;
+  await reconcileSubscription(f.stripe, grace.guildId, grace.subscriptionId);
+  expect(getMockStore().subscriptions.get(grace.guildId)).toEqual(previous);
 });

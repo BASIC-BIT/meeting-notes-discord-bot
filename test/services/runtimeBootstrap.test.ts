@@ -1,4 +1,17 @@
 /** @jest-environment node */
+import { stripeTransport } from "../fixtures/stripeTransport";
+import { getStripeClient } from "../../src/services/stripeClient";
+import {
+  startRenewalRecoveryWorker,
+  verifyRenewalRecoveryReadiness,
+} from "../../src/services/renewalRecoveryWorkerService";
+jest.mock("../../src/services/stripeClient", () => ({
+  getStripeClient: jest.fn(),
+}));
+jest.mock("../../src/services/renewalRecoveryWorkerService", () => ({
+  startRenewalRecoveryWorker: jest.fn(),
+  verifyRenewalRecoveryReadiness: jest.fn(async () => undefined),
+}));
 import { createProcessShutdownOwner } from "../../src/services/processShutdownService";
 import { createRuntimeShutdown } from "../../src/services/runtimeShutdownService";
 const mockExit = jest.fn();
@@ -62,6 +75,11 @@ afterEach(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   config.runtime.ecs = false;
+  jest.mocked(getStripeClient).mockReturnValue(
+    stripeTransport(() => {
+      throw new Error("Unexpected Stripe request");
+    }).stripe,
+  );
 });
 
 test.each(["all", "bot", "api"] as const)(
@@ -103,6 +121,15 @@ test.each(["all", "bot", "api"] as const)(
     finish({ ready, failed: jest.fn() });
     await boot;
     expect(ready).toHaveBeenCalledTimes(1);
+    if (mode !== "bot") {
+      expect(verifyRenewalRecoveryReadiness).toHaveBeenCalledTimes(1);
+      expect(
+        jest.mocked(verifyRenewalRecoveryReadiness).mock.invocationCallOrder[0],
+      ).toBeLessThan(ready.mock.invocationCallOrder[0]);
+      expect(
+        jest.mocked(startRenewalRecoveryWorker).mock.invocationCallOrder[0],
+      ).toBeGreaterThan(ready.mock.invocationCallOrder[0]);
+    } else expect(startRenewalRecoveryWorker).not.toHaveBeenCalled();
     if (mode !== "bot") expect(setupWebServer).toHaveBeenCalledWith(health);
     else expect(setupWebServer).not.toHaveBeenCalled();
   },
