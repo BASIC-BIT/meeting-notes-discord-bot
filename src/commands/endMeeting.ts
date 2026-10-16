@@ -4,6 +4,7 @@ import {
   stopCompletionClock,
   publishCompletionPolicy,
 } from "../services/meetingCompletionPolicyService";
+import { getNotesLatencyProperties } from "../observability/meetingNotesLatency";
 import { getMeetingProcessingSignal } from "../services/meetingProcessingLifetime";
 import type { RuntimeWorkClaim } from "../services/runtimeWorkAdmissionService";
 import { initiatingStopInterruption } from "../services/meetingStopInterruption";
@@ -162,7 +163,7 @@ function captureMeetingCompleted(meeting: MeetingData): void {
         transcribed: meeting.transcribeMeeting,
         notes_generated: meeting.generateNotes,
         cancelled: Boolean(meeting.cancelled),
-        event_version: 2,
+        event_version: 3,
         surface: "discord",
         transcription_outcome: meeting.processing?.transcription ?? "unknown",
         notes_outcome: meeting.processing?.notes ?? "unknown",
@@ -174,6 +175,14 @@ function captureMeetingCompleted(meeting: MeetingData): void {
               : "not_saved",
         notes_delivery: meeting.delivery?.notes?.outcome ?? "unknown",
         usable_notes: hasUsableMeetingNotes(meeting),
+        ...getNotesLatencyProperties({
+          capture: meeting.recordingCaptureState,
+          timing: meeting.notesDeliveryTiming,
+          eligible:
+            meeting.transcribeMeeting &&
+            meeting.generateNotes &&
+            !meeting.cancelled,
+        }),
       },
     });
   } catch (error) {

@@ -747,7 +747,7 @@ describe("handleEndMeetingOther", () => {
           expect.objectContaining({
             properties: expect.objectContaining({
               usable_notes: state === "complete",
-              event_version: 2,
+              event_version: 3,
             }),
           }),
         );
@@ -1991,4 +1991,238 @@ it("actual finalization fence cancels held text storage while retaining tail and
     client.destroy();
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+describe("completion notes latency contract", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-10-16T12:01:00.000Z"));
+    jest.mocked(captureEvent).mockReset();
+    mockedCleanupMeetingTempDir.mockResolvedValue(undefined);
+    mockedCleanupSpeakerTracks.mockResolvedValue(undefined);
+    mockedCloseOutputFile.mockResolvedValue(undefined);
+    mockedBuildMixedAudio.mockResolvedValue(undefined);
+    mockedWaitForAudioOnlyFinishProcessing.mockResolvedValue(undefined);
+    mockedWaitForFinishProcessing.mockResolvedValue(undefined);
+    mockedCompileTranscriptions.mockResolvedValue("Private transcript");
+    mockedSaveMeetingHistoryToDatabase.mockImplementation(async (meeting) => {
+      meeting.historySaved = true;
+    });
+    mockedReleaseMeetingLeaseForMeeting.mockResolvedValue(true);
+    mockedEvaluateAutoRecordCancellation.mockResolvedValue({ cancel: false });
+    mockedUploadMeetingArtifacts.mockResolvedValue(successfulArtifactUpload);
+    mockedUpdateMeetingStatusService.mockResolvedValue(undefined);
+    mockedGetGuildLimits.mockResolvedValue({ limits: {} } as never);
+    jest.mocked(ensureMeetingNotes).mockImplementation(async (input) => {
+      input.notesText = "Private notes";
+      input.processing = { ...input.processing, notes: "generated" };
+      return input.notesText;
+    });
+    jest
+      .mocked(updateMeetingSummaryMessage)
+      .mockImplementation(async (meeting) => {
+        meeting.delivery = {
+          notes: { outcome: "complete", sent: 2, intended: 2, errors: [] },
+        };
+      });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.mocked(captureEvent).mockReset();
+  });
+
+  function timedMeeting() {
+    const meeting = finalizationFixture();
+    Object.assign(meeting.textChannel, {
+      send: jest.fn().mockResolvedValue({ id: "cancel-notice" }),
+    });
+    meeting.startTime = new Date("2026-10-16T12:00:00.000Z");
+    meeting.transcribeMeeting = true;
+    meeting.generateNotes = true;
+    meeting.audioData.audioFiles = [
+      {
+        userId: "creator",
+        timestamp: Date.now(),
+        processing: false,
+        audioOnlyProcessing: false,
+        transcript: "Private transcript",
+      },
+    ];
+    meeting.recordingCaptureState = {
+      kind: "complete",
+      startedAt: "2026-10-16T11:59:00.000Z",
+      endedAt: "2026-10-16T12:00:00.000Z",
+    };
+    meeting.notesDeliveryTiming = {
+      kind: "complete",
+      notesVersion: 1,
+      path: "live",
+      firstAcknowledgedAt: "2026-10-16T12:00:02.000Z",
+      completeAcknowledgedAt: "2026-10-16T12:00:05.000Z",
+    };
+    return meeting;
+  }
+
+  function completionCapture() {
+    expect(captureEvent).toHaveBeenCalledTimes(1);
+    const [event, completion] = jest.mocked(captureEvent).mock.calls[0];
+    expect(event).toBe("meeting_completed");
+    if (!completion?.properties)
+      throw new Error("Expected completion properties");
+    return { ...completion, properties: completion.properties };
+  }
+
+  it("adds version 3 timing without changing recording duration", async () => {
+    const meeting = timedMeeting();
+    await runEndMeetingFlow({ client: {} as Client, meeting });
+    const completion = completionCapture();
+    expect(completion.properties.event_version).toBe(3);
+    expect(completion).toEqual({
+      userId: "creator",
+      guildId: "h4-guild",
+      properties: {
+        duration_ms: 60000,
+        attendee_count: 0,
+        end_reason: MEETING_END_REASONS.UNKNOWN,
+        trigger: undefined,
+        transcribed: true,
+        notes_generated: true,
+        cancelled: false,
+        event_version: 3,
+        surface: "discord",
+        transcription_outcome: "ready",
+        notes_outcome: "generated",
+        history_persistence: "saved",
+        notes_delivery: "complete",
+        usable_notes: true,
+        notes_latency_status: "measured",
+        notes_first_delivery_latency_ms: 2000,
+        notes_complete_delivery_latency_ms: 5000,
+        notes_delivery_path: "live",
+      },
+    });
+  });
+
+  it("retains first-only timing for partial delivery", async () => {
+    const meeting = timedMeeting();
+    meeting.notesDeliveryTiming = {
+      kind: "first",
+      notesVersion: 1,
+      path: "live",
+      firstAcknowledgedAt: "2026-10-16T12:00:02.000Z",
+    };
+    jest
+      .mocked(updateMeetingSummaryMessage)
+      .mockImplementationOnce(async (current) => {
+        current.delivery = {
+          notes: { outcome: "partial", sent: 1, intended: 2, errors: [] },
+        };
+      });
+    await runEndMeetingFlow({ client: {} as Client, meeting });
+    const completion = completionCapture();
+    expect(completion.properties).toMatchObject({
+      notes_latency_status: "partial",
+      notes_first_delivery_latency_ms: 2000,
+      notes_delivery_path: "live",
+      notes_generated: true,
+      notes_delivery: "partial",
+      usable_notes: false,
+    });
+    expect(completion.properties).not.toHaveProperty(
+      "notes_complete_delivery_latency_ms",
+    );
+  });
+
+  it.each([
+    "notes_disabled",
+    "transcription_disabled",
+    "cancelled",
+    "missing_stop",
+    "legacy",
+  ])("keeps unavailable timing explicit for %s", async (state) => {
+    const meeting = timedMeeting();
+    if (state === "notes_disabled") meeting.generateNotes = false;
+    if (state === "transcription_disabled") meeting.transcribeMeeting = false;
+    if (state === "cancelled") meeting.cancelled = true;
+    if (state === "missing_stop") meeting.recordingCaptureState = undefined;
+    if (state === "legacy") meeting.notesDeliveryTiming = undefined;
+    await runEndMeetingFlow({ client: {} as Client, meeting });
+    const completion = completionCapture();
+    expect(completion.properties).toMatchObject({
+      event_version: 3,
+      duration_ms: 60000,
+      notes_latency_status: ["missing_stop", "legacy"].includes(state)
+        ? "unknown"
+        : "not_applicable",
+    });
+    expect(completion.properties).not.toHaveProperty(
+      "notes_first_delivery_latency_ms",
+    );
+    expect(completion.properties).not.toHaveProperty(
+      "notes_complete_delivery_latency_ms",
+    );
+    expect(completion.properties.notes_delivery_path).toBe(
+      state === "missing_stop" ? "live" : undefined,
+    );
+  });
+
+  it("does not add a completion when notes processing fails", async () => {
+    const meeting = timedMeeting();
+    meeting.notesDeliveryTiming = undefined;
+    jest.mocked(ensureMeetingNotes).mockImplementationOnce(async (input) => {
+      input.processing = { ...input.processing, notes: "failed" };
+      return undefined;
+    });
+    await expect(
+      runEndMeetingFlow({ client: {} as Client, meeting }),
+    ).rejects.toThrow("processing failed");
+    expect(captureEvent).not.toHaveBeenCalled();
+    expect(meeting.setFinished).not.toHaveBeenCalled();
+  });
+
+  it("contains timing property assembly inside the analytics guard", async () => {
+    const meeting = timedMeeting();
+    Object.defineProperty(meeting, "notesDeliveryTiming", {
+      get() {
+        throw new Error("invalid optional timing access");
+      },
+    });
+    const warning = jest.spyOn(console, "warn");
+    try {
+      await expect(
+        runEndMeetingFlow({ client: {} as Client, meeting }),
+      ).resolves.toBeUndefined();
+      expect(captureEvent).not.toHaveBeenCalled();
+      expect(deleteMeeting).toHaveBeenCalledWith(meeting.guildId);
+      expect(warning).toHaveBeenCalledWith(
+        "Failed to capture meeting_completed",
+        expect.any(Object),
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it("cannot fail finalization when analytics throws", async () => {
+    const meeting = timedMeeting();
+    jest.mocked(captureEvent).mockImplementationOnce(() => {
+      throw new Error("analytics unavailable");
+    });
+    const warning = jest.spyOn(console, "warn");
+    try {
+      await expect(
+        runEndMeetingFlow({ client: {} as Client, meeting }),
+      ).resolves.toBeUndefined();
+      expect(meeting.setFinished).toHaveBeenCalledTimes(1);
+      expect(deleteMeeting).toHaveBeenCalledWith(meeting.guildId);
+      expect(warning).toHaveBeenCalledWith(
+        "Failed to capture meeting_completed",
+        expect.any(Object),
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
 });

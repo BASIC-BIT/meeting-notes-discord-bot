@@ -7,6 +7,11 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Notes delivery timing notice (October 16)
+
+- We are adding content-free measurements of the wait from recording stop until Discord acknowledges the first notes message and all initial notes messages. Partial delivery and missing timing remain separate from complete delivery.
+- These records use the existing server and acting account identities, with no additional identifiers, meeting content or per-server financial amounts. They measure delivery acknowledgement, not readership, and do not promise a response time. See [Measuring notes delivery wait](/whats-new/meeting-processing-times) and the updated [Privacy Policy](/legal/privacy).
+
 ### Time to resolve a failed renewal
 
 - When renewal payment fails for an existing paid Basic or Pro subscription, the server keeps its previous paid plan for 48 hours from invoice finalization, including scheduled plan changes. Billing shows the local deadline and lets the original payer retry the same invoice, update their payment method, or cancel the unpaid renewal.
