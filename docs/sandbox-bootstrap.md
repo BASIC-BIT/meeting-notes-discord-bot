@@ -100,3 +100,5 @@ Repair refuses unless Control is still empty at generation zero, the original co
 The existing protected launch, readiness, promotion and serving-heartbeat checks then run. Unknown stop, transfer or launch acknowledgments preserve state and refuse replay. Repair is limited to this unserved first-activation state; it cannot adopt a serving environment or an uncertain launch. An expired lease alone does not prove voice or effect settlement.
 
 Before reserving repair, every live failed-candidate task must have an exact native unprotected proof. Group A targets must match that service's discovered failed-candidate tasks by address and port. A STOPPED task can account only for its already-draining target. Foreign targets or unknown protection refuse before reservation or shutdown. Repair never clears protection or removes a target manually.
+
+Repair repeats the native task and target ownership checks after recording stop intent, immediately before the desired-zero request. After the serving heartbeat is confirmed, introduction and repair completion are one conditional transaction, so an uncertain completion acknowledgment cannot leave only one receipt complete.

@@ -949,6 +949,8 @@ async function repairFixture() {
     slowTransfer: false,
     protectedTask: false,
     foreignTarget: false,
+    lateTopology: "",
+    raceCompletion: false,
     oldTask: "none",
     seconds: 1000,
   };
@@ -1086,12 +1088,50 @@ async function repairFixture() {
       throw new Error("transfer acknowledgment lost");
     return out;
   }
+  async function updateStage(input: Record<string, never>) {
+    const result = await client.send(new UpdateItemCommand(input));
+    if (
+      unmarshall(input.ExpressionAttributeValues)[":next"] ===
+        "stop_submitted" &&
+      state.lateTopology
+    ) {
+      state.oldTask = "live";
+      state.protectedTask = state.lateTopology === "protected";
+      state.foreignTarget = state.lateTopology === "foreign-target";
+    }
+    if (
+      state.slowIntent &&
+      unmarshall(input.ExpressionAttributeValues)[":next"] === "stop_submitted"
+    )
+      state.seconds += 301;
+    return result;
+  }
+  async function injectCompletionRace(
+    service: string,
+    operation: string,
+    input: Record<string, never>,
+  ) {
+    if (
+      state.raceCompletion &&
+      service === "dynamodb" &&
+      ["update-item", "transact-write-items"].includes(operation) &&
+      JSON.stringify(input).includes('"complete"')
+    ) {
+      const row = await f.get("REPAIR#" + f.manifest.operationId);
+      row!.stage = "foreign";
+      await client.send(
+        new PutItemCommand({ TableName: f.table, Item: marshall(row) }),
+      );
+      state.raceCompletion = false;
+    }
+  }
   const aws = async (
     service: string,
     operation: string,
     input: Record<string, never>,
   ) => {
     calls.push({ service, operation });
+    await injectCompletionRace(service, operation, input);
     if (service === "dynamodb" && operation === "get-item") {
       const result = await f.aws(service, operation, input);
       if (
@@ -1102,16 +1142,8 @@ async function repairFixture() {
         state.seconds = 1901;
       return result;
     }
-    if (service === "dynamodb" && operation === "update-item") {
-      const result = await client.send(new UpdateItemCommand(input));
-      if (
-        state.slowIntent &&
-        unmarshall(input.ExpressionAttributeValues)[":next"] ===
-          "stop_submitted"
-      )
-        state.seconds += 301;
-      return result;
-    }
+    if (service === "dynamodb" && operation === "update-item")
+      return updateStage(input);
     if (service === "dynamodb" && operation === "transact-write-items") {
       return transact(input);
     }
@@ -1352,3 +1384,31 @@ test.each(["live", "stopped"])(
     ).resolves.toMatchObject({ kind: "complete", generation: 1 });
   },
 );
+
+test.each(["protected", "foreign-target"])(
+  "repair revalidates late %s at the stop boundary",
+  async (kind) => {
+    const f = await repairFixture();
+    f.repairState.lateTopology = kind;
+    await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+    expect(
+      f.calls.filter((c) => c.operation === "update-service"),
+    ).toHaveLength(0);
+    expect(await f.get("REPAIR#" + f.manifest.operationId)).toMatchObject({
+      stage: "stop_submitted",
+    });
+  },
+);
+
+test("repair completion conditions preserve both receipts when ownership changes", async () => {
+  const f = await repairFixture();
+  f.repairState.raceCompletion = true;
+  await expect(f.intro.repair(f.previous, f.previousHash)).rejects.toThrow();
+  expect(await f.get("INTRODUCTION")).toMatchObject({
+    stage: "routing_acknowledged",
+  });
+  expect(await f.get("REPAIR#" + f.manifest.operationId)).toMatchObject({
+    stage: "foreign",
+  });
+  expect(await f.get("CONTROL")).toMatchObject({ servingGeneration: 1 });
+});

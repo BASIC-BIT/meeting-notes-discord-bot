@@ -234,8 +234,8 @@ function createIntroduction(options) {
     });
     return result.Item ? unmarshall(result.Item) : undefined;
   }
-  async function stage(from, to, sk = "INTRODUCTION") {
-    await aws("dynamodb", "update-item", {
+  function stageUpdate(from, to, sk = "INTRODUCTION") {
+    return {
       TableName: table,
       Key: marshall({ pk: "ENV", sk }),
       ConditionExpression:
@@ -248,7 +248,10 @@ function createIntroduction(options) {
         ":from": from,
         ":next": to,
       }),
-    });
+    };
+  }
+  async function stage(from, to, sk = "INTRODUCTION") {
+    await aws("dynamodb", "update-item", stageUpdate(from, to, sk));
   }
   async function count(TableName, extra = {}) {
     let ExclusiveStartKey,
@@ -637,14 +640,21 @@ function createIntroduction(options) {
     await bootstrap.initialize();
     return finish();
   }
-  async function finish() {
+  async function finish(repairKey) {
     await bootstrap.launch();
     const result = await wait(
       async () => (await bootstrap.readiness()).kind === "ready",
       { complete: (deadline) => bootstrap.promote(deadline) },
     );
     await wait(() => runtimeReady());
-    await stage("routing_acknowledged", "complete");
+    if (repairKey)
+      await aws("dynamodb", "transact-write-items", {
+        TransactItems: [
+          { Update: stageUpdate("routing_acknowledged", "complete") },
+          { Update: stageUpdate("initialized", "complete", repairKey) },
+        ],
+      });
+    else await stage("routing_acknowledged", "complete");
     return result;
   }
 
@@ -785,6 +795,7 @@ function createIntroduction(options) {
     });
     stopBudget();
     await stage("reserved", "stop_submitted", repairKey);
+    await assertRepairTargets();
     stopBudget();
     const stopped = await aws("ecs", "update-service", {
       cluster: m.cluster,
@@ -857,9 +868,7 @@ function createIntroduction(options) {
         },
       ],
     });
-    const result = await finish();
-    await stage("initialized", "complete", repairKey);
-    return result;
+    return finish(repairKey);
   }
   return { activate, repair };
 }
