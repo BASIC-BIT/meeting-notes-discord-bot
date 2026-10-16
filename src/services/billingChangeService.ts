@@ -278,7 +278,12 @@ export async function cancelBillingChange(
   let operation = await owned(context, context.operationId);
   if (!operation) throw changeUnavailable();
   await verifyPayer(context, operation);
-  if (["applying", "preparing", "scheduled"].includes(operation.state))
+  // Recover the idempotent scheduling write before cancellation can release
+  // control. A missing schedule snapshot cannot prove an in-flight write ended.
+  if (
+    ["applying", "preparing", "scheduled"].includes(operation.state) ||
+    (operation.state === "accepted" && operation.timing === "renewal")
+  )
     operation = await resume(context, operation);
   if (
     operation.state === "succeeded" ||

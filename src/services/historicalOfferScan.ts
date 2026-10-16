@@ -131,12 +131,16 @@ async function assessScannedInvoice(
     throw new Error("Historical original invoice identity mismatch");
   const change = await classifyChangeHistory(original, scope);
   if (change) return { scope, invoiceId: invoice.id, evidence: change };
-  return assessOriginalHistory(stripe,original,scope,cycles);
+  return assessOriginalHistory(stripe, original, scope, cycles);
 }
-async function assessOriginalHistory(stripe:StripeClient,original:StripeInvoice,scope:HistoricalOfferScope,
-  cycles:Map<string,StripeInvoice>):Promise<HistoricalOfferBatch["entries"][number]> {
-  const invoice=original;
-  const metadata=original.parent?.subscription_details?.metadata;
+async function assessOriginalHistory(
+  stripe: StripeClient,
+  original: StripeInvoice,
+  scope: HistoricalOfferScope,
+  cycles: Map<string, StripeInvoice>,
+): Promise<HistoricalOfferBatch["entries"][number]> {
+  const invoice = original;
+  const metadata = original.parent?.subscription_details?.metadata;
   const claimedOffer = introOfferIdSchema.safeParse(metadata?.intro_offer_id);
   if (
     original.billing_reason === "subscription_cycle" &&

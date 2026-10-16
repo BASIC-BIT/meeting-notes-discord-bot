@@ -251,7 +251,7 @@ export function assertBillingChangeTransition(
     next.revision === previous.revision
   )
     throw new Error("Invalid plan change state transition");
-  assertFrozenChangeTerms(next,previous);
+  assertFrozenChangeTerms(next, previous);
   if (
     "funding" in previous &&
     "funding" in next &&
@@ -293,11 +293,14 @@ export function parseChangeUsage(
     !isDeepStrictEqual(next.terms, operation.target.offer.terms)
   )
     throw new Error("Plan change reservation terms mismatch");
-  assertChangeOfferResult(operation,next,mutation);
+  assertChangeOfferResult(operation, next, mutation);
   return { next, expected, authority: mutation.authority };
 }
 
-function assertFrozenChangeTerms(next:BillingChangeOperation,previous:BillingChangeOperation) {
+function assertFrozenChangeTerms(
+  next: BillingChangeOperation,
+  previous: BillingChangeOperation,
+) {
   const {
     revision: oldRevision,
     quote: oldQuote,
@@ -319,13 +322,17 @@ function assertFrozenChangeTerms(next:BillingChangeOperation,previous:BillingCha
     throw new Error("Frozen plan change terms cannot change");
   void oldRevision;
   void newRevision;
-
 }
 
-function assertChangeOfferResult(operation:BillingChangeOperation,next:ReturnType<typeof offerUsageSchema.parse>,mutation:OfferUsageMutation) {
+function assertChangeOfferResult(
+  operation: BillingChangeOperation,
+  next: ReturnType<typeof offerUsageSchema.parse>,
+  mutation: OfferUsageMutation,
+) {
   if (
     mutation.authority &&
-    (!operation.target.offer || !isDeepStrictEqual(mutation.authority, operation.target.offer.authority))
+    (!operation.target.offer ||
+      !isDeepStrictEqual(mutation.authority, operation.target.offer.authority))
   )
     throw new Error("Plan change history authority mismatch");
   if (
@@ -336,5 +343,4 @@ function assertChangeOfferResult(operation:BillingChangeOperation,next:ReturnTyp
     throw new Error("Offer result does not match plan change");
   if (next.state === "reserved" && !mutation.authority)
     throw new Error("Fresh plan change offer requires history authority");
-
 }

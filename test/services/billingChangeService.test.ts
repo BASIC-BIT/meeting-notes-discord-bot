@@ -1,8 +1,10 @@
 /** @jest-environment node */
+import * as scheduling from "../../src/services/billingChangeSchedule";
 import {
   readBillingChange,
   confirmBillingChange,
   prepareBillingChange,
+  cancelBillingChange,
 } from "../../src/services/billingChangeService";
 import { getBillingChangeRepository } from "../../src/repositories/billingChangeRepository";
 import { billingChangeBase } from "../../src/types/billingChange";
@@ -225,39 +227,7 @@ it("keeps Basic through review and incomplete payment, then applies one settled 
     amount_remaining: 0,
     amount_paid: 0,
   };
-  const f = stripeTransport(({ path, method, fields }) => {
-    if (path === "/v1/customers/cus_renewal") return customer;
-    if (path === "/v1/subscriptions/sub_renewal" && method === "GET")
-      return provider;
-    if (path === "/v1/prices")
-      return { object: "list", data: [basic, pro], has_more: false };
-    if (path === "/v1/prices/price_pro_monthly") return pro;
-    if (path === "/v1/invoices/in_funded")
-      return {
-        ...fundedInvoice,
-        total: 600,
-        amount_due: 600,
-        amount_paid: 600,
-        lines: {
-          ...fundedInvoice.lines,
-          data: [
-            {
-              ...fundedInvoice.lines.data[0],
-              discount_amounts: [
-                { amount: 400, discount: remainingDiscount.id },
-              ],
-            },
-          ],
-        },
-      };
-    if (path === "/v1/invoices/create_preview")
-      return {
-        ...fundedInvoice,
-        total: 900,
-        amount_due: 900,
-        amount_paid: 0,
-        lines: { ...fundedInvoice.lines, data: [credit, debit] },
-      };
+  function fundingWrite(path: string, method: string, fields: URLSearchParams) {
     if (path === "/v1/invoices" && method === "POST") {
       funding = {
         ...funding,
@@ -301,6 +271,43 @@ it("keeps Basic through review and incomplete payment, then applies one settled 
         hosted_invoice_url: "https://invoice.stripe.com/i/fixture",
       };
     }
+    return undefined;
+  }
+  const f = stripeTransport(({ path, method, fields }) => {
+    if (path === "/v1/customers/cus_renewal") return customer;
+    if (path === "/v1/subscriptions/sub_renewal" && method === "GET")
+      return provider;
+    if (path === "/v1/prices")
+      return { object: "list", data: [basic, pro], has_more: false };
+    if (path === "/v1/prices/price_pro_monthly") return pro;
+    if (path === "/v1/invoices/in_funded")
+      return {
+        ...fundedInvoice,
+        total: 600,
+        amount_due: 600,
+        amount_paid: 600,
+        lines: {
+          ...fundedInvoice.lines,
+          data: [
+            {
+              ...fundedInvoice.lines.data[0],
+              discount_amounts: [
+                { amount: 400, discount: remainingDiscount.id },
+              ],
+            },
+          ],
+        },
+      };
+    if (path === "/v1/invoices/create_preview")
+      return {
+        ...fundedInvoice,
+        total: 900,
+        amount_due: 900,
+        amount_paid: 0,
+        lines: { ...fundedInvoice.lines, data: [credit, debit] },
+      };
+    const createdFunding = fundingWrite(path, method, fields);
+    if (createdFunding) return createdFunding;
     if (path === "/v1/invoices/in_change")
       return {
         ...funding,
@@ -381,4 +388,84 @@ it("keeps Basic through review and incomplete payment, then applies one settled 
   );
   expect(baseline.update).not.toHaveBeenCalled();
   jest.restoreAllMocks();
+});
+
+it("finishes accepted schedule creation before cancellation releases control", async () => {
+  const review = seedReview();
+  const operation = {
+    ...billingChangeBase(review),
+    timing: "renewal" as const,
+    state: "accepted" as const,
+    funding: null,
+    consent: { at: review.createdAt, quoteRevision: review.revision },
+  };
+  getMockStore().billingChangeOperations.set(
+    `CHANGE_OP#${operation.guildId}#${operation.operationId}`,
+    operation,
+  );
+  const baseline = renewalStripeClientFixture();
+  const customer = await baseline.stripe.customers.retrieve("cus_renewal");
+  if (customer.deleted) throw Error("Expected customer");
+  const f = stripeTransport(({ path }) => {
+    if (path.includes("customers"))
+      return {
+        ...customer,
+        id: operation.source.customerId,
+        metadata: { discord_id: operation.payerId },
+      };
+    if (path.includes("subscriptions"))
+      return { ...sourceSubscription, schedule: null };
+    throw Error(`Unexpected ${path}`);
+  });
+  let finishCreation: (id: string) => void = () => undefined;
+  let started: () => void = () => undefined;
+  const creationStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const creationResult = new Promise<string>((resolve) => {
+    finishCreation = resolve;
+  });
+  const creation = jest
+    .spyOn(scheduling, "scheduleBillingChange")
+    .mockImplementationOnce(() => {
+      started();
+      return creationResult;
+    })
+    .mockRejectedValue(Error("Creation still pending"));
+  const settlement = jest
+    .spyOn(scheduling, "readScheduledChangeSettlement")
+    .mockResolvedValue({ kind: "waiting" });
+  const originalRead = readBillingChange({
+    stripe: f.stripe,
+    guildId: operation.guildId,
+    payerId: operation.payerId,
+    now: operation.createdAt,
+  });
+  await creationStarted;
+  await expect(
+    cancelBillingChange({
+      stripe: f.stripe,
+      guildId: operation.guildId,
+      payerId: operation.payerId,
+      operationId: operation.operationId,
+      now: operation.createdAt,
+    }),
+  ).rejects.toThrow("Creation still pending");
+  expect(creation).toHaveBeenCalled();
+  expect(
+    (
+      await getBillingChangeRepository().getOperation(
+        operation.guildId,
+        operation.operationId,
+      )
+    )?.state,
+  ).toBe("accepted");
+  expect(
+    await getBillingChangeRepository().getControl(operation.guildId),
+  ).toBeDefined();
+  finishCreation("sub_sched_owned");
+  await expect(originalRead).resolves.toMatchObject({ state: "scheduled" });
+  expect(creation).toHaveBeenCalledTimes(2);
+  settlement.mockRestore();
+  creation.mockRestore();
 });

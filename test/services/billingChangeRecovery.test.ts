@@ -100,25 +100,11 @@ it("reverses service before old debt, restores only that debt, and resumes witho
       chronote_invoice_role: "funding",
     },
   };
-  const f = stripeTransport(({ path, method, fields }) => {
-    if (path === "/v1/invoices/in_funding") return native;
-    if (path === "/v1/credit_notes" && method === "GET")
-      return { object: "list", data: note ? [note] : [], has_more: false };
-    if (path === "/v1/credit_notes" && method === "POST") {
-      journal.push("service");
-      expect(fields.get("refund_amount")).toBe("5700");
-      note = {
-        id: "cn_owned",
-        invoice: "in_funding",
-        amount: 5700,
-        status: "issued",
-        livemode: false,
-        customer: operation.source.customerId,
-        metadata: { chronote_change_operation: operation.operationId },
-        refunds: [{ amount_refunded: 5700, refund: "re_service" }],
-      };
-      return note;
-    }
+  function fundingRefund(
+    path: string,
+    method: string,
+    fields: URLSearchParams,
+  ) {
     if (path === "/v1/refunds/re_service")
       return {
         id: "re_service",
@@ -171,6 +157,29 @@ it("reverses service before old debt, restores only that debt, and resumes witho
       };
       return refund;
     }
+    return undefined;
+  }
+  const f = stripeTransport(({ path, method, fields }) => {
+    if (path === "/v1/invoices/in_funding") return native;
+    if (path === "/v1/credit_notes" && method === "GET")
+      return { object: "list", data: note ? [note] : [], has_more: false };
+    if (path === "/v1/credit_notes" && method === "POST") {
+      journal.push("service");
+      expect(fields.get("refund_amount")).toBe("5700");
+      note = {
+        id: "cn_owned",
+        invoice: "in_funding",
+        amount: 5700,
+        status: "issued",
+        livemode: false,
+        customer: operation.source.customerId,
+        metadata: { chronote_change_operation: operation.operationId },
+        refunds: [{ amount_refunded: 5700, refund: "re_service" }],
+      };
+      return note;
+    }
+    const refundedFunding = fundingRefund(path, method, fields);
+    if (refundedFunding) return refundedFunding;
     if (path.endsWith("/balance_transactions") && method === "GET")
       return {
         object: "list",

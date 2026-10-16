@@ -3,6 +3,21 @@ import { Alert, Button, Group, Stack, Text } from "@mantine/core";
 import BillingChangeReview from "./BillingChangeReview";
 import Surface from "./Surface";
 import type { useBillingChange } from "../hooks/useBillingChange";
+function reviewStatus(
+  view: Extract<
+    ReturnType<typeof useBillingChange>["view"],
+    { kind: "operation" }
+  >,
+  busy: boolean,
+) {
+  return view.state === "review" && !busy
+    ? "review"
+    : view.state === "accepted" && view.paymentUrl
+      ? "payment_required"
+      : view.state === "canceling"
+        ? "cancellation_unknown"
+        : "processing";
+}
 export default function BillingChangePanel({
   change,
   serverName,
@@ -79,14 +94,7 @@ export default function BillingChangePanel({
         </Surface>
       </div>
     );
-  const status =
-    view.state === "review" && !change.busy
-      ? "review"
-      : view.state === "accepted" && view.paymentUrl
-        ? "payment_required"
-        : view.state === "canceling"
-          ? "cancellation_unknown"
-          : "processing";
+  const status = reviewStatus(view, change.busy);
   return (
     <div
       ref={panel}

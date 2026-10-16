@@ -592,6 +592,25 @@ function providerCustomerId(subscription: StripeSubscription): string {
     : subscription.customer.id;
 }
 
+async function managedPortalConfiguration(
+  stripe: StripeClient,
+  providerSubscription: StripeSubscription | null,
+) {
+  const managedConfiguration =
+    config.stripe.basicIntroOffer.portalConfigurationId ||
+    providerSubscription?.metadata.intro_offer_portal_configuration_id;
+  if (config.stripe.subscriptionTransitionsEnabled && !managedConfiguration)
+    throw new BillingActionError(
+      "BAD_REQUEST",
+      "Billing management is temporarily unavailable. Please try again later.",
+    );
+  return managedConfiguration &&
+    (config.stripe.subscriptionTransitionsEnabled ||
+      config.stripe.introOfferLedgerEnabled)
+    ? await verifyBasicIntroPortalConfiguration(stripe, managedConfiguration)
+    : undefined;
+}
+
 export async function createPortalSession(params: {
   stripe: StripeClient;
   user: StripeUser;
@@ -624,20 +643,10 @@ export async function createPortalSession(params: {
       "Server billing information does not match Stripe; contact support",
     );
   }
-  const managedConfiguration =
-    config.stripe.basicIntroOffer.portalConfigurationId ||
-    providerSubscription?.metadata.intro_offer_portal_configuration_id;
-  if (config.stripe.subscriptionTransitionsEnabled && !managedConfiguration)
-    throw new BillingActionError(
-      "BAD_REQUEST",
-      "Billing management is temporarily unavailable. Please try again later.",
-    );
-  const configuration =
-    managedConfiguration &&
-    (config.stripe.subscriptionTransitionsEnabled ||
-      config.stripe.introOfferLedgerEnabled)
-      ? await verifyBasicIntroPortalConfiguration(stripe, managedConfiguration)
-      : undefined;
+  const configuration = await managedPortalConfiguration(
+    stripe,
+    providerSubscription,
+  );
   const portal = await stripe.billingPortal.sessions.create({
     customer: customerId,
     ...(configuration ? { configuration } : {}),

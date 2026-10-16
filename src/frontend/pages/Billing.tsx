@@ -496,6 +496,23 @@ type BillingPlanCardsProps = Pick<
   | "canChange"
 > & { shownOffer: BasicIntroOffer };
 
+function freePlanAction(
+  data: BillingPlanCardsProps["data"],
+  canChange: boolean,
+  busy: boolean,
+  checkoutBlocked: boolean,
+) {
+  return {
+    cta:
+      data.tier === "free"
+        ? "Current plan"
+        : canChange
+          ? "Switch to Free"
+          : "Available",
+    ctaDisabled:
+      data.tier !== "free" && (!canChange || busy || checkoutBlocked),
+  };
+}
 function BillingPlanCards({
   data,
   interval,
@@ -530,6 +547,7 @@ function BillingPlanCards({
     canChange,
     interval,
   );
+  const freeAction = freePlanAction(data, canChange, busy, checkoutBlocked);
   const checkoutBasic = () => onCheckout("basic");
   const checkoutPro = () => onCheckout("pro");
   return (
@@ -544,16 +562,8 @@ function BillingPlanCards({
           "Ask across up to 5 meetings",
           "Notes, tags, and summaries",
         ]}
-        cta={
-          data.tier === "free"
-            ? "Current plan"
-            : canChange
-              ? "Switch to Free"
-              : "Available"
-        }
-        ctaDisabled={
-          data.tier !== "free" && (!canChange || busy || checkoutBlocked)
-        }
+        cta={freeAction.cta}
+        ctaDisabled={freeAction.ctaDisabled}
         ctaProps={{
           variant: data.tier === "free" ? "light" : "outline",
           onClick: () => onCheckout("free"),
@@ -824,6 +834,19 @@ function billingCheckoutRequest({
   return request;
 }
 
+type CheckoutReadiness = {
+  canChange?: boolean;
+  busy: boolean;
+  refreshing: boolean;
+  failedCheckout: CheckoutRequest | null;
+  billingFetching: boolean;
+  pricingFetching: boolean;
+  pricingError: boolean;
+  data: BillingData | null;
+  tier: PaidTier;
+  offer: BasicIntroOffer;
+};
+
 function checkoutIsBlocked({
   busy,
   refreshing,
@@ -835,18 +858,7 @@ function checkoutIsBlocked({
   tier,
   offer,
   canChange = false,
-}: {
-  canChange?: boolean;
-  busy: boolean;
-  refreshing: boolean;
-  failedCheckout: CheckoutRequest | null;
-  billingFetching: boolean;
-  pricingFetching: boolean;
-  pricingError: boolean;
-  data: BillingData | null;
-  tier: PaidTier;
-  offer: BasicIntroOffer;
-}): boolean {
+}: CheckoutReadiness): boolean {
   return Boolean(
     busy ||
     refreshing ||
@@ -1147,15 +1159,6 @@ function BillingCheckoutRecovery({
   );
 }
 
-function savedCheckoutQuote(
-  checkoutAttempt: ReturnType<typeof useCheckoutAttempt>,
-) {
-  return {
-    failedCheckout: checkoutAttempt.attempt?.request ?? null,
-    frozenOffer: checkoutAttempt.attempt?.offer ?? null,
-  };
-}
-
 export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
   const {
@@ -1193,7 +1196,7 @@ export function Billing() {
       Boolean(data && !isTerminalStripeHistory(data)) &&
       selectedGuildId === routeServerId &&
       Boolean(renewal.view?.canManageBilling),
-    onBillingChanged: () => billingQuery.refetch(),
+    onBillingChanged: () => renewal.onRetry(),
   });
   const attemptIdentity = JSON.stringify([
     routeServerId,
@@ -1206,7 +1209,8 @@ export function Billing() {
   const checkoutAttempt = useCheckoutAttempt(attemptIdentity, () =>
     Promise.allSettled([billingQuery.refetch(), pricingQuery.refetch()]),
   );
-  const { failedCheckout, frozenOffer } = savedCheckoutQuote(checkoutAttempt);
+  const failedCheckout = checkoutAttempt.attempt?.request ?? null;
+  const frozenOffer = checkoutAttempt.attempt?.offer ?? null;
 
   const { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans } =
     useBillingPricing(pricingQuery.data, data, frozenOffer, interval);
@@ -1237,8 +1241,23 @@ export function Billing() {
     limitContext,
   });
 
+  const changePricingReady =
+    !pricingQuery.isFetching &&
+    !pricingQuery.isLoading &&
+    !pricingQuery.isError &&
+    Boolean(basicPlan && proPlan);
+  const canSelectChange = (tier: PlanTier) =>
+    Boolean(
+      selectedGuildId &&
+      selectedGuildId === routeServerId &&
+      !busy &&
+      (tier === "free" ||
+        (changePricingReady &&
+          (tier === "pro" || offer.status !== "unavailable"))),
+    );
   const handleCheckout = async (tier: PlanTier) => {
     if (change.enabled) {
+      if (!canSelectChange(tier)) return;
       await change.select({
         tier,
         interval,
@@ -1308,14 +1327,15 @@ export function Billing() {
   };
 
   const routedSelection = useRef("");
+  const routedChangeReady = search.plan ? canSelectChange(search.plan) : false;
   useEffect(() => {
-    if (!search.plan || !change.enabled) return;
+    if (!search.plan || !change.enabled || !routedChangeReady) return;
     const key = JSON.stringify([routeServerId, search.plan, interval]);
     if (routedSelection.current === key) return;
     routedSelection.current = key;
     void handleCheckout(search.plan);
     void navigate({ replace: true, search: { ...search, plan: undefined } });
-  }, [search.plan, change.enabled, routeServerId, interval]);
+  }, [search.plan, change.enabled, routeServerId, interval, routedChangeReady]);
 
   const handlePortal = async () => {
     try {

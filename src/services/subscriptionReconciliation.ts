@@ -116,6 +116,23 @@ const isTerminalSubscription = (subscription: StripeSubscription) =>
   subscription.status === "canceled" ||
   subscription.status === "incomplete_expired";
 
+async function hasUnsettledPlanChange(
+  guildId: string,
+  subscription: StripeSubscription,
+) {
+  const control = await getBillingChangeRepository().getControl(guildId);
+  if (!control) return false;
+  const operation = await getBillingChangeRepository().getOperation(
+    guildId,
+    control.operationId,
+  );
+  return Boolean(
+    operation &&
+    !["succeeded", "canceled"].includes(operation.state) &&
+    subscription.metadata.chronote_change_operation === operation.operationId,
+  );
+}
+
 // Read the row before fetching Stripe. If another webhook commits during the
 // fetch, retry both reads so an older response cannot undo its newer state.
 export const reconcileSubscription = async (
@@ -146,22 +163,7 @@ export const reconcileSubscription = async (
       )
         return;
     }
-    const changeControl =
-      await getBillingChangeRepository().getControl(guildId);
-    if (changeControl) {
-      const operation = await getBillingChangeRepository().getOperation(
-        guildId,
-        changeControl.operationId,
-      );
-      if (
-        operation &&
-        operation.state !== "succeeded" &&
-        operation.state !== "canceled" &&
-        subscription.metadata.chronote_change_operation ===
-          operation.operationId
-      )
-        return;
-    }
+    if (await hasUnsettledPlanChange(guildId, subscription)) return;
     await validatePurchaseSubscription(guildId, subscription);
     const tier = isTerminalSubscription(subscription)
       ? "free"

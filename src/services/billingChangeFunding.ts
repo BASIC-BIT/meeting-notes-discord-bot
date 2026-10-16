@@ -66,16 +66,15 @@ export async function createChangeFundingDraft(input: {
   if (invoice.status !== "draft") throw changeUnavailable();
   return invoice.id;
 }
-export async function finalizeChangeFunding(input: {
-  stripe: StripeClient;
-  operation: BillingChangeOperation;
-  subscription: StripeSubscription;
-}) {
+async function completeFundingDraft(
+  input: {
+    stripe: StripeClient;
+    operation: BillingChangeOperation;
+    subscription: StripeSubscription;
+  },
+  invoice: StripeInvoice,
+) {
   const { stripe, operation } = input;
-  if (!operation.draftInvoiceId) throw changeUnavailable();
-  let invoice = await stripe.invoices.retrieve(operation.draftInvoiceId);
-  assertFundingOwner(invoice, operation);
-  if (invoice.lines.has_more) throw changeUnavailable();
   if (invoice.status === "draft") {
     const parts = [
       {
@@ -149,6 +148,22 @@ export async function finalizeChangeFunding(input: {
       changeIdempotency(operation, "funding-finalize"),
     );
   }
+  return invoice;
+}
+
+export async function finalizeChangeFunding(input: {
+  stripe: StripeClient;
+  operation: BillingChangeOperation;
+  subscription: StripeSubscription;
+}) {
+  const { stripe, operation } = input;
+  if (!operation.draftInvoiceId) throw changeUnavailable();
+  let invoice: StripeInvoice = await stripe.invoices.retrieve(
+    operation.draftInvoiceId,
+  );
+  assertFundingOwner(invoice, operation);
+  if (invoice.lines.has_more) throw changeUnavailable();
+  invoice = await completeFundingDraft(input, invoice);
   assertFundingOwner(invoice, operation);
   if (invoice.status !== "open" && invoice.status !== "paid")
     throw changeUnavailable();
@@ -208,7 +223,6 @@ function targetFundedValue(
     return expected;
   throw changeUnavailable();
 }
-
 
 function assertFundingLines(
   invoice: StripeInvoice,

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { notifications } from "@mantine/notifications";
 import { trpc } from "../services/trpc";
 import type {
@@ -39,6 +39,31 @@ export function useBillingChange({
   const cancel = trpc.billing.cancelChange.useMutation();
   const busy = prepare.isPending || confirm.isPending || cancel.isPending;
   const view = query.data;
+  const observed = useRef(new Map<string, BillingChangeView>());
+  const refreshBilling = useRef(onBillingChanged);
+  refreshBilling.current = onBillingChanged;
+  useEffect(() => {
+    if (!serverId || !active || !view) return;
+    const previous = observed.current.get(serverId);
+    observed.current.set(serverId, view);
+    const complete =
+      view.kind === "operation" &&
+      ["succeeded", "canceled"].includes(view.state);
+    const newlyComplete =
+      complete &&
+      (previous?.kind !== "operation" ||
+        previous.operationId !== view.operationId ||
+        previous.state !== view.state);
+    const completedElsewhere =
+      view.kind === "none" &&
+      previous?.kind === "operation" &&
+      !["succeeded", "canceled"].includes(previous.state);
+    if (newlyComplete || completedElsewhere)
+      void Promise.allSettled([
+        utils.billing.change.invalidate({ serverId }),
+        refreshBilling.current(),
+      ]);
+  }, [serverId, active, view, utils]);
   const receive = async (result: BillingChangeView) => {
     if (!serverId) return;
     utils.billing.change.setData({ serverId }, result);
@@ -58,10 +83,6 @@ export function useBillingChange({
               ? "Your billing details have been updated."
               : "Your current plan is unchanged.",
         });
-      await Promise.allSettled([
-        utils.billing.change.invalidate({ serverId }),
-        onBillingChanged(),
-      ]);
     }
   };
   const run = async (

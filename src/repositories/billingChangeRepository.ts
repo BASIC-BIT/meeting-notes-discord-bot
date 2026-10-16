@@ -46,6 +46,42 @@ function saveMockUsage(mutation: OfferUsageMutation | undefined) {
     structuredClone(next),
   );
 }
+function claimMatchesPointer(
+  next: BillingChangeOperation,
+  input: BillingChangeClaim,
+) {
+  return (
+    next.state === "preparing" &&
+    input.expectedSubscription.guildId === next.guildId &&
+    input.expectedSubscription.stripeSubscriptionId ===
+      next.source.subscriptionId &&
+    (input.expectedSubscription.stripeSyncRevision ?? null) ===
+      next.source.revision
+  );
+}
+function mockClaimAvailable(
+  next: BillingChangeOperation,
+  input: BillingChangeClaim,
+) {
+  const store = getMockStore();
+  const pointer = store.subscriptions.get(next.guildId);
+  return Boolean(
+    pointer &&
+    pointer.stripeSubscriptionId ===
+      input.expectedSubscription.stripeSubscriptionId &&
+    pointer.stripeSyncRevision ===
+      input.expectedSubscription.stripeSyncRevision &&
+    !store.billingChangeControls.has(billingChangeControlKey(next.guildId)) &&
+    !["preparing", "open", "needs_review"].includes(
+      store.purchaseAttempts.get(next.guildId)?.state ?? "",
+    ) &&
+    !store.billingChangeOperations.has(
+      billingChangeOperationKey(next.guildId, next.operationId),
+    ) &&
+    !store.renewalControls.has(renewalControlKey(next.guildId)) &&
+    (!input.usage || mockUsageAllowed(input.usage, next)),
+  );
+}
 export function getBillingChangeRepository() {
   return {
     async getControl(
@@ -73,38 +109,15 @@ export function getBillingChangeRepository() {
     },
     async claim(input: BillingChangeClaim): Promise<boolean> {
       const next = billingChangeOperationSchema.parse(input.operation);
-      if (
-        next.state !== "preparing" ||
-        input.expectedSubscription.guildId !== next.guildId ||
-        input.expectedSubscription.stripeSubscriptionId !==
-          next.source.subscriptionId ||
-        (input.expectedSubscription.stripeSyncRevision ?? null) !==
-          next.source.revision
-      )
-        return false;
+      if (!claimMatchesPointer(next, input)) return false;
       if (input.usage) parseChangeUsage(next, input.usage);
       if (Boolean(next.target.offer) !== Boolean(input.usage))
         throw new Error("Offer reservation must be atomic");
       if (!config.mock.enabled) return claimBillingChangeOperation(input);
       const store = getMockStore();
-      const pointer = store.subscriptions.get(next.guildId);
       const key = billingChangeOperationKey(next.guildId, next.operationId);
       const control = billingChangeControlKey(next.guildId);
-      if (
-        !pointer ||
-        pointer.stripeSubscriptionId !==
-          input.expectedSubscription.stripeSubscriptionId ||
-        pointer.stripeSyncRevision !==
-          input.expectedSubscription.stripeSyncRevision ||
-        store.billingChangeControls.has(control) ||
-        ["preparing", "open", "needs_review"].includes(
-          store.purchaseAttempts.get(next.guildId)?.state ?? "",
-        ) ||
-        store.billingChangeOperations.has(key) ||
-        store.renewalControls.has(renewalControlKey(next.guildId)) ||
-        (input.usage && !mockUsageAllowed(input.usage, next))
-      )
-        return false;
+      if (!mockClaimAvailable(next, input)) return false;
       store.billingChangeOperations.set(key, structuredClone(next));
       store.billingChangeControls.set(control, {
         operationId: next.operationId,

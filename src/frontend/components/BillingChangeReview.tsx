@@ -1,12 +1,5 @@
 import QuoteAmounts from "./BillingChangeAmounts";
-import {
-  Alert,
-  Button,
-  Group,
-  Stack,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Alert, Button, Group, Stack, Text, Title } from "@mantine/core";
 import type { BillingInterval, PaidTier } from "../../types/pricing";
 import { formatCurrency } from "../utils/pricing";
 

@@ -23,10 +23,10 @@ jest.mock("../../src/services/analyticsService", () => ({
 const guildId = "111111111111111111";
 const user = { id: "payer", email: "payer@example.test" };
 const originalTransitionsEnabled = config.stripe.subscriptionTransitionsEnabled;
-const originalPortal=config.stripe.basicIntroOffer.portalConfigurationId;
+const originalPortal = config.stripe.basicIntroOffer.portalConfigurationId;
 afterAll(() => {
   config.stripe.subscriptionTransitionsEnabled = originalTransitionsEnabled;
-  config.stripe.basicIntroOffer.portalConfigurationId=originalPortal;
+  config.stripe.basicIntroOffer.portalConfigurationId = originalPortal;
 });
 
 function fixture() {
@@ -75,8 +75,18 @@ function fixture() {
       },
     },
     billingPortal: {
-      configurations:{retrieve:jest.fn(async()=>({id:"bpc_changes",active:true,livemode:false,features:{
-        subscription_update:{enabled:false},payment_method_update:{enabled:true},subscription_cancel:{enabled:true}}}))},
+      configurations: {
+        retrieve: jest.fn(async () => ({
+          id: "bpc_changes",
+          active: true,
+          livemode: false,
+          features: {
+            subscription_update: { enabled: false },
+            payment_method_update: { enabled: true },
+            subscription_cancel: { enabled: true },
+          },
+        })),
+      },
       sessions: {
         create: jest.fn(async () => ({
           url: "https://billing.stripe.com/confirm",
@@ -88,7 +98,7 @@ function fixture() {
 }
 
 beforeEach(() => {
-  config.stripe.basicIntroOffer.portalConfigurationId=originalPortal;
+  config.stripe.basicIntroOffer.portalConfigurationId = originalPortal;
   jest.clearAllMocks();
   config.stripe.subscriptionTransitionsEnabled = true;
   resetMockStore();
@@ -234,12 +244,12 @@ describe("existing server subscription checkout", () => {
 
   it("returns general billing management to the selected server Billing page", async () => {
     const { stripe, client } = fixture();
-    config.stripe.basicIntroOffer.portalConfigurationId="bpc_changes";
+    config.stripe.basicIntroOffer.portalConfigurationId = "bpc_changes";
     await createPortalSession({ stripe: client, user, guildId });
     expect(stripe.billingPortal.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
         customer: "cus_existing",
-        configuration:"bpc_changes",
+        configuration: "bpc_changes",
         return_url: new URL(
           `/portal/server/${guildId}/billing`,
           config.frontend.siteUrl,

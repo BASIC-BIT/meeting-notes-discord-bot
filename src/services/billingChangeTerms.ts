@@ -112,6 +112,18 @@ export async function resolveBillingChangeTarget(
     offer,
   });
 }
+function nextChangeRate(
+  target: BillingChangeTarget,
+  timing: "immediate" | "renewal",
+) {
+  if (target.selection.tier === "free") return null;
+  if (
+    target.offer &&
+    (timing === "renewal" || target.selection.interval === "month")
+  )
+    return target.offer.terms.discountedUnitAmount;
+  return target.unitAmount;
+}
 export function billingChangeQuote(
   source: Source,
   target: BillingChangeTarget,
@@ -158,12 +170,7 @@ export function billingChangeQuote(
     balanceCarriedForward: 0,
     amountDue: 0,
     remainingCredit: 0,
-    nextPlanRate:
-      target.selection.tier === "free"
-        ? null
-        : target.offer?.terms.interval === "month"
-          ? 600
-          : target.unitAmount,
+    nextPlanRate: nextChangeRate(target, timing),
     nextAt:
       target.selection.tier === "free"
         ? null

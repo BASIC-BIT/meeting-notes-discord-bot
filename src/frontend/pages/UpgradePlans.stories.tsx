@@ -251,6 +251,60 @@ export function UpgradePreview({
         cancellationAt,
         terminalStatus,
       });
+    function respondToPlanChange(
+      paths: string[],
+      body: RequestInit["body"],
+      data: Record<string, unknown>,
+    ) {
+      if (paths.includes("billing.prepareChange")) {
+        const request = JSON.parse(String(body ?? "{}"));
+        const input = request["0"]?.json ?? request["0"];
+        currentChange = previewChangeReview(input.selection);
+        data["billing.prepareChange"] = currentChange;
+      }
+      if (
+        paths.includes("billing.confirmChange") &&
+        currentChange.kind === "operation"
+      ) {
+        currentChange = {
+          ...currentChange,
+          state:
+            currentChange.quote.timing === "renewal" ? "scheduled" : "accepted",
+          revision: "confirmed",
+          paymentUrl:
+            currentChange.quote.timing === "renewal"
+              ? null
+              : "https://example.invalid/preview-payment",
+        };
+        data["billing.confirmChange"] = currentChange;
+      }
+      if (
+        paths.includes("billing.cancelChange") &&
+        currentChange.kind === "operation"
+      ) {
+        data["billing.cancelChange"] = {
+          ...currentChange,
+          state: "canceled",
+        };
+        currentChange = { kind: "none", enabled: true };
+      }
+    }
+    function respondToRenewal(paths: string[], data: Record<string, unknown>) {
+      if (paths.includes("billing.reactivateRenewal")) {
+        const state = currentRenewal.state;
+        if (state.kind === "off" && state.action.kind === "ready") {
+          const terms = state.action.terms;
+          currentRenewal = {
+            ...currentRenewal,
+            state: { kind: "on", terms },
+          };
+          data["billing.reactivateRenewal"] = {
+            kind: "confirmed",
+            terms,
+          };
+        } else data["billing.reactivateRenewal"] = { kind: "changed" };
+      }
+    }
     return trpc.createClient({
       links: [
         httpBatchLink({
@@ -274,54 +328,8 @@ export function UpgradePreview({
               .split("/")
               .at(-1)!
               .split(",");
-            if (paths.includes("billing.prepareChange")) {
-              const body = JSON.parse(String(options?.body ?? "{}"));
-              const input = body["0"]?.json ?? body["0"];
-              currentChange = previewChangeReview(input.selection);
-              data["billing.prepareChange"] = currentChange;
-            }
-            if (
-              paths.includes("billing.confirmChange") &&
-              currentChange.kind === "operation"
-            ) {
-              currentChange = {
-                ...currentChange,
-                state:
-                  currentChange.quote.timing === "renewal"
-                    ? "scheduled"
-                    : "accepted",
-                revision: "confirmed",
-                paymentUrl:
-                  currentChange.quote.timing === "renewal"
-                    ? null
-                    : "https://example.invalid/preview-payment",
-              };
-              data["billing.confirmChange"] = currentChange;
-            }
-            if (
-              paths.includes("billing.cancelChange") &&
-              currentChange.kind === "operation"
-            ) {
-              data["billing.cancelChange"] = {
-                ...currentChange,
-                state: "canceled",
-              };
-              currentChange = { kind: "none", enabled: true };
-            }
-            if (paths.includes("billing.reactivateRenewal")) {
-              const state = currentRenewal.state;
-              if (state.kind === "off" && state.action.kind === "ready") {
-                const terms = state.action.terms;
-                currentRenewal = {
-                  ...currentRenewal,
-                  state: { kind: "on", terms },
-                };
-                data["billing.reactivateRenewal"] = {
-                  kind: "confirmed",
-                  terms,
-                };
-              } else data["billing.reactivateRenewal"] = { kind: "changed" };
-            }
+            respondToPlanChange(paths, options?.body, data);
+            respondToRenewal(paths, data);
             if (errorFor && paths.includes(errorFor))
               throw new Error("Preview request failed");
             if (loadingBilling && paths.includes("billing.me"))

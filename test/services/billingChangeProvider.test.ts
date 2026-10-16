@@ -183,20 +183,57 @@ it("does not invalidate a server quote when another server redeems the same coup
   expect(changeSourceFingerprint(second)).toBe(changeSourceFingerprint(first));
 });
 
-it("allows a settled fully discounted period without treating it as an unpaid invoice",async()=>{
-  const f=fixture();
-  const item=f.provider.items.data[0];
-  f.invoice.mockResolvedValue(response({...fundedInvoice,total:0,amount_due:0,amount_paid:0,amount_remaining:0,
-    lines:{...fundedInvoice.lines,data:[{...fundedInvoice.lines.data[0],period:{start:item.current_period_start,end:item.current_period_end},
-      discount_amounts:[{amount:1000,discount:"di_fully_discounted"}]}]}}));
-  await expect(readBillingChangeSource({stripe:f.stripe,guildId:renewalGuildId,payerId:renewalPayerId,
-    at:item.current_period_start+100})).resolves.toMatchObject({source:{tier:"basic"}});
+it("allows a settled fully discounted period without treating it as an unpaid invoice", async () => {
+  const f = fixture();
+  const item = f.provider.items.data[0];
+  f.invoice.mockResolvedValue(
+    response({
+      ...fundedInvoice,
+      total: 0,
+      amount_due: 0,
+      amount_paid: 0,
+      amount_remaining: 0,
+      lines: {
+        ...fundedInvoice.lines,
+        data: [
+          {
+            ...fundedInvoice.lines.data[0],
+            period: {
+              start: item.current_period_start,
+              end: item.current_period_end,
+            },
+            discount_amounts: [
+              { amount: 1000, discount: "di_fully_discounted" },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  await expect(
+    readBillingChangeSource({
+      stripe: f.stripe,
+      guildId: renewalGuildId,
+      payerId: renewalPayerId,
+      at: item.current_period_start + 100,
+    }),
+  ).resolves.toMatchObject({ source: { tier: "basic" } });
 });
 
-it("never credits a new period using the previous period's paid invoice",async()=>{
-  const f=fixture();
-  const item=f.provider.items.data[0];
-  f.provider.items.data[0]={...item,current_period_start:item.current_period_end,current_period_end:item.current_period_end+30*86400};
-  await expect(readBillingChangeSource({stripe:f.stripe,guildId:renewalGuildId,payerId:renewalPayerId,
-    at:item.current_period_end+100})).rejects.toThrow();
+it("never credits a new period using the previous period's paid invoice", async () => {
+  const f = fixture();
+  const item = f.provider.items.data[0];
+  f.provider.items.data[0] = {
+    ...item,
+    current_period_start: item.current_period_end,
+    current_period_end: item.current_period_end + 30 * 86400,
+  };
+  await expect(
+    readBillingChangeSource({
+      stripe: f.stripe,
+      guildId: renewalGuildId,
+      payerId: renewalPayerId,
+      at: item.current_period_end + 100,
+    }),
+  ).rejects.toThrow();
 });
