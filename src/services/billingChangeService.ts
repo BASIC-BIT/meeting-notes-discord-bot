@@ -335,6 +335,17 @@ async function beginCancel(
     operation,
   );
 }
+async function reviewSourceEnded(
+  context: Context,
+  operation: BillingChangeOperation,
+) {
+  const pointer = await getSubscriptionRepository().get(context.guildId);
+  return (
+    !pointer ||
+    pointer.stripeSubscriptionId !== operation.source.subscriptionId ||
+    ["canceled", "incomplete_expired"].includes(pointer.status)
+  );
+}
 async function resume(
   context: Context,
   initial: BillingChangeOperation,
@@ -359,7 +370,10 @@ async function resume(
         operation = await finishCancellation(context, operation);
         break;
       case "review":
-        if (at(context) >= operation.expiresAt) {
+        if (
+          at(context) >= operation.expiresAt ||
+          (await reviewSourceEnded(context, operation))
+        ) {
           operation = await beginCancel(context, operation);
           break;
         }

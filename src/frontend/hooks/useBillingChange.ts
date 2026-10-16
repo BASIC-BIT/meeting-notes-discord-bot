@@ -9,10 +9,12 @@ import type {
 export function useBillingChange({
   serverId,
   active,
+  canStart = true,
   onBillingChanged,
 }: {
   serverId: string | null;
   active: boolean;
+  canStart?: boolean;
   onBillingChanged: () => Promise<unknown>;
 }) {
   const utils = trpc.useUtils();
@@ -25,6 +27,7 @@ export function useBillingChange({
       retry: false,
       refetchInterval: (query) => {
         const view = query.state.data;
+        if (view?.kind === "operation" && view.state === "review") return 30000;
         return view?.kind === "operation" &&
           ["preparing", "accepted", "applying", "canceling"].includes(
             view.state,
@@ -114,8 +117,12 @@ export function useBillingChange({
       await query.refetch();
     }
   };
-  const select = (selection: BillingChangeSelection) =>
-    run(() => prepare.mutateAsync({ serverId: serverId ?? "", selection }));
+  const select = async (selection: BillingChangeSelection) => {
+    if (!canStart) return;
+    await run(() =>
+      prepare.mutateAsync({ serverId: serverId ?? "", selection }),
+    );
+  };
   const approve = () =>
     run(() => {
       if (view?.kind !== "operation" || view.state !== "review")
@@ -153,7 +160,7 @@ export function useBillingChange({
     abandon,
     pay,
     refresh: () => query.refetch(),
-    enabled: active && view?.kind === "none" && view.enabled,
+    enabled: active && canStart && view?.kind === "none" && view.enabled,
     pending:
       view?.kind === "operation" &&
       !["succeeded", "canceled"].includes(view.state),

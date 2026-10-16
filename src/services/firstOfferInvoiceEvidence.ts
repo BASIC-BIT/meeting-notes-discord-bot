@@ -37,6 +37,7 @@ export function assertFirstOfferInvoice(
     throw invalid();
   assertInvoiceLine(
     invoice,
+    invoice.lines.data[0],
     subscriptionId,
     terms,
     discount.id,
@@ -45,12 +46,12 @@ export function assertFirstOfferInvoice(
 }
 function assertInvoiceLine(
   invoice: StripeInvoice,
+  line: StripeInvoice["lines"]["data"][number],
   subscriptionId: string,
   terms: Extract<OfferUsage, { state: "reserved" }>["terms"],
   discountId: string,
   expectedDiscount: number,
 ) {
-  const line = invoice.lines.data[0];
   const parent = line.parent?.subscription_item_details;
   if (
     line.invoice !== invoice.id ||
@@ -85,4 +86,56 @@ function assertLineDiscount(
     referenceId(line.discount_amounts[0].discount) !== discountId
   )
     throw invalid();
+}
+
+function assertRecurringInvoiceItems(
+  invoice: StripeInvoice,
+  service: StripeInvoice["lines"]["data"][number],
+  currency: string,
+) {
+  for (const line of invoice.lines.data) {
+    if (
+      line.invoice !== invoice.id ||
+      line.livemode !== invoice.livemode ||
+      line.currency !== currency
+    )
+      throw invalid();
+    if (line !== service && line.parent?.type !== "invoice_item_details")
+      throw invalid();
+  }
+}
+export function assertRecurringOfferInvoice(
+  invoice: StripeInvoice,
+  subscriptionId: string,
+  terms: Extract<OfferUsage, { state: "reserved" }>["terms"],
+) {
+  if (invoice.billing_reason !== "subscription_cycle" || invoice.lines.has_more)
+    throw invalid();
+  const service = invoice.lines.data.filter(
+    (line) =>
+      referenceId(line.pricing?.price_details?.price) === terms.priceId &&
+      line.parent?.subscription_item_details?.subscription === subscriptionId,
+  );
+  if (service.length !== 1) throw invalid();
+  assertRecurringInvoiceItems(invoice, service[0], terms.currency);
+  const discountId = referenceId(service[0].discount_amounts?.[0]?.discount);
+  const discount = invoice.discounts.find(
+    (item) => referenceId(item) === discountId,
+  );
+  if (
+    !discount ||
+    typeof discount === "string" ||
+    discount.source.type !== "coupon" ||
+    referenceId(discount.source.coupon) !== terms.couponId
+  )
+    throw invalid();
+  assertInvoiceLine(
+    invoice,
+    service[0],
+    subscriptionId,
+    terms,
+    discount.id,
+    terms.regularUnitAmount - terms.discountedUnitAmount,
+  );
+  return service[0];
 }

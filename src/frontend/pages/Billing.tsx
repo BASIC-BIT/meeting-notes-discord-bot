@@ -1159,6 +1159,49 @@ function BillingCheckoutRecovery({
   );
 }
 
+function canSelectBillingChange(input: {
+  tier: PlanTier;
+  serverId: string | null;
+  routeServerId: string;
+  busy: boolean;
+  pricingReady: boolean;
+  offer: BasicIntroOffer;
+}) {
+  return Boolean(
+    input.serverId &&
+    input.serverId === input.routeServerId &&
+    !input.busy &&
+    (input.tier === "free" ||
+      (input.pricingReady &&
+        (input.tier === "pro" || input.offer.status !== "unavailable"))),
+  );
+}
+function isChangePricingReady(
+  input: {
+    isFetching: boolean;
+    isLoading: boolean;
+    isError: boolean;
+  },
+  basic: ReturnType<typeof resolvePaidPlan>,
+  pro: ReturnType<typeof resolvePaidPlan>,
+) {
+  return (
+    !input.isFetching &&
+    !input.isLoading &&
+    !input.isError &&
+    Boolean(basic && pro)
+  );
+}
+function billingChangeAccess(
+  data: BillingData | null,
+  sameServer: boolean,
+  payerCanManage: boolean | undefined,
+) {
+  return {
+    active: Boolean(data?.hasStripeBilling && sameServer && payerCanManage),
+    canStart: Boolean(data && !isTerminalStripeHistory(data)),
+  };
+}
 export function Billing() {
   const [showPlans, setShowPlans] = useState(false);
   const {
@@ -1191,11 +1234,11 @@ export function Billing() {
   });
   const change = useBillingChange({
     serverId: selectedGuildId,
-    active:
-      Boolean(data?.hasStripeBilling) &&
-      Boolean(data && !isTerminalStripeHistory(data)) &&
-      selectedGuildId === routeServerId &&
-      Boolean(renewal.view?.canManageBilling),
+    ...billingChangeAccess(
+      data,
+      selectedGuildId === routeServerId,
+      renewal.view?.canManageBilling,
+    ),
     onBillingChanged: () => renewal.onRetry(),
   });
   const attemptIdentity = JSON.stringify([
@@ -1214,11 +1257,12 @@ export function Billing() {
 
   const { basicPlan, proPlan, normalPlan, planLookup, offer, hasAnnualPlans } =
     useBillingPricing(pricingQuery.data, data, frozenOffer, interval);
-  const busy =
-    checkoutMutation.isPending ||
-    portalMutation.isPending ||
-    renewal.busy ||
-    change.busy;
+  const busy = [
+    checkoutMutation.isPending,
+    portalMutation.isPending,
+    renewal.busy,
+    change.busy,
+  ].some(Boolean);
   const isPortalPending = portalMutation.isPending;
   const displayedOffer = useBillingOfferExposure({
     data,
@@ -1241,20 +1285,20 @@ export function Billing() {
     limitContext,
   });
 
-  const changePricingReady =
-    !pricingQuery.isFetching &&
-    !pricingQuery.isLoading &&
-    !pricingQuery.isError &&
-    Boolean(basicPlan && proPlan);
+  const changePricingReady = isChangePricingReady(
+    pricingQuery,
+    basicPlan,
+    proPlan,
+  );
   const canSelectChange = (tier: PlanTier) =>
-    Boolean(
-      selectedGuildId &&
-      selectedGuildId === routeServerId &&
-      !busy &&
-      (tier === "free" ||
-        (changePricingReady &&
-          (tier === "pro" || offer.status !== "unavailable"))),
-    );
+    canSelectBillingChange({
+      tier,
+      serverId: selectedGuildId,
+      routeServerId,
+      busy,
+      pricingReady: changePricingReady,
+      offer,
+    });
   const handleCheckout = async (tier: PlanTier) => {
     if (change.enabled) {
       if (!canSelectChange(tier)) return;
@@ -1438,12 +1482,12 @@ export function Billing() {
         offer={offer}
         offerChoice={offerChoice}
         onOfferChoiceChange={changeOffer}
-        busy={
-          busy ||
-          billingQuery.isFetching ||
-          pricingQuery.isFetching ||
-          checkoutAttempt.refreshing
-        }
+        busy={[
+          busy,
+          billingQuery.isFetching,
+          pricingQuery.isFetching,
+          checkoutAttempt.refreshing,
+        ].some(Boolean)}
         checkoutBlocked={
           Boolean(failedCheckout) ||
           pricingQuery.isError ||

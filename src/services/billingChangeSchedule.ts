@@ -1,4 +1,4 @@
-import { assertFirstOfferInvoice } from "./firstOfferInvoiceEvidence";
+import { assertRecurringOfferInvoice } from "./firstOfferInvoiceEvidence";
 import type Stripe from "stripe";
 import type { StripeClient, StripeSubscription } from "../types/stripe";
 import type { BillingChangeOperation } from "../types/billingChange";
@@ -349,11 +349,10 @@ function isScheduledInvoice(
 ) {
   if (operation.target.offer) {
     try {
-      assertFirstOfferInvoice(
+      assertRecurringOfferInvoice(
         invoice,
         operation.source.subscriptionId,
         operation.target.offer.terms,
-        "subscription_cycle",
       );
     } catch {
       return false;

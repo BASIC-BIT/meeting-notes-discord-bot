@@ -245,6 +245,34 @@ function invoiceDiscountFixture(variant: string) {
 }
 
 describe("billing webhook routes", () => {
+  test("recovers a deleted subscription review after its terminal state is persisted", async () => {
+    const { renewalSubscription } = await import("../fixtures/renewal");
+    getMockStore().subscriptions.set(guildId, {
+      ...renewalSubscription,
+      guildId,
+      stripeSubscriptionId: "sub_basic",
+      stripeCustomerId: "cus_basic",
+      status: "active",
+    });
+    const changeService =
+      await import("../../src/services/billingChangeService");
+    const observed: (string | undefined)[] = [];
+    const recover = jest
+      .spyOn(changeService, "reconcileBillingChangeForWebhook")
+      .mockImplementation(async () => {
+        observed.push((await getSubscriptionRepository().get(guildId))?.status);
+      });
+    const event = subscriptionEvent("canceled", "evt_terminal_review");
+    const { server, baseUrl } = createServer(createStripe(event));
+    try {
+      expect((await postWebhook(baseUrl)).statusCode).toBe(200);
+      expect(observed).toEqual(["active", "canceled"]);
+    } finally {
+      recover.mockRestore();
+      await closeServer(server);
+    }
+  });
+
   test.each([
     ["annual", "intro_discounted"],
     ["tax", "intro_discounted"],

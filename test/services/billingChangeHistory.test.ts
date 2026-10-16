@@ -193,3 +193,84 @@ it("shows actual annual switch payment and coverage, then stops showing it after
     }),
   ).toBeNull();
 });
+
+it("shows a paid scheduled annual offer invoice with a separate one-off item", async () => {
+  seed();
+  if (
+    operation.state !== "succeeded" ||
+    !operation.service ||
+    !operation.target.offer
+  )
+    throw Error("Expected annual offer");
+  const scheduled = { ...operation, funding: null };
+  getMockStore().billingChangeOperations.set(
+    billingChangeOperationKey(operation.guildId, operation.operationId),
+    scheduled,
+  );
+  const terms = operation.target.offer.terms;
+  const item = {
+    ...sourceSubscription.items.data[0],
+    price: { ...sourceSubscription.items.data[0].price, id: terms.priceId },
+    current_period_start: operation.service.periodStart,
+    current_period_end: operation.service.periodEnd,
+  };
+  const native = {
+    ...sourceSubscription,
+    id: operation.source.subscriptionId,
+    customer: operation.source.customerId,
+    metadata: {
+      guild_id: operation.guildId,
+      chronote_change_operation: operation.operationId,
+    },
+    items: { ...sourceSubscription.items, data: [item] },
+  };
+  const invoiceId = operation.service.invoiceId;
+  const service = {
+    ...fundedInvoice.lines.data[0],
+    invoice: invoiceId,
+    amount: 10000,
+    quantity: 1,
+    period: { start: item.current_period_start, end: item.current_period_end },
+    pricing: { price_details: { price: terms.priceId } },
+    discount_amounts: [{ amount: 4000, discount: "di_annual" }],
+    parent: {
+      type: "subscription_item_details",
+      subscription_item_details: {
+        subscription: native.id,
+        subscription_item: item.id,
+        proration: false,
+      },
+    },
+  };
+  const oneOff = {
+    ...fundedInvoice.lines.data[0],
+    invoice: invoiceId,
+    amount: 200,
+    pricing: null,
+    discount_amounts: [],
+    parent: {
+      type: "invoice_item_details",
+      invoice_item_details: { invoice_item: "ii_pending", proration: false },
+    },
+  };
+  const paid = {
+    ...fundedInvoice,
+    id: invoiceId,
+    customer: operation.source.customerId,
+    billing_reason: "subscription_cycle",
+    total: 6200,
+    amount_paid: 6200,
+    amount_due: 6200,
+    amount_remaining: 0,
+    discounts: [
+      { id: "di_annual", source: { type: "coupon", coupon: terms.couponId } },
+    ],
+    lines: { ...fundedInvoice.lines, data: [service, oneOff] },
+  };
+  const f = stripeTransport(() => paid);
+  expect(await readChangedAnnualPayment(f.stripe, native)).toMatchObject({
+    status: "available",
+    amountPaid: 6200,
+    discountedSubtotal: 6000,
+  });
+});

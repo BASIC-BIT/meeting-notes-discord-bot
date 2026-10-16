@@ -3,7 +3,17 @@ import type { FirstYearPayment } from "../types/pricing";
 import { getBillingChangeRepository } from "../repositories/billingChangeRepository";
 import { verifyChangeFunding } from "./billingChangeFunding";
 import { stripeId } from "./billingChangeProvider";
-import { assertFirstOfferInvoice } from "./firstOfferInvoiceEvidence";
+import { assertRecurringOfferInvoice } from "./firstOfferInvoiceEvidence";
+function isPaidAnnualInvoice(
+  invoice: import("../types/stripe").StripeInvoice,
+  customerId: string,
+) {
+  return (
+    invoice.status === "paid" &&
+    invoice.amount_remaining === 0 &&
+    stripeId(invoice.customer) === customerId
+  );
+}
 export async function readChangedAnnualPayment(
   stripe: StripeClient,
   subscription: StripeSubscription,
@@ -17,6 +27,8 @@ export async function readChangedAnnualPayment(
   if (!operation || operation.state !== "succeeded")
     return { status: "unavailable" };
   if (operation.target.offer?.id !== "basic_annual_intro_v1") return null;
+  const terms = operation.target.offer.terms;
+  if (terms.interval !== "year") return { status: "unavailable" };
   if (!sameAnnualPeriod(subscription, operation)) return null;
   if (!samePaymentOwner(subscription, operation))
     return { status: "unavailable" };
@@ -29,23 +41,18 @@ export async function readChangedAnnualPayment(
     if (!verifyChangeFunding(invoice, operation, operation.funding))
       return { status: "unavailable" };
   } else {
-    assertFirstOfferInvoice(
+    assertRecurringOfferInvoice(
       invoice,
       subscription.id,
       operation.target.offer.terms,
-      "subscription_cycle",
     );
-    if (
-      invoice.status !== "paid" ||
-      invoice.amount_remaining !== 0 ||
-      stripeId(invoice.customer) !== operation.source.customerId
-    )
+    if (!isPaidAnnualInvoice(invoice, operation.source.customerId))
       return { status: "unavailable" };
   }
   return {
     status: "available",
-    currency: "usd",
-    discountedSubtotal: 6000,
+    currency: terms.currency,
+    discountedSubtotal: terms.discountedUnitAmount,
     amountPaid: invoice.amount_paid,
     periodStartsAt: new Date(
       operation.service.periodStart * 1000,

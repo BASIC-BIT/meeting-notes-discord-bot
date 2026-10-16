@@ -155,6 +155,9 @@ const handleSubscriptionUpsert: WebhookHandler = async ({ stripe, event }) => {
   }
   await reconcileBillingChangeForWebhook(stripe, guildId);
   await reconcileSubscription(stripe, guildId, subscription.id);
+  // A deletion may have ended an unexpired review. Recover after persisting it
+  // so a replacement purchase never waits for a browser visit or quote expiry.
+  await reconcileBillingChangeForWebhook(stripe, guildId);
 };
 
 const handleInvoicePaymentSucceeded: WebhookHandler = async ({

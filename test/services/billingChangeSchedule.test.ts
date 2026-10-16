@@ -339,3 +339,127 @@ it("settles the actual target item when Stripe replaces the old item at renewal"
     await readScheduledChangeSettlement(f.stripe, scheduled),
   ).toMatchObject({ kind: "paid", invoice: { id: "in_scheduled" } });
 });
+
+it.each([true, false])(
+  "settles a paid scheduled offer with a separate pending invoice item: valid discount %s",
+  async (valid) => {
+    const terms = {
+      interval: "month" as const,
+      currency: "usd" as const,
+      priceId: "price_basic_month",
+      couponId: "co_scheduled",
+      regularUnitAmount: 1000 as const,
+      discountedUnitAmount: 600 as const,
+      durationMonths: 3 as const,
+    };
+    const selected = {
+      ...operation,
+      state: "scheduled" as const,
+      scheduleId: null,
+      target: {
+        ...operation.target,
+        priceId: terms.priceId,
+        unitAmount: 1000,
+        selection: {
+          tier: "basic" as const,
+          interval: "month" as const,
+          expectedOffer: "basic_intro_v1" as const,
+        },
+        offer: {
+          id: "basic_intro_v1" as const,
+          terms,
+          authority: {
+            guildId: operation.guildId,
+            mode: "test" as const,
+            offerId: "basic_intro_v1" as const,
+            accountId: "acct-owned",
+            coverageRevision: "coverage",
+            boundaryRevision: "boundary",
+            writerImageDigest: "sha256:" + "a".repeat(64),
+          },
+        },
+      },
+    };
+    const original = (await import("../fixtures/renewalStripe")).fundedInvoice;
+    const discount = {
+      ...remainingDiscount,
+      id: "di_scheduled",
+      source: { type: "coupon", coupon: terms.couponId },
+    };
+    const service = {
+      ...original.lines.data[0],
+      id: "il_service",
+      invoice: "in_scheduled",
+      amount: 1000,
+      quantity: 1,
+      period: {
+        start: operation.source.periodEnd,
+        end: operation.source.periodEnd + 30 * 86400,
+      },
+      pricing: { price_details: { price: terms.priceId } },
+      discount_amounts: [{ discount: discount.id, amount: valid ? 400 : 200 }],
+      parent: {
+        type: "subscription_item_details",
+        subscription_item_details: {
+          subscription: operation.source.subscriptionId,
+          subscription_item: "si_new",
+          proration: false,
+        },
+      },
+    };
+    const pending = {
+      ...original.lines.data[0],
+      id: "il_pending",
+      invoice: "in_scheduled",
+      amount: 200,
+      pricing: null,
+      discount_amounts: [],
+      parent: {
+        type: "invoice_item_details",
+        invoice_item_details: { invoice_item: "ii_pending", proration: false },
+      },
+    };
+    const invoice = {
+      ...original,
+      id: "in_scheduled",
+      customer: operation.source.customerId,
+      billing_reason: "subscription_cycle",
+      subtotal: 1200,
+      total: 800,
+      amount_due: 800,
+      amount_paid: 800,
+      amount_remaining: 0,
+      discounts: [discount],
+      total_discount_amounts: [{ discount: discount.id, amount: 400 }],
+      parent: {
+        type: "subscription_details",
+        subscription_details: {
+          subscription: operation.source.subscriptionId,
+          metadata: { chronote_change_operation: operation.operationId },
+        },
+      },
+      lines: { ...original.lines, data: [service, pending] },
+    };
+    const native = {
+      ...sourceSubscription,
+      id: operation.source.subscriptionId,
+      customer: operation.source.customerId,
+      metadata: {
+        guild_id: operation.guildId,
+        chronote_change_operation: operation.operationId,
+      },
+      latest_invoice: invoice.id,
+    };
+    const { stripeTransport } = await import("../fixtures/stripeTransport");
+    const f = stripeTransport(({ path }) => {
+      if (path.includes("subscriptions/")) return native;
+      if (path === "/v1/invoices/in_scheduled") return invoice;
+      if (path === "/v1/invoices")
+        return { object: "list", has_more: false, data: [] };
+      throw Error(`Unexpected ${path}`);
+    });
+    expect(
+      await readScheduledChangeSettlement(f.stripe, selected),
+    ).toMatchObject({ kind: valid ? "paid" : "waiting" });
+  },
+);

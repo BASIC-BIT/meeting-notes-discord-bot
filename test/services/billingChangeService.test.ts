@@ -469,3 +469,47 @@ it("finishes accepted schedule creation before cancellation releases control", a
   settlement.mockRestore();
   creation.mockRestore();
 });
+
+it("releases an unexpired review after its subscription has become terminal", async () => {
+  const seeded = seedReview();
+  const operation = { ...seeded, timing: "renewal" as const, funding: null };
+  getMockStore().billingChangeOperations.set(
+    `CHANGE_OP#${operation.guildId}#${operation.operationId}`,
+    operation,
+  );
+  getMockStore().subscriptions.set(operation.guildId, {
+    ...changePointer,
+    status: "canceled",
+    tier: "free",
+  });
+  const baseline = renewalStripeClientFixture();
+  const customer = await baseline.stripe.customers.retrieve("cus_renewal");
+  if (customer.deleted) throw Error("Expected customer");
+  const f = stripeTransport(({ path }) => {
+    if (path.includes("customers"))
+      return {
+        ...customer,
+        id: operation.source.customerId,
+        metadata: { discord_id: operation.payerId },
+      };
+    if (path.includes("subscriptions"))
+      return {
+        ...sourceSubscription,
+        id: operation.source.subscriptionId,
+        customer: operation.source.customerId,
+        metadata: { guild_id: operation.guildId },
+        status: "canceled",
+      };
+    throw Error(`Unexpected ${path}`);
+  });
+  const result = await readBillingChange({
+    stripe: f.stripe,
+    guildId: operation.guildId,
+    payerId: operation.payerId,
+    now: operation.createdAt,
+  });
+  expect(result).toMatchObject({ state: "canceled" });
+  expect(
+    await getBillingChangeRepository().getControl(operation.guildId),
+  ).toBeUndefined();
+});

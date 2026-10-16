@@ -1,3 +1,4 @@
+import { formatIntroOfferTerms } from "../utils/introOfferCopy";
 import { randomUUID } from "node:crypto";
 import type {
   StripeClient,
@@ -139,9 +140,7 @@ export function billingChangeQuote(
         ? "Basic"
         : "Free";
   const offerTerms = target.offer
-    ? annual
-      ? "$60 for your first year, then $100/year."
-      : "$6/month for three months, then $10/month."
+    ? formatIntroOfferTerms(target.offer.terms)
     : null;
   return {
     targetTier: target.selection.tier,

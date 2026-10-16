@@ -41,3 +41,19 @@ it.each(["succeeded", "none"] as const)(
     expect(onBillingChanged).toHaveBeenCalledTimes(1);
   },
 );
+
+it("recovers an operation for terminal subscription history without enabling a new change", () => {
+  billingChangeQuery.data = { kind: "none", enabled: true };
+  const onBillingChanged = jest
+    .fn<() => Promise<void>>()
+    .mockResolvedValue(undefined);
+  const { result } = renderHook(() =>
+    useBillingChange({
+      serverId: "g1",
+      active: true,
+      canStart: false,
+      onBillingChanged,
+    }),
+  );
+  expect(result.current.enabled).toBe(false);
+});

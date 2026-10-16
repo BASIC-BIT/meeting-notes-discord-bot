@@ -1249,3 +1249,38 @@ export const BillingScheduledChangePending: Story = {
     ).toBeVisible();
   },
 };
+
+export const BillingTerminalChangeRecovery: Story = {
+  tags: ["integration-plan-change"],
+  args: {
+    ...BillingPlanChangeReview.args,
+    tier: "free",
+    terminalStatus: "canceled",
+    subscriptionDetails: undefined,
+    change: previewChangeReview({
+      tier: "pro",
+      interval: "month",
+      expectedOffer: "none",
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const review = await canvas.findByTestId("billing-change-review");
+    await expect(canvas.getByTestId("billing-current-plan")).toHaveTextContent(
+      "Free",
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Back", exact: true }),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.queryByTestId("billing-change-review"),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Get Basic again" }),
+      ).toBeEnabled(),
+    );
+  },
+};
