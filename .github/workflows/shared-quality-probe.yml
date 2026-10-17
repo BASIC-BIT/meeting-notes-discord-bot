@@ -1,0 +1,50 @@
+name: Shared quality cross-owner probe
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: probe-quality-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  quality:
+    name: Code quality ratchet probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture caller checkout state
+        run: |
+          git status --porcelain=v1 --untracked-files=all > "$RUNNER_TEMP/quality-probe-status-before"
+          git ls-files -z | xargs -0 sha256sum -- > "$RUNNER_TEMP/quality-probe-files-before"
+          sha256sum -- .git/index .git/config > "$RUNNER_TEMP/quality-probe-git-before"
+      - id: quality
+        uses: BASIC-BIT/quality-ratchet@5e84c9d2f59fd7c9c7cd42a988c1d09e81636b63
+        with:
+          github-token: ${{ github.token }}
+          repository-path: ${{ github.workspace }}
+      - name: Record downstream action outputs
+        if: ${{ !cancelled() }}
+        env:
+          QR_OUTCOME: ${{ steps.quality.outputs.outcome }}
+          QR_STRICT_EXIT: ${{ steps.quality.outputs.strict-exit-code }}
+          QR_REPORT_DIRECTORY: ${{ steps.quality.outputs.report-directory }}
+        run: >-
+          node -e 'console.log(JSON.stringify({outcome:process.env.QR_OUTCOME,strictExitCode:process.env.QR_STRICT_EXIT,reportDirectoryAvailable:Boolean(process.env.QR_REPORT_DIRECTORY)}))'
+      - name: Verify caller checkout state
+        if: ${{ !cancelled() }}
+        run: |
+          git status --porcelain=v1 --untracked-files=all > "$RUNNER_TEMP/quality-probe-status-after"
+          diff -u "$RUNNER_TEMP/quality-probe-status-before" "$RUNNER_TEMP/quality-probe-status-after"
+          sha256sum --check --status "$RUNNER_TEMP/quality-probe-files-before"
+          sha256sum --check --status "$RUNNER_TEMP/quality-probe-git-before"
+          echo 'checkoutUnchanged=true'
