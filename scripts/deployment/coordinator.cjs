@@ -27,7 +27,7 @@ async function awsCli(service, operation, input) {
       validating ? "update-service" : operation,
       "--cli-input-json",
       JSON.stringify(input),
-      ...(validating ? ["--generate-cli-skeleton", "output"] : []),
+      ...(validating ? ["--generate-cli-skeleton", "input"] : []),
       "--output",
       "json",
       "--no-cli-pager",
@@ -40,7 +40,21 @@ async function awsCli(service, operation, input) {
         : {}),
     },
   );
-  return stdout.trim() ? JSON.parse(stdout) : {};
+  const response = stdout.trim() ? JSON.parse(stdout) : {};
+  if (validating) {
+    // Output skeletons can fail on invalid dummy responses in supported CLI models.
+    const criteria = response.deploymentConfiguration?.earlySuccessCriteria;
+    if (
+      !criteria ||
+      !["enable", "healthyPercent", "sourceServiceRevisionCleanup"].every(
+        (field) => Object.hasOwn(criteria, field),
+      )
+    )
+      throw new Error(
+        "AWS CLI lacks deferred service revision cleanup support",
+      );
+  }
+  return response;
 }
 function configuration(env) {
   const required = (key) => {
