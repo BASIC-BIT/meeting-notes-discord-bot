@@ -10,10 +10,10 @@ const release = "0873869f6b8fd80150d24689849ec0aebd94e9dd";
 function hasVisibleQualityExceptionHeading(template) {
   let inComment = false;
   for (const [token] of template.matchAll(
-    /<!--|-->|^## Quality exception[ \t]*\r?$/gm,
+    /<!--|--!?>|^## Quality exception[ \t]*\r?$/gm,
   )) {
     if (token === "<!--") inComment = true;
-    else if (token === "-->") inComment = false;
+    else if (token === "-->" || token === "--!>") inComment = false;
     else if (!inComment) return true;
   }
   return false;
@@ -26,6 +26,7 @@ test("the quality exception heading must be outside HTML comments", () => {
     ["<!--\n## Quality exception\n-->", false],
     ["<!--\n## Quality exception\n", false],
     ["<!-- instructions -->\n## Quality exception\n", true],
+    ["<!-- instructions --!>\n## Quality exception\n", true],
     ["<!--\n## Quality exception\n-->\n## Quality exception\n", true],
     ["## Summary\n", false],
     ["### Quality exception\n", false],
