@@ -2299,6 +2299,14 @@ resource "aws_iam_role_policy" "deployment_control" {
     Statement = [
       {
         Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan"
+        ]
+        Resource = [aws_dynamodb_table.deployment_control_table.arn]
+      },
+      {
+        Effect = "Allow"
         Action = ["dynamodb:ConditionCheckItem"]
         Resource = [
           aws_dynamodb_table.deployment_control_table.arn,

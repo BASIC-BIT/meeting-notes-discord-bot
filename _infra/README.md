@@ -281,6 +281,33 @@ the artifact name, plan run ID, and SHA-256 to the workflow summary.
 reviewed plan artifact from a specific plan run, verifies the SHA-256, and applies
 that saved plan. It does not generate a fresh unreviewed plan during apply.
 
+`plan_scope` accepts only `full`, `purchase-permission`, or
+`deployment-prerequisites`. `full` remains untargeted; `purchase-permission`
+continues to target only `aws_iam_role_policy.initial_purchase_condition`.
+Unsupported scope values fail before the plan command, and no scope accepts
+arbitrary Terraform arguments.
+
+`deployment-prerequisites` targets exactly:
+
+1. `aws_dynamodb_table.deployment_control_table`
+2. `aws_lb_target_group.api_spare_tg[0]`
+3. `aws_iam_role_policy.deployment_control`
+4. `aws_iam_policy.deployment_routing[0]`
+
+The inline deployment-control policy supplies its table's item/read permissions
+without changing the shared DynamoDB policy or depending on GSI work. Routing
+permissions construct the existing service, service-deployment and service-revision
+ARNs from its account, region, cluster and name prefix, so planning that policy
+does not depend on the ECS service or its task definition.
+
+Terraform targeting includes dependencies. Review the complete saved plan's
+dependency closure before approval. Reject any GSI migration, public-site change,
+ECS service change or task-definition change. Local mocked plans establish source
+behavior, not the closure of an actual saved production plan. Minimum health
+100%, maximum 200% and `DEFERRED` source cleanup belong only to separately approved
+activation. This prerequisite scope does not activate them. The saved-plan hash
+review and GitHub environment approval required by Terraform Apply are unchanged.
+
 Each GitHub environment used by the workflow must provide:
 
 - Secret `AWS_ACCESS_KEY_ID`

@@ -102,3 +102,102 @@ run "production_does_not_adopt_sandbox_role" {
     error_message = "This Sandbox change must preserve the existing production AppConfig policy."
   }
 }
+
+run "deployment_prerequisites_are_scoped_without_service_changes" {
+  override_resource {
+    target          = aws_dynamodb_table.deployment_control_table
+    override_during = plan
+    values          = { arn = "arn:aws:dynamodb:us-east-1:123456789012:table/chronote-prod-DeploymentControlTable" }
+  }
+  override_resource {
+    target          = aws_dynamodb_table.active_meeting_table
+    override_during = plan
+    values          = { arn = "arn:aws:dynamodb:us-east-1:123456789012:table/chronote-prod-ActiveMeetingTable" }
+  }
+  override_resource {
+    target          = aws_dynamodb_table.meeting_history_table
+    override_during = plan
+    values          = { arn = "arn:aws:dynamodb:us-east-1:123456789012:table/chronote-prod-MeetingHistoryTable" }
+  }
+  override_resource {
+    target          = aws_lb_listener.api_https[0]
+    override_during = plan
+    values          = { arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/test/1234567890123456/1234567890123456" }
+  }
+  command = plan
+  plan_options {
+    target = [
+      aws_dynamodb_table.deployment_control_table,
+      aws_lb_target_group.api_spare_tg[0],
+      aws_iam_role_policy.deployment_control,
+      aws_iam_policy.deployment_routing[0]
+    ]
+  }
+  variables {
+    project_name       = "chronote"
+    environment        = "prod"
+    github_environment = "production"
+  }
+  override_resource {
+    target          = aws_ecs_service.app_service
+    override_during = plan
+    values = {
+      id   = "arn:aws:ecs:us-east-1:123456789012:service/should-not-be-read/should-not-be-read"
+      name = "should-not-be-read"
+    }
+  }
+  assert {
+    condition = length(jsondecode(aws_iam_role_policy.deployment_control.policy).Statement) == 3 && length([
+      for s in jsondecode(aws_iam_role_policy.deployment_control.policy).Statement : s
+      if toset(s.Action) == toset(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan"]) && toset(s.Resource) == toset([aws_dynamodb_table.deployment_control_table.arn]) && s.Effect == "Allow"
+    ]) == 1
+    error_message = "Deployment control CRUD and reads must target only its table, without relying on the shared DynamoDB policy or GSI permissions."
+  }
+  assert {
+    condition = length([
+      for s in jsondecode(aws_iam_role_policy.deployment_control.policy).Statement : s
+      if toset(s.Action) == toset(["dynamodb:ConditionCheckItem"]) && toset(s.Resource) == toset([aws_dynamodb_table.deployment_control_table.arn, aws_dynamodb_table.active_meeting_table.arn, aws_dynamodb_table.meeting_history_table.arn]) && s.Effect == "Allow"
+    ]) == 1
+    error_message = "Condition checks must retain exactly the existing three tables."
+  }
+  assert {
+    condition = length([
+      for s in jsondecode(aws_iam_role_policy.deployment_control.policy).Statement : s
+      if toset(s.Action) == toset(["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"]) && toset(s.Resource) == toset(["arn:aws:ecs:us-east-1:123456789012:task/chronote-prod-bot-cluster/*"]) && s.Effect == "Allow"
+    ]) == 1
+    error_message = "Native task protection permissions must remain scoped to the existing cluster."
+  }
+  assert {
+    condition = jsondecode(aws_iam_policy.deployment_routing[0].policy).Statement == jsondecode(jsonencode([
+      {
+        Effect   = "Allow"
+        Action   = ["elasticloadbalancing:ModifyListener"]
+        Resource = [aws_lb_listener.api_https[0].arn]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules",
+          "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetGroupAttributes",
+          "elasticloadbalancing:DescribeTargetHealth"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["ecs:ListServiceDeployments"]
+        Resource = "arn:aws:ecs:us-east-1:123456789012:service/chronote-prod-bot-cluster/chronote-prod-bot-service"
+      },
+      {
+        Effect = "Allow"
+        Action = ["ecs:DescribeServiceDeployments", "ecs:DescribeServiceRevisions"]
+        Resource = [
+          "arn:aws:ecs:us-east-1:123456789012:service/chronote-prod-bot-cluster/chronote-prod-bot-service",
+          "arn:aws:ecs:us-east-1:123456789012:service-deployment/chronote-prod-bot-cluster/chronote-prod-bot-service/*",
+          "arn:aws:ecs:us-east-1:123456789012:service-revision/chronote-prod-bot-cluster/chronote-prod-bot-service/*"
+        ]
+      }
+    ]))
+    error_message = "Routing must preserve exact listener scope and read actions, using service ARNs independent of the ECS service and its task definition."
+  }
+}
