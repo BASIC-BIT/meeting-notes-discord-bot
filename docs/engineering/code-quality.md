@@ -65,7 +65,7 @@ blocking file-growth rule.
 
 The explicit exclusions preserve dependency/build output, generated code and
 declarations, package-manager lockfiles, Terraform lockfiles, generated
-Docusaurus/Tauri output, and agent work directories. The shared tool also
+Docusaurus/Tauri output, and `.superpowers` work directories. The shared tool also
 always excludes Git metadata, dependency/cache directories, nested worktrees,
 generated output, and symlinks. No authored test directory is excluded.
 Configuration changes are validated as proposals; the target branch's policy
