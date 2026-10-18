@@ -7,6 +7,37 @@ const read = (name) =>
   readFileSync(new URL("../" + name, import.meta.url), "utf8");
 const release = "0873869f6b8fd80150d24689849ec0aebd94e9dd";
 
+function hasVisibleQualityExceptionHeading(template) {
+  let inComment = false;
+  for (const [token] of template.matchAll(
+    /<!--|-->|^## Quality exception[ \t]*\r?$/gm,
+  )) {
+    if (token === "<!--") inComment = true;
+    else if (token === "-->") inComment = false;
+    else if (!inComment) return true;
+  }
+  return false;
+}
+
+test("the quality exception heading must be outside HTML comments", () => {
+  for (const [template, expected] of [
+    ["## Quality exception\n", true],
+    ["## Quality exception \t\r\n", true],
+    ["<!--\n## Quality exception\n-->", false],
+    ["<!--\n## Quality exception\n", false],
+    ["<!-- instructions -->\n## Quality exception\n", true],
+    ["<!--\n## Quality exception\n-->\n## Quality exception\n", true],
+    ["## Summary\n", false],
+    ["### Quality exception\n", false],
+  ]) {
+    assert.equal(
+      hasVisibleQualityExceptionHeading(template),
+      expected,
+      template,
+    );
+  }
+});
+
 test("the shared action runs for every PR and exception change with read-only access", () => {
   const workflow = parse(read(".github/workflows/code-quality.yml"));
   assert.deepEqual(workflow.on, {
@@ -102,9 +133,7 @@ test("diagnostics and deployment checks remain outside strict PR policy", () => 
         (step) => step.run === "bash scripts/ci-install-dependencies.sh",
       ),
   );
-  const template = read(".github/pull_request_template.md").replace(
-    /<!--[\s\S]*?-->/g,
-    "",
+  assert.ok(
+    hasVisibleQualityExceptionHeading(read(".github/pull_request_template.md")),
   );
-  assert.match(template, /^## Quality exception\s*$/m);
 });
