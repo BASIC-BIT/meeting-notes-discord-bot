@@ -21,6 +21,8 @@ try {
         resource.address.length > 0,
     );
     assert.ok(resource.change && Array.isArray(resource.change.actions));
+    assert.equal(resource.change.importing ?? null, null);
+    assert.equal(resource.previous_address ?? null, null);
     assert.equal(resource.change.actions.length, 1);
     const action = resource.change.actions[0];
     if (resource.mode === "data") {

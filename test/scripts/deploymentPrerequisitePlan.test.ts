@@ -162,3 +162,84 @@ test.each([0, 1])(
     expect(result.stdout + result.stderr).not.toContain("SECRET-PLAN-VALUE");
   },
 );
+
+test.each([
+  {
+    name: "imported key no-op",
+    resources: [
+      {
+        ...kms,
+        change: { ...kms.change, importing: { id: "SECRET-PLAN-VALUE" } },
+      },
+    ],
+  },
+  {
+    name: "imported standalone policy no-op",
+    resources: [
+      kms,
+      {
+        ...change("aws_kms_key_policy.app_general", ["no-op"]),
+        change: { actions: ["no-op"], importing: { id: "SECRET-PLAN-VALUE" } },
+      },
+    ],
+  },
+  {
+    name: "imported allowed target",
+    resources: [
+      kms,
+      {
+        ...change(targets[0]),
+        change: { actions: ["update"], importing: { id: "SECRET-PLAN-VALUE" } },
+      },
+    ],
+  },
+  {
+    name: "moved address no-op",
+    resources: [
+      kms,
+      {
+        ...change(targets[0], ["no-op"]),
+        previous_address: "SECRET-PLAN-VALUE",
+      },
+    ],
+  },
+  {
+    name: "import metadata on a data read",
+    resources: [
+      kms,
+      {
+        ...change("data.aws_caller_identity.current", ["read"], "data"),
+        change: { actions: ["read"], importing: { id: "SECRET-PLAN-VALUE" } },
+      },
+    ],
+  },
+])("rejects $name without exposing state identifiers", ({ resources }) => {
+  const result = validate({ resource_changes: resources });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("rejected");
+  expect(result.stdout + result.stderr).not.toContain("SECRET-PLAN-VALUE");
+});
+
+test.each([false, 0, ""])("rejects non-null state metadata %j", (metadata) => {
+  for (const resource of [
+    { ...kms, change: { ...kms.change, importing: metadata } },
+    { ...kms, previous_address: metadata },
+  ]) {
+    const result = validate({ resource_changes: [resource] });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("rejected");
+  }
+});
+
+test("accepts explicit null state metadata as no import or move", () => {
+  const result = validate({
+    resource_changes: [
+      {
+        ...kms,
+        previous_address: null,
+        change: { ...kms.change, importing: null },
+      },
+    ],
+  });
+  expect(result.status).toBe(0);
+});
