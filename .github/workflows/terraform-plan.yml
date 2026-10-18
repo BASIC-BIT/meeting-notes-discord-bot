@@ -210,6 +210,7 @@ jobs:
         env:
           PLAN_SCOPE: ${{ inputs.plan_scope }}
         run: |
+          set -euo pipefail
           plan_args=()
           case "$PLAN_SCOPE" in
             full) ;;
@@ -245,6 +246,15 @@ jobs:
           else
             echo "changes=false" >> "$GITHUB_OUTPUT"
             echo "Terraform plan completed with no pending changes."
+          fi
+
+      - name: Validate deployment prerequisite actions
+        if: inputs.plan_scope == 'deployment-prerequisites'
+        run: |
+          set -euo pipefail
+          if ! terraform -chdir=_infra show -json tfplan 2>/dev/null | node scripts/deployment/validate-prerequisite-plan.cjs; then
+            echo "ERROR: Deployment prerequisite plan validation failed." >&2
+            exit 1
           fi
 
       - name: Record plan artifact metadata

@@ -32,7 +32,7 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:iam::123456789012:role/test-role" }
   }
   mock_resource "aws_kms_key" {
-    defaults = { arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-1111-1111-111111111111" }
+    defaults = { arn = "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-1111-1111-111111111111", policy = "{}" }
   }
 }
 mock_provider "github" {
@@ -199,5 +199,28 @@ run "deployment_prerequisites_are_scoped_without_service_changes" {
       }
     ]))
     error_message = "Routing must preserve exact listener scope and read actions, using service ARNs independent of the ECS service and its task definition."
+  }
+}
+
+run "app_general_policy_preserves_permissions_and_key_settings" {
+  command = plan
+  plan_options { target = [aws_kms_key_policy.app_general] }
+  override_resource {
+    target          = aws_cloudfront_distribution.frontend
+    override_during = plan
+    values          = { id = "FRONTEND-TEST" }
+  }
+  override_resource {
+    target          = aws_cloudfront_distribution.docs
+    override_during = plan
+    values          = { id = "DOCS-TEST" }
+  }
+  assert {
+    condition     = jsondecode(aws_kms_key_policy.app_general.policy) == jsondecode(file("tests/fixtures/app-general-policy.json"))
+    error_message = "The standalone policy must preserve all seven existing statements, principals, actions and CloudFront source ARNs."
+  }
+  assert {
+    condition     = aws_kms_key_policy.app_general.key_id == aws_kms_key.app_general.id && aws_kms_key_policy.app_general.bypass_policy_lockout_safety_check != true && aws_kms_key.app_general.policy == "{}" && aws_kms_key.app_general.bypass_policy_lockout_safety_check != true && aws_kms_key.app_general.enable_key_rotation && aws_kms_key.app_general.deletion_window_in_days == 7 && aws_kms_key.app_general.description == "KMS key for ECR, CloudWatch logs, and other app resources"
+    error_message = "Policy ownership must retain the existing key and key settings with lockout protection enabled."
   }
 }

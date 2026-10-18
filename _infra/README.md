@@ -308,6 +308,30 @@ behavior, not the closure of an actual saved production plan. Minimum health
 activation. This prerequisite scope does not activate them. The saved-plan hash
 review and GitHub environment approval required by Terraform Apply are unchanged.
 
+Before artifact creation or upload, this scope runs
+`terraform show -json tfplan` through
+`scripts/deployment/validate-prerequisite-plan.cjs`. The guard requires the
+existing `aws_kms_key.app_general` to be a no-op. It permits create/update only
+for the four exact addresses above, other managed no-ops and dependent data reads.
+It rejects deletes, replacements, unsupported actions, invalid or missing action
+evidence and all other managed changes. A failed show/validation pipeline blocks
+artifact upload. Its output contains only fixed resource/action results, never
+plan values. Other plan scopes keep their existing behavior.
+
+The existing key's entire policy expression now has one configured owner,
+`aws_kms_key_policy.app_general`. The key's identity, rotation and deletion
+settings are unchanged. The key and encrypted DynamoDB tables do not depend on
+that policy resource, keeping CloudFront dependencies out of prerequisite plans.
+Encrypted CloudWatch log groups and the critical-alert SNS topic explicitly wait
+for the policy's service grants during cold creation.
+
+Standalone policy adoption requires a separate reviewed plan and approval; it is
+outside the four-target Apply. The actual state-backed prerequisite plan must
+show the existing key as a no-op or remain blocked. Mocked cold-state plans do not
+prove migration safety. Destroying the standalone policy restores the default key
+policy, so an ownership handback or revert needs separate review. Never remove the
+resource blindly.
+
 Each GitHub environment used by the workflow must provide:
 
 - Secret `AWS_ACCESS_KEY_ID`
