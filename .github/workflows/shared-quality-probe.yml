@@ -1,4 +1,4 @@
-name: Shared quality cross-owner probe
+name: Shared quality probe
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
@@ -28,7 +28,7 @@ jobs:
           git ls-files -z | xargs -0 sha256sum -- > "$RUNNER_TEMP/quality-probe-files-before"
           sha256sum -- .git/index .git/config > "$RUNNER_TEMP/quality-probe-git-before"
       - id: quality
-        uses: BASIC-BIT/quality-ratchet@ba9c9bec7c312a303e61b6779591610cd32509b8
+        uses: BASIC-BIT/quality-ratchet@9d713408d8c12eb9ced26fe45b4a99e1df5505ff
         with:
           github-token: ${{ github.token }}
           repository-path: ${{ github.workspace }}
