@@ -736,6 +736,7 @@ export default function Settings() {
       <ChannelOverridesCard
         busy={channelBusy}
         refreshing={channelsRefreshing}
+        recordAllEnabled={recordAllEnabled}
         overrides={overrides}
         availableVoiceChannels={availableVoiceChannels}
         voiceChannels={voiceChannels}

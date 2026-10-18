@@ -519,65 +519,78 @@ export async function handleRequestStartMeeting(
 ) {
   if (!options?.deferredEphemeralReply && !interaction.deferred)
     await interaction.deferReply({ ephemeral: true });
-  const guildId = interaction.guildId!;
-  const { meetingContext, tags, explicitChannelId } =
-    getMeetingRequestOptions(interaction);
-  const channelResult = resolveGuildChannels(interaction);
-  if (!channelResult.ok) {
-    await replyStartMeetingError(interaction, channelResult.error);
-    return;
-  }
-
-  const { guild, invocationChannelId } = channelResult;
-  const meetingConflict = await ensureNoActiveMeeting(guildId);
-  if (meetingConflict) {
-    await replyStartMeetingError(interaction, meetingConflict);
-    return;
-  }
-
-  const member = await fetchGuildMember(guild, interaction.user.id);
-  if (!member) {
-    await replyStartMeetingError(
-      interaction,
-      "Unable to find your server member profile.",
-    );
-    return;
-  }
-  const voiceResult = resolveMemberVoiceChannel(member);
-  if (!voiceResult.ok) {
-    await replyStartMeetingError(interaction, voiceResult.error);
-    return;
-  }
-  const { voiceChannel } = voiceResult;
-  let textChannel: TextChannel;
+  let startResult: StartManualMeetingFromChannelsResult;
   try {
-    textChannel = await resolveMeetingNotesChannel({
+    const guildId = interaction.guildId!;
+    const { meetingContext, tags, explicitChannelId } =
+      getMeetingRequestOptions(interaction);
+    const channelResult = resolveGuildChannels(interaction);
+    if (!channelResult.ok) {
+      await replyStartMeetingError(interaction, channelResult.error);
+      return;
+    }
+
+    const { guild, invocationChannelId } = channelResult;
+    const meetingConflict = await ensureNoActiveMeeting(guildId);
+    if (meetingConflict) {
+      await replyStartMeetingError(interaction, meetingConflict);
+      return;
+    }
+
+    const member = await fetchGuildMember(guild, interaction.user.id);
+    if (!member) {
+      await replyStartMeetingError(
+        interaction,
+        "Unable to find your server member profile.",
+      );
+      return;
+    }
+    const voiceResult = resolveMemberVoiceChannel(member);
+    if (!voiceResult.ok) {
+      await replyStartMeetingError(interaction, voiceResult.error);
+      return;
+    }
+    const { voiceChannel } = voiceResult;
+    let textChannel: TextChannel;
+    try {
+      textChannel = await resolveMeetingNotesChannel({
+        guild,
+        voiceChannelId: voiceChannel.id,
+        explicitChannelId,
+        invocationChannelId,
+      });
+      assertMemberCanAccessNotesChannel(member, textChannel);
+    } catch (error) {
+      await replyStartMeetingError(
+        interaction,
+        error instanceof Error
+          ? error.message
+          : "The notes channel is unavailable.",
+      );
+      return;
+    }
+
+    startResult = await startManualMeetingFromChannels({
+      client: interaction.client,
       guild,
-      voiceChannelId: voiceChannel.id,
-      explicitChannelId,
-      invocationChannelId,
+      voiceChannel,
+      textChannel,
+      creator: interaction.user,
+      meetingContext,
+      tags,
+      startTriggeredByUserId: interaction.user.id,
     });
-    assertMemberCanAccessNotesChannel(member, textChannel);
   } catch (error) {
+    console.warn("Failed to prepare or start meeting", {
+      guildId: interaction.guildId,
+      error,
+    });
     await replyStartMeetingError(
       interaction,
-      error instanceof Error
-        ? error.message
-        : "The notes channel is unavailable.",
+      "Recording could not be started. Please try again.",
     );
     return;
   }
-
-  const startResult = await startManualMeetingFromChannels({
-    client: interaction.client,
-    guild,
-    voiceChannel,
-    textChannel,
-    creator: interaction.user,
-    meetingContext,
-    tags,
-    startTriggeredByUserId: interaction.user.id,
-  });
   if (!startResult.ok) {
     if (startResult.recordingLimitNotice) {
       const notice = startResult.recordingLimitNotice;

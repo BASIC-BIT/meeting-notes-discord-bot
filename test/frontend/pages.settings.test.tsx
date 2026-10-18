@@ -200,9 +200,9 @@ describe("independent notes routing", () => {
       },
     });
   }
-  async function openRow() {
+  async function openRow(channelName = "Voice Lounge") {
     fireEvent.click(
-      await screen.findByRole("button", { name: "Edit Voice Lounge" }),
+      await screen.findByRole("button", { name: `Edit ${channelName}` }),
     );
     return screen.findByRole("dialog");
   }
@@ -235,6 +235,101 @@ describe("independent notes routing", () => {
     expect(autorecordAddMutation.mutateAsync).not.toHaveBeenCalled();
     expect(autorecordRemoveMutation.mutateAsync).not.toHaveBeenCalled();
   });
+  test.each([
+    [false, "Voice Lounge"],
+    [true, "Voice Lounge"],
+    [false, "Context only"],
+    [true, "Context only"],
+    [false, "Notes only"],
+    [true, "Notes only"],
+  ])(
+    "overview shows effective recording and routing-only saves preserve rules (record-all=%s, channel=%s)",
+    async (recordAll, editedChannel) => {
+      const serverRule = {
+        guildId: "g1",
+        channelId: "ALL",
+        enabled: true,
+        recordAll: true,
+        createdAt: "now",
+        createdBy: "admin",
+      };
+      const channelRule = {
+        ...serverRule,
+        channelId: "explicit",
+        recordAll: false,
+      };
+      setAutorecordListQuery({
+        data: { rules: recordAll ? [serverRule, channelRule] : [channelRule] },
+      });
+      setServersChannelsQuery({
+        data: {
+          voiceChannels: [
+            { id: "voice", name: "Voice Lounge", botAccess: true },
+            { id: "context", name: "Context only", botAccess: true },
+            { id: "notes-only", name: "Notes only", botAccess: true },
+            { id: "explicit", name: "Explicit rule", botAccess: true },
+          ],
+          textChannels: [
+            { id: "notes", name: "notes", botAccess: true },
+            { id: "other", name: "staff-notes", botAccess: true },
+          ],
+        },
+      });
+      setChannelContextsQuery({
+        data: {
+          contexts: [
+            {
+              ...savedContext,
+              channelId: "context",
+              defaultNotesChannelId: undefined,
+            },
+            { ...savedContext, channelId: "notes-only", context: "" },
+          ],
+        },
+      });
+      renderWithMantine(<Settings />);
+      const rows = screen.getAllByTestId("settings-override");
+      for (const name of ["Voice Lounge", "Context only", "Notes only"]) {
+        const row = rows.find((entry) => within(entry).queryByText(name));
+        expect(row).toHaveTextContent(
+          recordAll
+            ? "Auto-record on \u00b7 Server default"
+            : "Auto-record off \u00b7 Server default",
+        );
+      }
+      const explicit = rows.find((entry) =>
+        within(entry).queryByText("Explicit rule"),
+      );
+      expect(explicit).toHaveTextContent(
+        "Auto-record on \u00b7 Voice channel override",
+      );
+      const inheritedRow = rows.find((entry) =>
+        within(entry).queryByText("Voice Lounge"),
+      );
+      if (!inheritedRow) throw new Error("Missing inherited voice row");
+      expect(
+        within(inheritedRow).queryByRole("button", { name: "Remove override" }),
+      ).not.toBeInTheDocument();
+      const dialog = await openRow(editedChannel);
+      expect(
+        within(dialog).getByRole("switch", {
+          name: "Auto-record this channel",
+        }),
+      ).not.toBeChecked();
+      await selectNotes(dialog, "#notes");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Save channel" }),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      );
+      expect(channelContextsSetMutation.mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ defaultNotesChannelId: "notes" }),
+      );
+      expect(autorecordAddMutation.mutateAsync).not.toHaveBeenCalled();
+      expect(autorecordRemoveMutation.mutateAsync).not.toHaveBeenCalled();
+    },
+  );
   test("reset_only_clears_notes_override", async () => {
     setChannelContextsQuery({ data: { contexts: [savedContext] } });
     setAutorecordListQuery({

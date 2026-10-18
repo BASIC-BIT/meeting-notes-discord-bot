@@ -34,9 +34,11 @@ type PreviewProps = {
   destination?:
     "inherited" | "explicit" | "equal" | "unconfigured" | "unavailable";
   saveState?: "ready" | "saving" | "error";
+  recordAll?: boolean;
 };
 function previewResponses(
   destination: NonNullable<PreviewProps["destination"]>,
+  recordAll: boolean,
 ): Record<string, unknown> {
   const defaultId = destination === "unconfigured" ? "" : "notes";
   const overrideId =
@@ -94,7 +96,11 @@ function previewResponses(
         missingRequired: [],
       },
     },
-    "autorecord.list": { rules: [] },
+    "autorecord.list": {
+      rules: recordAll
+        ? [{ channelId: "ALL", enabled: true, recordAll: true }]
+        : [],
+    },
     "channelContexts.list": {
       contexts: overrideId
         ? [{ channelId: "voice", defaultNotesChannelId: overrideId }]
@@ -110,6 +116,7 @@ function NotesDestinationPreview({
   colorScheme = "dark",
   destination = "inherited",
   saveState = "ready",
+  recordAll = false,
 }: PreviewProps) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => setColorScheme(colorScheme), [colorScheme, setColorScheme]);
@@ -124,7 +131,7 @@ function NotesDestinationPreview({
   );
   const [client] = useState(() => {
     let failed = false;
-    const data = previewResponses(destination);
+    const data = previewResponses(destination, recordAll);
     async function fetchPreview(url: RequestInfo | URL) {
       const paths =
         new URL(String(url), window.location.origin).pathname
@@ -183,6 +190,26 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const Inherited: Story = {};
+export const InheritedRecordAll: Story = {
+  args: { recordAll: true },
+  play: async ({ canvasElement }) => {
+    await expect(
+      await within(canvasElement).findByText(
+        "Auto-record on \u00b7 Server default",
+      ),
+    ).toBeVisible();
+  },
+};
+export const InheritedRecordAllMobile: Story = {
+  ...InheritedRecordAll,
+  play: async ({ canvasElement }) => {
+    const recordingState = await within(canvasElement).findByText(
+      "Auto-record on \u00b7 Server default",
+    );
+    recordingState.scrollIntoView({ block: "center" });
+    await expect(recordingState).toBeVisible();
+  },
+};
 export const Explicit: Story = { args: { destination: "explicit" } };
 export const EqualToDefault: Story = { args: { destination: "equal" } };
 export const Unconfigured: Story = { args: { destination: "unconfigured" } };

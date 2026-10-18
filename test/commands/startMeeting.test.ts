@@ -36,6 +36,7 @@ import { getGlobalConfigValues } from "../../src/services/appConfigService";
 import { listConfigOverridesForScope } from "../../src/services/configOverridesService";
 import { handleRequestStartMeeting } from "../../src/commands/startMeeting";
 import { interruptOwnedMeeting } from "../../src/services/ownedMeetingInterruption";
+import { resolveMeetingVoiceSettings } from "../../src/services/meetingVoiceSettingsService";
 import { resolveServerMeetingArtifactAccess } from "../../src/services/meetingArtifactAccessService";
 import { getActiveMeetingLeaseForGuild } from "../../src/services/activeMeetingLeaseService";
 import {
@@ -431,16 +432,33 @@ test("starter access is checked before named bot permission errors", async () =>
   );
 });
 
-test("artifact lookup failure occurs before initialization", async () => {
-  jest
-    .mocked(resolveServerMeetingArtifactAccess)
-    .mockRejectedValueOnce(new Error("lookup unavailable"));
-  await expect(handleRequestStartMeeting(interaction())).rejects.toThrow(
-    "lookup unavailable",
-  );
-  expect(initializeMeeting).not.toHaveBeenCalled();
-  expect(send).not.toHaveBeenCalled();
-});
+test.each([
+  ["early lease lookup", getActiveMeetingLeaseForGuild],
+  ["artifact access lookup", resolveServerMeetingArtifactAccess],
+  ["voice settings lookup", resolveMeetingVoiceSettings],
+  ["subscription lookup", getGuildLimits],
+])(
+  "%s rejection completes the deferred reply before initialization",
+  async (_, lookup) => {
+    const failure = new Error("private-notes voice-notes lookup unavailable");
+    jest.mocked(lookup).mockRejectedValueOnce(failure);
+    const request = interaction();
+    await expect(handleRequestStartMeeting(request)).resolves.toBeUndefined();
+    expect(request.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(request.editReply).toHaveBeenCalledTimes(1);
+    expect(request.editReply).toHaveBeenCalledWith(
+      "Recording could not be started. Please try again.",
+    );
+    expect(warning).toHaveBeenCalledWith(
+      "Failed to prepare or start meeting",
+      expect.objectContaining({ guildId: guild.id, error: failure }),
+    );
+    expect(initializeMeeting).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(invocation.send).not.toHaveBeenCalled();
+    expect(interruptOwnedMeeting).not.toHaveBeenCalled();
+  },
+);
 
 test("a live lease rejects admission before publication", async () => {
   jest.mocked(getActiveMeetingLeaseForGuild).mockResolvedValueOnce({
@@ -567,11 +585,18 @@ test("initialization rejection does not publish or invent a success link", async
     .mocked(initializeMeeting)
     .mockRejectedValueOnce(new Error("recording admission rejected"));
   const request = interaction();
-  await expect(handleRequestStartMeeting(request)).rejects.toThrow(
-    "recording admission rejected",
-  );
+  await expect(handleRequestStartMeeting(request)).resolves.toBeUndefined();
   expect(send).not.toHaveBeenCalled();
-  expect(request.editReply).not.toHaveBeenCalled();
+  expect(invocation.send).not.toHaveBeenCalled();
+  expect(initializeMeeting).toHaveBeenCalledTimes(1);
+  expect(request.editReply).toHaveBeenCalledTimes(1);
+  expect(request.editReply).toHaveBeenCalledWith(
+    "Recording could not be started. Please try again.",
+  );
+  expect(warning).toHaveBeenCalledWith(
+    "Failed to prepare or start meeting",
+    expect.objectContaining({ error: expect.any(Error) }),
+  );
   expect(interruptOwnedMeeting).not.toHaveBeenCalled();
 });
 

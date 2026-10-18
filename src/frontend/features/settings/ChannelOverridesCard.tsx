@@ -24,6 +24,7 @@ import type {
 type ChannelOverridesCardProps = {
   busy: boolean;
   refreshing: boolean;
+  recordAllEnabled: boolean;
   overrides: ChannelOverride[];
   voiceChannels: ChannelOption[];
   defaultNotesChannelId: string | null;
@@ -42,6 +43,7 @@ type ChannelOverridesCardProps = {
 export function ChannelOverridesCard({
   busy,
   refreshing,
+  recordAllEnabled,
   overrides,
   onRefresh,
   onAdd,
@@ -147,8 +149,10 @@ export function ChannelOverridesCard({
                     <Stack gap={2} align="flex-end">
                       <Text size="xs" c="dimmed">
                         {override?.autoRecordEnabled
-                          ? "Auto-record on"
-                          : "Auto-record off"}
+                          ? "Auto-record on \u00b7 Voice channel override"
+                          : recordAllEnabled
+                            ? "Auto-record on \u00b7 Server default"
+                            : "Auto-record off \u00b7 Server default"}
                       </Text>
                       <Text size="xs" c="dimmed">
                         {override?.chatTtsEnabled === undefined
