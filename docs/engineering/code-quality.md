@@ -49,3 +49,24 @@ The required check must be activated in the default branch rules with up-to-date
 `yarn code:stats` retains scc and unsuppressed Lizard diagnostics. Lizard warnings do not block deployment; tool execution failures still do. Production and Sandbox retain their existing operational checks and do not reapply a strict PR-relative check after an exception has merged.
 
 Do not suppress a finding through source comments, a growing allowlist, threshold flags, or a checked-in debt inventory. Simplify or share the implementation, or use the reviewed PR exception. Small functions and files still need sensible interfaces; extracting a helper solely to lower a score can make the code worse.
+
+## Staged shared-tool policy
+
+The root [quality-ratchet.json](../../quality-ratchet.json) records the policy
+for the shared tool before its separate activation. Existing commands and CI
+checks still enforce this preparation change.
+
+All three checks remain in ratchet mode at the limits above. Complexity, file
+size, and duplication include all eight JS/TS extensions, tests, stories,
+fixtures, scripts, and root configuration. Duplication remains JS/TS-only.
+The shared test-debt and oversized-test reports are disabled because this
+repository has no equivalent reports today. Oversized tests still obey the
+blocking file-growth rule.
+
+The explicit exclusions preserve dependency/build output, generated code and
+declarations, package-manager lockfiles, Terraform lockfiles, generated
+Docusaurus/Tauri output, and agent work directories. The shared tool also
+always excludes Git metadata, dependency/cache directories, nested worktrees,
+generated output, and symlinks. No authored test directory is excluded.
+Configuration changes are validated as proposals; the target branch's policy
+governs a shared-tool comparison.
