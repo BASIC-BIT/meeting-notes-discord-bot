@@ -80,30 +80,24 @@ function fixture() {
   function lateLegacy(kind) {
     return state.lateLegacy === kind && state.stage?.stage === "stop_submitted";
   }
-  const action = () =>
-    state.routed
+  const action = () => {
+    const TargetGroups = state.routed
       ? [
-          {
-            Type: "forward",
-            ForwardConfig: {
-              TargetGroups: [
-                { TargetGroupArn: m.targetGroupA, Weight: 100 },
-                { TargetGroupArn: m.targetGroupB, Weight: 0 },
-              ],
-              TargetGroupStickinessConfig: { Enabled: false },
-            },
-          },
+          { TargetGroupArn: m.targetGroupA, Weight: 100 },
+          { TargetGroupArn: m.targetGroupB, Weight: 0 },
         ]
-      : [
-          {
-            Type: "forward",
-            TargetGroupArn: m.targetGroupA,
-            ForwardConfig: {
-              TargetGroups: [{ TargetGroupArn: m.targetGroupA, Weight: 1 }],
-              TargetGroupStickinessConfig: { Enabled: false },
-            },
-          },
-        ];
+      : [{ TargetGroupArn: m.targetGroupA, Weight: 1 }];
+    return [
+      {
+        Type: "forward",
+        ...(!state.routed && { TargetGroupArn: m.targetGroupA }),
+        ForwardConfig: {
+          TargetGroups,
+          TargetGroupStickinessConfig: { Enabled: false },
+        },
+      },
+    ];
+  };
   const service = () => ({
     serviceName: m.service,
     desiredCount: state.stopped && !state.launched ? 0 : 1,
@@ -346,21 +340,31 @@ function fixture() {
   };
   return { m, hash, env, state, calls, aws, bootstrap };
 }
+function introduction(f, options = {}) {
+  return createIntroduction({
+    manifest: f.m,
+    expectedSha256: f.hash,
+    aws: f.aws,
+    bootstrap: f.bootstrap,
+    now: () => 1000,
+    pause: async () => {},
+    ...options,
+  });
+}
+
+function expectNoWrites(
+  f,
+  operations = ["transact-write-items", "update-service", "modify-listener"],
+) {
+  expect(f.calls.some((call) => operations.includes(call.o))).toBe(false);
+}
+
 test.each(["protected", "target"])(
   "activation revalidates late legacy %s before stopping",
   async (kind) => {
     const f = fixture();
     f.state.lateLegacy = kind;
-    await expect(
-      createIntroduction({
-        manifest: f.m,
-        expectedSha256: f.hash,
-        aws: f.aws,
-        bootstrap: f.bootstrap,
-        now: () => 1000,
-        pause: async () => {},
-      }).activate(),
-    ).rejects.toThrow();
+    await expect(introduction(f).activate()).rejects.toThrow();
     expect(f.calls.filter((c) => c.o === "update-service")).toHaveLength(0);
     expect(f.state.stage.stage).toBe("stop_submitted");
   },
@@ -382,39 +386,22 @@ test.each([
 });
 test("records intent before stop and routing and reuses guarded bootstrap", async () => {
   const f = fixture();
-  await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
-      aws: f.aws,
-      bootstrap: f.bootstrap,
-      now: () => 1000,
-      pause: async () => {},
-    }).activate(),
-  ).resolves.toEqual({ kind: "complete", generation: 1 });
+  await expect(introduction(f).activate()).resolves.toEqual({
+    kind: "complete",
+    generation: 1,
+  });
   expect(f.bootstrap.initialize).toHaveBeenCalledTimes(1);
   expect(f.bootstrap.launch).toHaveBeenCalledTimes(1);
   expect(f.bootstrap.promote).toHaveBeenCalledTimes(1);
   expect(f.state.stage.stage).toBe("complete");
-  expect(
-    f.calls.some((c) =>
-      ["stop-task", "update-task-protection", "delete-item"].includes(c.o),
-    ),
-  ).toBe(false);
+  expectNoWrites(f, ["stop-task", "update-task-protection", "delete-item"]);
 });
 test.each(["lostStop", "lostRoute"])(
   "does not replay an unknown provider write: %s",
   async (flag) => {
     const f = fixture();
     f.state[flag] = true;
-    const intro = createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
-      aws: f.aws,
-      bootstrap: f.bootstrap,
-      now: () => 1000,
-      pause: async () => {},
-    });
+    const intro = introduction(f);
     await expect(intro.activate()).rejects.toThrow();
     await expect(intro.activate()).rejects.toThrow();
     expect(f.calls.filter((c) => c.o === "update-service")).toHaveLength(1);
@@ -424,21 +411,8 @@ test.each(["lostStop", "lostRoute"])(
 test("unsettled history blocks every provider write", async () => {
   const f = fixture();
   f.state.historyCount = 1;
-  await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
-      aws: f.aws,
-      bootstrap: f.bootstrap,
-      now: () => 1000,
-      pause: async () => {},
-    }).activate(),
-  ).rejects.toThrow();
-  expect(
-    f.calls.some((c) =>
-      ["put-item", "update-service", "modify-listener"].includes(c.o),
-    ),
-  ).toBe(false);
+  await expect(introduction(f).activate()).rejects.toThrow();
+  expectNoWrites(f, ["put-item", "update-service", "modify-listener"]);
 });
 test("an invalid prepared candidate refuses before stopping legacy", async () => {
   const f = fixture();
@@ -447,22 +421,11 @@ test("an invalid prepared candidate refuses before stopping legacy", async () =>
       ? { taskDefinition: { status: "INACTIVE" } }
       : f.aws(s, o, p);
   await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
+    introduction(f, {
       aws,
-      bootstrap: f.bootstrap,
-      now: () => 1000,
-      pause: async () => {},
     }).activate(),
   ).rejects.toThrow();
-  expect(
-    f.calls.some((c) =>
-      ["transact-write-items", "update-service", "modify-listener"].includes(
-        c.o,
-      ),
-    ),
-  ).toBe(false);
+  expectNoWrites(f);
 });
 test("activation requires the manifest operation to match the requested session", () => {
   const f = fixture();
@@ -629,13 +592,8 @@ test("accepts AWS's legacy TargetGroupArn-only forward action", async () => {
     return response;
   };
   await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
+    introduction(f, {
       aws,
-      bootstrap: f.bootstrap,
-      now: () => 1000,
-      pause: async () => {},
     }).activate(),
   ).resolves.toEqual({ kind: "complete", generation: 1 });
 });
@@ -667,22 +625,11 @@ test.each(["foreign-source", "drifted-group"])(
       return f.aws(service, operation, input);
     };
     await expect(
-      createIntroduction({
-        manifest: f.m,
-        expectedSha256: f.hash,
+      introduction(f, {
         aws,
-        bootstrap: f.bootstrap,
-        now: () => 1000,
-        pause: async () => {},
       }).activate(),
     ).rejects.toThrow();
-    expect(
-      f.calls.some((c) =>
-        ["transact-write-items", "update-service", "modify-listener"].includes(
-          c.o,
-        ),
-      ),
-    ).toBe(false);
+    expectNoWrites(f);
   },
 );
 
@@ -697,16 +644,10 @@ test("polls read-only promotion readiness before submitting promotion once", asy
     f.state.serving = true;
     return { kind: "complete", generation: 1 };
   });
-  await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
-      aws: f.aws,
-      bootstrap: f.bootstrap,
-      now: () => 1000,
-      pause: async () => {},
-    }).activate(),
-  ).resolves.toEqual({ kind: "complete", generation: 1 });
+  await expect(introduction(f).activate()).resolves.toEqual({
+    kind: "complete",
+    generation: 1,
+  });
   expect(f.bootstrap.promote).toHaveBeenCalledTimes(1);
 });
 
@@ -731,13 +672,8 @@ test("ignores a replaced candidate row when confirming the promoted member", asy
     return response;
   };
   await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
+    introduction(f, {
       aws,
-      bootstrap: f.bootstrap,
-      now: () => 1000,
-      pause: async () => {},
     }).activate(),
   ).resolves.toEqual({ kind: "complete", generation: 1 });
 });
@@ -750,13 +686,8 @@ test("does not promote when a read-only readiness check exceeds its warmup deadl
     return { kind: "ready" };
   });
   await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
-      aws: f.aws,
-      bootstrap: f.bootstrap,
+    introduction(f, {
       now: () => time,
-      pause: async () => {},
     }).activate(),
   ).rejects.toThrow();
   expect(f.bootstrap.promote).not.toHaveBeenCalled();
@@ -794,22 +725,12 @@ test.each([
     return response;
   };
   await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
+    introduction(f, {
       aws,
-      bootstrap: f.bootstrap,
       now: () => time,
-      pause: async () => {},
     }).activate(),
   ).rejects.toThrow();
-  expect(
-    f.calls.some((c) =>
-      ["transact-write-items", "update-service", "modify-listener"].includes(
-        c.o,
-      ),
-    ),
-  ).toBe(false);
+  expectNoWrites(f);
 });
 
 test("resumes read-only readiness after a pre-write promotion race", async () => {
@@ -822,16 +743,10 @@ test("resumes read-only readiness after a pre-write promotion race", async () =>
       });
     })
     .mockImplementation(finish);
-  await expect(
-    createIntroduction({
-      manifest: f.m,
-      expectedSha256: f.hash,
-      aws: f.aws,
-      bootstrap: f.bootstrap,
-      now: () => 1000,
-      pause: async () => {},
-    }).activate(),
-  ).resolves.toEqual({ kind: "complete", generation: 1 });
+  await expect(introduction(f).activate()).resolves.toEqual({
+    kind: "complete",
+    generation: 1,
+  });
   expect(f.bootstrap.readiness).toHaveBeenCalledTimes(2);
   expect(f.bootstrap.promote).toHaveBeenCalledTimes(2);
 });
@@ -839,14 +754,7 @@ test("resumes read-only readiness after a pre-write promotion race", async () =>
 test("never retries an unknown promotion write outcome", async () => {
   const f = fixture();
   f.bootstrap.promote.mockRejectedValue(new Error("write outcome unknown"));
-  const intro = createIntroduction({
-    manifest: f.m,
-    expectedSha256: f.hash,
-    aws: f.aws,
-    bootstrap: f.bootstrap,
-    now: () => 1000,
-    pause: async () => {},
-  });
+  const intro = introduction(f);
   await expect(intro.activate()).rejects.toThrow();
   await expect(intro.activate()).rejects.toThrow();
   expect(f.bootstrap.promote).toHaveBeenCalledTimes(1);

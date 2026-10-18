@@ -6,213 +6,15 @@ const { setTimeout: pause } = require("node:timers/promises");
 const { readFileSync, writeFileSync, appendFileSync } = require("node:fs");
 const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb");
 const { z } = require("zod");
-const {
-  parseManifest,
-  manifestHash,
-  awsCaller,
-} = require("./sandbox-manifest.cjs");
+const { parseManifest, awsCaller } = require("./sandbox-manifest.cjs");
 const { action, canonical } = require("./routing.cjs");
-const { candidateDefinition, runtimeMode } = require("./coordinator.cjs");
+const {
+  bindJob,
+  prepare,
+  assertSourceImage,
+} = require("./prepare-sandbox.cjs");
+const { listServiceTaskArns } = require("./service-task-inventory.cjs");
 const uuid = z.string().uuid();
-function sessionName(operationId) {
-  uuid.parse(operationId);
-  return (
-    "chronote-sandbox-" + BigInt("0x" + operationId.replaceAll("-", "")) + "-1"
-  );
-}
-function bindJob(env) {
-  assert.equal(
-    env.GITHUB_RUN_ATTEMPT,
-    "1",
-    "Reruns require explicit reconciliation",
-  );
-  assert.match(env.GITHUB_SHA, /^[a-f0-9]{40}$/);
-  assert.match(env.EXPECTED_ACCOUNT_ID, /^\d{12}$/);
-  const rolePrefix = "arn:aws:iam::" + env.EXPECTED_ACCOUNT_ID + ":role/";
-  assert(env.EXPECTED_ROLE_ARN.startsWith(rolePrefix));
-  const role = env.EXPECTED_ROLE_ARN.slice(rolePrefix.length);
-  assert.match(role, /^[a-z0-9-]*sandbox[a-z0-9-]*-github-deploy$/);
-  if (env.BOOTSTRAP_PHASE === "prepare") {
-    uuid.parse(env.BOOTSTRAP_OPERATION_ID);
-    assert.match(env.GITHUB_RUN_ID, /^\d+$/);
-    return { sessionName: "chronote-sandbox-" + env.GITHUB_RUN_ID + "-1" };
-  }
-  assert(["activate", "repair"].includes(env.BOOTSTRAP_PHASE));
-  const payload = JSON.parse(env.BOOTSTRAP_MANIFEST_JSON);
-  let manifestInput = payload,
-    previousManifest;
-  if (env.BOOTSTRAP_PHASE === "repair") {
-    assert.equal(manifestHash(payload), env.BOOTSTRAP_MANIFEST_SHA256);
-    assert.deepEqual(Object.keys(payload).sort(), [
-      "manifest",
-      "previousManifest",
-    ]);
-    manifestInput = payload.manifest;
-    previousManifest = payload.previousManifest;
-    parseManifest(previousManifest, manifestHash(previousManifest));
-  }
-  const expectedSha256 =
-    env.BOOTSTRAP_PHASE === "repair"
-      ? manifestHash(manifestInput)
-      : env.BOOTSTRAP_MANIFEST_SHA256;
-  const manifest = parseManifest(manifestInput, expectedSha256);
-  assert.equal(manifest.operationId, env.BOOTSTRAP_OPERATION_ID);
-  const name = sessionName(manifest.operationId);
-  assert.equal(manifest.sourceCommit, env.GITHUB_SHA);
-  assert.equal(manifest.accountId, env.EXPECTED_ACCOUNT_ID);
-  assert.equal(
-    manifest.principalArn,
-    "arn:aws:sts::" + manifest.accountId + ":assumed-role/" + role + "/" + name,
-  );
-  return {
-    sessionName: name,
-    manifest: manifestInput,
-    manifestSha256: expectedSha256,
-    ...(previousManifest
-      ? {
-          previousManifest,
-          previousManifestSha256: manifestHash(previousManifest),
-        }
-      : {}),
-  };
-}
-async function assertSourceImage(m, image, aws) {
-  const prefix = m.accountId + ".dkr.ecr." + m.region + ".amazonaws.com/";
-  assert(image.startsWith(prefix));
-  const [repository, digest] = image.slice(prefix.length).split("@");
-  assert.match(repository, /^[a-z0-9-]*sandbox[a-z0-9-]*$/);
-  assert.match(digest, /^sha256:[a-f0-9]{64}$/);
-  assert.equal(image, prefix + repository + "@" + digest);
-  const response = await aws("ecr", "describe-images", {
-    repositoryName: repository,
-    imageIds: [{ imageTag: m.sourceCommit }],
-  });
-  assert.equal(response.imageDetails.length, 1);
-  assert.equal(response.imageDetails[0].imageDigest, digest);
-  assert(response.imageDetails[0].imageTags.includes(m.sourceCommit));
-}
-async function prepare(env, aws = awsCaller(env.AWS_REGION)) {
-  const binding = bindJob({ ...env, BOOTSTRAP_PHASE: "prepare" });
-  const actor = await aws("sts", "get-caller-identity", {});
-  const expected =
-    env.EXPECTED_ROLE_ARN.replace(":iam::", ":sts::").replace(
-      ":role/",
-      ":assumed-role/",
-    ) +
-    "/" +
-    binding.sessionName;
-  assert.equal(actor.Arn, expected);
-  assert.equal(actor.Account, env.EXPECTED_ACCOUNT_ID);
-  for (const value of [
-    env.ECS_CLUSTER,
-    env.ECS_SERVICE,
-    env.ECS_TASK_FAMILY,
-    env.SECRETS_PREFIX,
-  ]) {
-    assert.match(value, /^[a-z0-9-]*sandbox[a-z0-9-]*$/);
-  }
-  const config = {
-    image: env.CANDIDATE_IMAGE,
-    candidateId: env.BOOTSTRAP_OPERATION_ID,
-    tablePrefix: env.SECRETS_PREFIX + "-",
-  };
-  assert.match(
-    config.image,
-    new RegExp(
-      "^" +
-        env.EXPECTED_ACCOUNT_ID +
-        "\\.dkr\\.ecr\\." +
-        env.AWS_REGION +
-        "\\.amazonaws\\.com/[a-z0-9-]*sandbox[a-z0-9-]*@sha256:[a-f0-9]{64}$",
-    ),
-  );
-  assert.match(env.AWS_REGION, /^[a-z]{2}-[a-z]+-[0-9]$/);
-  await assertSourceImage(
-    {
-      accountId: env.EXPECTED_ACCOUNT_ID,
-      region: env.AWS_REGION,
-      sourceCommit: env.GITHUB_SHA,
-    },
-    config.image,
-    aws,
-  );
-  let nextToken,
-    count = 0;
-  do {
-    const page = await aws("ecs", "list-task-definitions", {
-      familyPrefix: env.ECS_TASK_FAMILY,
-      status: "ACTIVE",
-      maxResults: 100,
-      ...(nextToken ? { nextToken } : {}),
-    });
-    for (const arn of page.taskDefinitionArns) {
-      assert(++count <= 1000);
-      const d = (
-        await aws("ecs", "describe-task-definition", { taskDefinition: arn })
-      ).taskDefinition;
-      assert.equal(d.family, env.ECS_TASK_FAMILY);
-      assert(
-        !d.containerDefinitions.some((c) =>
-          c.environment?.some(
-            (e) =>
-              e.name === "DEPLOYMENT_CANDIDATE_ID" &&
-              e.value === config.candidateId,
-          ),
-        ),
-        "Candidate already registered; reconcile it",
-      );
-    }
-    nextToken = page.nextToken;
-  } while (nextToken);
-  const definition = (
-    await aws("ecs", "describe-task-definition", {
-      taskDefinition: env.ECS_TASK_FAMILY,
-    })
-  ).taskDefinition;
-  assert.equal(definition.family, env.ECS_TASK_FAMILY);
-  const next = candidateDefinition(definition, config);
-  const container = next.containerDefinitions.find((c) =>
-    c.environment?.some((e) => e.name === "DDB_TABLE_PREFIX"),
-  );
-  assert.equal(runtimeMode(container), "all");
-  assert(
-    !container.secrets?.some((e) =>
-      [
-        "DDB_TABLE_PREFIX",
-        "TRANSCRIPTS_BUCKET",
-        "DEPLOYMENT_CANDIDATE_ID",
-      ].includes(e.name),
-    ),
-  );
-  const roleBase =
-    "arn:aws:iam::" + env.EXPECTED_ACCOUNT_ID + ":role/" + env.SECRETS_PREFIX;
-  assert.equal(next.taskRoleArn, roleBase + "-ecs-task-app-role");
-  assert.equal(next.executionRoleArn, roleBase + "-ecs-task-exec-role");
-  for (const secret of container.secrets ?? []) {
-    assert(
-      secret.valueFrom.startsWith(
-        "arn:aws:secretsmanager:" +
-          env.AWS_REGION +
-          ":" +
-          env.EXPECTED_ACCOUNT_ID +
-          ":secret:" +
-          env.SECRETS_PREFIX +
-          "/",
-      ),
-    );
-  }
-  container.command = ["node", "dist/index.js"];
-  // Registration is attempted once; an unknown acknowledgment requires operator reconciliation.
-  const registered = await aws("ecs", "register-task-definition", next);
-  assert.equal(registered.taskDefinition.family, env.ECS_TASK_FAMILY);
-  assert.equal(registered.taskDefinition.status, "ACTIVE");
-  assert(
-    registered.taskDefinition.containerDefinitions.some(
-      (c) => c.image === config.image,
-    ),
-  );
-  return { kind: "prepared" };
-}
 function createIntroduction(options) {
   const m = parseManifest(options.manifest, options.expectedSha256);
   const aws = options.aws ?? awsCaller(m.region);
@@ -332,22 +134,7 @@ function createIntroduction(options) {
     ).TargetHealthDescriptions;
   }
   async function taskInventory() {
-    const arns = new Set();
-    for (const desiredStatus of ["RUNNING", "STOPPED"]) {
-      let nextToken;
-      do {
-        const page = await aws("ecs", "list-tasks", {
-          cluster: m.cluster,
-          serviceName: m.service,
-          desiredStatus,
-          ...(nextToken ? { nextToken } : {}),
-        });
-        page.taskArns.forEach((arn) => arns.add(arn));
-        assert(arns.size <= 1000);
-        nextToken = page.nextToken;
-      } while (nextToken);
-    }
-    const all = [...arns];
+    const all = await listServiceTaskArns(aws, m);
     const inventory = [];
     for (let i = 0; i < all.length; i += 100) {
       const batch = all.slice(i, i + 100);
@@ -450,18 +237,37 @@ function createIntroduction(options) {
       if (now() >= deadline) break;
       const ready = await check();
       if (now() >= deadline) break;
-      if (ready) {
-        if (!complete) return;
-        try {
-          return await complete(deadline);
-        } catch (error) {
-          // This code is emitted only by promotion checks before any write.
-          if (error.code !== "candidate_not_ready") throw error;
-        }
+      if (!ready) {
+        await sleep();
+        continue;
+      }
+      if (!complete) return;
+      try {
+        return await complete(deadline);
+      } catch (error) {
+        // This code is emitted only by promotion checks before any write.
+        if (error.code !== "candidate_not_ready") throw error;
       }
       await sleep();
     }
     throw new Error("Bounded wait expired; preserve operation");
+  }
+  async function waitForStoppedService() {
+    await wait(
+      async () => {
+        const current = await service();
+        assert.equal(current.taskDefinition, m.legacyTaskDefinition);
+        assert.equal(current.desiredCount, 0);
+        return (
+          current.runningCount === 0 &&
+          current.pendingCount === 0 &&
+          (await liveTasks()).length === 0 &&
+          (await targets(m.targetGroupA)).length === 0 &&
+          (await targets(m.targetGroupB)).length === 0
+        );
+      },
+      { timeoutSeconds: 480 },
+    );
   }
   async function runtimeReady() {
     const response = await aws("dynamodb", "get-item", {
@@ -514,6 +320,20 @@ function createIntroduction(options) {
       proof.expiresAt > now()
     );
   }
+  async function assertCandidateDefinition() {
+    const definition = (
+      await aws("ecs", "describe-task-definition", {
+        taskDefinition: m.taskDefinition,
+      })
+    ).taskDefinition;
+    require("./bootstrap-sandbox.cjs").assertPreparedCandidate(m, definition);
+    await assertSourceImage(
+      m,
+      definition.containerDefinitions.find((c) => c.name === m.containerName)
+        .image,
+      aws,
+    );
+  }
   async function activate() {
     const actor = await aws("sts", "get-caller-identity", {});
     assert.equal(actor.Account, m.accountId);
@@ -530,18 +350,7 @@ function createIntroduction(options) {
     assert.equal(original.pendingCount, 0);
     assert.equal(original.taskDefinition, m.legacyTaskDefinition);
     await workSettled();
-    const definition = (
-      await aws("ecs", "describe-task-definition", {
-        taskDefinition: m.taskDefinition,
-      })
-    ).taskDefinition;
-    require("./bootstrap-sandbox.cjs").assertPreparedCandidate(m, definition);
-    await assertSourceImage(
-      m,
-      definition.containerDefinitions.find((c) => c.name === m.containerName)
-        .image,
-      aws,
-    );
+    await assertCandidateDefinition();
     const before = await listener();
     const actions = before.DefaultActions;
     assert.equal(actions.length, 1);
@@ -609,21 +418,7 @@ function createIntroduction(options) {
     assert.equal(stopped.taskDefinition, m.legacyTaskDefinition);
     assert.equal(stopped.desiredCount, 0);
     await stage("stop_submitted", "stop_acknowledged");
-    await wait(
-      async () => {
-        const current = await service();
-        assert.equal(current.taskDefinition, m.legacyTaskDefinition);
-        assert.equal(current.desiredCount, 0);
-        return (
-          current.runningCount === 0 &&
-          current.pendingCount === 0 &&
-          (await liveTasks()).length === 0 &&
-          (await targets(m.targetGroupA)).length === 0 &&
-          (await targets(m.targetGroupB)).length === 0
-        );
-      },
-      { timeoutSeconds: 480 },
-    );
+    await waitForStoppedService();
     await workSettled();
     assert(
       same((await listener()).DefaultActions, before.DefaultActions),
@@ -830,18 +625,7 @@ function createIntroduction(options) {
     const current = await service();
     assert.equal(current.taskDefinition, m.legacyTaskDefinition);
     assert.equal(current.desiredCount, 1);
-    const definition = (
-      await aws("ecs", "describe-task-definition", {
-        taskDefinition: m.taskDefinition,
-      })
-    ).taskDefinition;
-    require("./bootstrap-sandbox.cjs").assertPreparedCandidate(m, definition);
-    await assertSourceImage(
-      m,
-      definition.containerDefinitions.find((c) => c.name === m.containerName)
-        .image,
-      aws,
-    );
+    await assertCandidateDefinition();
     const traffic = await listener();
     assert.deepEqual(
       canonical(traffic.DefaultActions),
@@ -889,21 +673,7 @@ function createIntroduction(options) {
     assert.equal(stopped.service.serviceName, m.service);
     assert.equal(stopped.service.desiredCount, 0);
     await stage("stop_submitted", "stop_acknowledged", repairKey);
-    await wait(
-      async () => {
-        const svc = await service();
-        assert.equal(svc.taskDefinition, m.legacyTaskDefinition);
-        assert.equal(svc.desiredCount, 0);
-        return (
-          svc.runningCount === 0 &&
-          svc.pendingCount === 0 &&
-          (await liveTasks()).length === 0 &&
-          (await targets(m.targetGroupA)).length === 0 &&
-          (await targets(m.targetGroupB)).length === 0
-        );
-      },
-      { timeoutSeconds: 480 },
-    );
+    await waitForStoppedService();
     await workSettled();
 
     assert.deepEqual(

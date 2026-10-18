@@ -4,6 +4,7 @@ const { sameEcsTaskArn } = require("../../src/utils/ecsTaskArn.js");
 const { isDeepStrictEqual: same } = require("node:util");
 const { randomUUID } = require("node:crypto");
 const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb");
+const { listServiceTaskArns } = require("./service-task-inventory.cjs");
 const {
   parseManifest,
   awsCaller,
@@ -13,21 +14,12 @@ function assertPreparedCandidate(m, d) {
   const container = d.containerDefinitions.find(
     (v) => v.name === m.containerName,
   );
-  const commands = {
-    all: ["node", "dist/index.js"],
-    bot: ["node", "dist/apps/bot/main.js"],
-    api: ["node", "dist/apps/api/main.js"],
-  };
   if (
     d.taskDefinitionArn !== m.taskDefinition ||
     d.status !== "ACTIVE" ||
     !container ||
     !container.image.endsWith("@" + m.imageDigest) ||
     container.stopTimeout !== 120 ||
-    container.environment.filter((v) => v.name === "TRANSCRIPTS_BUCKET")
-      .length !== 1 ||
-    container.environment.find((v) => v.name === "TRANSCRIPTS_BUCKET")
-      ?.value !== m.bucket ||
     container.secrets?.some((v) =>
       [
         "TRANSCRIPTS_BUCKET",
@@ -36,17 +28,45 @@ function assertPreparedCandidate(m, d) {
       ].includes(v.name),
     ) ||
     container.entryPoint?.length ||
-    !same(container.command, commands[m.runtimeMode]) ||
-    container.environment.filter((v) => v.name === "DDB_TABLE_PREFIX")
-      .length !== 1 ||
-    container.environment.find((v) => v.name === "DDB_TABLE_PREFIX")?.value !==
-      m.tablePrefix ||
-    container.environment.filter((v) => v.name === "DEPLOYMENT_CANDIDATE_ID")
-      .length !== 1 ||
-    container.environment.find((v) => v.name === "DEPLOYMENT_CANDIDATE_ID")
-      ?.value !== m.operationId
+    !same(container.command, candidateCommand(m.runtimeMode)) ||
+    !preparedEnvironmentMatches(m, container.environment)
   )
     throw new Error("Prepared candidate definition mismatch");
+}
+function candidateCommand(runtimeMode) {
+  return {
+    all: ["node", "dist/index.js"],
+    bot: ["node", "dist/apps/bot/main.js"],
+    api: ["node", "dist/apps/api/main.js"],
+  }[runtimeMode];
+}
+function preparedEnvironmentMatches(m, environment) {
+  const expected = {
+    TRANSCRIPTS_BUCKET: m.bucket,
+    DDB_TABLE_PREFIX: m.tablePrefix,
+    DEPLOYMENT_CANDIDATE_ID: m.operationId,
+  };
+  return Object.entries(expected).every(([name, value]) => {
+    const entries = environment.filter((entry) => entry.name === name);
+    return entries.length === 1 && entries[0].value === value;
+  });
+}
+function targetGroupBindingMatches(m, group, listener, beforeIntroduction) {
+  if (beforeIntroduction && group.TargetGroupArn === m.targetGroupB)
+    return group.LoadBalancerArns?.length === 0;
+  return group.LoadBalancerArns?.includes(listener.LoadBalancerArn);
+}
+function assertTargetGroupConfiguration(m, group, vpc) {
+  if (
+    ![m.targetGroupA, m.targetGroupB].includes(group.TargetGroupArn) ||
+    group.TargetType !== "ip" ||
+    group.Protocol !== "HTTP" ||
+    group.Port !== m.containerPort ||
+    group.HealthCheckPath !== "/health" ||
+    !group.VpcId ||
+    (vpc && vpc !== group.VpcId)
+  )
+    throw new Error("Group configuration mismatch");
 }
 async function assertTargetGroups(
   m,
@@ -64,18 +84,8 @@ async function assertTargetGroups(
     throw new Error("Group identities incomplete");
   let vpc;
   for (const g of groups.TargetGroups) {
-    if (
-      ![m.targetGroupA, m.targetGroupB].includes(g.TargetGroupArn) ||
-      g.TargetType !== "ip" ||
-      g.Protocol !== "HTTP" ||
-      g.Port !== m.containerPort ||
-      g.HealthCheckPath !== "/health" ||
-      (beforeIntroduction && g.TargetGroupArn === m.targetGroupB
-        ? g.LoadBalancerArns?.length !== 0
-        : !g.LoadBalancerArns?.includes(listener.LoadBalancerArn)) ||
-      !g.VpcId ||
-      (vpc && vpc !== g.VpcId)
-    )
+    assertTargetGroupConfiguration(m, g, vpc);
+    if (!targetGroupBindingMatches(m, g, listener, beforeIntroduction))
       throw new Error("Group configuration mismatch");
     vpc = g.VpcId;
     const attrs = await aws("elbv2", "describe-target-group-attributes", {
@@ -141,23 +151,8 @@ function createBootstrap(options) {
     return svc;
   }
   async function tasks() {
-    const arns = new Set();
-    for (const desiredStatus of ["RUNNING", "STOPPED"]) {
-      let nextToken;
-      do {
-        const page = await aws("ecs", "list-tasks", {
-          cluster: m.cluster,
-          serviceName: m.service,
-          desiredStatus,
-          ...(nextToken ? { nextToken } : {}),
-        });
-        for (const arn of page.taskArns) arns.add(arn);
-        if (arns.size > 1000) fail("Task inventory exceeds bootstrap bound");
-        nextToken = page.nextToken;
-      } while (nextToken);
-    }
     const result = [];
-    const all = [...arns];
+    const all = await listServiceTaskArns(aws, m);
     for (let i = 0; i < all.length; i += 100) {
       const r = await aws("ecs", "describe-tasks", {
         cluster: m.cluster,
@@ -336,13 +331,7 @@ function createBootstrap(options) {
   async function state() {
     return Promise.all([read("CONTROL"), read(receiptKey)]);
   }
-  async function initialize() {
-    await identity();
-    const [current, prior] = await state();
-    if (current || prior) {
-      if (!owned(current, prior)) fail("Existing Control cannot be adopted");
-      return { kind: "initialized", stage: prior.stage };
-    }
+  async function assertLegacyRuntimeStopped(message) {
     const svc = await service();
     if (
       svc.desiredCount !== 0 ||
@@ -351,12 +340,16 @@ function createBootstrap(options) {
       svc.taskDefinition !== m.legacyTaskDefinition ||
       (await tasks()).length
     )
-      fail("Legacy runtime is not stopped");
+      fail(message);
+  }
+  function assertMaintenanceProof() {
     if (
       now() - Date.parse(m.maintenance.confirmedAt) / 1000 > 900 ||
       Date.parse(m.maintenance.confirmedAt) / 1000 > now()
     )
       fail("Maintenance proof is stale");
+  }
+  async function assertSettledLeases() {
     const leases = await scan(
       m.tablePrefix + "ActiveMeetingTable",
       "guildId, status, leaseExpiresAt",
@@ -369,24 +362,57 @@ function createBootstrap(options) {
       )
     )
       fail("Unsettled lease remains");
+  }
+  async function introductionReceipt() {
     const existing = await scan(table, "pk, sk");
-    let introduction;
-    if (existing.length) {
-      if (
-        existing.length !== 1 ||
-        existing[0].pk !== "ENV" ||
-        existing[0].sk !== "INTRODUCTION"
-      )
-        fail("Control table has existing ownership");
-      introduction = await read("INTRODUCTION");
-      if (
-        introduction.operationId !== m.operationId ||
-        introduction.manifestSha256 !== options.expectedSha256 ||
-        introduction.principalArn !== m.principalArn ||
-        introduction.stage !== "routing_acknowledged"
-      )
-        fail("Introduction ownership is unconfirmed");
+    if (!existing.length) return undefined;
+    if (
+      existing.length !== 1 ||
+      existing[0].pk !== "ENV" ||
+      existing[0].sk !== "INTRODUCTION"
+    )
+      fail("Control table has existing ownership");
+    const introduction = await read("INTRODUCTION");
+    if (
+      introduction.operationId !== m.operationId ||
+      introduction.manifestSha256 !== options.expectedSha256 ||
+      introduction.principalArn !== m.principalArn ||
+      introduction.stage !== "routing_acknowledged"
+    )
+      fail("Introduction ownership is unconfirmed");
+    return introduction;
+  }
+  function introductionConditions(introduction) {
+    if (!introduction) return [];
+    return [
+      {
+        ConditionCheck: {
+          TableName: table,
+          Key: key("INTRODUCTION"),
+          ConditionExpression:
+            "operationId = :op AND manifestSha256 = :hash AND principalArn = :principal AND #stage = :stage",
+          ExpressionAttributeNames: { "#stage": "stage" },
+          ExpressionAttributeValues: marshall({
+            ":op": m.operationId,
+            ":hash": options.expectedSha256,
+            ":principal": m.principalArn,
+            ":stage": "routing_acknowledged",
+          }),
+        },
+      },
+    ];
+  }
+  async function initialize() {
+    await identity();
+    const [current, prior] = await state();
+    if (current || prior) {
+      if (!owned(current, prior)) fail("Existing Control cannot be adopted");
+      return { kind: "initialized", stage: prior.stage };
     }
+    await assertLegacyRuntimeStopped("Legacy runtime is not stopped");
+    assertMaintenanceProof();
+    await assertSettledLeases();
+    const introduction = await introductionReceipt();
     await topology(true);
     const ctl = types.controlRecordSchema.parse(initialControl());
     const receipt = {
@@ -405,25 +431,7 @@ function createBootstrap(options) {
             ConditionExpression: "attribute_not_exists(pk)",
           },
         })),
-        ...(introduction
-          ? [
-              {
-                ConditionCheck: {
-                  TableName: table,
-                  Key: key("INTRODUCTION"),
-                  ConditionExpression:
-                    "operationId = :op AND manifestSha256 = :hash AND principalArn = :principal AND #stage = :stage",
-                  ExpressionAttributeNames: { "#stage": "stage" },
-                  ExpressionAttributeValues: marshall({
-                    ":op": m.operationId,
-                    ":hash": options.expectedSha256,
-                    ":principal": m.principalArn,
-                    ":stage": "routing_acknowledged",
-                  }),
-                },
-              },
-            ]
-          : []),
+        ...introductionConditions(introduction),
       ],
       async () => {
         const [c, r] = await state();
@@ -438,15 +446,7 @@ function createBootstrap(options) {
     live(c, r);
     if (r.stage === "launched") return { kind: "launched" };
     if (r.stage !== "initialized") fail("Submitted launch cannot be replayed");
-    const svc = await service();
-    if (
-      svc.desiredCount !== 0 ||
-      svc.runningCount !== 0 ||
-      svc.pendingCount !== 0 ||
-      svc.taskDefinition !== m.legacyTaskDefinition ||
-      (await tasks()).length
-    )
-      fail("Service is not empty");
+    await assertLegacyRuntimeStopped("Service is not empty");
     await topology(true);
     const d = (
       await aws("ecs", "describe-task-definition", {
@@ -507,7 +507,7 @@ function createBootstrap(options) {
     error.code = "candidate_not_ready";
     throw error;
   }
-  async function readyCandidate() {
+  async function candidateTask() {
     const svc = await service(),
       running = await tasks();
     if (
@@ -520,14 +520,18 @@ function createBootstrap(options) {
       running[0].lastStatus !== "RUNNING"
     )
       notReady("Exact candidate task unavailable");
-    const task = running[0],
-      container = task.containers.find((v) => v.name === m.containerName);
+    return running[0];
+  }
+  function candidateContainer(task) {
+    const container = task.containers.find((v) => v.name === m.containerName);
     if (
       container?.imageDigest !== m.imageDigest ||
       container.networkInterfaces?.length !== 1
     )
       fail("Candidate image/address mismatch");
-    await topology(false);
+    return container;
+  }
+  async function assertCandidateTargetHealthy(container) {
     const health = await aws("elbv2", "describe-target-health", {
       TargetGroupArn: m.targetGroupA,
     });
@@ -539,12 +543,8 @@ function createBootstrap(options) {
       health.TargetHealthDescriptions[0].TargetHealth.State !== "healthy"
     )
       notReady("Candidate target not healthy");
-    const rows = await scan(table, "pk, sk, recordType, identity");
-    const candidates = rows.filter(
-      (v) => v.recordType === "runtime" && v.identity?.taskArn === task.taskArn,
-    );
-    if (candidates.length !== 1) notReady("Candidate registration ambiguous");
-    const row = types.runtimeRecordSchema.parse(await read(candidates[0].sk));
+  }
+  function assertCandidateRuntimeIdentity(row) {
     if (
       row.identity.kind !== "ecs" ||
       row.identity.imageDigest !== m.imageDigest ||
@@ -553,7 +553,12 @@ function createBootstrap(options) {
       row.retirementRequest ||
       row.retirementAcknowledgment ||
       !row.workCounts ||
-      Object.values(row.workCounts).some((v) => v !== 0) ||
+      Object.values(row.workCounts).some((v) => v !== 0)
+    )
+      notReady("Candidate readiness is stale");
+  }
+  function assertCandidateReadiness(row) {
+    if (
       row.readiness.runtimeMode !== m.runtimeMode ||
       !row.readiness.cacheReady ||
       !row.readiness.dependenciesReady ||
@@ -566,6 +571,19 @@ function createBootstrap(options) {
       row.protection.expiresAt <= now() + 120
     )
       notReady("Candidate readiness is stale");
+  }
+  async function candidateRuntime(task) {
+    const rows = await scan(table, "pk, sk, recordType, identity");
+    const candidates = rows.filter(
+      (v) => v.recordType === "runtime" && v.identity?.taskArn === task.taskArn,
+    );
+    if (candidates.length !== 1) notReady("Candidate registration ambiguous");
+    const row = types.runtimeRecordSchema.parse(await read(candidates[0].sk));
+    assertCandidateRuntimeIdentity(row);
+    assertCandidateReadiness(row);
+    return row;
+  }
+  async function assertNativeProtection(task) {
     const protection = await aws("ecs", "get-task-protection", {
       cluster: m.cluster,
       tasks: [task.taskArn],
@@ -579,6 +597,14 @@ function createBootstrap(options) {
       Date.parse(proof.expirationDate) / 1000 <= now() + 120
     )
       notReady("Native protection unconfirmed");
+  }
+  async function readyCandidate() {
+    const task = await candidateTask();
+    const container = candidateContainer(task);
+    await topology(false);
+    await assertCandidateTargetHealthy(container);
+    const row = await candidateRuntime(task);
+    await assertNativeProtection(task);
     return row;
   }
   async function readiness() {
