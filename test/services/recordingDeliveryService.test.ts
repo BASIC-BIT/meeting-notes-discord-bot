@@ -156,3 +156,66 @@ test("a definite stale lease result cannot be converted to ACK by matching old m
     acknowledgeRecordingDeliveryMessage(meeting, "notes", "first"),
   ).rejects.toThrow("fenced");
 });
+
+test("rejects notes timing from a stale original owner", async () => {
+  const { meeting, row } = fixture();
+  await beginRecordingDelivery(meeting);
+  row.ownerInstanceId = "replacement";
+  await expect(
+    acknowledgeRecordingDeliveryMessage(meeting, "notes", "notes", {
+      kind: "complete",
+      notesVersion: 1,
+      path: "live",
+      firstAcknowledgedAt: "2026-10-16T12:00:30.000Z",
+      completeAcknowledgedAt: "2026-10-16T12:00:30.000Z",
+    }),
+  ).rejects.toThrow("ownership changed");
+  expect(row.notesDeliveryTiming).toBeUndefined();
+});
+
+test("omits invalid timing from an existing notes acknowledgement write", async () => {
+  const { meeting, row } = fixture();
+  const first = {
+    kind: "first",
+    notesVersion: 1,
+    path: "live",
+    firstAcknowledgedAt: "2026-10-16T12:00:30.000Z",
+  } as const;
+  row.notesDeliveryTiming = first;
+  meeting.notesDeliveryTiming = first;
+  await beginRecordingDelivery(meeting);
+  await acknowledgeRecordingDeliveryMessage(
+    meeting,
+    "notes",
+    "notes",
+    JSON.parse('{"kind":"first","firstAcknowledgedAt":"bad"}'),
+  );
+  expect(row.notesMessageIds).toEqual(["notes"]);
+  expect(row.notesDeliveryTiming).toEqual(first);
+  expect(meeting.notesDeliveryTiming).toEqual(first);
+  const input = mockRepository.transitionMeetingHistory.mock.calls.at(-1)![0];
+  expect(input.patch).not.toHaveProperty("notesDeliveryTiming");
+  expect(input.recordingDelivery.previous.notesDeliveryTiming).toEqual(first);
+});
+
+test("uncertain timing write must match the exact durable timing before continuing", async () => {
+  const { meeting, row } = fixture();
+  await beginRecordingDelivery(meeting);
+  const timing = {
+    kind: "complete",
+    notesVersion: 1,
+    path: "live",
+    firstAcknowledgedAt: "2026-10-16T12:00:30.000Z",
+    completeAcknowledgedAt: "2026-10-16T12:00:45.000Z",
+  } as const;
+  mockRepository.transitionMeetingHistory.mockImplementationOnce(
+    async (input) => {
+      Object.assign(row, input.patch, { notesDeliveryTiming: undefined });
+      throw new Error("timing not committed");
+    },
+  );
+  await expect(
+    acknowledgeRecordingDeliveryMessage(meeting, "notes", "notes", timing),
+  ).rejects.toThrow("timing not committed");
+  expect(row.notesMessageIds).toEqual(["notes"]);
+});

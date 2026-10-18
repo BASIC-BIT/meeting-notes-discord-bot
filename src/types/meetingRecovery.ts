@@ -46,6 +46,7 @@ export type RecoveryRepository = {
         | "summaryMessageId"
         | "notesMessageIds"
         | "notesChannelId"
+        | "notesDeliveryTiming"
         | "transcriptS3Key"
         | "updatedAt"
       >

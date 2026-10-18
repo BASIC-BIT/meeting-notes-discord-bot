@@ -8,20 +8,13 @@ import {
   PermissionsBitField,
   TextChannel,
 } from "discord.js";
-import { CONFIG_KEYS } from "../../src/config/keys";
+import { mockNotesDestinations } from "../fixtures/notesDestinationConfig";
 import { getGlobalConfigValues } from "../../src/services/appConfigService";
 import { listConfigOverridesForScope } from "../../src/services/configOverridesService";
 import {
   assertMemberCanAccessNotesChannel,
   resolveMeetingNotesChannel,
 } from "../../src/services/meetingNotesDestinationService";
-
-jest.mock("../../src/services/appConfigService", () => ({
-  getGlobalConfigValues: jest.fn(),
-}));
-jest.mock("../../src/services/configOverridesService", () => ({
-  listConfigOverridesForScope: jest.fn(),
-}));
 
 const client = new Client({ intents: [] });
 const guild: Guild = Reflect.construct(Guild, [client, { id: "guild-1" }]);
@@ -45,24 +38,9 @@ beforeEach(() => {
   jest.resetAllMocks();
   serverDestination = undefined;
   voiceDestination = undefined;
-  jest.mocked(getGlobalConfigValues).mockResolvedValue({});
-  jest
-    .mocked(listConfigOverridesForScope)
-    .mockImplementation(async (context) => {
-      const value =
-        context.scope === "channel" ? voiceDestination : serverDestination;
-      return value === undefined
-        ? []
-        : [
-            {
-              scopeId: `${context.scope}#guild-1`,
-              configKey: CONFIG_KEYS.notes.channelId,
-              value,
-              updatedAt: "2026-10-16T00:00:00Z",
-              updatedBy: "user-1",
-            },
-          ];
-    });
+  mockNotesDestinations((scope) =>
+    scope === "channel" ? voiceDestination : serverDestination,
+  );
   fetchChannel = jest
     .spyOn(guild.channels, "fetch")
     .mockResolvedValue(destination);

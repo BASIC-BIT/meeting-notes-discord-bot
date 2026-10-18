@@ -18,6 +18,7 @@ import {
 import type { SpanContext } from "@opentelemetry/api";
 import type { MeetingDelivery } from "./meetingDelivery";
 import type { MeetingProcessingOutcome } from "./meetingProcessing";
+import type { NotesDeliveryTiming } from "./meetingNotesTiming";
 import { AudioData } from "./audio";
 import { ChatEntry } from "./chat";
 import { Participant } from "./participants";
@@ -154,6 +155,7 @@ export interface MeetingData {
   startMessageId?: string;
   summaryMessageId?: string;
   delivery?: MeetingDelivery;
+  notesDeliveryTiming?: NotesDeliveryTiming;
   processing?: MeetingProcessingOutcome;
   historySaved?: boolean;
   recordingLimitNotice?: RecordingLimitState;

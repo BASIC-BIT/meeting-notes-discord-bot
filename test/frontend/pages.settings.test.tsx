@@ -206,10 +206,18 @@ describe("independent notes routing", () => {
     );
     return screen.findByRole("dialog");
   }
-  async function selectNotes(dialog: HTMLElement, label: string) {
+  const notesField = (dialog: HTMLElement) =>
+    within(dialog).getByRole("combobox", { name: "Notes channel" });
+  const saveButton = (dialog: HTMLElement) =>
+    within(dialog).getByRole("button", { name: "Save channel" });
+  const autoRecordSwitch = (dialog: HTMLElement) =>
+    within(dialog).getByRole("switch", { name: "Auto-record this channel" });
+  const resetNotes = (dialog: HTMLElement) =>
     fireEvent.click(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
+      within(dialog).getByRole("button", { name: "Reset to server default" }),
     );
+  async function selectNotes(dialog: HTMLElement, label: string) {
+    fireEvent.click(notesField(dialog));
     fireEvent.click(
       await screen.findByRole("option", { name: label, hidden: true }),
     );
@@ -217,16 +225,10 @@ describe("independent notes routing", () => {
   test("routing_without_auto_record", async () => {
     renderWithMantine(<Settings />);
     const dialog = await openRow();
-    expect(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
-    ).toBeEnabled();
-    expect(
-      within(dialog).getByRole("switch", { name: "Auto-record this channel" }),
-    ).not.toBeChecked();
+    expect(notesField(dialog)).toBeEnabled();
+    expect(autoRecordSwitch(dialog)).not.toBeChecked();
     await selectNotes(dialog, "#staff-notes");
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    );
+    fireEvent.click(saveButton(dialog));
     await waitFor(() =>
       expect(channelContextsSetMutation.mutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({ defaultNotesChannelId: "other" }),
@@ -311,15 +313,9 @@ describe("independent notes routing", () => {
         within(inheritedRow).queryByRole("button", { name: "Remove override" }),
       ).not.toBeInTheDocument();
       const dialog = await openRow(editedChannel);
-      expect(
-        within(dialog).getByRole("switch", {
-          name: "Auto-record this channel",
-        }),
-      ).not.toBeChecked();
+      expect(autoRecordSwitch(dialog)).not.toBeChecked();
       await selectNotes(dialog, "#notes");
-      fireEvent.click(
-        within(dialog).getByRole("button", { name: "Save channel" }),
-      );
+      fireEvent.click(saveButton(dialog));
       await waitFor(() =>
         expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
       );
@@ -350,12 +346,8 @@ describe("independent notes routing", () => {
     });
     const view = renderWithMantine(<Settings />);
     const dialog = await openRow();
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Reset to server default" }),
-    );
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    );
+    resetNotes(dialog);
+    fireEvent.click(saveButton(dialog));
     await waitFor(() =>
       expect(channelContextsSetMutation.mutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -403,9 +395,7 @@ describe("independent notes routing", () => {
       </MantineProvider>,
     );
     const reopened = await openRow();
-    expect(
-      within(reopened).getByRole("combobox", { name: "Notes channel" }),
-    ).toHaveValue("Use server default (#notes)");
+    expect(notesField(reopened)).toHaveValue("Use server default (#notes)");
     expect(
       within(reopened).getByRole("textbox", { name: "Channel context" }),
     ).toHaveValue("Keep context");
@@ -429,20 +419,14 @@ describe("independent notes routing", () => {
     );
     expect(screen.getByTestId("settings-override")).toHaveTextContent("#notes");
     const dialog = await openRow();
-    expect(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
-    ).toHaveValue("#notes");
+    expect(notesField(dialog)).toHaveValue("#notes");
   });
   test("toggle_save_preserves_route", async () => {
     setChannelContextsQuery({ data: { contexts: [savedContext] } });
     renderWithMantine(<Settings />);
     const dialog = await openRow();
-    fireEvent.click(
-      within(dialog).getByRole("switch", { name: "Auto-record this channel" }),
-    );
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    );
+    fireEvent.click(autoRecordSwitch(dialog));
+    fireEvent.click(saveButton(dialog));
     await waitFor(() =>
       expect(channelContextsSetMutation.mutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({ defaultNotesChannelId: "other" }),
@@ -474,30 +458,18 @@ describe("independent notes routing", () => {
       "#staff-notes",
     );
     const dialog = await openRow();
-    expect(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
-    ).toBeEnabled();
+    expect(notesField(dialog)).toBeEnabled();
   });
   test("requires a destination for recording while inherited routing stays editable without a default", async () => {
     setDefault("");
     renderWithMantine(<Settings />);
     const dialog = await openRow();
-    expect(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
-    ).toHaveValue("Use server default");
-    expect(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    ).toBeEnabled();
-    fireEvent.click(
-      within(dialog).getByRole("switch", { name: "Auto-record this channel" }),
-    );
-    expect(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    ).toBeDisabled();
+    expect(notesField(dialog)).toHaveValue("Use server default");
+    expect(saveButton(dialog)).toBeEnabled();
+    fireEvent.click(autoRecordSwitch(dialog));
+    expect(saveButton(dialog)).toBeDisabled();
     await selectNotes(dialog, "#staff-notes");
-    expect(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    ).toBeEnabled();
+    expect(saveButton(dialog)).toBeEnabled();
   });
   test("retains TTS-only destination validation", async () => {
     setDefault("");
@@ -515,16 +487,10 @@ describe("independent notes routing", () => {
     });
     renderWithMantine(<Settings />);
     const dialog = await openRow();
-    expect(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
-    ).toBeEnabled();
-    expect(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    ).toBeDisabled();
+    expect(notesField(dialog)).toBeEnabled();
+    expect(saveButton(dialog)).toBeDisabled();
     await selectNotes(dialog, "#staff-notes");
-    expect(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    ).toBeEnabled();
+    expect(saveButton(dialog)).toBeEnabled();
   });
   test("keeps an unavailable saved destination explicit until corrected", async () => {
     setChannelContextsQuery({
@@ -540,21 +506,11 @@ describe("independent notes routing", () => {
       "Voice channel override",
     );
     const dialog = await openRow();
-    expect(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
-    ).toHaveValue("Unavailable notes channel");
-    expect(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    ).toBeDisabled();
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Reset to server default" }),
-    );
-    expect(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
-    ).toHaveValue("Use server default (#notes)");
-    expect(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    ).toBeEnabled();
+    expect(notesField(dialog)).toHaveValue("Unavailable notes channel");
+    expect(saveButton(dialog)).toBeDisabled();
+    resetNotes(dialog);
+    expect(notesField(dialog)).toHaveValue("Use server default (#notes)");
+    expect(saveButton(dialog)).toBeEnabled();
   });
   test("failed_save_retains_draft", async () => {
     channelContextsSetMutation.mutateAsync.mockRejectedValueOnce(
@@ -567,17 +523,13 @@ describe("independent notes routing", () => {
       within(dialog).getByRole("textbox", { name: "Channel context" }),
       { target: { value: "Unsaved context" } },
     );
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Save channel" }),
-    );
+    fireEvent.click(saveButton(dialog));
     expect(
       await within(dialog).findByText(
         "Could not save channel settings. Try again.",
       ),
     ).toBeInTheDocument();
-    expect(
-      within(dialog).getByRole("combobox", { name: "Notes channel" }),
-    ).toHaveValue("#staff-notes");
+    expect(notesField(dialog)).toHaveValue("#staff-notes");
     expect(
       within(dialog).getByRole("textbox", { name: "Channel context" }),
     ).toHaveValue("Unsaved context");

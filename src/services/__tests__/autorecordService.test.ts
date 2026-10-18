@@ -44,18 +44,28 @@ beforeEach(async () => {
 afterEach(() => jest.restoreAllMocks());
 
 test("toggle_save_preserves_route when destination is omitted", async () => {
-  await saveAutoRecordSetting(params);
+  const saved = await saveAutoRecordSetting(params);
+  expect(saved).toMatchObject({ textChannelId: "notes", enabled: true });
   expect(await route()).toBe("notes");
   expect(
     await getAutoRecordSettingByChannel("routing-guild", "voice"),
   ).toMatchObject({ textChannelId: "notes", enabled: true });
 });
 test("explicit autorecord enable destination replaces the saved route", async () => {
-  await saveAutoRecordSetting({ ...params, textChannelId: "other" });
+  const read = jest.spyOn(overridesService, "getConfigOverrideForScope");
+  const saved = await saveAutoRecordSetting({
+    ...params,
+    textChannelId: "other",
+  });
+  expect(saved.textChannelId).toBe("other");
+  expect(read).not.toHaveBeenCalled();
   expect(await route()).toBe("other");
 });
 test("explicit null clears the route while omitted preserves it", async () => {
-  await saveAutoRecordSetting({ ...params, textChannelId: null });
+  const read = jest.spyOn(overridesService, "getConfigOverrideForScope");
+  const saved = await saveAutoRecordSetting({ ...params, textChannelId: null });
+  expect(saved.textChannelId).toBeUndefined();
+  expect(read).not.toHaveBeenCalled();
   expect(await route()).toBeUndefined();
 });
 test("auto-record removal retains the independently saved route", async () => {
@@ -97,12 +107,13 @@ test.each([undefined, null])(
       "server-notes",
       "admin",
     );
-    await saveAutoRecordSetting({
+    const saved = await saveAutoRecordSetting({
       ...params,
       channelId: "ALL",
       recordAll: true,
       textChannelId,
     });
+    expect(saved.textChannelId).toBe("server-notes");
     expect(
       (
         await getConfigOverrideForScope(

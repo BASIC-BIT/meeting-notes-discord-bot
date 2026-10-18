@@ -9,6 +9,8 @@ import type { Locator } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { mockGuilds, mockLibrary, mockSettings } from "./mockData";
 import { applyVisualDefaults, waitForVisualReady } from "./visualUtils";
+import { registerNotesRoutingVisualTests } from "./notesRoutingVisuals";
+import { assertPageCanScroll } from "./scrollAssertions";
 
 const runVisual = process.env.PW_VISUAL === "true";
 const visualModes = ["viewport", "full"] as const;
@@ -138,37 +140,6 @@ const installNotionVisualState = async (
     });
   });
 };
-
-async function assertPageCanScroll(page: Page): Promise<void> {
-  const scroll = await page.evaluate(() => {
-    const elements = [
-      document.scrollingElement,
-      ...document.querySelectorAll<HTMLElement>("*"),
-    ];
-    const element = elements.find(
-      (candidate) =>
-        candidate &&
-        candidate.scrollHeight > candidate.clientHeight + 10 &&
-        (candidate === document.scrollingElement ||
-          ["auto", "scroll"].includes(getComputedStyle(candidate).overflowY)),
-    );
-    if (!element) return null;
-    element.scrollTop = 0;
-    const before = element.scrollTop;
-    element.scrollTop = 100;
-    const result = {
-      height: element.scrollHeight,
-      client: element.clientHeight,
-      before,
-      after: element.scrollTop,
-    };
-    element.scrollTop = 0;
-    return result;
-  });
-  expect(scroll).not.toBeNull();
-  expect(scroll!.height).toBeGreaterThan(scroll!.client);
-  expect(scroll!.after).toBeGreaterThan(scroll!.before);
-}
 
 test.describe("visual regression", () => {
   test.skip(!runVisual, "Visual regression disabled");
@@ -1044,71 +1015,7 @@ test.describe("visual regression", () => {
     });
   }
 
-  for (const colorScheme of ["light", "dark"] as const) {
-    for (const width of [1280, 768, 390]) {
-      test(`notes routing ${width}px ${colorScheme} @visual`, async ({
-        page,
-        settingsPage,
-      }) => {
-        await page.setViewportSize({
-          width,
-          height: width === 390 ? 844 : 900,
-        });
-        await page.addInitScript(
-          (scheme) =>
-            localStorage.setItem("mantine-color-scheme-value", scheme),
-          colorScheme,
-        );
-        await page.goto(`/portal/server/${mockGuilds.ddm.id}/settings`);
-        await settingsPage.waitForLoaded();
-        const row = settingsPage.overrideByName("Tabletop Voice");
-        await expect(row).toContainText("Server default");
-        const notesEntry = page.getByTestId(
-          "settings-config-entry-notes.channelId",
-        );
-        await notesEntry.evaluate((element) =>
-          element.scrollIntoView({ block: "center" }),
-        );
-        await expect(notesEntry).toBeInViewport({ ratio: 1 });
-        await expect(
-          page.getByRole("combobox", { name: "notes.channelId", exact: true }),
-        ).toBeInViewport();
-        await expectVisualScreenshot(
-          page,
-          `notes-routing-default-notes-${width}-${colorScheme}`,
-          "viewport",
-          { target: page.getByTestId("settings-config-entry-notes.channelId") },
-        );
-        await expectVisualScreenshot(
-          page,
-          `notes-routing-voice-overrides-${width}-${colorScheme}`,
-          "viewport",
-          { target: page.getByTestId("settings-overrides") },
-        );
-        await row.getByRole("button", { name: "Edit Tabletop Voice" }).click();
-        await expect(
-          settingsPage
-            .modal()
-            .getByRole("switch", { name: "Auto-record this channel" }),
-        ).not.toBeChecked();
-        await expect(
-          settingsPage
-            .modal()
-            .getByRole("combobox", { name: "Notes channel", exact: true }),
-        ).toBeEnabled();
-        await expectVisualScreenshot(
-          page,
-          `notes-routing-editor-${width}-${colorScheme}`,
-          "viewport",
-        );
-        expect(
-          await page.evaluate(
-            () => document.documentElement.scrollWidth <= innerWidth,
-          ),
-        ).toBe(true);
-      });
-    }
-  }
+  registerNotesRoutingVisualTests(expectVisualScreenshot);
 
   test("settings page @visual", async ({
     serverSelectPage,

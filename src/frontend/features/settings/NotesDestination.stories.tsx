@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react";
 import { useMantineColorScheme } from "@mantine/core";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import {
   createMemoryHistory,
@@ -10,8 +10,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import { AuthProvider } from "../../contexts/AuthContext";
-import { GuildProvider } from "../../contexts/GuildContext";
+import { AuthenticatedPreviewProviders } from "../../storybook/AuthenticatedPreviewProviders";
 import { trpc } from "../../services/trpc";
 import Settings from "../../pages/Settings";
 import type { ConfigEntryInput } from "../../types/configEntry";
@@ -19,8 +18,7 @@ import type { ConfigEntryInput } from "../../types/configEntry";
 const notesEntry: ConfigEntryInput = {
   key: "notes.channelId",
   label: "Default notes channel",
-  description:
-    "Recording controls and notes appear here unless you choose another channel for a voice channel or meeting.",
+  description: "Default destination for recording controls and notes.",
   category: "Notes",
   group: "Recommended",
   valueType: "string",
@@ -120,15 +118,12 @@ function NotesDestinationPreview({
 }: PreviewProps) {
   const { setColorScheme } = useMantineColorScheme();
   useEffect(() => setColorScheme(colorScheme), [colorScheme, setColorScheme]);
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: { retry: false },
-          mutations: { retry: false },
-        },
-      }),
-  );
+  const [queryClient] = useState(() => {
+    const noRetry = { retry: false };
+    return new QueryClient({
+      defaultOptions: { queries: noRetry, mutations: noRetry },
+    });
+  });
   const [client] = useState(() => {
     let failed = false;
     const data = previewResponses(destination, recordAll);
@@ -158,28 +153,19 @@ function NotesDestinationPreview({
   });
   const [router] = useState(() => {
     localStorage.setItem("mn-selected-guild", "fictional-server");
-    const root = createRootRoute({ component: Settings });
     return createRouter({
-      routeTree: root,
+      routeTree: createRootRoute({ component: Settings }),
       history: createMemoryHistory({ initialEntries: ["/"] }),
     });
   });
   return (
-    <trpc.Provider client={client} queryClient={queryClient}>
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <GuildProvider>
-            <div
-              style={{ padding: 16, background: "var(--mantine-color-body)" }}
-            >
-              {/* Keep this component story focused on notes routing. */}
-              <style>{`[data-testid="settings-dictionary"], [data-testid="settings-notion-integration"], [data-testid="service-accounts-card"] { display: none; }`}</style>
-              <RouterProvider router={router} />
-            </div>
-          </GuildProvider>
-        </AuthProvider>
-      </QueryClientProvider>
-    </trpc.Provider>
+    <AuthenticatedPreviewProviders client={client} queryClient={queryClient}>
+      <div style={{ padding: 16, background: "var(--mantine-color-body)" }}>
+        {/* Keep this component story focused on notes routing. */}
+        <style>{`[data-testid="settings-dictionary"], [data-testid="settings-notion-integration"], [data-testid="service-accounts-card"] { display: none; }`}</style>
+        <RouterProvider router={router} />
+      </div>
+    </AuthenticatedPreviewProviders>
   );
 }
 const meta = {

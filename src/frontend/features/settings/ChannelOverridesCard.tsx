@@ -111,91 +111,127 @@ export function ChannelOverridesCard({
           </Surface>
         ) : (
           <Stack gap="xs">
-            {channelIds.map((channelId) => {
-              const override = overrides.find(
-                (entry) => entry.channelId === channelId,
-              );
-              const voiceLabel =
-                override?.voiceLabel ??
-                voiceChannels.find((channel) => channel.value === channelId)
-                  ?.label ??
-                "Unknown channel";
-              const hasNotesOverride = override?.textChannelId !== undefined;
-              const textLabel =
-                override?.textLabel ??
-                (defaultNotesChannelId
-                  ? (defaultNotesLabel ?? "Unavailable notes channel")
-                  : undefined);
-              return (
-                <Surface
-                  key={channelId}
-                  p="sm"
-                  withBorder
-                  data-testid="settings-override"
-                >
-                  <Group justify="space-between" align="center" wrap="nowrap">
-                    <Stack gap={2}>
-                      <Text fw={600}>{voiceLabel}</Text>
-                      <Text size="xs" c="dimmed">
-                        {textLabel ??
-                          "No notes channel configured. Manually started meetings use the command channel."}
-                        {hasNotesOverride
-                          ? " \u00b7 Voice channel override"
-                          : defaultNotesChannelId
-                            ? " \u00b7 Server default"
-                            : ""}
-                      </Text>
-                    </Stack>
-                    <Stack gap={2} align="flex-end">
-                      <Text size="xs" c="dimmed">
-                        {override?.autoRecordEnabled
-                          ? "Auto-record on \u00b7 Voice channel override"
-                          : recordAllEnabled
-                            ? "Auto-record on \u00b7 Server default"
-                            : "Auto-record off \u00b7 Server default"}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {override?.chatTtsEnabled === undefined
-                          ? "Chat TTS default"
-                          : override?.chatTtsEnabled
-                            ? "Chat TTS on"
-                            : "Chat TTS off"}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {override?.chatTtsTtsOnlyEnabled === undefined
-                          ? "TTS-only default"
-                          : override?.chatTtsTtsOnlyEnabled
-                            ? "TTS-only on"
-                            : "TTS-only off"}
-                      </Text>
-                    </Stack>
-                    <ActionIcon
-                      variant="subtle"
-                      aria-label={`Edit ${voiceLabel}`}
-                      onClick={() => onSelect(channelId)}
-                    >
-                      <IconPencil size={16} />
-                    </ActionIcon>
-                    {onRemove && override ? (
-                      <ActionIcon
-                        variant="subtle"
-                        color="red"
-                        aria-label="Remove override"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onRemove(override);
-                        }}
-                      >
-                        <IconTrash size={16} />
-                      </ActionIcon>
-                    ) : null}
-                  </Group>
-                </Surface>
-              );
-            })}
+            {channelIds.map((channelId) => (
+              <ChannelOverrideRow
+                key={channelId}
+                channelId={channelId}
+                override={overrides.find(
+                  (entry) => entry.channelId === channelId,
+                )}
+                voiceLabel={
+                  voiceChannels.find((channel) => channel.value === channelId)
+                    ?.label ?? "Unknown channel"
+                }
+                defaultNotesChannelId={defaultNotesChannelId}
+                defaultNotesLabel={defaultNotesLabel}
+                recordAllEnabled={recordAllEnabled}
+                onSelect={onSelect}
+                onRemove={onRemove}
+              />
+            ))}
           </Stack>
         )}
       </Stack>
+    </Surface>
+  );
+}
+
+const booleanStatus = (label: string, value: boolean | undefined) =>
+  `${label} ${value === undefined ? "default" : value ? "on" : "off"}`;
+
+function notesSummary(
+  override: ChannelOverride | undefined,
+  defaultChannelId: string | null,
+  defaultLabel: string | undefined,
+) {
+  const text =
+    override?.textLabel ??
+    (defaultChannelId
+      ? (defaultLabel ?? "Unavailable notes channel")
+      : undefined);
+  const source =
+    override?.textChannelId !== undefined
+      ? " \u00b7 Voice channel override"
+      : defaultChannelId
+        ? " \u00b7 Server default"
+        : "";
+  return `${text ?? "No notes channel configured. Manually started meetings use the command channel."}${source}`;
+}
+
+function recordingStatus(
+  override: ChannelOverride | undefined,
+  recordAllEnabled: boolean,
+) {
+  return override?.autoRecordEnabled
+    ? "Auto-record on \u00b7 Voice channel override"
+    : `${booleanStatus("Auto-record", recordAllEnabled)} \u00b7 Server default`;
+}
+
+type ChannelOverrideRowProps = Pick<
+  ChannelOverridesCardProps,
+  | "defaultNotesChannelId"
+  | "defaultNotesLabel"
+  | "recordAllEnabled"
+  | "onSelect"
+  | "onRemove"
+> & {
+  channelId: string;
+  voiceLabel: string;
+  override: ChannelOverride | undefined;
+};
+
+function ChannelOverrideRow({
+  channelId,
+  voiceLabel,
+  override,
+  defaultNotesChannelId,
+  defaultNotesLabel,
+  recordAllEnabled,
+  onSelect,
+  onRemove,
+}: ChannelOverrideRowProps) {
+  const label = override?.voiceLabel ?? voiceLabel;
+  return (
+    <Surface p="sm" withBorder data-testid="settings-override">
+      <Group justify="space-between" align="center" wrap="nowrap">
+        <Stack gap={2}>
+          <Text fw={600}>{label}</Text>
+          <Text size="xs" c="dimmed">
+            {notesSummary(override, defaultNotesChannelId, defaultNotesLabel)}
+          </Text>
+        </Stack>
+        <Stack gap={2} align="flex-end">
+          <Text size="xs" c="dimmed">
+            {recordingStatus(override, recordAllEnabled)}
+          </Text>
+          <Text size="xs" c="dimmed">
+            {booleanStatus("Chat TTS", override?.chatTtsEnabled)}
+          </Text>
+          <Text size="xs" c="dimmed">
+            {booleanStatus("TTS-only", override?.chatTtsTtsOnlyEnabled)}
+          </Text>
+        </Stack>
+        <ActionIcon
+          variant="subtle"
+          aria-label={`Edit ${label}`}
+          onClick={() => onSelect(channelId)}
+        >
+          <IconPencil size={16} />
+        </ActionIcon>
+        {onRemove && override ? (
+          <ActionIcon
+            variant="subtle"
+            color="red"
+            aria-label="Remove override"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRemove(override);
+            }}
+          >
+            <IconTrash size={16} />
+          </ActionIcon>
+        ) : null}
+      </Group>
     </Surface>
   );
 }

@@ -67,6 +67,38 @@ describe("analyticsService", () => {
     });
   });
 
+  it("sends numeric version 3 latency with only the existing identities", () => {
+    analyticsConfig.posthogKey = "phc_test";
+    captureEvent("meeting_completed", {
+      userId: "user-1",
+      guildId: "guild-1",
+      properties: {
+        event_version: 3,
+        surface: "discord",
+        duration_ms: 60000,
+        notes_latency_status: "measured",
+        notes_first_delivery_latency_ms: 2000,
+        notes_complete_delivery_latency_ms: 5000,
+        notes_delivery_path: "live",
+      },
+    });
+    expect(capture).toHaveBeenCalledWith({
+      distinctId: "user-1",
+      event: "meeting_completed",
+      properties: {
+        guild_id: "guild-1",
+        environment: "sandbox",
+        event_version: 3,
+        surface: "discord",
+        duration_ms: 60000,
+        notes_latency_status: "measured",
+        notes_first_delivery_latency_ms: 2000,
+        notes_complete_delivery_latency_ms: 5000,
+        notes_delivery_path: "live",
+      },
+    });
+  });
+
   it("namespaces the distinct id by guild when there is no acting user", () => {
     analyticsConfig.posthogKey = "phc_test";
 
@@ -85,14 +117,18 @@ describe("analyticsService", () => {
     expect(capture).not.toHaveBeenCalled();
   });
 
-  it("never throws when the client fails", () => {
+  it("never throws when the client fails for version 3 completion", () => {
     analyticsConfig.posthogKey = "phc_test";
     capture.mockImplementationOnce(() => {
       throw new Error("posthog exploded");
     });
 
     expect(() =>
-      captureEvent("meeting_started", { userId: "user-1" }),
+      captureEvent("meeting_completed", {
+        userId: "user-1",
+        guildId: "guild-1",
+        properties: { event_version: 3, notes_latency_status: "unknown" },
+      }),
     ).not.toThrow();
   });
 

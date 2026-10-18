@@ -40,6 +40,13 @@ function held() {
 async function readyFixture() {
   const f = await recoveryFixture();
   const row = f.histories.get("guild")![0];
+  row.notesDeliveryTiming = {
+    kind: "first",
+    notesVersion: 1,
+    path: "live",
+    firstAcknowledgedAt: "2026-10-13T23:59:00Z",
+  };
+  const originalTiming = structuredClone(row.notesDeliveryTiming);
   row.ownerInstanceId = "old";
   row.executionVersion = 1;
   row.recovery = undefined;
@@ -137,7 +144,14 @@ async function readyFixture() {
   await lifecycle.start();
   await lifecycle.getRuntimeAdmissionContext();
   const oldRuntime = await f.repository.getRecord("ENV", "RUNTIME#old");
-  return { ...f, lifecycle, originalCapture, oldRuntime, voice };
+  return {
+    ...f,
+    lifecycle,
+    originalCapture,
+    originalTiming,
+    oldRuntime,
+    voice,
+  };
 }
 async function exerciseShutdown(mode: "terminal" | "renewal" | "stage") {
   const f = await readyFixture();
@@ -202,6 +216,7 @@ async function exerciseShutdown(mode: "terminal" | "renewal" | "stage") {
     recover: recoverMeeting,
     now: () => Math.floor(Date.now() / 1000),
     content: {
+      nowMs: () => f.nowMs,
       autoExport: async () => "skipped",
       reader: f.reader,
       upload: f.upload,
@@ -291,7 +306,18 @@ async function exerciseShutdown(mode: "terminal" | "renewal" | "stage") {
     expect(f.histories.get("guild")![0].checkpoint!.capture).toEqual(
       f.originalCapture,
     );
+    expect(f.histories.get("guild")![0].notesDeliveryTiming).toMatchObject({
+      firstAcknowledgedAt: f.originalTiming.firstAcknowledgedAt,
+      path: f.originalTiming.path,
+    });
+    if (mode !== "terminal")
+      expect(f.histories.get("guild")![0].notesDeliveryTiming).toEqual(
+        f.originalTiming,
+      );
     if (mode === "terminal") {
+      expect(f.histories.get("guild")![0].notesDeliveryTiming?.kind).toBe(
+        "complete",
+      );
       expect(releasing).toHaveBeenCalledTimes(1);
       expect(f.leases.has("guild")).toBe(false);
       expect(exit).toHaveBeenCalledWith(0);

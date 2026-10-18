@@ -1,46 +1,18 @@
 #!/usr/bin/env node
 "use strict";
-const { execFile } = require("node:child_process");
-const { promisify, isDeepStrictEqual } = require("node:util");
+const { sameEcsTaskArn } = require("../../src/utils/ecsTaskArn.js");
+const { isDeepStrictEqual } = require("node:util");
 const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb");
-const exec = promisify(execFile);
+const {
+  CoordinatorFailure,
+  awsCli,
+  createAwsCaller,
+} = require("./coordinator-aws.cjs");
 const WARMUP_SECONDS = 900;
 const RETIREMENT_SECONDS = 7500;
 const PROTECTION_MARGIN_SECONDS = 120;
 const CLI_PHASES = ["prepare", "promote", "retire", "reconcile"];
 
-class CoordinatorFailure extends Error {
-  constructor(category, message, operation) {
-    super(message);
-    this.category = category;
-    this.operation = operation;
-  }
-}
-
-async function awsCli(service, operation, input) {
-  const validating = operation === "validate-update-service";
-  const { stdout } = await exec(
-    "aws",
-    [
-      service,
-      validating ? "update-service" : operation,
-      "--cli-input-json",
-      JSON.stringify(input),
-      ...(validating ? ["--generate-cli-skeleton", "output"] : []),
-      "--output",
-      "json",
-      "--no-cli-pager",
-    ],
-    {
-      maxBuffer: 4 * 1024 * 1024,
-      // A hidden retry can outlive this call and invalidate the submitted fence.
-      ...(service === "elbv2" && operation === "modify-listener"
-        ? { env: { ...process.env, AWS_MAX_ATTEMPTS: "1" } }
-        : {}),
-    },
-  );
-  return stdout.trim() ? JSON.parse(stdout) : {};
-}
 function configuration(env) {
   const required = (key) => {
     if (!env[key]?.trim())
@@ -148,30 +120,6 @@ function candidateDefinition(definition, config) {
     value: config.candidateId,
   });
   return next;
-}
-function createAwsCaller(executeAws, diagnostic) {
-  return async function callAws(service, operation, input) {
-    const name = `${service}.${operation}`;
-    diagnostic.operation = name;
-    try {
-      return await executeAws(service, operation, input);
-    } catch {
-      const categories = {
-        "ecs.validate-update-service": "cli_capability_unsupported",
-        "ecs.get-task-protection": "native_protection_unconfirmed",
-      };
-      const category =
-        categories[name] ??
-        (service === "dynamodb"
-          ? "control_store_operation_failed"
-          : "provider_operation_failed");
-      throw new CoordinatorFailure(
-        category,
-        "Coordinator AWS operation failed",
-        name,
-      );
-    }
-  };
 }
 function protocolModules(options) {
   const builders =
@@ -445,8 +393,8 @@ function createCoordinator(options = {}) {
       tasks: [identity.taskArn],
     });
     diagnostic.operation = "verify_native_protection";
-    const proof = result.protectedTasks?.find(
-      (task) => task.taskArn === identity.taskArn,
+    const proof = result.protectedTasks?.find((task) =>
+      sameEcsTaskArn(task.taskArn, identity.taskArn),
     );
     if (
       result.failures?.length ||

@@ -1,3 +1,4 @@
+import { recordNotesAcknowledgement } from "../observability/meetingNotesLatency";
 import { EMPTY_RECORDING_NOTICE } from "../utils/meetingProcessing";
 import type { MeetingHistory } from "../types/db";
 import {
@@ -46,6 +47,7 @@ export type RecoveryDependencies = {
   reader: RecoveryReader;
   signal: AbortSignal;
   now(): number;
+  nowMs(): number;
   effect: TranscriptionContentInput["effect"];
   notes: typeof ensureMeetingNotes;
   summaries: typeof ensureMeetingSummaries;
@@ -186,14 +188,15 @@ async function deliver(claim: RecoveryClaim, deps: RecoveryDependencies) {
     if (!summary.id) throw new Error("Summary acknowledgment missing");
     await persistRecovery(claim, { summaryMessageId: summary.id }, deps);
     const ids: string[] = [];
-    for (const embed of buildMeetingNotesEmbeds({
+    const embeds = buildMeetingNotesEmbeds({
       ...row,
       notesBody: row.notes!,
       meetingName:
         row.capture?.kind === "complete"
           ? "Recovered meeting notes"
           : "Recovered partial notes",
-    })) {
+    });
+    for (const embed of embeds) {
       const message = await deps.effect(() =>
         deps.send(
           channel,
@@ -201,11 +204,23 @@ async function deliver(claim: RecoveryClaim, deps: RecoveryDependencies) {
           deps.signal,
         ),
       );
+      const timing = recordNotesAcknowledgement(
+        claim.history.notesDeliveryTiming,
+        {
+          acknowledgedAt: new Date(deps.nowMs()).toJSON() ?? "",
+          complete: embed === embeds.at(-1),
+          path: "recovery",
+        },
+      );
       if (!message.id) throw new Error("Notes acknowledgment missing");
       ids.push(message.id);
       await persistRecovery(
         claim,
-        { notesMessageIds: [...ids], notesChannelId: channel },
+        {
+          notesMessageIds: [...ids],
+          notesChannelId: channel,
+          ...(timing ? { notesDeliveryTiming: timing } : {}),
+        },
         deps,
       );
     }

@@ -1,5 +1,9 @@
 import { expect, test } from "./fixtures";
 import { mockGuilds, mockSettings } from "./mockData";
+import {
+  saveChannelOverride,
+  selectNotesChannel,
+} from "./settingsNotesRouting";
 
 test("settings page shows overrides and updates tags (mock)", async ({
   page,
@@ -104,26 +108,13 @@ test.describe("notes routing", () => {
         .getByRole("switch", { name: "Auto-record this channel" }),
     ).not.toBeChecked();
     // An explicit choice equal to the default must stay explicit after that default changes.
-    await settingsPage
-      .modal()
-      .getByLabel("Notes channel", { exact: true })
-      .click();
-    await page
-      .getByRole("option", { name: "#session-notes", exact: true })
-      .click();
+    await selectNotesChannel(page, settingsPage, "#session-notes");
     await expect(
       settingsPage
         .modal()
         .getByRole("button", { name: "Reset to server default" }),
     ).toBeEnabled();
-    await Promise.all([
-      page.waitForResponse(
-        (response) =>
-          response.url().includes("/trpc/channelContexts.set") && response.ok(),
-      ),
-      settingsPage.saveChannelButton().click(),
-    ]);
-    await expect(settingsPage.modal()).toBeHidden();
+    await saveChannelOverride(page, settingsPage);
     await page.reload();
     await settingsPage.waitForLoaded();
     await expect(row).toContainText("#session-notes · Voice channel override");
@@ -134,14 +125,7 @@ test.describe("notes routing", () => {
       .modal()
       .getByRole("button", { name: "Reset to server default" })
       .click();
-    await Promise.all([
-      page.waitForResponse(
-        (response) =>
-          response.url().includes("/trpc/channelContexts.set") && response.ok(),
-      ),
-      settingsPage.saveChannelButton().click(),
-    ]);
-    await expect(settingsPage.modal()).toBeHidden();
+    await saveChannelOverride(page, settingsPage);
     await page.reload();
     await settingsPage.waitForLoaded();
     await expect(row).toContainText("#campaign-info · Server default");
@@ -159,22 +143,9 @@ test.describe("notes routing", () => {
       .modal()
       .getByRole("switch", { name: "Auto-record this channel" });
     await expect(autoRecord).not.toBeChecked();
-    await settingsPage
-      .modal()
-      .getByLabel("Notes channel", { exact: true })
-      .click();
-    await page
-      .getByRole("option", { name: "#campaign-info", exact: true })
-      .click();
+    await selectNotesChannel(page, settingsPage, "#campaign-info");
     await expect(autoRecord).not.toBeChecked();
-    await Promise.all([
-      page.waitForResponse(
-        (response) =>
-          response.url().includes("/trpc/channelContexts.set") && response.ok(),
-      ),
-      settingsPage.saveChannelButton().click(),
-    ]);
-    await expect(settingsPage.modal()).toBeHidden();
+    await saveChannelOverride(page, settingsPage);
     await page.reload();
     await settingsPage.waitForLoaded();
     await expect(row).toContainText("Auto-record off");
@@ -185,14 +156,7 @@ test.describe("notes routing", () => {
       .modal()
       .getByRole("button", { name: "Reset to server default" })
       .click();
-    await Promise.all([
-      page.waitForResponse(
-        (response) =>
-          response.url().includes("/trpc/channelContexts.set") && response.ok(),
-      ),
-      settingsPage.saveChannelButton().click(),
-    ]);
-    await expect(settingsPage.modal()).toBeHidden();
+    await saveChannelOverride(page, settingsPage);
   });
 
   test("notes_routing_editor_scrolls", async ({ page, settingsPage }) => {

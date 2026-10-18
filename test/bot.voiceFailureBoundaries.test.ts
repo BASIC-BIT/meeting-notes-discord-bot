@@ -129,7 +129,7 @@ import {
 import { CONFIG_KEYS } from "../src/config/keys";
 import { getGlobalConfigValues } from "../src/services/appConfigService";
 import { listConfigOverridesForScope } from "../src/services/configOverridesService";
-import { getAutoRecordSettingByChannel } from "../src/services/autoRecordService";
+import { getAutoRecordSettingByChannel } from "../src/services/autorecordService";
 import { resolveMeetingNotesChannel } from "../src/services/meetingNotesDestinationService";
 import {
   getSnapshotString,
@@ -144,6 +144,20 @@ jest.mock("../src/services/appConfigService", () => ({
 jest.mock("../src/services/configOverridesService", () => ({
   listConfigOverridesForScope: jest.fn(),
 }));
+
+function readBotFunction(name: string) {
+  const source = ts.createSourceFile(
+    "bot.ts",
+    readFileSync(path.join(__dirname, "../src/bot.ts"), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const declaration = source.statements.find(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+  );
+  if (!declaration) throw new Error(`Missing production bot function: ${name}`);
+  return declaration.getText(source);
+}
 
 async function runAutoRecordJoin(options: {
   voiceDestination?: string;
@@ -189,17 +203,7 @@ async function runAutoRecordJoin(options: {
   const tts = jest.fn();
   const admission = jest.fn();
   const errors = jest.fn();
-  const source = ts.createSourceFile(
-    "bot.ts",
-    readFileSync(path.join(__dirname, "../src/bot.ts"), "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-  );
-  const declaration = source.statements.find(
-    (node) =>
-      ts.isFunctionDeclaration(node) && node.name?.text === "handleUserJoin",
-  );
-  if (!declaration) throw new Error("Missing production voice-join handler");
+  const declaration = readBotFunction("handleUserJoin");
   const context = vm.createContext({
     client: { user: { id: "bot-1" } },
     getMeeting: () => undefined,
@@ -232,15 +236,12 @@ async function runAutoRecordJoin(options: {
     },
   });
   await vm.runInContext(
-    ts.transpileModule(
-      declaration.getText(source) + "\nhandleUserJoin(newState, true);",
-      {
-        compilerOptions: {
-          module: ts.ModuleKind.None,
-          target: ts.ScriptTarget.ES2022,
-        },
+    ts.transpileModule(declaration + "\nhandleUserJoin(newState, true);", {
+      compilerOptions: {
+        module: ts.ModuleKind.None,
+        target: ts.ScriptTarget.ES2022,
       },
-    ).outputText,
+    }).outputText,
     context,
   );
   return {
@@ -295,18 +296,7 @@ test("a missing configured auto destination does not start elsewhere", async () 
 });
 
 test("registered startmeeting offers an optional ordinary text notes channel", async () => {
-  const source = ts.createSourceFile(
-    "bot.ts",
-    readFileSync(path.join(__dirname, "../src/bot.ts"), "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-  );
-  const declaration = source.statements.find(
-    (node) =>
-      ts.isFunctionDeclaration(node) &&
-      node.name?.text === "setupApplicationCommands",
-  );
-  if (!declaration) throw new Error("Missing command registration");
+  const declaration = readBotFunction("setupApplicationCommands");
   const put = jest.spyOn(REST.prototype, "put").mockResolvedValue([]);
   const command = new SlashCommandBuilder()
     .setName("fixture")
@@ -333,15 +323,12 @@ test("registered startmeeting offers an optional ordinary text notes channel", a
   });
   try {
     await vm.runInContext(
-      ts.transpileModule(
-        declaration.getText(source) + "\nsetupApplicationCommands();",
-        {
-          compilerOptions: {
-            module: ts.ModuleKind.None,
-            target: ts.ScriptTarget.ES2022,
-          },
+      ts.transpileModule(declaration + "\nsetupApplicationCommands();", {
+        compilerOptions: {
+          module: ts.ModuleKind.None,
+          target: ts.ScriptTarget.ES2022,
         },
-      ).outputText,
+      }).outputText,
       context,
     );
     expect(put).toHaveBeenCalledWith(

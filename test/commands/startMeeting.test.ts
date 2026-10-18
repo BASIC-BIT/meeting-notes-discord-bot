@@ -1,23 +1,17 @@
 /** @jest-environment node */
+import { createMeetingStartDiscordFixture } from "../fixtures/meetingStart";
+import { createUpgradeRecordingLimitNotice } from "../fixtures/recordingLimitNotice";
 import {
   ChannelType,
   ChatInputCommandInteraction,
   UserContextMenuCommandInteraction,
   InteractionResponse,
   ActionRowBuilder,
-  Client,
-  ClientUser,
-  Guild,
-  GuildMember,
   Message,
   PermissionFlagsBits,
   PermissionsBitField,
   TextChannel,
-  User,
-  VoiceChannel,
-  VoiceState,
 } from "discord.js";
-import { CONFIG_KEYS } from "../../src/config/keys";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -32,95 +26,22 @@ import {
   deliverRecordingLimitNotice,
 } from "../../src/services/recordingLimitService";
 import { deleteMeeting, initializeMeeting } from "../../src/meetings";
-import { getGlobalConfigValues } from "../../src/services/appConfigService";
 import { listConfigOverridesForScope } from "../../src/services/configOverridesService";
 import { handleRequestStartMeeting } from "../../src/commands/startMeeting";
 import { interruptOwnedMeeting } from "../../src/services/ownedMeetingInterruption";
 import { resolveMeetingVoiceSettings } from "../../src/services/meetingVoiceSettingsService";
 import { resolveServerMeetingArtifactAccess } from "../../src/services/meetingArtifactAccessService";
 import { getActiveMeetingLeaseForGuild } from "../../src/services/activeMeetingLeaseService";
-import {
-  getGuildLimits,
-  getLimitsForTier,
-} from "../../src/services/subscriptionService";
+import { getGuildLimits } from "../../src/services/subscriptionService";
 import { checkBotPermissions } from "../../src/utils/permissions";
 import type { MeetingData } from "../../src/types/meeting-data";
 
-jest.mock("../../src/meetings", () => ({
-  hasMeeting: jest.fn(() => false),
-  getMeeting: jest.fn(),
-  deleteMeeting: jest.fn(),
-  initializeMeeting: jest.fn(),
-}));
-jest.mock("../../src/commands/endMeeting", () => ({
-  handleEndMeetingOther: jest.fn(),
-  persistExplicitMeetingStop: jest.fn(),
-}));
-jest.mock("../../src/services/meetingVoiceSettingsService", () => ({
-  resolveMeetingVoiceSettings: jest.fn(async () => ({})),
-}));
-jest.mock("../../src/services/meetingArtifactAccessService", () => ({
-  resolveServerMeetingArtifactAccess: jest.fn(async () => ({
-    transcriptAccessEnabled: false,
-  })),
-}));
-jest.mock("../../src/services/activeMeetingLeaseService", () => ({
-  getActiveMeetingLeaseForGuild: jest.fn(async () => undefined),
-  isLeaseActive: (lease: { leaseExpiresAt: number }) =>
-    lease.leaseExpiresAt > Date.now() / 1000,
-}));
-jest.mock("../../src/services/subscriptionService", () => ({
-  ...jest.requireActual("../../src/services/subscriptionService"),
-  getGuildLimits: jest.fn(),
-}));
-jest.mock("../../src/utils/permissions", () => ({
-  checkBotPermissions: jest.fn(),
-}));
-jest.mock("../../src/services/appConfigService", () => ({
-  getGlobalConfigValues: jest.fn(),
-}));
-jest.mock("../../src/services/configOverridesService", () => ({
-  listConfigOverridesForScope: jest.fn(),
-}));
-
-const client = new Client({ intents: [] });
-const guild: Guild = Reflect.construct(Guild, [client, { id: "guild-1" }]);
-const creator: User = Reflect.construct(User, [
-  client,
-  { id: "user-1", username: "Starter" },
-]);
-const bot: ClientUser = Reflect.construct(ClientUser, [
-  client,
-  { id: "bot-1", username: "Chronote" },
-]);
-client.user = bot;
-const member: GuildMember = Reflect.construct(GuildMember, [
-  client,
-  { user: { id: creator.id, username: creator.username }, roles: [] },
-  guild,
-]);
-const botMember: GuildMember = Reflect.construct(GuildMember, [
-  client,
-  { user: { id: bot.id, username: bot.username }, roles: [] },
-  guild,
-]);
-const voice: VoiceChannel = Reflect.construct(VoiceChannel, [
-  guild,
-  { id: "voice-1", type: ChannelType.GuildVoice, name: "Voice" },
-  guild.client,
-]);
-const notes: TextChannel = Reflect.construct(TextChannel, [
-  guild,
-  { id: "voice-notes", type: ChannelType.GuildText, name: "private-notes" },
-  guild.client,
-]);
+const { client, guild, creator, bot, botMember, voice, notes, resetStart } =
+  createMeetingStartDiscordFixture();
 let serverDestination: string | undefined;
 let voiceDestination: string | undefined;
 let fetchChannel: jest.SpyInstance;
 let send: jest.SpyInstance;
-jest.mock("../../src/services/ownedMeetingInterruption", () => ({
-  interruptOwnedMeeting: jest.fn(async () => ({ kind: "unresolved" })),
-}));
 jest.mock("../../src/services/meetingUsageService", () => ({
   getRollingUsageForGuild: jest.fn(),
   getRollingWindowMs: jest.fn(() => 7 * 86400000),
@@ -207,35 +128,21 @@ beforeEach(() => {
   jest.mocked(getActiveMeetingLeaseForGuild).mockResolvedValue(undefined);
   serverDestination = "server-notes";
   voiceDestination = "voice-notes";
-  client.guilds.cache.set(guild.id, guild);
-  client.channels.cache.set(voice.id, voice);
-  client.channels.cache.set(notes.id, notes);
-  client.channels.cache.set(invocation.id, invocation);
-  guild.channels.cache.set(voice.id, voice);
-  guild.channels.cache.set(notes.id, notes);
-  guild.channels.cache.set(invocation.id, invocation);
-  guild.members.cache.set(creator.id, member);
-  guild.members.cache.set(bot.id, botMember);
-  guild.voiceStates.cache.set(
-    creator.id,
-    Reflect.construct(VoiceState, [
-      guild,
-      { user_id: creator.id, channel_id: voice.id },
-    ]),
-  );
-  jest.spyOn(client.users, "fetch").mockResolvedValue(creator);
-  fetchChannel = jest.spyOn(guild.channels, "fetch").mockResolvedValue(notes);
-  send = jest.spyOn(notes, "send").mockResolvedValue(published);
+  ({ fetchChannel, send } = resetStart({
+    published,
+    notesPermissions: [
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.ReadMessageHistory,
+    ],
+    selectDestination: (scope) =>
+      scope === "channel" ? voiceDestination : serverDestination,
+  }));
+  for (const channel of [voice, notes, invocation]) {
+    client.channels.cache.set(channel.id, channel);
+    guild.channels.cache.set(channel.id, channel);
+  }
   jest.spyOn(invocation, "send").mockResolvedValue(published);
-  jest
-    .spyOn(notes, "permissionsFor")
-    .mockReturnValue(
-      new PermissionsBitField([
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-      ]),
-    );
   jest
     .spyOn(invocation, "permissionsFor")
     .mockReturnValue(
@@ -244,44 +151,6 @@ beforeEach(() => {
         PermissionFlagsBits.SendMessages,
       ]),
     );
-  jest.mocked(checkBotPermissions).mockReturnValue({ success: true });
-  jest.mocked(getGlobalConfigValues).mockResolvedValue({});
-  jest
-    .mocked(listConfigOverridesForScope)
-    .mockImplementation(async (context) => {
-      const value =
-        context.scope === "channel" ? voiceDestination : serverDestination;
-      return value === undefined
-        ? []
-        : [
-            {
-              scopeId: `${context.scope}#guild-1`,
-              configKey: CONFIG_KEYS.notes.channelId,
-              value,
-              updatedAt: "2026-10-16T00:00:00Z",
-              updatedBy: creator.id,
-            },
-          ];
-    });
-  jest.mocked(getGuildLimits).mockResolvedValue({
-    limits: { ...getLimitsForTier("free"), maxMeetingMinutesRolling: 0 },
-    subscription: {
-      tier: "free",
-      status: "active",
-      source: "default",
-      billingSource: "free",
-      stripeTier: null,
-      grantTier: null,
-      activeGrant: null,
-    },
-  });
-  jest.mocked(initializeMeeting).mockResolvedValue({
-    guildId: guild.id,
-    meetingId: "meeting-1",
-    voiceChannel: voice,
-    textChannel: notes,
-    startTime: new Date("2026-10-16T00:00:00Z"),
-  } as MeetingData);
 });
 
 afterEach(() => warning.mockRestore());
@@ -528,20 +397,9 @@ test("rolling limits use the deferred delivery policy before publication", async
   });
   jest
     .mocked(encounterRecordingLimit)
-    .mockImplementationOnce(async (input) => ({
-      input,
-      currentTier: "free",
-      action: {
-        kind: "upgrade",
-        label: "View Basic",
-        url: "https://chronote.test/upgrade",
-        purchasePath: "initial_purchase",
-        eligibility: "higher_allowance",
-        targetTier: "basic",
-        benefit: "More time",
-      },
-      payload: { content: input.message, allowedMentions: { parse: [] } },
-    }));
+    .mockImplementationOnce(async (input) =>
+      createUpgradeRecordingLimitNotice(input),
+    );
   const request = interaction();
   await handleRequestStartMeeting(request);
   expect(deliverRecordingLimitNotice).toHaveBeenCalledWith(

@@ -37,6 +37,7 @@ import {
   type ChannelOption,
   type ChannelOverride,
 } from "../utils/settingsChannels";
+import { ChannelNotesDestinationSelect } from "../features/settings/ChannelNotesDestinationSelect";
 import { ChannelOverridesCard } from "../features/settings/ChannelOverridesCard";
 import { ServerConfigCard } from "../features/settings/ServerConfigCard";
 import { DictionaryCard } from "../features/settings/DictionaryCard";
@@ -157,7 +158,7 @@ export default function Settings() {
     "inherit" | "on" | "off"
   >("inherit");
 
-  useEffect(() => {
+  const resetChannelDraft = () => {
     setEditingChannelId(null);
     setChannelVoiceChannelId(null);
     setChannelAutoRecord(false);
@@ -169,6 +170,10 @@ export default function Settings() {
     setChannelLiveVoiceCommandsMode("inherit");
     setChannelChatTtsMode("inherit");
     setChannelChatTtsTtsOnlyMode("inherit");
+  };
+
+  useEffect(() => {
+    resetChannelDraft();
     channelModal.close();
   }, [selectedGuildId]);
 
@@ -330,17 +335,7 @@ export default function Settings() {
     dictionaryQuery.isLoading;
 
   const openAddChannel = () => {
-    setEditingChannelId(null);
-    setChannelVoiceChannelId(null);
-    setChannelAutoRecord(false);
-    setChannelSaveError(null);
-    setChannelTextChannelId(null);
-    setChannelTags("");
-    setChannelContext("");
-    setChannelLiveVoiceMode("inherit");
-    setChannelLiveVoiceCommandsMode("inherit");
-    setChannelChatTtsMode("inherit");
-    setChannelChatTtsTtsOnlyMode("inherit");
+    resetChannelDraft();
     channelModal.open();
   };
 
@@ -824,53 +819,14 @@ export default function Settings() {
               back to the global setting.
             </Alert>
           ) : null}
-          <FormSelect
-            label="Notes channel"
-            description={
-              channelTextChannelId !== null
-                ? "Voice channel override"
-                : defaultNotesChannelId
-                  ? "Server default"
-                  : "No server default. Manually started meetings use the channel where the command was run."
-            }
-            placeholder={
-              channelsQuery.isLoading ? "Loading..." : "Select channel"
-            }
-            data={[
-              {
-                value: "__default",
-                label: defaultNotesChannelId
-                  ? `Use server default (${defaultNotesLabel ?? "Unavailable notes channel"})`
-                  : "Use server default",
-              },
-              ...(channelTextChannelId &&
-              !textChannelAccess.has(channelTextChannelId)
-                ? [
-                    {
-                      value: channelTextChannelId,
-                      label: "Unavailable notes channel",
-                      disabled: true,
-                    },
-                  ]
-                : []),
-              ...textChannels.map((channel) => ({
-                value: channel.value,
-                label: formatChannelLabel(channel),
-                disabled: !channel.botAccess,
-              })),
-            ]}
-            value={channelTextChannelId ?? "__default"}
-            onChange={(value) =>
-              setChannelTextChannelId(value === "__default" ? null : value)
-            }
+          <ChannelNotesDestinationSelect
+            value={channelTextChannelId}
+            onChange={setChannelTextChannelId}
+            defaultChannelId={defaultNotesChannelId}
+            defaultLabel={defaultNotesLabel}
+            channels={textChannels}
+            loading={channelsQuery.isLoading}
           />
-          <Button
-            variant="subtle"
-            onClick={() => setChannelTextChannelId(null)}
-            disabled={channelTextChannelId === null}
-          >
-            Reset to server default
-          </Button>
           {resolvedTextChannelId && !selectedTextChannel ? (
             <Text size="sm" c="red">
               Unavailable notes channel. Choose an available channel or reset to

@@ -54,6 +54,7 @@ import {
 } from "../../src/services/meetingNotesService";
 import { createOpenAIClient } from "../../src/services/openaiClient";
 import { buildMeetingTimelineEventsFromHistory } from "../../src/services/meetingTimelineService";
+import { getNotesLatencyProperties } from "../../src/observability/meetingNotesLatency";
 import { recoveryFixture } from "./meetingRecoveryFixtures";
 async function fixture(
   text?: string,
@@ -71,6 +72,7 @@ async function fixture(
     reader: f.reader,
     signal: new AbortController().signal,
     now: () => f.now,
+    nowMs: () => f.nowMs,
     effect: (run) => run(),
     notes,
     summaries: ensureMeetingSummaries,
@@ -221,6 +223,7 @@ test.each(["complete", "interrupted"] as const)(
   async (status) => {
     const f = await fixture();
     await recoverMeeting(f.claim, f.deps);
+    const timing = structuredClone(f.claim.history.notesDeliveryTiming);
     const capture =
       status === "complete"
         ? {
@@ -252,6 +255,7 @@ test.each(["complete", "interrupted"] as const)(
     await recoverMeeting(f.claim, f.deps);
     expect(f.claim.history.status).toBe(status);
     expect(f.claim.history.capture).toEqual(capture);
+    expect(f.claim.history.notesDeliveryTiming).toEqual(timing);
     expect(f.claim.history.recovery?.disposition).toBe("done");
     expect(f.send).not.toHaveBeenCalled();
     expect(f.autoExport).not.toHaveBeenCalled();
@@ -558,6 +562,10 @@ test.each(["delivery", "pending"])(
       });
     }
     expect(f.claim.history.recovery?.disposition).not.toBe("done");
+    const timing = structuredClone(f.claim.history.notesDeliveryTiming);
+    expect(timing?.kind).toBe("complete");
+    f.claim.history.notesVersion = 2;
+    f.histories.get("guild")![0].notesVersion = 2;
     f.repository.updateRecordingRecovery = update;
     f.autoExport.mockReset();
     f.autoExport.mockResolvedValue("skipped");
@@ -572,6 +580,7 @@ test.each(["delivery", "pending"])(
     await recoverMeeting(restarted!, f.deps);
     f.claim.history = restarted!.history;
     expect(f.autoExport).toHaveBeenCalledTimes(1);
+    expect(f.claim.history.notesDeliveryTiming).toEqual(timing);
     expect(f.claim.history.recovery?.disposition).toBe("done");
     expect(f.send).toHaveBeenCalledTimes(2);
     expect(mockCompletionBodies).toHaveLength(2);
@@ -727,5 +736,167 @@ test.each(["legacy", "malformed", "finalized_tail"] as const)(
     expect(f.send).not.toHaveBeenCalled();
     expect(f.autoExport).not.toHaveBeenCalled();
     expect(f.upload).not.toHaveBeenCalled();
+  },
+);
+
+test("measures recovery from the original capture stop", async () => {
+  jest.useFakeTimers({ now: Date.parse("2026-10-16T12:10:00Z") });
+  try {
+    const f = await fixture(undefined, {
+      nowMs: Date.parse("2026-10-16T12:10:00Z"),
+    });
+    f.claim.history.capture = {
+      kind: "interrupted",
+      startedAt: f.claim.history.timestamp,
+      endedAt: "2026-10-16T12:00:00Z",
+      detectedAt: "2026-10-16T12:10:00Z",
+    };
+    Object.assign(
+      f.histories.get("guild")![0],
+      structuredClone(f.claim.history),
+    );
+    let clock = Date.parse("2026-10-16T12:12:00Z");
+    f.deps.nowMs = () => clock;
+    const update = f.repository.updateRecordingRecovery;
+    f.repository.updateRecordingRecovery = async (...args) => {
+      if (args[1].notesMessageIds) clock += 60000;
+      return update(...args);
+    };
+    await recoverMeeting(f.claim, f.deps);
+    const properties = getNotesLatencyProperties({
+      capture: f.claim.history.capture,
+      timing: f.claim.history.notesDeliveryTiming,
+      eligible: true,
+    });
+    expect(properties.notes_latency_status).toBe("measured");
+    if (properties.notes_latency_status !== "measured")
+      throw new Error("Missing measurement");
+    expect(properties.notes_complete_delivery_latency_ms).toBe(720000);
+    expect(f.claim.history.notesDeliveryTiming).toEqual({
+      kind: "complete",
+      notesVersion: 1,
+      path: "recovery",
+      firstAcknowledgedAt: "2026-10-16T12:12:00.000Z",
+      completeAcknowledgedAt: "2026-10-16T12:12:00.000Z",
+    });
+    expect(f.histories.get("guild")![0].notesDeliveryTiming).toEqual(
+      f.claim.history.notesDeliveryTiming,
+    );
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test("missing original stop remains unknown after recovered notes", async () => {
+  const f = await fixture();
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.claim.history.capture).toMatchObject({
+    kind: "interrupted",
+    endedAt: null,
+  });
+  expect(f.claim.history.notesDeliveryTiming?.kind).toBe("complete");
+  expect(
+    getNotesLatencyProperties({
+      capture: f.claim.history.capture,
+      timing: f.claim.history.notesDeliveryTiming,
+      eligible: true,
+    }),
+  ).toEqual({
+    notes_latency_status: "unknown",
+    notes_delivery_path: "recovery",
+  });
+});
+
+test("does not resend an uncertain delivery for timing", async () => {
+  const f = await fixture();
+  f.send
+    .mockResolvedValueOnce({ id: "summary" })
+    .mockResolvedValueOnce({ id: "first" })
+    .mockRejectedValueOnce(new Error("second send failed"));
+  f.deps.notes = async (input) => {
+    input.processing = { ...input.processing, notes: "generated" };
+    return "Saved decision. ".repeat(600);
+  };
+  await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow(
+    "acknowledgment is unknown",
+  );
+  const timing = structuredClone(f.claim.history.notesDeliveryTiming);
+  expect(timing).toMatchObject({
+    kind: "first",
+    path: "recovery",
+    firstAcknowledgedAt: new Date(f.nowMs).toISOString(),
+  });
+  expect(timing).not.toHaveProperty("completeAcknowledgedAt");
+  f.send.mockClear();
+  await recoverMeeting(f.claim, f.deps);
+  const send = f.send;
+  expect(send).not.toHaveBeenCalled();
+  expect(f.claim.history.notesDeliveryTiming).toEqual(timing);
+  expect(f.claim.history.recovery?.disposition).toBe("needs_reconciliation");
+});
+
+test.each(["committed", "uncommitted"] as const)(
+  "%s uncertain notes timing write never replays Discord",
+  async (outcome) => {
+    const f = await fixture();
+    const update = f.repository.updateRecordingRecovery;
+    f.repository.updateRecordingRecovery = async (claim, patch, now) => {
+      if (!patch.notesMessageIds) return update(claim, patch, now);
+      if (outcome === "committed") await update(claim, patch, now);
+      throw new Error("lost notes write ACK");
+    };
+    if (outcome === "committed") await recoverMeeting(f.claim, f.deps);
+    else
+      await expect(recoverMeeting(f.claim, f.deps)).rejects.toThrow(
+        "acknowledgment is unknown",
+      );
+    expect(f.claim.history.notesDeliveryTiming?.kind).toBe(
+      outcome === "committed" ? "complete" : undefined,
+    );
+    const timing = structuredClone(f.claim.history.notesDeliveryTiming);
+    f.send.mockClear();
+    await recoverMeeting(f.claim, f.deps);
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.claim.history.notesDeliveryTiming).toEqual(timing);
+  },
+);
+
+test("malformed optional timing does not block recovered delivery", async () => {
+  const f = await fixture();
+  Object.assign(f.claim.history, {
+    notesDeliveryTiming: { kind: "complete", firstAcknowledgedAt: "bad" },
+  });
+  Object.assign(f.histories.get("guild")![0], structuredClone(f.claim.history));
+  await recoverMeeting(f.claim, f.deps);
+  expect(f.claim.history.recovery?.disposition).toBe("done");
+  expect(f.claim.history.notesDeliveryTiming).toMatchObject({
+    kind: "complete",
+    path: "recovery",
+    notesVersion: 1,
+  });
+  expect(f.send).toHaveBeenCalledTimes(2);
+});
+
+test.each([NaN, Infinity, Date.parse("2026-01-01T00:00:00Z")])(
+  "invalid later clock %s retains first timing without blocking delivery",
+  async (clock) => {
+    const f = await fixture();
+    f.deps.notes = async (input) => {
+      input.processing = { ...input.processing, notes: "generated" };
+      return "Saved decision. ".repeat(600);
+    };
+    f.deps.nowMs = jest
+      .fn()
+      .mockReturnValueOnce(f.nowMs)
+      .mockReturnValue(clock);
+    await recoverMeeting(f.claim, f.deps);
+    expect(f.claim.history.recovery?.disposition).toBe("done");
+    expect(f.claim.history.notesDeliveryTiming).toEqual({
+      kind: "first",
+      notesVersion: 1,
+      path: "recovery",
+      firstAcknowledgedAt: new Date(f.nowMs).toISOString(),
+    });
+    expect(f.send.mock.calls.length).toBeGreaterThan(2);
   },
 );

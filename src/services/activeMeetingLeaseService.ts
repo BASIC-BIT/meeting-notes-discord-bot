@@ -354,6 +354,23 @@ function renewReservation(owned: OwnedReservation): Promise<void> {
   });
   return renewal;
 }
+async function readRecordingControlLease(
+  reservation: SessionReservation,
+): Promise<ActiveMeetingLease | undefined> {
+  try {
+    return await getActiveMeetingLease(
+      reservation.guildId,
+      AbortSignal.timeout(5000),
+    );
+  } catch (error) {
+    // A failed stop-request read does not invalidate the acknowledged lease renewal.
+    console.warn("Recording stop-request read failed after lease renewal", {
+      meetingId: reservation.meetingId,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    return undefined;
+  }
+}
 async function performReservationRenewal(
   owned: OwnedReservation,
 ): Promise<void> {
@@ -376,10 +393,14 @@ async function performReservationRenewal(
     );
     if (!renewed) throw new Error("Reservation ownership lost");
     if (meeting) {
-      const lease = await getActiveMeetingLease(reservation.guildId);
+      const lease = await readRecordingControlLease(reservation);
       if (lease) processRemoteEndRequest(lease, meeting);
     }
-  } catch {
+  } catch (error) {
+    console.warn("Recording reservation renewal could not confirm ownership", {
+      meetingId: reservation.meetingId,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
     owned.controller.abort();
     if (owned.timer) clearInterval(owned.timer);
     if (meeting && !meeting.finishing && !meeting.finished)

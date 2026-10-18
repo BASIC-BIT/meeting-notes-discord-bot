@@ -12,7 +12,7 @@ export default [
   // Node.js scripts and CommonJS child-process fixtures
   {
     files: [
-      "scripts/**/*.{js,cjs}",
+      "scripts/**/*.{js,mjs,cjs}",
       "test/deployment/**/*.cjs",
       "test/audio/fixtures/voiceCaptureExit.cjs",
     ],

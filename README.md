@@ -74,13 +74,13 @@ These checks run before PR merge and deployment. Use `yarn run check` for the fu
 - Docs build (Docusaurus) validates docs compilation and links. Command: `yarn docs:check`.
 - E2E tests (Playwright) validate critical user flows. Command: `yarn test:e2e`. Docs: https://playwright.dev/docs/running-tests
 - Visual regression (Playwright screenshots) fails its PR check on visual test failures. Upgrade and post-install welcome pages include desktop, phone and wide-screen baselines. Review screenshots before updating them. Commands: `yarn test:visual` and `yarn test:visual:update`. Details: `docs/visual-regression.md`.
-- Code stats and complexity (scc + lizard) keep size and complexity visible. Command: `yarn code:stats`. Use `.sccignore` to exclude paths from scc output. `whitelizard.txt` can suppress known complexity offenders. Docs: https://github.com/boyter/scc and https://github.com/terryyin/lizard
+- Code stats and complexity (scc + lizard) keep size and complexity visible. Command: `yarn code:stats`. Use `.sccignore` to exclude paths from scc output. Lizard reports all warnings without suppressing or blocking on legacy debt. Use `yarn check:quality` for enforced limits. Docs: https://github.com/boyter/scc and https://github.com/terryyin/lizard
 - Prompt sync (Langfuse) keeps repo prompt files aligned with Langfuse. Command: `yarn prompts:check`.
 - LLM connection sync (Langfuse) keeps LLM connection YAML aligned with Langfuse. Command: `yarn llm-connections:check`.
 - IaC scan (Checkov via uvx) catches Terraform misconfigurations. Command: `yarn checkov`. Docs: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html and https://docs.astral.sh/uv/concepts/tools/
 - Terraform drift visibility and reconciliation are manual through `.github/workflows/terraform-plan.yml` and `.github/workflows/terraform-apply.yml`. Apply uses a reviewed saved plan artifact and GitHub environment approval.
 
-CI runs the same set as `yarn run check:ci` (see `.github/workflows/ci.yml` and `.github/workflows/ci-core.yml`).
+CI covers the local checks in `yarn run check:ci`. The separate PR quality workflow may accept an explicitly reviewed exception; local quality commands remain strict. See [code quality checks](docs/engineering/code-quality.md).
 
 ### Check dependencies (Mermaid)
 
@@ -252,7 +252,11 @@ Terraform uses a GitHub provider to manage the Actions environment and variables
 - `yarn observability:up` → starts local Prometheus (scrapes `host.docker.internal:3001/metrics`) and Grafana on :3000 with a pre-provisioned Prom datasource.
 - `yarn observability:down` to stop.
 
-## Code complexity with scc and lizard
+## Code quality checks
+
+Run `yarn check:quality` before committing. It prevents new duplication, complex functions, and oversized files relative to Git history, including tests. See the [policy and PR exception process](docs/engineering/code-quality.md).
+
+### Diagnostic statistics with scc and lizard
 
 Setup:
 
