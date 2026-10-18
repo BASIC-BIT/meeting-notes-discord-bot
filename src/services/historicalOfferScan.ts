@@ -1,3 +1,4 @@
+import { classifyChangeHistory } from "./billingChangeHistory";
 import { assertHistoricalProviderPage } from "./historicalProviderPage";
 import { scanHistoricalCheckouts } from "./historicalCheckoutScan";
 import { introOfferIdSchema } from "../types/basicIntroOffers";
@@ -105,7 +106,9 @@ async function assessScannedInvoice(
   scope: HistoricalOfferScope,
   cycles: Map<string, StripeInvoice>,
 ): Promise<HistoricalOfferBatch["entries"][number] | undefined> {
-  const owner = invoice.parent?.subscription_details?.metadata?.guild_id;
+  const owner =
+    invoice.parent?.subscription_details?.metadata?.guild_id ??
+    invoice.metadata?.guild_id;
   const validOwner =
     historicalOfferScopeSchema.shape.guildId.safeParse(owner).success;
   if (validOwner && owner !== scope.guildId) return undefined;
@@ -123,10 +126,21 @@ async function assessScannedInvoice(
   const original = await stripe.invoices.retrieve(invoice.id, {
     expand: ["discounts.source.coupon"],
   });
-  const metadata = original.parent?.subscription_details?.metadata;
   assertListedInvoice(original, scope, new Set());
   if (original.id !== invoice.id)
     throw new Error("Historical original invoice identity mismatch");
+  const change = await classifyChangeHistory(original, scope);
+  if (change) return { scope, invoiceId: invoice.id, evidence: change };
+  return assessOriginalHistory(stripe, original, scope, cycles);
+}
+async function assessOriginalHistory(
+  stripe: StripeClient,
+  original: StripeInvoice,
+  scope: HistoricalOfferScope,
+  cycles: Map<string, StripeInvoice>,
+): Promise<HistoricalOfferBatch["entries"][number]> {
+  const invoice = original;
+  const metadata = original.parent?.subscription_details?.metadata;
   const claimedOffer = introOfferIdSchema.safeParse(metadata?.intro_offer_id);
   if (
     original.billing_reason === "subscription_cycle" &&

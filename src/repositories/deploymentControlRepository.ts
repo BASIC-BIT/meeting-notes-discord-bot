@@ -37,6 +37,7 @@ import {
   retirementSnapshotCondition,
 } from "../services/deploymentControlTransactions";
 import {
+  RECORDING_DELIVERY_FIELDS,
   admissionContextSchema,
   controlRecordSchema,
   parseDeploymentControlRecord,
@@ -937,16 +938,14 @@ export function createMockDeploymentControlRepository(
       });
       const row = getHistory(input.key);
       if (!checkpointLeaseAllowed(input, records, leases)) return "stale";
+      const { recordingDelivery } = input;
       if (
-        input.recordingDelivery &&
-        !Object.entries(input.recordingDelivery.previous).every(
-          ([field, value]) =>
-            JSON.stringify(row?.[field as keyof MeetingHistory]) ===
-            JSON.stringify(value),
-        )
-      )
-        return "stale";
-      if (
+        (recordingDelivery &&
+          !RECORDING_DELIVERY_FIELDS.every(
+            (field) =>
+              JSON.stringify(row?.[field]) ===
+              JSON.stringify(recordingDelivery.previous[field]),
+          )) ||
         !row ||
         row.meetingId !== input.expectedMeetingId ||
         row.ownerInstanceId !== input.expectedOwnerInstanceId ||

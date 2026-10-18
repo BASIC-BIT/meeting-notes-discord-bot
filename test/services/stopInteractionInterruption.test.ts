@@ -159,6 +159,7 @@ test.each([
       reservation: original,
       creator: { id: "synthetic-user" },
       channelId: "voice",
+      voiceChannel: { id: "voice", name: "Synthetic voice" },
       startMessageId: "synthetic-control",
       startTime: new Date(0),
       setFinished: jest.fn(),

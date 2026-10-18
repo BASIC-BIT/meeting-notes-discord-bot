@@ -18,6 +18,7 @@ export async function recoveryFixture(
   text = "We agreed to finish the release testing tomorrow.",
   options: {
     guildId?: string;
+    nowMs?: number;
     requested?: { transcribeMeeting: boolean; generateNotes: boolean };
     artifacts?: CheckpointArtifactInput[];
     context?: (
@@ -28,7 +29,8 @@ export async function recoveryFixture(
     ) => void;
   } = {},
 ) {
-  const now = Math.floor(Date.now() / 1000);
+  const nowMs = options.nowMs ?? Date.now();
+  const now = Math.floor(nowMs / 1000);
   const row: MeetingHistory = {
     ...history,
     guildId: options.guildId ?? history.guildId,
@@ -246,6 +248,7 @@ export async function recoveryFixture(
     transcript,
     leases,
     now,
+    nowMs,
     context: { ...context, now },
     histories,
   };

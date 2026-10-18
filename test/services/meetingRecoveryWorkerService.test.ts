@@ -19,6 +19,29 @@ function barrier() {
   });
   return { promise, resolve };
 }
+function workerFixture(
+  f: Awaited<ReturnType<typeof recoveryFixture>>,
+  content: Parameters<typeof createMeetingRecoveryWorker>[0]["content"],
+) {
+  return {
+    repository: f.repository,
+    recover: recoverMeeting,
+    now: () => Math.floor(Date.now() / 1000),
+    content: {
+      nowMs: Date.now,
+      autoExport: async () => "skipped" as const,
+      reader: f.reader,
+      upload: f.upload,
+      transcript: recoverTranscript,
+      summaries: async (input: Parameters<typeof recoverTranscript>[0]) => {
+        input.summarySentence = "Saved summary";
+        input.processing = { ...input.processing, summary: "generated" };
+        return { summarySentence: input.summarySentence };
+      },
+      ...content,
+    },
+  };
+}
 function scanWorker(
   f: Awaited<ReturnType<typeof recoveryFixture>>,
   now = () => Math.floor(Date.now() / 1000),
@@ -30,6 +53,7 @@ function scanWorker(
     recover: recoverMeeting,
     now,
     content: {
+      nowMs: Date.now,
       autoExport: async () => "skipped",
       reader: f.reader,
       upload: f.upload,
@@ -350,15 +374,8 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
     throw new Error("unknown send ACK");
   });
   const worker = createMeetingRecoveryWorker({
-    repository: f.repository,
     begin: beginRuntimeWorkClaim,
-    recover: recoverMeeting,
-    now: () => Math.floor(Date.now() / 1000),
-    content: {
-      autoExport: async () => "skipped",
-      reader: f.reader,
-      upload: f.upload,
-      transcript: recoverTranscript,
+    ...workerFixture(f, {
       send,
       notes: async (input) => {
         entered.resolve();
@@ -367,12 +384,7 @@ test("actual compatible replacement discovers recovery, owns renewal tails, seal
         input.processing = { ...input.processing, notes: "generated" };
         return input.notesText;
       },
-      summaries: async (input) => {
-        input.summarySentence = "Saved summary";
-        input.processing = { ...input.processing, summary: "generated" };
-        return { summarySentence: input.summarySentence };
-      },
-    },
+    }),
   });
   const polling = worker.poll();
   expect(lifecycle.getWorkCounts().pending_admission).toBe(1);
@@ -471,23 +483,8 @@ test.each(["retained", "active"] as const)(
         };
       const notes = jest.fn(generateNotes);
       const worker = createMeetingRecoveryWorker({
-        repository: f.repository,
         begin: beginRuntimeWorkClaim,
-        recover: recoverMeeting,
-        now: () => Math.floor(Date.now() / 1000),
-        content: {
-          autoExport: async () => "skipped",
-          reader: f.reader,
-          upload: f.upload,
-          transcript: recoverTranscript,
-          send,
-          notes,
-          summaries: async (input) => {
-            input.summarySentence = "Saved summary";
-            input.processing = { ...input.processing, summary: "generated" };
-            return { summarySentence: input.summarySentence };
-          },
-        },
+        ...workerFixture(f, { send, notes }),
       });
       try {
         const refused = scanWorker(

@@ -19,6 +19,7 @@ jest.mock("../src/commands/meetingName", () => ({
 jest.mock("../src/services/summaryUpgradeService", () => ({
   claimSummaryUpgrade: jest.fn().mockResolvedValue(undefined),
 }));
+import { acknowledgeRecordingDeliveryMessage } from "../src/services/recordingDeliveryService";
 import { claimSummaryUpgrade } from "../src/services/summaryUpgradeService";
 import { captureEvent } from "../src/services/analyticsService";
 jest.mock("../src/services/analyticsService", () => ({
@@ -96,6 +97,21 @@ describe("updateMeetingSummaryMessage", () => {
     ).rejects.toThrow();
     expect(value.textChannel.send).not.toHaveBeenCalled();
   });
+  it("zero notes embeds produce no notes acknowledgement timing", async () => {
+    const value = fixture();
+    value.generateNotes = false;
+    const meeting = value as unknown as MeetingData;
+    await updateMeetingSummaryMessage(meeting, { finalization: true });
+    expect(value.textChannel.send).not.toHaveBeenCalled();
+    expect(meeting.notesDeliveryTiming).toBeUndefined();
+    expect(acknowledgeRecordingDeliveryMessage).toHaveBeenCalledTimes(1);
+    expect(acknowledgeRecordingDeliveryMessage).toHaveBeenCalledWith(
+      meeting,
+      "summary",
+      "start",
+    );
+  });
+
   it("adds the value proposition and Upgrade beside Open in Chronote", async () => {
     const value = fixture();
     const url =

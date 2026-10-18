@@ -79,3 +79,26 @@ it("activates lifecycle analytics independently of renewal writes", async () => 
   expect(config.analytics.billingLifecycleEnabled).toBe(true);
   expect(config.stripe.renewalReactivationEnabled).toBe(false);
 });
+
+const originalGrace = process.env.STRIPE_RENEWAL_GRACE_ENABLED;
+afterEach(() => {
+  if (originalGrace === undefined)
+    delete process.env.STRIPE_RENEWAL_GRACE_ENABLED;
+  else process.env.STRIPE_RENEWAL_GRACE_ENABLED = originalGrace;
+});
+it.each([undefined, "false", "", "TRUE", "1", " true "])(
+  "keeps renewal grace disabled for %s",
+  async (value) => {
+    if (value === undefined) delete process.env.STRIPE_RENEWAL_GRACE_ENABLED;
+    else process.env.STRIPE_RENEWAL_GRACE_ENABLED = value;
+    jest.resetModules();
+    const { config } = await import("../../src/services/configService");
+    expect(config.stripe.renewalGraceEnabled).toBe(false);
+  },
+);
+it("requires explicit true to activate renewal grace", async () => {
+  process.env.STRIPE_RENEWAL_GRACE_ENABLED = "true";
+  jest.resetModules();
+  const { config } = await import("../../src/services/configService");
+  expect(config.stripe.renewalGraceEnabled).toBe(true);
+});

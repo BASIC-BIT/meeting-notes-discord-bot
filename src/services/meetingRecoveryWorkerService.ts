@@ -372,6 +372,7 @@ export function startMeetingRecoveryWorker() {
     recover: recoverMeeting,
     now: () => Math.floor(Date.now() / 1000),
     content: {
+      nowMs: Date.now,
       reader: createRecordingCheckpointService(),
       notes: ensureMeetingNotes,
       summaries: ensureMeetingSummaries,

@@ -7,6 +7,21 @@ Notable product changes for Chronote users. For the full changelog, see the [Git
 
 ## 2026
 
+### Notes delivery timing notice (October 16)
+
+- We are adding content-free measurements of the wait from recording stop until Discord acknowledges the first notes message and all initial notes messages. Partial delivery and missing timing remain separate from complete delivery.
+- These records use the existing server and acting account identities, with no additional identifiers, meeting content or per-server financial amounts. They measure delivery acknowledgement, not readership, and do not promise a response time. See [Measuring notes delivery wait](/whats-new/meeting-processing-times) and the updated [Privacy Policy](/legal/privacy).
+
+### Time to resolve a failed renewal
+
+- When renewal payment fails for an existing paid Basic or Pro subscription, the server keeps its previous paid plan for 48 hours from invoice finalization, including scheduled plan changes. Billing shows the local deadline and lets the original payer retry the same invoice, update their payment method, or cancel the unpaid renewal.
+- Cancellation preserves the remaining grace time. A new purchase becomes available after cleanup. Without payment, the server moves to Free at the original deadline, with any valid complimentary access preserved. See [Billing or plan issues](/troubleshooting/common-issues/#a-renewal-payment-failed).
+
+### Plan-change reviews and independent Basic offers
+
+- Where plan changes are available in Billing, the original payer reviews an exact total before payment. Pro upgrades and monthly to annual changes take effect after payment; downgrades and annual to monthly changes within the same plan wait until renewal.
+- Each server can use the monthly and annual Basic introductory offers once, in either order. Leaving an offer ends it, and future changes do not restart it. Discounts on other servers do not block plan changes. See [Server plans](/features/#basic-introductory-pricing).
+
 ### Recording continuity during service handoffs
 
 - A ready replacement can accept new recordings while the previous runtime finishes its existing work. A start caught at the handoff can ask you to retry; active recordings keep their original owner.

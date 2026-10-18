@@ -1,4 +1,12 @@
 import {
+  billingChangeControlKey,
+  billingChangeOperationKey,
+  isBillingChangeComplete,
+  type BillingChangeClaim,
+  type BillingChangeWrite,
+  parseChangeUsage,
+} from "./types/billingChange";
+import {
   renewalOperationKey,
   renewalControlKey,
   isRenewalComplete,
@@ -47,6 +55,7 @@ import {
   DeleteItemCommand,
   QueryCommand,
   ScanCommand,
+  DescribeTableCommand,
   UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
@@ -108,6 +117,18 @@ import {
   buildPendingSegmentTransaction,
 } from "./services/deploymentControlTransactions";
 
+import {
+  renewalRecoveryKey,
+  renewalRecoveryCurrentKey,
+  RENEWAL_RECOVERY_DUE_INDEX,
+  renewalRecoveryNextCheck,
+  readRenewalRecoveryCursor,
+  writeRenewalRecoveryCursor,
+  renewalRecoveryCursorSchema,
+  type RenewalRecovery,
+  type RenewalRecoveryPointer,
+} from "./types/renewalRecovery";
+
 const MEETING_USER_INDEX_WRITE_BATCH_SIZE = 25;
 const PERSONAL_MEDIA_UPLOAD_STATUS_UPDATED_AT_INDEX = "StatusUpdatedAtIndex";
 
@@ -126,6 +147,53 @@ const dynamoDbClient = new DynamoDBClient(
 
 const tablePrefix = config.database.tablePrefix ?? "";
 const tableName = (name: string) => `${tablePrefix}${name}`;
+export async function getRenewalRecoveryIndexStatus(): Promise<
+  string | undefined
+> {
+  if (config.mock.enabled) return "ACTIVE";
+  const result = await dynamoDbClient.send(
+    new DescribeTableCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+    }),
+  );
+  return result.Table?.GlobalSecondaryIndexes?.find(
+    (index) => index.IndexName === "RenewalRecoveryDueIndex",
+  )?.IndexStatus;
+}
+export async function scanGuildSubscriptionPage(
+  cursor?: string,
+): Promise<{ guildIds: string[]; cursor?: string }> {
+  if (config.mock.enabled) {
+    const keys = [...getMockStore().subscriptions.keys()]
+      .sort()
+      .filter((key) => !cursor || key > cursor)
+      .slice(0, 100);
+    return {
+      guildIds: keys.filter((key) => /^\d{17,20}$/.test(key)),
+      cursor: keys.length === 100 ? keys.at(-1) : undefined,
+    };
+  }
+  const result = await dynamoDbClient.send(
+    new ScanCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      ConsistentRead: true,
+      Limit: 100,
+      ProjectionExpression: "guildId",
+      ExclusiveStartKey: cursor
+        ? marshall({ guildId: z.string().min(1).parse(cursor) })
+        : undefined,
+    }),
+  );
+  const guildIds = (result.Items ?? [])
+    .map((item) => z.string().parse(unmarshall(item).guildId))
+    .filter((key) => /^\d{17,20}$/.test(key));
+  return {
+    guildIds,
+    cursor: result.LastEvaluatedKey
+      ? z.string().parse(unmarshall(result.LastEvaluatedKey).guildId)
+      : undefined,
+  };
+}
 export function getDeploymentControlRepository() {
   if (config.mock.enabled) {
     const store = getMockStore();
@@ -3546,6 +3614,20 @@ export async function compareAndWritePurchaseAttempt(
                 : {}),
             },
           },
+          ...(next.state === "preparing" &&
+          next.attemptId !== expected?.attemptId
+            ? [
+                {
+                  ConditionCheck: historicalRevisionFence(
+                    billingChangeControlKey(next.guildId),
+                    undefined,
+                  ),
+                },
+                {
+                  ConditionCheck: renewalRecoveryFence(next.guildId),
+                },
+              ]
+            : []),
           ...(usage
             ? [
                 { Put: offerUsagePut(usage.next, usage.expected) },
@@ -4175,6 +4257,7 @@ export async function claimRenewalOperation(
     values[":revision"] = expected.stripeSyncRevision;
   }
   return transactRenewalRecords([
+    { ConditionCheck: renewalRecoveryFence(operation.guildId) },
     {
       ConditionCheck: {
         TableName: table,
@@ -4183,6 +4266,12 @@ export async function claimRenewalOperation(
         ExpressionAttributeNames: names,
         ExpressionAttributeValues: marshall(values),
       },
+    },
+    {
+      ConditionCheck: historicalRevisionFence(
+        billingChangeControlKey(operation.guildId),
+        undefined,
+      ),
     },
     {
       Put: {
@@ -4237,4 +4326,248 @@ export async function writeRenewalOperation(
     },
     isRenewalComplete(next) ? { Delete: control } : { ConditionCheck: control },
   ]);
+}
+
+export async function claimBillingChangeOperation(
+  input: BillingChangeClaim,
+): Promise<boolean> {
+  const operation = input.operation;
+  const usage = input.usage && parseChangeUsage(operation, input.usage);
+  return transactRenewalRecords([
+    { ConditionCheck: renewalRecoveryFence(operation.guildId) },
+    {
+      ConditionCheck: subscriptionRevisionFence(
+        operation.guildId,
+        input.expectedSubscription,
+      ),
+    },
+    {
+      ConditionCheck: historicalRevisionFence(
+        renewalControlKey(operation.guildId),
+        undefined,
+      ),
+    },
+    {
+      ConditionCheck: {
+        TableName: tableName("GuildSubscriptionTable"),
+        Key: marshall({ guildId: purchaseRecordKey(operation.guildId) }),
+        ConditionExpression:
+          "attribute_not_exists(#guildId) OR #state IN (:completed, :expired)",
+        ExpressionAttributeNames: { "#guildId": "guildId", "#state": "state" },
+        ExpressionAttributeValues: marshall({
+          ":completed": "completed",
+          ":expired": "expired",
+        }),
+      },
+    },
+    {
+      Put: {
+        TableName: tableName("GuildSubscriptionTable"),
+        Item: marshall({
+          ...operation,
+          guildId: billingChangeOperationKey(
+            operation.guildId,
+            operation.operationId,
+          ),
+        }),
+        ConditionExpression: "attribute_not_exists(guildId)",
+      },
+    },
+    {
+      Put: {
+        TableName: tableName("GuildSubscriptionTable"),
+        Item: marshall({
+          guildId: billingChangeControlKey(operation.guildId),
+          operationId: operation.operationId,
+        }),
+        ConditionExpression: "attribute_not_exists(guildId)",
+      },
+    },
+    ...(usage
+      ? [
+          { Put: offerUsagePut(usage.next, usage.expected) },
+          ...offerAuthorityFences(usage.authority),
+        ]
+      : []),
+  ]);
+}
+export async function writeBillingChangeOperation(
+  input: BillingChangeWrite,
+): Promise<boolean> {
+  const next = input.next;
+  const usage = input.usage && parseChangeUsage(next, input.usage);
+  const control = {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId: billingChangeControlKey(next.guildId) }),
+    ConditionExpression: "operationId = :operationId",
+    ExpressionAttributeValues: marshall({ ":operationId": next.operationId }),
+  };
+  return transactRenewalRecords([
+    {
+      Put: {
+        TableName: tableName("GuildSubscriptionTable"),
+        Item: marshall({
+          ...next,
+          guildId: billingChangeOperationKey(next.guildId, next.operationId),
+        }),
+        ConditionExpression: "#revision = :revision",
+        ExpressionAttributeNames: { "#revision": "revision" },
+        ExpressionAttributeValues: marshall({
+          ":revision": input.expectedRevision,
+        }),
+      },
+    },
+    isBillingChangeComplete(next)
+      ? { Delete: control }
+      : { ConditionCheck: control },
+    ...(usage ? [{ Put: offerUsagePut(usage.next, usage.expected) }] : []),
+  ]);
+}
+
+export async function writeRenewalRecoveryRecord(input: {
+  next: RenewalRecovery;
+  expectedRevision?: string;
+  expectedPointer?: RenewalRecoveryPointer;
+  supersededWatch?: Extract<RenewalRecovery, { state: "watching" }>;
+  expectedSubscription: GuildSubscription;
+  blocking: boolean;
+}): Promise<boolean> {
+  const next = input.next;
+  if (input.expectedSubscription.stripeSubscriptionId !== next.subscriptionId)
+    return false;
+  const table = tableName("GuildSubscriptionTable");
+  const superseded = input.supersededWatch;
+  const archived: NonNullable<Parameters<typeof transactRenewalRecords>[0]> =
+    superseded
+      ? [
+          {
+            Update: {
+              TableName: table,
+              Key: marshall({ guildId: renewalRecoveryKey(superseded) }),
+              UpdateExpression:
+                "SET #state = :ended, #revision = :newRevision REMOVE nextCheckAt, recoveryQueue, recoveryDueAt",
+              ConditionExpression:
+                "#revision = :revision AND #state = :watching AND enforcementAccepted = :no",
+              ExpressionAttributeNames: {
+                "#state": "state",
+                "#revision": "revision",
+              },
+              ExpressionAttributeValues: marshall({
+                ":ended": "ended",
+                ":newRevision": randomUUID(),
+                ":revision": superseded.revision,
+                ":watching": "watching",
+                ":no": false,
+              }),
+            },
+          },
+        ]
+      : [];
+  return transactRenewalRecords([
+    ...archived,
+    {
+      ConditionCheck: subscriptionRevisionFence(
+        next.guildId,
+        input.expectedSubscription,
+      ),
+    },
+    {
+      Put: {
+        TableName: table,
+        Item: marshall(
+          {
+            ...next,
+            ownerGuildId: next.guildId,
+            guildId: renewalRecoveryKey(next),
+            ...(renewalRecoveryNextCheck(next) !== undefined
+              ? {
+                  recoveryQueue: next.mode,
+                  recoveryDueAt: renewalRecoveryNextCheck(next),
+                }
+              : {}),
+          },
+          { removeUndefinedValues: true },
+        ),
+        ConditionExpression: input.expectedRevision
+          ? "#revision = :revision"
+          : "attribute_not_exists(guildId)",
+        ...(input.expectedRevision
+          ? {
+              ExpressionAttributeNames: { "#revision": "revision" },
+              ExpressionAttributeValues: marshall({
+                ":revision": input.expectedRevision,
+              }),
+            }
+          : {}),
+      },
+    },
+    {
+      Put: {
+        TableName: table,
+        Item: marshall({
+          guildId: renewalRecoveryCurrentKey(next.guildId),
+          key: renewalRecoveryKey(next),
+          revision: next.revision,
+          blocking: input.blocking,
+        }),
+        ConditionExpression: input.expectedPointer
+          ? "#revision = :revision"
+          : "attribute_not_exists(guildId)",
+        ...(input.expectedPointer
+          ? {
+              ExpressionAttributeNames: { "#revision": "revision" },
+              ExpressionAttributeValues: marshall({
+                ":revision": input.expectedPointer.revision,
+              }),
+            }
+          : {}),
+      },
+    },
+  ]);
+}
+function renewalRecoveryFence(guildId: string): ConditionCheck {
+  return {
+    TableName: tableName("GuildSubscriptionTable"),
+    Key: marshall({ guildId: renewalRecoveryCurrentKey(guildId) }),
+    ConditionExpression: "attribute_not_exists(guildId) OR #blocking = :no",
+    ExpressionAttributeNames: { "#blocking": "blocking" },
+    ExpressionAttributeValues: marshall({ ":no": false }),
+  };
+}
+export async function listDueRenewalRecoveries(input: {
+  mode: "test" | "live";
+  now: number;
+  limit: number;
+  cursor?: string;
+}): Promise<{ keys: string[]; cursor?: string }> {
+  const cursor = readRenewalRecoveryCursor(input.cursor);
+  if (cursor && cursor.recoveryQueue !== input.mode)
+    throw new Error("Renewal cursor mode mismatch");
+  const response = await dynamoDbClient.send(
+    new QueryCommand({
+      TableName: tableName("GuildSubscriptionTable"),
+      IndexName: RENEWAL_RECOVERY_DUE_INDEX,
+      KeyConditionExpression: "recoveryQueue = :mode AND recoveryDueAt <= :now",
+      ExpressionAttributeValues: marshall({
+        ":mode": input.mode,
+        ":now": input.now,
+      }),
+      Limit: input.limit,
+      ...(cursor ? { ExclusiveStartKey: marshall(cursor) } : {}),
+    }),
+  );
+  return {
+    keys: (response.Items ?? []).map((item) =>
+      z.string().parse(unmarshall(item).guildId),
+    ),
+    ...(response.LastEvaluatedKey
+      ? {
+          cursor: writeRenewalRecoveryCursor(
+            renewalRecoveryCursorSchema.parse(
+              unmarshall(response.LastEvaluatedKey),
+            ),
+          ),
+        }
+      : {}),
+  };
 }

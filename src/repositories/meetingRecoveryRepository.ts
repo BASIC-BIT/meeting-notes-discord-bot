@@ -29,6 +29,8 @@ import {
   checkpointObjectSchema,
 } from "../types/recordingCheckpoint";
 
+import { notesDeliveryTimingSchema } from "../types/meetingNotesTiming";
+
 const LEASE_SECONDS = 30;
 const SCAN_PAGE_SIZE = 100;
 const OBSERVED_FIELDS = [
@@ -55,6 +57,7 @@ const OBSERVED_FIELDS = [
   "summaryMessageId",
   "notesMessageIds",
   "notesChannelId",
+  "notesDeliveryTiming",
 ] as const;
 function fieldsSnapshot(record: object, fields: readonly string[]) {
   const entries = Object.entries(record);
@@ -230,7 +233,28 @@ type RecoveryPatch = Parameters<
   RecoveryRepository["updateRecordingRecovery"]
 >[1];
 const stages = ["verification", "transcription", "notes", "delivery", "export"];
+function validateRecoveryNotesTiming(
+  claim: RecoveryClaim,
+  patch: RecoveryPatch,
+) {
+  if (patch.notesDeliveryTiming !== undefined) {
+    const next = notesDeliveryTimingSchema.parse(patch.notesDeliveryTiming);
+    const prior = notesDeliveryTimingSchema.safeParse(
+      claim.history.notesDeliveryTiming,
+    );
+    if (
+      prior.success &&
+      (next.firstAcknowledgedAt !== prior.data.firstAcknowledgedAt ||
+        next.path !== prior.data.path ||
+        (prior.data.kind === "complete" &&
+          (next.kind !== "complete" ||
+            next.completeAcknowledgedAt !== prior.data.completeAcknowledgedAt)))
+    )
+      throw new Error("Acknowledged notes timing cannot be replaced");
+  }
+}
 function validateRecoveryPatch(claim: RecoveryClaim, patch: RecoveryPatch) {
+  validateRecoveryNotesTiming(claim, patch);
   if (patch.captureCoverage)
     captureCoverageSummarySchema.parse(patch.captureCoverage);
   if (patch.recovery) {

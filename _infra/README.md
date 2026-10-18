@@ -519,6 +519,69 @@ Turning the renewal-action flag off stops new provider writes, including retries
 
 Publish the updated Privacy Policy and What's New notice before lifecycle capture is enabled. Baseline reconciliation and private invoice receipts run independently of capture. A first observation is not a historical cancellation. Invoice deduplication markers are eligible for deletion after 400 days; event capture is best effort, not a financial audit trail. Verify actual Sandbox event rows before production rollout, and keep saved insight configuration separate from code verification.
 
+### Renewal payment grace
+
+`STRIPE_RENEWAL_GRACE_ENABLED` defaults to `false`. It is independent of
+reactivation, plan switching and lifecycle analytics. Prepare the recovery index
+and prove complete paid-period coverage before enabling it. Keep provider
+credentials, account IDs, deployment identifiers and full audit reports in the
+private operations workspace described in the repository's `AGENTS.md`.
+
+1. Keep the environment-scoped GitHub variable
+   `TFVAR_STRIPE_RENEWAL_GRACE_ENABLED=false`. Review and apply a saved Terraform
+   plan that adds `RenewalRecoveryDueIndex`, its query permission and the
+   subscription table's `dynamodb:DescribeTable` permission. Wait for the index to
+   become `ACTIVE`.
+2. Deploy the intended backend image with grace disabled. Terraform apply creates
+   a task definition, but the service ignores task-definition drift. A subsequent
+   backend deployment must move the service to that definition. Verify the exact
+   AWS environment, provider account and mode, running image digest, and flag.
+3. Obtain a normal-writer record from that deployed API image through an
+   authorized paid-subscription reconciliation. It must carry
+   `writerVersion=renewal-grace-v1` and the actual ECS task ARN and image digest.
+   An imported record or a simulated witness cannot establish deployment
+   readiness. If there is no eligible paid subscription, arrange an authorized
+   fixture before continuing.
+4. Run the bounded audit below. It is read-only by default. Set each variable
+   from the reviewed environment's private owner note. The example uses Sandbox
+   provider mode; a production run needs its own scope and authorization.
+
+   ```bash
+   yarn ts-node scripts/billing-renewal-recovery.ts \
+     --account "$STRIPE_ACCOUNT_ID" --mode test \
+     --report "$PRIVATE_REPORT_PATH" --max-pages 20 \
+     --cluster "$ECS_CLUSTER_ARN" --service "$ECS_SERVICE_ARN" \
+     --container "$ECS_CONTAINER_NAME" --image "$API_IMAGE_DIGEST"
+   ```
+
+5. With enforcement still disabled, repeat the command with `--apply` to write
+   owned DynamoDB coverage records. It does not edit Stripe or enable grace.
+   Require a successful exit and a private report with `coverageReady=true`,
+   `enumeration=complete`, `indexActive=true`, `writerVerified=true`, and only
+   `covered` or `ignored` outcomes. Readiness includes two complete traversals and
+   an exact current deployed-writer check. Unpaid trials without paid history are
+   ignored; first-payment failures receive no renewal grace. Applied runs exit
+   nonzero if any prerequisite is missing, including an inactive index or
+   unverified writer.
+6. If the page bound or a failure leaves the report incomplete, resume with
+   `--resume` and the same account, mode, report and apply scope. Preserve its
+   cursor and phase. A completed but unready audit needs correction and a fresh
+   report, rather than resuming its completed cursor. Keep enforcement off while
+   resolving provider errors, source drift or a retired writer witness.
+7. After accepting coverage and the environment's rollout gate, set
+   `TFVAR_STRIPE_RENEWAL_GRACE_ENABLED=true`, review and apply the resulting saved
+   plan, then deploy the backend. Verify the running task's environment and image
+   before exercising an authorized renewal failure. Check the saved deadline,
+   original-payer retry/cancel flow, preserved unrelated charges and hosted expiry.
+   Native test clocks or local DynamoDB do not replace signed-in hosted
+   acceptance. Sandbox's first activation also follows
+   [the controlled bootstrap procedure](../docs/sandbox-bootstrap.md).
+
+To stop new grace adoption, set the variable back to `false`, apply and deploy.
+Already accepted recoveries continue through their original deadline and durable
+cleanup. Turning the flag off does not remove financial fences or restore expired
+access. Preserve their records and reconcile them through the recovery path.
+
 ## Sandbox backend deployment identity
 
 Sandbox backend deployments use the Terraform-managed GitHub OIDC role. Its trust requires
