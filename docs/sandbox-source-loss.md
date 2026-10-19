@@ -8,6 +8,8 @@ Use the existing Sandbox Deployment Identity workflow on an independently review
 
 After reviewing the fresh packet, select `continuation_action=recover-source-loss` with `continuation_binding_sha256` set to that checksum. The existing `sandbox` environment approval and deployment concurrency group apply. Workflow reruns, mixed bootstrap operations and missing checksums refuse before role assumption. Use a new workflow run, never replay an uncertain operation.
 
+Stopped-task records have a limited provider retention window. If the exact source lookup becomes `MISSING`, this executor is unavailable and a separately reviewed procedure is required. Historical receipts do not replace the fresh native check.
+
 The executor verifies the actual OIDC session and Sandbox account/resource route. It requires native `STOPPED` for the exact source task. `MISSING`, a stale heartbeat or an empty target group alone cannot substitute. The service must have one exact protected, ready candidate, no pending replacement, an empty source group, and the original acknowledged source listener action. The immutable candidate definition must retain Stripe test mode and disabled intro-offer, subscription-transition and renewal-grace gates. Existing renewal-reactivation configuration is included in the reviewed binding and remains unchanged.
 
 Admission and the durable receipt commit atomically through conditional DynamoDB operations. The candidate must then publish its own fresh heartbeat and readiness at the new generation. Routing uses the existing submitted-request fence, one listener call, and exact acknowledgment. Authority, native identities, protection, target health and the expected source listener action are checked again before submission.
@@ -20,7 +22,9 @@ The operator receipt uses `SOURCELOSS#<originalRunToken>` / `RECOVERY` in Deploy
 
 The receipt progresses through `admission_transferred`, `forward_submitted` and `availability_restored`. Its settlement remains `lost_owner_settlement_pending`, with reason `incomplete_durable_effect_ledger`. No automatic `source_loss_settled` transition exists. The original deployment stays `promoting` or `promoted`; its source runtime receives no fabricated retirement acknowledgment.
 
-Metadata scans retain source-attributed claims, history dispositions, processing claims and voice guards, with complete pagination. The receipt records that dated snapshot. Scans exclude meeting content and raw command result/error bodies. Empty scans cannot recover the stopped runtime's in-memory effect acknowledgments. Completed personal processing can also precede ancillary export. The deploy role lacks reads for some ancillary ledgers; expanding that role would not reconstruct the lost evidence.
+Metadata scans retain source-attributed claims, history dispositions, processing claims and voice guards, with complete pagination. The receipt records that dated snapshot. Scans exclude meeting content and raw command result/error bodies. Empty scans cannot recover the stopped runtime's in-memory effect acknowledgments. Completed personal processing can also precede ancillary export. Each scan is bounded to 100 pages of 100 items and at most 100 source-owned rows per table. Larger or incomplete results refuse recovery. The snapshot records its collection time and may precede the fresh admission inspection; it is observational and does not authorize settlement.
+
+The deploy role lacks reads for some ancillary ledgers; expanding that role would not reconstruct the lost evidence.
 
 An unknown listener result leaves `forward_submitted` unresolved. Intended weights observed later do not authorize another listener request or completion. A lost DynamoDB response can be accepted only through exact readback of the atomic Control and receipt state.
 

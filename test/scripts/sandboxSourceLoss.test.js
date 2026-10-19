@@ -152,6 +152,16 @@ test("conditional Control race cannot be swallowed as an uncertain applied write
   ).toHaveLength(0);
 });
 
+async function expectFencedRouting(f) {
+  await expect(
+    recoverSandbox({ ...f.options, mode: "recover" }),
+  ).rejects.toThrow();
+  expect(f.loss.receipt.stage).toBe("forward_submitted");
+  expect(
+    writes(f).filter((c) => c.operation === "modify-listener"),
+  ).toHaveLength(0);
+}
+
 test("foreign listener appearing after submitted fence is preserved, never overwritten", async () => {
   const f = await sourceLossFixture();
   await reviewed(f);
@@ -161,13 +171,7 @@ test("foreign listener appearing after submitted fence is preserved, never overw
         { Type: "redirect", RedirectConfig: { Host: "foreign.example" } },
       ];
   };
-  await expect(
-    recoverSandbox({ ...f.options, mode: "recover" }),
-  ).rejects.toThrow();
-  expect(f.loss.receipt.stage).toBe("forward_submitted");
-  expect(
-    writes(f).filter((c) => c.operation === "modify-listener"),
-  ).toHaveLength(0);
+  await expectFencedRouting(f);
 });
 
 test.each([
@@ -252,11 +256,5 @@ test("slow native reads cannot outlive candidate proof immediately before routin
       f.loss.clock += 31;
     return result;
   });
-  await expect(
-    recoverSandbox({ ...f.options, mode: "recover" }),
-  ).rejects.toThrow();
-  expect(f.loss.receipt.stage).toBe("forward_submitted");
-  expect(
-    writes(f).filter((c) => c.operation === "modify-listener"),
-  ).toHaveLength(0);
+  await expectFencedRouting(f);
 });
