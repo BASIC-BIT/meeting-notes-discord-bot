@@ -3,12 +3,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import ts from "typescript";
+import { createCommandRegistrationContext } from "../fixtures/botCommandRegistration";
 import {
-  ChannelType,
   MessageFlags,
   REST,
-  Routes,
-  SlashCommandBuilder,
   type ButtonInteraction,
   type ChannelSelectMenuInteraction,
   type ChatInputCommandInteraction,
@@ -174,29 +172,7 @@ function executeBot(
 
 test("retired_command_is_not_registered even when installer DMs are enabled", async () => {
   const put = jest.spyOn(REST.prototype, "put").mockResolvedValue([]);
-  const command = new SlashCommandBuilder()
-    .setName("fixture")
-    .setDescription("Fixture");
-  const context = vm.createContext({
-    SlashCommandBuilder,
-    ChannelType,
-    REST,
-    Routes,
-    TOKEN: "fake",
-    CLIENT_ID: "bot-1",
-    config: { server: { onboardingEnabled: true }, chatTts: { maxChars: 100 } },
-    TTS_VOICE_CHOICES: [{ name: "Alloy", value: "alloy" }],
-    TTS_PREFIX_MODE_CHOICES: [{ name: "Default", value: "default" }],
-    MIN_TTS_VOLUME_PERCENT: 0,
-    MAX_TTS_VOLUME_PERCENT: 200,
-    billingCommand: command,
-    dismissAutoRecordCommand: command,
-    startMeetingContextCommand: command,
-    onboardCommand: new SlashCommandBuilder()
-      .setName("onboard")
-      .setDescription("Old wizard"),
-    console: { log: jest.fn(), error: jest.fn() },
-  });
+  const context = createCommandRegistrationContext({ onboardingEnabled: true });
   try {
     await executeBot(
       ["setupApplicationCommands"],
