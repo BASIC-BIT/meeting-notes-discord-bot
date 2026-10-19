@@ -417,6 +417,12 @@ async function collectSandboxObservation(options) {
           r.readiness?.expiresAt <= now / 1000,
       ).length,
       sourceLoss: {
+        historicalCarryforwards: runtimes.filter(
+          (r) =>
+            r.recordType === "historical_deployment_carryforward" &&
+            r.version === 1 &&
+            r.settlement === "lost_owner_settlement_pending",
+        ).length,
         retainedTerminalProofs: runtimes.filter(
           (r) =>
             r.recordType === "source_loss_recovery" &&

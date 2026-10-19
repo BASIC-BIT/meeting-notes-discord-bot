@@ -644,7 +644,7 @@ test("a non-complete introduction remains incomplete after bootstrap promotion",
   expect((await f.collect()).runtime.deploymentIncomplete).toBe(true);
 });
 
-test("source-loss availability does not hide pending settlement or complete deployment", async () => {
+test("historical carryforward does not hide pending source settlement", async () => {
   const f = observationFixture();
   f.data.runtimes.push({
     pk: "SOURCELOSS#run",
@@ -653,10 +653,18 @@ test("source-loss availability does not hide pending settlement or complete depl
     stage: "availability_restored",
     settlement: "lost_owner_settlement_pending",
   });
+  f.data.runtimes.push({
+    pk: "CARRYFORWARD#approved",
+    sk: "ARCHIVE",
+    recordType: "historical_deployment_carryforward",
+    version: 1,
+    settlement: "lost_owner_settlement_pending",
+  });
   const result = await f.collect();
   expect(result.runtime.sourceLoss).toMatchObject({
     availabilityRestored: 1,
     settlementPending: 1,
+    historicalCarryforwards: 1,
   });
   expect(result.runtime.deploymentIncomplete).toBe(true);
 });

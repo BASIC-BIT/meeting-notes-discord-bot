@@ -1,8 +1,6 @@
 /** @jest-environment node */
 import { randomUUID } from "node:crypto";
 import {
-  DynamoDBClient,
-  CreateTableCommand,
   DeleteTableCommand,
   PutItemCommand,
   GetItemCommand,
@@ -14,15 +12,12 @@ import {
   type TransactWriteItemsCommandInput,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
+import { localControlTable } from "./fixtures/localControlTable";
 import { recoverRetainedSandbox } from "../../scripts/deployment/recover-retained-sandbox.cjs";
 import { retainedSourceLossFixture } from "./fixtures/retainedSourceLossFixture";
 import { sourceLossFixture } from "./fixtures/sourceLossFixture";
 import { recoverSandbox } from "../../scripts/deployment/recover-sandbox.cjs";
-const client = new DynamoDBClient({
-  endpoint: process.env.DEPLOYMENT_TEST_DYNAMODB_ENDPOINT,
-  region: "local",
-  credentials: { accessKeyId: "dummy", secretAccessKey: "dummy" },
-});
+const { client, createTable } = localControlTable();
 afterAll(() => client.destroy());
 test.each([
   "known",
@@ -57,20 +52,7 @@ test.each([
       );
       return result.Item ? unmarshall(result.Item) : undefined;
     };
-    await client.send(
-      new CreateTableCommand({
-        TableName: table,
-        BillingMode: "PAY_PER_REQUEST",
-        KeySchema: ["pk", "sk"].map((AttributeName, index) => ({
-          AttributeName,
-          KeyType: index === 0 ? "HASH" : "RANGE",
-        })),
-        AttributeDefinitions: ["pk", "sk"].map((AttributeName) => ({
-          AttributeName,
-          AttributeType: "S",
-        })),
-      }),
-    );
+    await createTable(table);
     try {
       await put(f.state.ctl);
       await put(f.state.rows.old);
