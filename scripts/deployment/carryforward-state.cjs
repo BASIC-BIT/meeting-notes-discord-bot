@@ -191,6 +191,8 @@ async function commitCarryforward({ aws, inspector, claim }) {
   }
 }
 module.exports = {
+  authorityFields,
+  expectedFields,
   archiveSchema,
   controlAuthority,
   buildCarryforward,

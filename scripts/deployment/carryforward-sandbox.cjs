@@ -1,13 +1,15 @@
 "use strict";
 const assert = require("node:assert/strict");
 const {
-  awsCli,
-  createCoordinator,
-  configuration,
-} = require("./coordinator.cjs");
-const { assertSandboxIdentity } = require("./assert-sandbox-identity.cjs");
+  assertNoEndpointOverride,
+  authenticateOperation,
+  guardedCoordinator,
+  operationOptions,
+  awaitSourceRefresh,
+  assertPreservedHistory,
+} = require("./sandbox-operation.cjs");
+const { createCoordinator, configuration } = require("./coordinator.cjs");
 const { readCarryforwardManifest } = require("./carryforward-manifest.cjs");
-const { createWriterInventory } = require("./carryforward-writers.cjs");
 const { createCarryforwardAuthority } = require("./carryforward-authority.cjs");
 const {
   createCarryforwardInspection,
@@ -17,43 +19,27 @@ const {
   commitCarryforward,
 } = require("./carryforward-state.cjs");
 const { runRecoveryCli } = require("./recover-sandbox.cjs");
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function carryforwardSandbox(options = {}) {
   const env = options.env ?? process.env,
     now = options.now ?? (() => Math.floor(Date.now() / 1000));
-  assert.ok(
-    !Object.keys(env).some(
-      (key) => key.startsWith("AWS_ENDPOINT_URL") && env[key],
-    ),
-  );
+  assertNoEndpointOverride(env);
   assert.ok(["inspect", "carryforward"].includes(options.mode));
   const { manifest, hash, runToken } = readCarryforwardManifest(env, now);
-  assert.equal(env.EXPECTED_SESSION_NAME, "chronote-sandbox-" + runToken);
-  const aws = options.aws ?? awsCli;
-  const actor = await aws("sts", "get-caller-identity", {});
-  assertSandboxIdentity(actor, env);
-  const types =
-    options.types ?? require("../../dist/types/deploymentControl.js");
-  const inventory = options.writerInventory ?? createWriterInventory({ env });
-  await inventory.assertExclusive();
-  const configEnv = {
-    ...env,
-    DEPLOYMENT_RUN_TOKEN: runToken,
-    DEPLOYMENT_CANDIDATE_ID: manifest.operationId,
-    CANDIDATE_IMAGE: manifest.image,
-  };
-  const config = configuration(configEnv);
-  const base = {
-    ...options,
-    env: configEnv,
+  const { aws, actor, types, inventory } = await authenticateOperation(
+    options,
+    env,
+    runToken,
+  );
+  const base = operationOptions(options, {
+    env,
+    manifest,
+    runToken: runToken,
     aws,
     types,
     now,
-    taskTemplate: {
-      arn: manifest.templateArn,
-      preparedSha256: manifest.preparedDefinitionSha256,
-    },
-  };
+  });
+  const configEnv = base.env,
+    config = configuration(configEnv);
   const coordinator = createCoordinator(base);
   const inspector = createCarryforwardInspection({
     ...base,
@@ -91,13 +77,6 @@ async function carryforwardSandbox(options = {}) {
     builders: options.builders,
   });
   await commitCarryforward({ aws, inspector, claim });
-  const mutations = new Set([
-    "update-item",
-    "transact-write-items",
-    "register-task-definition",
-    "update-service",
-    "modify-listener",
-  ]);
   const authority = createCarryforwardAuthority({
     aws,
     inspector,
@@ -110,32 +89,15 @@ async function carryforwardSandbox(options = {}) {
     claim,
     recovery: fresh.recovery,
   });
-  async function guardedAws(service, operation, input) {
-    if (mutations.has(operation)) {
-      await inventory.assertExclusive();
-      await authority.assertBeforeWrite(operation, input);
-    }
-    return aws(service, operation, input);
-  }
-  const deployment = createCoordinator({ ...base, aws: guardedAws });
-  let refreshed = false;
-  for (let attempt = 0; attempt < 60; attempt++) {
-    try {
-      const serving = await deployment.inspectServing();
-      assert.deepEqual(serving.source, fresh.source);
-      assert.equal(
-        serving.control.coordinatorEpoch,
-        claim.next.coordinatorEpoch,
-      );
-      refreshed = true;
-      break;
-    } catch {
-      await (options.sleep ?? sleep)(1000);
-    }
-  }
-  assert.ok(
-    refreshed,
-    "Recovered source did not refresh at carryforward epoch; preserve archive",
+  const deployment = guardedCoordinator(base, async (operation, input) => {
+    await inventory.assertExclusive();
+    await authority.assertBeforeWrite(operation, input);
+  });
+  await awaitSourceRefresh(
+    deployment,
+    fresh.source,
+    claim.next.coordinatorEpoch,
+    options.sleep,
   );
   assert.equal((await deployment.prepare()).kind, "warming");
   assert.equal((await deployment.promote()).kind, "promoted");
@@ -143,14 +105,10 @@ async function carryforwardSandbox(options = {}) {
   const completed = await inspector.control();
   assert.equal(completed.coordinatorToken, runToken);
   assert.equal(completed.deployment.phase, "complete");
-  assert.deepEqual(
-    await inspector.read(inspector.archiveKey, "ARCHIVE"),
-    claim.archive,
-  );
-  assert.deepEqual(
-    await inspector.read(fresh.recovery.pk, "RECOVERY"),
-    fresh.recovery,
-  );
+  await assertPreservedHistory(inspector, {
+    archive: claim.archive,
+    recovery: fresh.recovery,
+  });
   return {
     kind: "carryforward_complete",
     settlement: "lost_owner_settlement_pending",

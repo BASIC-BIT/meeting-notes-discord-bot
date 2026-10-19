@@ -178,6 +178,6 @@ function createCarryforwardInspection({
     };
     return { ...result, binding, bindingSha256: bindingHash(binding) };
   }
-  return { read, control, inspect, archiveKey };
+  return { read, control, inspect, archiveKey, template };
 }
 module.exports = { createCarryforwardInspection };

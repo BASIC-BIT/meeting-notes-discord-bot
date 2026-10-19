@@ -96,6 +96,13 @@ function createWriterInventory({ env, fetchImpl = fetch }) {
       statuses: [...statuses],
     };
   }
-  return { assertExclusive };
+  async function originalExecution(token) {
+    assert.match(token, /^\d+-[1-9]\d*$/);
+    const [id, attempt] = token.split("-");
+    return readPage(
+      `https://api.github.com/repos/Chronote-gg/Chronote/actions/runs/${id}/attempts/${attempt}`,
+    );
+  }
+  return { assertExclusive, originalExecution };
 }
 module.exports = { createWriterInventory };

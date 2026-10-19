@@ -2,13 +2,8 @@
 import { randomUUID } from "node:crypto";
 import {
   DeleteTableCommand,
-  GetItemCommand,
-  PutItemCommand,
-  UpdateItemCommand,
-  TransactWriteItemsCommand,
   type TransactWriteItemsCommandInput,
 } from "@aws-sdk/client-dynamodb";
-import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
 import { localControlTable } from "./fixtures/localControlTable";
 import { carryforwardFixture } from "./fixtures/carryforwardFixture";
 import { carryforwardSandbox } from "../../scripts/deployment/carryforward-sandbox.cjs";
@@ -16,7 +11,7 @@ import {
   buildCarryforward,
   commitCarryforward,
 } from "../../scripts/deployment/carryforward-state.cjs";
-const { client, createTable } = localControlTable();
+const { client, createTable, records, transact } = localControlTable();
 afterAll(() => client.destroy());
 test.each([
   "success",
@@ -52,18 +47,7 @@ test.each([
     builders: f.options.builders,
   });
   const table = "carryforward-" + randomUUID();
-  const put = (row: object) =>
-    client.send(new PutItemCommand({ TableName: table, Item: marshall(row) }));
-  const read = async (pk: string, sk: string) => {
-    const response = await client.send(
-      new GetItemCommand({
-        TableName: table,
-        Key: marshall({ pk, sk }),
-        ConsistentRead: true,
-      }),
-    );
-    return response.Item ? unmarshall(response.Item) : undefined;
-  };
+  const { put, read, invalidateReadiness, progress } = records(table);
   const voice = {
     pk: "VOICE#guild",
     sk: "STATE",
@@ -83,39 +67,19 @@ test.each([
     if (scenario === "recovery_race")
       await put({ ...f.carry.recovery, updatedAt: 999 });
     if (scenario === "source_proof_race")
-      await put({
-        ...f.state.rows.old,
-        readiness: { ...f.state.rows.old.readiness, dependenciesReady: false },
-      });
+      await invalidateReadiness(f.state.rows.old.sk);
     if (scenario === "already_consumed") await put(claim.archive);
     if (scenario === "cursor_progress")
-      await client.send(
-        new UpdateItemCommand({
-          TableName: table,
-          Key: marshall({ pk: "ENV", sk: "CONTROL" }),
-          UpdateExpression: "SET recoveryScanCursor = :cursor",
-          ExpressionAttributeValues: marshall({
-            ":cursor": { guildId: "guild", channelId_timestamp: "progress" },
-          }),
-        }),
-      );
+      await progress({ guildId: "guild", channelId_timestamp: "progress" });
     const aws = async (
       _service: string,
       operation: string,
       input: TransactWriteItemsCommandInput,
     ) => {
       expect(operation).toBe("transact-write-items");
-      const request = structuredClone(input);
-      for (const item of request.TransactItems!) {
-        if (item.Update) item.Update.TableName = table;
-        if (item.Put) item.Put.TableName = table;
-        if (item.ConditionCheck) item.ConditionCheck.TableName = table;
-      }
       if (scenario === "before_commit")
         throw new Error("request not committed");
-      const response = await client.send(
-        new TransactWriteItemsCommand(request),
-      );
+      const response = await transact(table, input);
       if (scenario === "wrong_archive") {
         await put({ ...claim.archive, bindingSha256: "0".repeat(64) });
         throw new Error("uncertain response");

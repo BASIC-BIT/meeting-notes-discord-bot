@@ -8,6 +8,7 @@ const {
   runtimeMode,
   taskDefinitionInput,
   candidateDefinition,
+  assertPreparedTaskDefinition,
 } = require("./task-definition.cjs");
 const {
   CoordinatorFailure,
@@ -402,14 +403,11 @@ function createCoordinator(options = {}) {
         if (!arn) throw error;
       }
     }
-    if (
-      options.taskTemplate &&
-      bindingHash(taskDefinitionInput(await definition(arn))) !==
-        options.taskTemplate.preparedSha256
-    )
-      throw new CoordinatorFailure(
-        "configuration_invalid",
-        "Registered task differs from reviewed template",
+    if (options.taskTemplate)
+      assertPreparedTaskDefinition(
+        taskDefinitionInput(await definition(arn)),
+        candidateDefinition(await definition(options.taskTemplate.arn), config),
+        options.taskTemplate.preparedSha256,
       );
     return phase(ctl, "preparing", { taskDefinition: arn });
   }

@@ -14,6 +14,7 @@ function createCarryforwardAuthority({
   runToken,
   claim,
   recovery,
+  fixedTaskDefinition,
 }) {
   const proof = createRuntimeProof({ aws, config, types, now, diagnostic: {} });
   const routing = createRouting({
@@ -26,6 +27,8 @@ function createCarryforwardAuthority({
     assert.equal(current.coordinatorToken, runToken);
     assert.equal(current.coordinatorEpoch, claim.next.coordinatorEpoch);
     const d = current.deployment;
+    if (fixedTaskDefinition)
+      assert.equal(d.taskDefinition, fixedTaskDefinition);
     for (const key of [
       "runToken",
       "cluster",

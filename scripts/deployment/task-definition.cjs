@@ -1,4 +1,6 @@
 "use strict";
+const assert = require("node:assert/strict");
+const { bindingHash } = require("./binding-hash.cjs");
 const { CoordinatorFailure } = require("./coordinator-aws.cjs");
 function taskContainer(definition, tablePrefix) {
   const matches = definition.containerDefinitions.filter((container) =>
@@ -78,9 +80,32 @@ function candidateDefinition(definition, config) {
   });
   return next;
 }
+function assertPreparedTaskDefinition(actual, prepared, rawSha256) {
+  assert.equal(bindingHash(prepared), rawSha256);
+  function environmentOrderOnly(definition) {
+    const next = structuredClone(definition);
+    for (const container of next.containerDefinitions) {
+      if (!container.environment) continue;
+      const names = container.environment.map((entry) => entry.name);
+      assert.ok(names.every((name) => typeof name === "string" && name.length));
+      assert.equal(
+        new Set(names).size,
+        names.length,
+        "Duplicate environment names",
+      );
+      container.environment.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return next;
+  }
+  assert.deepEqual(
+    environmentOrderOnly(actual),
+    environmentOrderOnly(prepared),
+  );
+}
 module.exports = {
   taskContainer,
   runtimeMode,
   taskDefinitionInput,
   candidateDefinition,
+  assertPreparedTaskDefinition,
 };
