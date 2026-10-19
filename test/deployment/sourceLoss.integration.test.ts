@@ -14,6 +14,8 @@ import {
   type TransactWriteItemsCommandInput,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
+import { recoverRetainedSandbox } from "../../scripts/deployment/recover-retained-sandbox.cjs";
+import { retainedSourceLossFixture } from "./fixtures/retainedSourceLossFixture";
 import { sourceLossFixture } from "./fixtures/sourceLossFixture";
 import { recoverSandbox } from "../../scripts/deployment/recover-sandbox.cjs";
 const client = new DynamoDBClient({
@@ -22,10 +24,24 @@ const client = new DynamoDBClient({
   credentials: { accessKeyId: "dummy", secretAccessKey: "dummy" },
 });
 afterAll(() => client.destroy());
-test.each(["known", "lost_ack", "control_race", "proof_race"])(
+test.each([
+  "known",
+  "lost_ack",
+  "control_race",
+  "proof_race",
+  "retained_known",
+  "retained_lost_ack",
+  "retained_control_race",
+  "retained_proof_race",
+])(
   "native atomic admission/receipt and preserved voice guard: %s",
   async (scenario) => {
-    const f = await sourceLossFixture();
+    const retained = scenario.startsWith("retained_");
+    const f = await (retained
+      ? retainedSourceLossFixture()
+      : sourceLossFixture());
+    if (retained) f.loss.missing = true;
+    const recover = retained ? recoverRetainedSandbox : recoverSandbox;
     const table = `source-loss-${randomUUID()}-DeploymentControlTable`;
     const put = (row: object) =>
       client.send(
@@ -76,7 +92,7 @@ test.each(["known", "lost_ack", "control_race", "proof_race"])(
           if (item.Put) item.Put.TableName = table;
           if (item.ConditionCheck) item.ConditionCheck.TableName = table;
         }
-        if (scenario === "control_race" && changes === 0)
+        if (scenario.endsWith("control_race") && changes === 0)
           await client.send(
             new UpdateItemCommand({
               TableName: table,
@@ -85,7 +101,7 @@ test.each(["known", "lost_ack", "control_race", "proof_race"])(
               ExpressionAttributeValues: marshall({ ":foreign": 99 }),
             }),
           );
-        if (scenario === "proof_race" && changes === 1)
+        if (scenario.endsWith("proof_race") && changes === 1)
           await client.send(
             new UpdateItemCommand({
               TableName: table,
@@ -98,7 +114,7 @@ test.each(["known", "lost_ack", "control_race", "proof_race"])(
           new TransactWriteItemsCommand(request),
         );
         changes++;
-        if (scenario === "lost_ack")
+        if (scenario.endsWith("lost_ack"))
           throw new Error("lost after native commit");
         return response;
       }
@@ -144,8 +160,8 @@ test.each(["known", "lost_ack", "control_race", "proof_race"])(
           );
         },
       };
-      const inspection = await recoverSandbox(options);
-      const recovering = recoverSandbox({
+      const inspection = await recover(options);
+      const recovering = recover({
         ...options,
         env: {
           ...options.env,
@@ -155,7 +171,7 @@ test.each(["known", "lost_ack", "control_race", "proof_race"])(
       });
       if (scenario.endsWith("race")) {
         await expect(recovering).rejects.toThrow();
-        expect(changes).toBe(scenario === "control_race" ? 0 : 1);
+        expect(changes).toBe(scenario.endsWith("control_race") ? 0 : 1);
         expect(await read("VOICE#guild", "STATE")).toEqual(voice);
         expect(await read("ENV", "RUNTIME#old")).toEqual(f.state.rows.old);
         expect(

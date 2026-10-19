@@ -243,6 +243,9 @@ async function collectSandboxObservation(options) {
     "supersededBy",
     "previousOperationId",
     "settlement",
+    "version",
+    "terminalProof.kind",
+    "terminalProof.nativeObservation",
   ]);
   const controls = await scan("MeetingControlCommandTable", [
     "queueStatus",
@@ -414,6 +417,18 @@ async function collectSandboxObservation(options) {
           r.readiness?.expiresAt <= now / 1000,
       ).length,
       sourceLoss: {
+        retainedTerminalProofs: runtimes.filter(
+          (r) =>
+            r.recordType === "source_loss_recovery" &&
+            r.version === 2 &&
+            r.terminalProof?.kind === "operator_retained_ecs_stop",
+        ).length,
+        sourceMissingAtAdmission: runtimes.filter(
+          (r) =>
+            r.recordType === "source_loss_recovery" &&
+            r.version === 2 &&
+            r.terminalProof?.nativeObservation === "MISSING",
+        ).length,
         availabilityRestored: runtimes.filter(
           (r) =>
             r.recordType === "source_loss_recovery" &&

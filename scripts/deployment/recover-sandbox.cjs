@@ -4,15 +4,19 @@ const { awsCli, configuration } = require("./coordinator.cjs");
 const { assertSandboxIdentity } = require("./assert-sandbox-identity.cjs");
 const {
   assertSandboxScope,
-  continuationBinding,
   bindingHash,
+  continuationBinding,
 } = require("./continue-sandbox.cjs");
 const { unmarshall, marshall } = require("@aws-sdk/util-dynamodb");
-const { createSourceLossInspection } = require("./source-loss-inspection.cjs");
+const {
+  createSourceLossInspection,
+  sourceLossBinding,
+} = require("./source-loss-inspection.cjs");
 const { inspectObligations } = require("./source-loss-obligations.cjs");
 const {
   controlUpdate,
   receiptWrite,
+  initialReceipt,
   promotion,
   candidateCheck,
   writeState,
@@ -58,20 +62,26 @@ async function recoverSandbox(options = {}) {
     env,
     types,
     now,
+    terminalProof: options.terminalProof,
   });
   const observed = await inspector.inspect();
+  assert.equal(
+    bindingHash(continuationBinding(original, observed.candidateIdentity)),
+    bindingHash(
+      continuationBinding(observed.control, observed.candidateIdentity),
+    ),
+  );
   const obligations = await inspectObligations({
     aws,
     tablePrefix: config.tablePrefix,
     source: d.outgoing,
     now,
   });
-  const binding = {
-    kind: "sandbox_source_loss",
-    version: 1,
-    ...continuationBinding(observed.control, observed.candidateIdentity),
-    terminal: observed.terminal,
-  };
+  const binding = sourceLossBinding(
+    observed.control,
+    observed.candidateIdentity,
+    observed.terminal,
+  );
   const hash = bindingHash(binding);
   if (options.mode === "inspect")
     return { kind: "inspection", bindingSha256: hash, binding, obligations };
@@ -80,34 +90,23 @@ async function recoverSandbox(options = {}) {
   // Revalidate outside uncertain-write handling: a refusal can never be swallowed as an applied write.
   const fresh = await inspector.inspect();
   assert.equal(
-    bindingHash({
-      ...binding,
-      ...continuationBinding(fresh.control, fresh.candidateIdentity),
-      terminal: fresh.terminal,
-    }),
+    bindingHash(
+      sourceLossBinding(fresh.control, fresh.candidateIdentity, fresh.terminal),
+    ),
     hash,
   );
   let ctl = fresh.control;
   const candidate = fresh.candidateIdentity;
   const admittedAt = now();
-  let receipt = {
-    pk: "SOURCELOSS#" + d.runToken,
-    sk: "RECOVERY",
-    recordType: "source_loss_recovery",
-    version: 1,
-    bindingSha256: hash,
-    runToken: d.runToken,
-    actorArn: actor.Arn,
-    source: d.outgoing,
+  let receipt = initialReceipt({
+    d,
     candidate,
-    stoppedAt: fresh.terminal.stoppedAt,
+    terminal: fresh.terminal,
     admittedAt,
-    stage: "admission_transferred",
-    settlement: "lost_owner_settlement_pending",
-    settlementReason: "incomplete_durable_effect_ledger",
+    actorArn: actor.Arn,
+    bindingSha256: hash,
     metadataAudit: obligations,
-    updatedAt: admittedAt,
-  };
+  });
   let next = {
     ...ctl,
     coordinatorExpiresAt: admittedAt + 180,
@@ -245,9 +244,8 @@ async function recoverSandbox(options = {}) {
     bindingSha256: hash,
   };
 }
-module.exports = { recoverSandbox };
-if (require.main === module) {
-  recoverSandbox({ mode: process.argv[2] })
+function runRecoveryCli(recover, mode, failureKind) {
+  return recover({ mode })
     .then((result) =>
       console.log(
         JSON.stringify({
@@ -260,10 +258,17 @@ if (require.main === module) {
     .catch(() => {
       console.error(
         JSON.stringify({
-          kind: "source_loss_recovery_failed",
+          kind: failureKind,
           action: "preserve_receipts_and_review_current_state",
         }),
       );
       process.exitCode = 1;
     });
 }
+module.exports = { recoverSandbox, runRecoveryCli };
+if (require.main === module)
+  runRecoveryCli(
+    recoverSandbox,
+    process.argv[2],
+    "source_loss_recovery_failed",
+  );

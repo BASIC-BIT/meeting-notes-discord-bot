@@ -63,8 +63,6 @@ export async function sourceLossFixture() {
     return {};
   }
   async function describeTasks(service, operation, input) {
-    if (state.missing && input.tasks.includes(f.oldIdentity.taskArn))
-      return { tasks: [], failures: [{ reason: "MISSING" }] };
     const response = await original(service, operation, input);
     for (const task of response.tasks) {
       task.group = "service:service";
@@ -74,6 +72,12 @@ export async function sourceLossFixture() {
         task.desiredStatus = state.sourceStatus;
         task.stoppedAt = new Date(999000).toISOString();
       }
+    }
+    if (state.missing && input.tasks.includes(f.oldIdentity.taskArn)) {
+      response.tasks = response.tasks.filter(
+        (task) => task.taskArn !== f.oldIdentity.taskArn,
+      );
+      response.failures = [{ arn: f.oldIdentity.taskArn, reason: "MISSING" }];
     }
     return response;
   }

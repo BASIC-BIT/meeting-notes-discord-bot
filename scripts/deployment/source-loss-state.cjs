@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const { marshall } = require("@aws-sdk/util-dynamodb");
 const { z } = require("zod");
 function receiptSchema(types) {
-  return z
+  const base = z
     .object({
       pk: z.string().startsWith("SOURCELOSS#"),
       sk: z.literal("RECOVERY"),
@@ -37,6 +37,53 @@ function receiptSchema(types) {
       updatedAt: z.number().int().nonnegative(),
     })
     .strict();
+  return z.discriminatedUnion("version", [
+    base,
+    base.extend({
+      version: z.literal(2),
+      terminalProof: z
+        .object({
+          kind: z.literal("operator_retained_ecs_stop"),
+          packetSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          originalSnapshotSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          capturedAt: z.string().datetime({ offset: true }),
+          provenance: z.literal("operator_captured_provider_response"),
+          nativeObservation: z.enum(["MISSING", "STOPPED"]),
+        })
+        .strict(),
+    }),
+  ]);
+}
+function initialReceipt({
+  d,
+  candidate,
+  terminal,
+  admittedAt,
+  actorArn,
+  bindingSha256,
+  metadataAudit,
+}) {
+  const evidence = terminal.terminalProof
+    ? { version: 2, terminalProof: terminal.terminalProof }
+    : { version: 1 };
+  return {
+    pk: "SOURCELOSS#" + d.runToken,
+    sk: "RECOVERY",
+    recordType: "source_loss_recovery",
+    ...evidence,
+    bindingSha256,
+    runToken: d.runToken,
+    actorArn,
+    source: d.outgoing,
+    candidate,
+    stoppedAt: terminal.stoppedAt,
+    admittedAt,
+    stage: "admission_transferred",
+    settlement: "lost_owner_settlement_pending",
+    settlementReason: "incomplete_durable_effect_ledger",
+    metadataAudit,
+    updatedAt: admittedAt,
+  };
 }
 function controlUpdate(table, previous, next) {
   return {
@@ -183,6 +230,7 @@ async function writeState({
 }
 module.exports = {
   receiptSchema,
+  initialReceipt,
   controlUpdate,
   receiptWrite,
   promotion,

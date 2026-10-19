@@ -293,6 +293,8 @@ test.each([
   "inspect",
   "inspect-source-loss",
   "recover-source-loss",
+  "inspect-retained-source-loss",
+  "recover-retained-source-loss",
 ])(
   "workflow rejects mixed bootstrap and %s input before authentication",
   (action) => {
@@ -311,10 +313,15 @@ test.each([
     const env = {
       ...process.env,
       CONTINUATION_ACTION: action,
-      CONTINUATION_BINDING_SHA256: ["continue", "recover-source-loss"].includes(
-        action,
-      )
+      CONTINUATION_BINDING_SHA256: [
+        "continue",
+        "recover-source-loss",
+        "recover-retained-source-loss",
+      ].includes(action)
         ? "a".repeat(64)
+        : "",
+      SOURCE_LOSS_TERMINAL_PROOF_SHA256: action.includes("retained")
+        ? "b".repeat(64)
         : "",
       GITHUB_RUN_ATTEMPT: "1",
       BOOTSTRAP_PHASE: "none",
@@ -325,6 +332,11 @@ test.each([
       { PROBE_WITHOUT_ENVIRONMENT: "true" },
       { GITHUB_RUN_ATTEMPT: "2" },
       { BOOTSTRAP_OPERATION_ID: "other" },
+      {
+        SOURCE_LOSS_TERMINAL_PROOF_SHA256: action.includes("retained")
+          ? ""
+          : "c".repeat(64),
+      },
     ]) {
       expect(
         spawnSync(process.execPath, ["-e", script], {

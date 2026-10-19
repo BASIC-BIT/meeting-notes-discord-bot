@@ -258,3 +258,22 @@ test("slow native reads cannot outlive candidate proof immediately before routin
   });
   await expectFencedRouting(f);
 });
+
+test("initial Control drift cannot leave stale source metadata in the recovery receipt", async () => {
+  const f = await sourceLossFixture();
+  const original = f.aws.getMockImplementation();
+  let first = true;
+  f.aws.mockImplementation(async (service, operation, input) => {
+    const response = await original(service, operation, input);
+    if (first && operation === "get-item") {
+      first = false;
+      f.state.ctl.coordinatorEpoch++;
+      f.state.rows.new.readiness.observedEpoch = f.state.ctl.coordinatorEpoch;
+    }
+    return response;
+  });
+  await expect(
+    recoverSandbox({ ...f.options, mode: "inspect" }),
+  ).rejects.toThrow();
+  expect(writes(f)).toEqual([]);
+});

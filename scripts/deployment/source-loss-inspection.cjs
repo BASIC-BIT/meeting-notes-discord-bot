@@ -7,7 +7,16 @@ const {
   CoordinatorFailure,
   listServiceTaskArns,
 } = require("./coordinator-aws.cjs");
-function createSourceLossInspection({ aws, config, env, types, now }) {
+const { continuationBinding } = require("./continue-sandbox.cjs");
+const { assertStoppedSource } = require("./source-task-proof.cjs");
+function createSourceLossInspection({
+  aws,
+  config,
+  env,
+  types,
+  now,
+  terminalProof,
+}) {
   const table = config.tablePrefix + "DeploymentControlTable";
   const read = async (pk, sk) => {
     const response = await aws("dynamodb", "get-item", {
@@ -39,26 +48,8 @@ function createSourceLossInspection({ aws, config, env, types, now }) {
       cluster: config.cluster,
       tasks: [d.outgoing.taskArn, candidate.taskArn],
     });
-    assert.ok(!result.failures?.length);
-    assert.equal(result.tasks?.length, 2);
-    const source = result.tasks.find(
-      (task) => task.taskArn === d.outgoing.taskArn,
-    );
-    const destination = result.tasks.find(
+    const destination = result.tasks?.find(
       (task) => task.taskArn === candidate.taskArn,
-    );
-    assert.equal(source?.lastStatus, "STOPPED");
-    assert.equal(source.desiredStatus, "STOPPED");
-    assert.equal(source.taskDefinitionArn, d.previousTaskDefinition);
-    assert.equal(source.group, "service:" + config.service);
-    assert.ok(
-      Number.isFinite(Date.parse(source.stoppedAt)) &&
-        Date.parse(source.stoppedAt) <= now() * 1000,
-    );
-    assert.equal(
-      source.containers?.find((c) => c.name === d.routing.containerName)
-        ?.imageDigest,
-      d.outgoing.imageDigest,
     );
     assert.equal(destination?.lastStatus, "RUNNING");
     assert.equal(destination.desiredStatus, "RUNNING");
@@ -69,7 +60,15 @@ function createSourceLossInspection({ aws, config, env, types, now }) {
         ?.imageDigest,
       candidate.imageDigest,
     );
-    return source.stoppedAt;
+    if (terminalProof)
+      return terminalProof.readSource(result, ctl, candidate, config);
+    assert.ok(!result.failures?.length);
+    assert.equal(result.tasks?.length, 2);
+    const source = result.tasks.find(
+      (task) => task.taskArn === d.outgoing.taskArn,
+    );
+    assertStoppedSource(source, d, config, now);
+    return { stoppedAt: source.stoppedAt };
   }
   async function billingFlags(d) {
     const { taskDefinition } = await aws("ecs", "describe-task-definition", {
@@ -128,11 +127,11 @@ function createSourceLossInspection({ aws, config, env, types, now }) {
     assert.equal(svc.taskDefinition, d.taskDefinition);
     const arns = await listServiceTaskArns(aws, config);
     assert.deepEqual(arns, [candidate.taskArn]);
-    const stoppedAt = await terminalTasks(ctl, candidate);
+    const terminal = await terminalTasks(ctl, candidate);
     const nativeProtectionExpiresAt = await proof.protectedTask(candidate);
     const revision = await routing.validateSourceLoss(ctl, svc, candidate);
     return {
-      stoppedAt,
+      ...terminal,
       candidateRevision: revision,
       billingFlags: flags,
       nativeProtectionExpiresAt,
@@ -197,6 +196,7 @@ function createSourceLossInspection({ aws, config, env, types, now }) {
       warm.workCounts &&
         Object.values(warm.workCounts).every((count) => count === 0),
     );
+    terminalProof?.assertOriginal(ctl, warm.identity);
     const old = await runtime(d.outgoing);
     assert.equal(old.role, "serving");
     assert.equal(old.authorizedGeneration, d.originalGeneration);
@@ -211,4 +211,13 @@ function createSourceLossInspection({ aws, config, env, types, now }) {
   }
   return { read, control, runtime, proof, routing, native, inspect };
 }
-module.exports = { createSourceLossInspection };
+function sourceLossBinding(control, candidateIdentity, terminal) {
+  return {
+    kind: terminal.terminalProof
+      ? "sandbox_retained_source_loss"
+      : "sandbox_source_loss",
+    ...continuationBinding(control, candidateIdentity),
+    terminal,
+  };
+}
+module.exports = { createSourceLossInspection, sourceLossBinding };
