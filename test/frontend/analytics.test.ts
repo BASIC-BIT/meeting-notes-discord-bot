@@ -194,3 +194,22 @@ test("redacts recording-limit URL values before automatic capture", () => {
   expect(decodeURIComponent(redacted)).not.toContain("untrusted-value");
   expect(decodeURIComponent(redacted)).not.toContain("also-untrusted");
 });
+
+test("redacts first-meeting targets in URLs, referrers, links and nested sign-in returns", () => {
+  const historyId = "333333333333333333#2026-10-19T12:00:00.000Z";
+  const serverId = "111111111111111111";
+  const guide = `https://chronote.gg/join?serverId=${serverId}&historyId=${encodeURIComponent(historyId)}`;
+  const meeting = `https://chronote.gg/portal/meetings/${serverId}/${encodeURIComponent(historyId)}`;
+  const payload = {
+    $current_url: guide,
+    $referrer: meeting,
+    elements: [{ attr__href: meeting }],
+    nested: `/auth/discord?redirect=${encodeURIComponent(guide)}`,
+    deeplyEncoded: `/auth/discord?redirect=${encodeURIComponent(`/auth/discord?redirect=${encodeURIComponent(meeting)}`)}`,
+  };
+  const redacted = JSON.stringify(redactDeep(payload));
+  expect(redacted).not.toContain(serverId);
+  expect(redacted).not.toContain("333333333333333333");
+  expect(redacted).toContain("/join");
+  expect(payload.$current_url).toBe(guide);
+});

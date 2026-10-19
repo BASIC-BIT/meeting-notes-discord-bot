@@ -31,6 +31,8 @@ type UseLibraryMeetingsResult = {
   tagOptions: string[];
   channelOptions: Array<{ value: string; label: string }>;
   channelNameMap: Map<string, string>;
+  hasAccessibleMeetings: boolean;
+  listReady: boolean;
   listLoading: boolean;
   listError: boolean;
   invalidateMeetingLists: () => Promise<void>;
@@ -48,7 +50,7 @@ export const useLibraryMeetings = (
       archivedOnly: params.archiveFilter === "archived",
       includeArchived: params.archiveFilter === "all",
     },
-    { enabled: Boolean(params.selectedGuildId) },
+    { enabled: Boolean(params.selectedGuildId), placeholderData: undefined },
   );
 
   const meetingRows = useMemo<MeetingSummaryRow[]>(
@@ -150,6 +152,13 @@ export const useLibraryMeetings = (
 
   return {
     filteredMeetings,
+    hasAccessibleMeetings: meetingRows.length > 0,
+    listReady:
+      Boolean(params.selectedGuildId) &&
+      meetingsQuery.isSuccess &&
+      !meetingsQuery.isPlaceholderData &&
+      !listLoading &&
+      !listError,
     tagOptions,
     channelOptions,
     channelNameMap,

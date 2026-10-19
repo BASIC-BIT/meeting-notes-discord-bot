@@ -21,6 +21,7 @@ let routeSearch: {
   conversationId?: string;
   messageId?: string;
   promo?: string;
+  historyId?: string;
   serverId?: string;
   plan?: string;
   interval?: string;
@@ -79,6 +80,7 @@ export const setRouteSearch = (search: {
   conversationId?: string;
   messageId?: string;
   promo?: string;
+  historyId?: string;
   serverId?: string;
   plan?: string;
   interval?: string;

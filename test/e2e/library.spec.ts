@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures";
 import { mockGuilds, mockLibrary } from "./mockData";
+import { mockFirstMeetingRequests } from "./firstMeetingMocks";
 
 test("library page shows meetings and drawer details (mock)", async ({
   page,
@@ -77,3 +78,37 @@ test("library page shows meetings and drawer details (mock)", async ({
     libraryPage.meetingRowByText(mockLibrary.meetingTitle),
   ).toBeVisible();
 });
+
+for (const width of [390, 768, 1280]) {
+  test(`empty server library at ${width}px shows selected example and scrolls`, async ({
+    page,
+  }) => {
+    await mockFirstMeetingRequests(page, {
+      "meetings.list": () => ({ meetings: [] }),
+    });
+    await page.setViewportSize({ width, height: 600 });
+    await page.goto(`/portal/server/${mockGuilds.ddm.id}/library`);
+    await expect(page.getByText("Your first meeting goes here.")).toBeVisible();
+    await expect(page.getByTestId("sample-summary")).toHaveCount(1);
+    await expect(
+      page.getByRole("link", { name: "Open Discord" }),
+    ).toHaveAttribute(
+      "href",
+      `https://discord.com/channels/${mockGuilds.ddm.id}`,
+    );
+    await expect(page.getByTestId("library-search")).toHaveCount(0);
+    expect(await page.locator("details").getAttribute("open")).toBeNull();
+    const scroll = await page.locator("main").evaluate((node) => {
+      const canScroll = node.scrollHeight > node.clientHeight;
+      node.scrollTop = 200;
+      return {
+        canScroll,
+        top: node.scrollTop,
+        horizontalOverflow: node.scrollWidth > node.clientWidth,
+      };
+    });
+    expect(scroll.canScroll).toBe(true);
+    expect(scroll.top).toBeGreaterThan(0);
+    expect(scroll.horizontalOverflow).toBe(false);
+  });
+}
