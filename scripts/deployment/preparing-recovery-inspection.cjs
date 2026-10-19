@@ -50,10 +50,16 @@ function createPreparingInspection(options) {
       for (const arn of page.taskDefinitionArns) {
         assert.ok(!seen.has(arn));
         seen.add(arn);
+        // ECS familyPrefix also returns sibling families; the pinned ARN defines the exact scope.
+        const familyPrefix = proof.definitionArn.slice(
+          0,
+          proof.definitionArn.lastIndexOf(":") + 1,
+        );
+        if (!arn.startsWith(familyPrefix)) continue;
         const actual = (
           await aws("ecs", "describe-task-definition", { taskDefinition: arn })
         ).taskDefinition;
-        if (actual.family !== config.family) continue;
+        assert.equal(actual.family, config.family);
         const container = taskContainer(actual, config.tablePrefix);
         if (
           !container.environment.some(
@@ -67,7 +73,8 @@ function createPreparingInspection(options) {
         assert.equal(actual.taskDefinitionArn, arn);
         assert.equal(actual.status, "ACTIVE");
         assert.equal(actual.registeredBy, archive.actorArn);
-        const registeredAt = Date.parse(actual.registeredAt) / 1000;
+        const registeredAtIso = new Date(actual.registeredAt).toISOString();
+        const registeredAt = Date.parse(registeredAtIso) / 1000;
         assert.ok(
           registeredAt >= archive.archivedAt &&
             registeredAt >= Date.parse(run.run_started_at) / 1000 &&
@@ -84,7 +91,7 @@ function createPreparingInspection(options) {
         matches.push({
           arn,
           registeredBy: actual.registeredBy,
-          registeredAt: actual.registeredAt,
+          registeredAt: registeredAtIso,
           sha256: bindingHash(input),
         });
       }

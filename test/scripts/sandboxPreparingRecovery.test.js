@@ -132,6 +132,36 @@ test.each(["sourceGroup", "candidateGroup"])(
   },
 );
 
+test("host SDK dates and gated CLI timestamps produce the same private binding", async () => {
+  const f = await preparingRecoveryFixture();
+  f.carry.registered.registeredAt = "1970-01-01T00:16:40.000000+00:00";
+  const cli = await bind(f);
+  f.carry.registered.registeredAt = new Date("1970-01-01T00:16:40.000Z");
+  const sdk = await bind(f);
+  expect(sdk.bindingSha256).toBe(cli.bindingSha256);
+  expect(sdk.binding.registration.registeredAt).toBe(
+    "1970-01-01T00:16:40.000Z",
+  );
+});
+
+test("family-prefix siblings are not read while exact-family pagination remains complete", async () => {
+  const f = await preparingRecoveryFixture(),
+    original = f.aws.getMockImplementation();
+  f.aws.mockImplementation(async (service, operation, input) => {
+    if (operation === "list-task-definitions")
+      return input.nextToken
+        ? { taskDefinitionArns: ["definition:new"] }
+        : { taskDefinitionArns: ["other-family:7"], nextToken: "own-family" };
+    if (
+      operation === "describe-task-definition" &&
+      input.taskDefinition === "other-family:7"
+    )
+      throw Error("Sibling family must not be read");
+    return original(service, operation, input);
+  });
+  expect(await bind(f)).toMatchObject({ kind: "inspection" });
+});
+
 test("registration discovery exhausts every page and rejects an additional same-operation registration", async () => {
   const f = await preparingRecoveryFixture();
   const original = f.aws.getMockImplementation();
