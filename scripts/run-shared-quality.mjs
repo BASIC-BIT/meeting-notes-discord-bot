@@ -10,8 +10,30 @@ const setup =
   release +
   ". See docs/engineering/code-quality.md for setup.";
 
-function git(home, ...args) {
-  const result = spawnSync("git", ["-C", home, ...args], { encoding: "utf8" });
+function toolInspectionEnvironment() {
+  const result = spawnSync("git", ["rev-parse", "--local-env-vars"], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0)
+    throw new Error("Cannot inspect Git hook environment. " + setup);
+  const local = new Set(
+    result.stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((key) => key.toUpperCase()),
+  );
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) => !local.has(key.toUpperCase()),
+    ),
+  );
+}
+
+function git(home, env, ...args) {
+  const result = spawnSync("git", ["-C", home, ...args], {
+    encoding: "utf8",
+    env,
+  });
   if (result.status !== 0)
     throw new Error("Cannot inspect the shared tool checkout. " + setup);
   return result.stdout.trim();
@@ -21,15 +43,21 @@ function run() {
   const location = process.env.QUALITY_RATCHET_HOME;
   if (!location || !existsSync(location)) throw new Error(setup);
   const home = realpathSync(resolve(location));
-  if (git(home, "rev-parse", "HEAD") !== release)
+  const inspectionEnv = toolInspectionEnvironment();
+  if (git(home, inspectionEnv, "rev-parse", "HEAD") !== release)
     throw new Error(
       "Shared tool HEAD does not match the expected release. " + setup,
     );
-  if (realpathSync(git(home, "rev-parse", "--show-toplevel")) !== home)
+  if (
+    realpathSync(git(home, inspectionEnv, "rev-parse", "--show-toplevel")) !==
+    home
+  )
     throw new Error(
       "QUALITY_RATCHET_HOME must name the tool checkout root. " + setup,
     );
-  if (git(home, "status", "--porcelain", "--untracked-files=all"))
+  if (
+    git(home, inspectionEnv, "status", "--porcelain", "--untracked-files=all")
+  )
     throw new Error("Shared tool source must be clean. " + setup);
   const entry = join(home, "bin", "quality-ratchet.mjs");
   if (!existsSync(entry))

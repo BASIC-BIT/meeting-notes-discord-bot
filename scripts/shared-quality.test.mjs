@@ -15,16 +15,28 @@ import { fileURLToPath } from "node:url";
 const launcher = fileURLToPath(
   new URL("run-shared-quality.mjs", import.meta.url),
 );
+const localGitEnvironment = new Set(
+  execFileSync("git", ["rev-parse", "--local-env-vars"], { encoding: "utf8" })
+    .trim()
+    .split(/\r?\n/)
+    .map((key) => key.toUpperCase()),
+);
+const fixtureEnvironment = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([key]) => !localGitEnvironment.has(key.toUpperCase()),
+  ),
+);
 const git = (dir, ...args) =>
   execFileSync("git", args, {
     cwd: dir,
+    env: fixtureEnvironment,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-const run = (script, home, args = []) =>
+const run = (script, home, args = [], extraEnv = {}) =>
   spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8",
-    env: { ...process.env, QUALITY_RATCHET_HOME: home },
+    env: { ...fixtureEnvironment, ...extraEnv, QUALITY_RATCHET_HOME: home },
   });
 
 test("missing local checkout gives setup instructions and operational exit", () => {
@@ -66,7 +78,7 @@ test("a clean pinned tool receives literal arguments and the current Node, with 
     mkdirSync(join(home, "bin"), { recursive: true });
     writeFileSync(
       join(home, "bin/quality-ratchet.mjs"),
-      "console.log(JSON.stringify({execPath:process.execPath,args:process.argv.slice(2)})); process.exitCode=Number(process.argv.at(-1));",
+      'console.log(JSON.stringify({execPath:process.execPath,args:process.argv.slice(2),env:Object.fromEntries(Object.entries(process.env).filter(([key])=>key.startsWith("GIT_")))})); process.exitCode=Number(process.argv.at(-1));',
     );
     git(home, "init", "-q");
     git(home, "add", ".");
@@ -107,6 +119,83 @@ test("a clean pinned tool receives literal arguments and the current Node, with 
         String(code),
       ]);
     }
+    const consumer = join(dir, "consumer checkout");
+    mkdirSync(consumer);
+    git(consumer, "init", "-q");
+    writeFileSync(join(consumer, "source.txt"), "committed\n");
+    git(consumer, "add", "source.txt");
+    git(
+      consumer,
+      "-c",
+      "user.name=fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-qm",
+      "consumer",
+    );
+    writeFileSync(join(consumer, "source.txt"), "staged\n");
+    git(consumer, "add", "source.txt");
+    writeFileSync(join(consumer, "source.txt"), "working\n");
+    const consumerGit = git(consumer, "rev-parse", "--absolute-git-dir");
+    const globalConfig = join(dir, "global-config");
+    const systemConfig = join(dir, "system-config");
+    writeFileSync(globalConfig, "[core]\n  autocrlf = input\n");
+    writeFileSync(systemConfig, "[core]\n  autocrlf = false\n");
+    const hookEnvironment = {
+      GIT_DIR: consumerGit,
+      GIT_COMMON_DIR: consumerGit,
+      GIT_WORK_TREE: consumer,
+      GIT_INDEX_FILE: join(consumerGit, "index"),
+      GIT_OBJECT_DIRECTORY: join(consumerGit, "objects"),
+      GIT_PREFIX: "nested/",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.worktree",
+      GIT_CONFIG_VALUE_0: consumer,
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_SYSTEM: systemConfig,
+    };
+    const beforeTree = git(consumer, "write-tree");
+    const beforeStatus = git(consumer, "status", "--porcelain");
+    const beforeIndex = readFileSync(hookEnvironment.GIT_INDEX_FILE);
+    for (const code of [0, 1, 2]) {
+      const fromHook = run(
+        fixtureLauncher,
+        home,
+        ["--base", "literal;$(echo should-not-run)", String(code)],
+        hookEnvironment,
+      );
+      assert.equal(fromHook.status, code, fromHook.stderr);
+      const output = JSON.parse(fromHook.stdout);
+      assert.equal(output.execPath, process.execPath);
+      assert.deepEqual(output.args, [
+        "--repo",
+        dir,
+        "--base",
+        "literal;$(echo should-not-run)",
+        String(code),
+      ]);
+      for (const [key, value] of Object.entries(hookEnvironment)) {
+        assert.equal(output.env[key], value, key);
+      }
+    }
+    assert.deepEqual(readFileSync(hookEnvironment.GIT_INDEX_FILE), beforeIndex);
+    assert.equal(git(consumer, "write-tree"), beforeTree);
+    assert.equal(git(consumer, "status", "--porcelain"), beforeStatus);
+    const withoutGit = join(dir, "without-git");
+    mkdirSync(withoutGit);
+    const pathKey =
+      Object.keys(fixtureEnvironment).find(
+        (key) => key.toUpperCase() === "PATH",
+      ) ?? "PATH";
+    const discoveryFailure = run(fixtureLauncher, home, [], {
+      [pathKey]: withoutGit,
+    });
+    assert.equal(discoveryFailure.status, 2);
+    assert.match(
+      discoveryFailure.stderr,
+      /Cannot inspect Git hook environment/,
+    );
     writeFileSync(
       join(home, "untracked-source.mjs"),
       "export const unsafe = true;\n",
