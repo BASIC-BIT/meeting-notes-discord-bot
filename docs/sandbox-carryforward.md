@@ -45,6 +45,8 @@ Only the three explicit intro-ledger, subscription-transition and renewal-grace 
 
 The approval UUID is one-use authority. The numeric execution run cannot be known before dispatch. The first valid exact-source execution consumes the UUID atomically and records its actual run token and OIDC actor. Reruns and second invocations refuse. Expiry limits initial consumption; a validly started drain does not abandon work when that timestamp passes.
 
+The historical source token may contain any positive attempt number, such as `123-2`. Only the new carryforward execution is restricted to attempt1.
+
 ## Atomic archive and normal handoff
 
 One transaction conditionally matches original Control authority, all original recovery attributes and the source's fresh admission proof. It puts `CARRYFORWARD#<operationId>` / `ARCHIVE` if absent and installs normal `preparing` Control. Serving membership/generation remain unchanged. The SOURCELOSS row is condition-checked and never modified.
@@ -54,6 +56,8 @@ The archive is append-only under this protocol, not IAM-immutable against privil
 The source must refresh its own readiness at the new epoch. Normal preparation warms a protected candidate, promotion transfers admission and routing, and retirement requires the actual source's acknowledgment and native convergence. Only the new operation reaches complete. There is no empty Control interval or transient false old completion.
 
 After writer inventory and other awaited reads, late authority checks validate exact identities, current-generation readiness, unexpired coordinator authority, native protection and stable Control. Listener submission also checks fresh native routing and the exact source action. Carryforward CLI calls use one transport attempt. Unknown listener acknowledgment retains the submitted fence; observing intended weights never authorizes replay.
+
+After promotion, the outgoing source retains its original authorized generation and may disable admission readiness while draining. Its native protection is checked independently until an exact current-operation retirement request and acknowledgment prove all seven work counts are zero. The final read must confirm that acknowledgment before accepting released protection, including when release occurs during the awaited checks. Unknown or incomplete retirement preserves the operation for review.
 
 The observer counts historical archives separately and retains pending source-loss counts. Its aggregate deploymentIncomplete may remain true for historical obligations after a new normal deployment completes. That signal is neither the authorization rule nor proof of settlement.
 

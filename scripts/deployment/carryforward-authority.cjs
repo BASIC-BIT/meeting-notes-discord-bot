@@ -59,6 +59,51 @@ function createCarryforwardAuthority({
       ).values(),
     ];
   }
+  async function runtime(identity) {
+    return types.runtimeRecordSchema.parse(
+      await inspector.read("ENV", "RUNTIME#" + identity.instanceId),
+    );
+  }
+  function sourceRetired(row, ctl) {
+    const d = ctl.deployment;
+    assert.ok(types.sameRuntimeIdentity(row.identity, claim.archive.source));
+    assert.equal(row.authorizedGeneration, d.originalGeneration);
+    assert.equal(row.expiresAt, undefined);
+    const request = {
+      identity: d.outgoing,
+      authorizedGeneration: d.originalGeneration,
+      coordinatorToken: runToken,
+      coordinatorEpoch: ctl.coordinatorEpoch,
+    };
+    if (row.retirementRequest) assert.deepEqual(row.retirementRequest, request);
+    if (row.role === "retired") {
+      assert.deepEqual(row.retirementRequest, request);
+      assert.deepEqual(row.retirementAcknowledgment?.request, request);
+      assert.ok(
+        row.retirementAcknowledgment.retiredAt >= claim.archive.archivedAt &&
+          row.retirementAcknowledgment.retiredAt <= now(),
+      );
+      assert.ok(
+        row.workCounts &&
+          Object.values(row.workCounts).every((count) => count === 0),
+      );
+      return true;
+    }
+    assert.ok(["serving", "draining", "releasing"].includes(row.role));
+    assert.equal(row.retirementAcknowledgment, undefined);
+    if (row.role !== "serving")
+      assert.deepEqual(row.retirementRequest, request);
+    return false;
+  }
+  async function sourceProtection(outgoing, ctl) {
+    if (!outgoing || sourceRetired(await runtime(outgoing), ctl)) return {};
+    try {
+      return { expiry: await proof.protectedTask(outgoing) };
+    } catch (error) {
+      // Retirement releases protection before publishing its acknowledgment.
+      return { error };
+    }
+  }
   async function assertBeforeWrite(operation, input) {
     assert.deepEqual(
       await inspector.read(inspector.archiveKey, "ARCHIVE"),
@@ -70,6 +115,10 @@ function createCarryforwardAuthority({
     const expirations = await Promise.all(
       identities.map((identity) => proof.protectedTask(identity)),
     );
+    const outgoing = current.servingMembers[claim.archive.source.instanceId]
+      ? undefined
+      : claim.archive.source;
+    const source = await sourceProtection(outgoing, current);
     if (operation === "modify-listener") {
       const r = current.deployment.routing;
       assert.equal(r.state, "forward_submitted");
@@ -90,13 +139,9 @@ function createCarryforwardAuthority({
     const late = await inspector.control();
     assert.deepEqual(controlAuthority(late), controlAuthority(current));
     const rows = await Promise.all(
-      identities.map(async (identity) =>
-        types.runtimeRecordSchema.parse(
-          await inspector.read("ENV", "RUNTIME#" + identity.instanceId),
-        ),
-      ),
+      [...identities, ...(outgoing ? [outgoing] : [])].map(runtime),
     );
-    for (const [index, row] of rows.entries()) {
+    for (const [index, row] of rows.slice(0, identities.length).entries()) {
       assert.ok(
         proof.ready(row, late, identities[index], late.deployment.runtimeMode),
       );
@@ -108,6 +153,13 @@ function createCarryforwardAuthority({
           : "candidate",
       );
       assert.ok(!row.retirementRequest && !row.retirementAcknowledgment);
+    }
+    if (outgoing && !sourceRetired(rows[identities.length], late)) {
+      if (source.error) throw source.error;
+      assert.ok(
+        source.expiry > now() + 120,
+        "Outgoing source protection expired before provider mutation",
+      );
     }
     assert.ok(
       late.coordinatorExpiresAt > now(),

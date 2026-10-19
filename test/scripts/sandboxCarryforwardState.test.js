@@ -50,6 +50,7 @@ async function fixture() {
     actorArn: "actual-oidc-actor",
     now: f.loss.clock,
     types: f.options.types,
+    builders: f.options.builders,
   });
   return { ...f, observed, manifest, ...result };
 }

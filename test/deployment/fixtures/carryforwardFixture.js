@@ -168,6 +168,8 @@ export function carryforwardFixture() {
     template,
     registered: undefined,
     loseAck: false,
+    sourceProtectionLost: false,
+    sourceProtectionRead: () => undefined,
     beforeClaim: () => undefined,
     afterClaim: () => undefined,
   };
@@ -198,7 +200,23 @@ export function carryforwardFixture() {
     if (carry.loseAck) throw new Error("lost claim response");
     return {};
   }
+  function unprotectedSource(operation, input) {
+    if (
+      operation === "get-task-protection" &&
+      carry.sourceProtectionLost &&
+      input.tasks.includes(f.oldIdentity.taskArn)
+    ) {
+      carry.sourceProtectionRead();
+      return {
+        protectedTasks: [
+          { taskArn: f.oldIdentity.taskArn, protectionEnabled: false },
+        ],
+      };
+    }
+  }
   f.aws.mockImplementation(async (service, operation, input) => {
+    const protection = unprotectedSource(operation, input);
+    if (protection) return protection;
     if (service === "sts")
       return {
         Account: env.EXPECTED_ACCOUNT_ID,

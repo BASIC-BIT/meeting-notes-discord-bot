@@ -51,6 +51,20 @@ test("the exact private approval binds tooling source independently from existin
     bindingHash(f.manifest),
   );
 });
+
+test.each(["900-2", "900-12"])(
+  "a historical rerun source %s remains eligible with a new attempt1 execution",
+  (token) => {
+    const f = fixture();
+    f.manifest.originalRunToken = token;
+    f.bind();
+    expect(
+      readCarryforwardManifest(f.env, () => 1000).manifest.originalRunToken,
+    ).toBe(token);
+    f.env.GITHUB_RUN_ATTEMPT = "2";
+    expect(() => readCarryforwardManifest(f.env, () => 1000)).toThrow();
+  },
+);
 test.each([
   "hash",
   "source",

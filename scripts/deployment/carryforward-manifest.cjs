@@ -20,7 +20,7 @@ const carryforwardManifestSchema = z
     preparedDefinitionSha256: hash,
     controlSha256: hash,
     recoverySha256: hash,
-    originalRunToken: z.string().regex(/^\d+-1$/),
+    originalRunToken: z.string().regex(/^\d+-[1-9]\d*$/),
     approveBefore: z.number().int().positive(),
   })
   .strict();

@@ -71,6 +71,33 @@ test.each([false, true])(
     expect(writes(f)).toHaveLength(before);
   },
 );
+function invalidateLateProof(f, scenario) {
+  if (scenario === "readiness")
+    f.state.rows.new.readiness.dependenciesReady = false;
+  if (scenario === "protection") f.state.protected = false;
+  if (scenario === "outgoing_protection") f.carry.sourceProtectionLost = true;
+  if (scenario === "foreign_listener") f.traffic.actions = [];
+  if (scenario === "foreign_identity") {
+    const identity = {
+      ...f.state.rows.new.identity,
+      instanceId: "foreign",
+      taskArn: f.candidateIdentity.taskArn + "-foreign",
+    };
+    Object.assign(f.state.rows.new, { identity, role: "candidate" });
+    f.state.rows.new.readiness.identity = identity;
+    f.state.rows.new.protection.identity = identity;
+  }
+  if (scenario === "coordinator_expiry") {
+    f.carry.advance(f.state.ctl.coordinatorExpiresAt - f.options.now() + 1);
+    for (const row of Object.values(f.state.rows)) {
+      row.heartbeatAt = f.options.now();
+      row.readiness.provenAt = f.options.now();
+      row.readiness.expiresAt = f.options.now() + 30;
+      row.protection.expiresAt = f.options.now() + 600;
+    }
+  }
+}
+
 test.each([
   "receipt",
   "control",
@@ -131,30 +158,42 @@ test("unknown listener acknowledgment preserves the submitted fence and forbids 
     submitted,
   );
 });
-test("ongoing source work is retained after traffic moves until its own genuine acknowledgment", async () => {
-  const f = carryforwardFixture();
-  await bind(f);
-  f.state.rows.old.workCounts.recording = 1;
-  f.state.retirementAcknowledged = false;
-  let observedBusy = false;
-  f.state.onSleep = () => {
-    if (!f.state.rows.old.retirementRequest || observedBusy) return;
-    expect(f.state.ctl.deployment.routing.state).toBe("candidate");
-    expect(f.state.rows.old.retirementAcknowledgment).toBeUndefined();
-    expect(f.state.rows.old.workCounts.recording).toBe(1);
-    observedBusy = true;
-    f.state.rows.old.workCounts.recording = 0;
-    f.state.rows.old.role = "retired";
-    f.state.rows.old.retirementAcknowledgment = {
-      request: f.state.rows.old.retirementRequest,
-      retiredAt: f.options.now(),
+test.each(["before_read", "during_protection_read"])(
+  "ongoing source work is retained until its genuine acknowledgment %s",
+  async (acknowledgment) => {
+    const f = carryforwardFixture();
+    await bind(f);
+    f.state.rows.old.workCounts.recording = 1;
+    f.state.retirementAcknowledged = false;
+    let observedBusy = false;
+    f.state.onSleep = () => {
+      if (!f.state.rows.old.retirementRequest || observedBusy) return;
+      expect(f.state.ctl.deployment.routing.state).toBe("candidate");
+      expect(f.state.rows.old.retirementAcknowledgment).toBeUndefined();
+      expect(f.state.rows.old.workCounts.recording).toBe(1);
+      observedBusy = true;
+      f.state.rows.old.workCounts.recording = 0;
+      const acknowledge = () => {
+        f.state.rows.old.role = "retired";
+        f.state.rows.old.retirementAcknowledgment = {
+          request: f.state.rows.old.retirementRequest,
+          retiredAt: f.options.now(),
+        };
+      };
+      if (acknowledgment === "before_read") acknowledge();
+      else {
+        f.state.rows.old.role = "draining";
+        f.state.rows.old.readiness.dependenciesReady = false;
+        f.carry.sourceProtectionLost = true;
+        f.carry.sourceProtectionRead = acknowledge;
+      }
     };
-  };
-  expect(
-    await carryforwardSandbox({ ...f.options, mode: "carryforward" }),
-  ).toMatchObject({ kind: "carryforward_complete" });
-  expect(observedBusy).toBe(true);
-});
+    expect(
+      await carryforwardSandbox({ ...f.options, mode: "carryforward" }),
+    ).toMatchObject({ kind: "carryforward_complete" });
+    expect(observedBusy).toBe(true);
+  },
+);
 test("loss of the exclusive writer window after claim preserves archive and prevents service mutation", async () => {
   const f = carryforwardFixture();
   await bind(f);
@@ -183,6 +222,7 @@ test.each([
   "foreign_listener",
   "foreign_identity",
   "coordinator_expiry",
+  "outgoing_protection",
 ])(
   "late %s loss during writer inventory cannot reach listener mutation",
   async (scenario) => {
@@ -195,31 +235,7 @@ test.each([
         f.state.ctl.deployment.routing.state === "forward_submitted"
       ) {
         injected = true;
-        if (scenario === "readiness")
-          f.state.rows.new.readiness.dependenciesReady = false;
-        if (scenario === "protection") f.state.protected = false;
-        if (scenario === "foreign_listener") f.traffic.actions = [];
-        if (scenario === "foreign_identity") {
-          const identity = {
-            ...f.state.rows.new.identity,
-            instanceId: "foreign",
-            taskArn: f.candidateIdentity.taskArn + "-foreign",
-          };
-          Object.assign(f.state.rows.new, { identity, role: "candidate" });
-          f.state.rows.new.readiness.identity = identity;
-          f.state.rows.new.protection.identity = identity;
-        }
-        if (scenario === "coordinator_expiry") {
-          f.carry.advance(
-            f.state.ctl.coordinatorExpiresAt - f.options.now() + 1,
-          );
-          for (const row of Object.values(f.state.rows)) {
-            row.heartbeatAt = f.options.now();
-            row.readiness.provenAt = f.options.now();
-            row.readiness.expiresAt = f.options.now() + 30;
-            row.protection.expiresAt = f.options.now() + 600;
-          }
-        }
+        invalidateLateProof(f, scenario);
       }
       return { competing: 0 };
     });
@@ -231,6 +247,59 @@ test.each([
       f.calls.filter((c) => c.operation === "modify-listener"),
     ).toHaveLength(0);
     expect(f.state.ctl.deployment.routing.state).toBe("forward_submitted");
+  },
+);
+
+test("the outgoing source stays protected during retirement while it still has work", async () => {
+  const f = carryforwardFixture();
+  await bind(f);
+  f.state.rows.old.workCounts.recording = 1;
+  f.state.retirementAcknowledged = false;
+  let submitted;
+  f.options.writerInventory.assertExclusive.mockImplementation(async () => {
+    if (submitted !== undefined) throw new Error("bounded regression check");
+    if (f.state.ctl.deployment.phase === "retiring") {
+      submitted = writes(f).length;
+      f.carry.sourceProtectionLost = true;
+    }
+    return { competing: 0 };
+  });
+  await expect(
+    carryforwardSandbox({ ...f.options, mode: "carryforward" }),
+  ).rejects.toThrow();
+  expect(submitted).toBeDefined();
+  expect(writes(f)).toHaveLength(submitted);
+  expect(f.state.rows.old.workCounts.recording).toBe(1);
+  expect(f.state.rows.old.retirementAcknowledgment).toBeUndefined();
+});
+
+test.each(["valid", "foreign_request", "work_remaining", "incomplete_counts"])(
+  "released source protection requires truthful retired acknowledgment: %s",
+  async (scenario) => {
+    const f = carryforwardFixture();
+    await bind(f);
+    f.options.writerInventory.assertExclusive.mockImplementation(async () => {
+      if (f.state.rows.old.retirementAcknowledgment) {
+        f.carry.sourceProtectionLost = true;
+        if (scenario === "foreign_request")
+          f.state.rows.old.retirementAcknowledgment.request = {
+            ...f.state.rows.old.retirementRequest,
+            coordinatorToken: "foreign",
+          };
+        if (scenario === "work_remaining")
+          f.state.rows.old.workCounts.recording = 1;
+        if (scenario === "incomplete_counts") f.state.rows.old.workCounts = {};
+      }
+      return { competing: 0 };
+    });
+    const execute = carryforwardSandbox({ ...f.options, mode: "carryforward" });
+    if (scenario === "valid")
+      expect(await execute).toMatchObject({ kind: "carryforward_complete" });
+    else {
+      await expect(execute).rejects.toThrow();
+      expect(f.state.ctl.deployment.phase).toBe("retiring");
+    }
+    expect(f.carry.sourceProtectionLost).toBe(true);
   },
 );
 test("the actual OIDC session must belong to the execution run, not only an independently named valid session", async () => {
