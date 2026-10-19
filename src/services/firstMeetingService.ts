@@ -32,10 +32,10 @@ function permissionUnavailable(): never {
   });
 }
 
-async function buildTarget(
+async function authorizedDiscordUrl(
   history: MeetingHistory,
   userId: string,
-): Promise<FirstMeetingTarget> {
+): Promise<string | null> {
   const channelId = history.notesChannelId || history.textChannelId;
   let discordUrl: string | null = null;
   if (channelId) {
@@ -54,6 +54,13 @@ async function buildTarget(
       discordUrl = `https://discord.com/channels/${history.guildId}/${channelId}${messageId ? `/${messageId}` : ""}`;
     }
   }
+  return discordUrl;
+}
+
+async function buildTarget(
+  history: MeetingHistory,
+  userId: string,
+): Promise<FirstMeetingTarget> {
   return {
     historyId: history.channelId_timestamp,
     title:
@@ -63,7 +70,7 @@ async function buildTarget(
       guildId: history.guildId,
       meetingId: history.channelId_timestamp,
     }),
-    discordUrl,
+    discordUrl: await authorizedDiscordUrl(history, userId),
     captureNotice: formatMeetingCaptureNotice(history) ?? null,
     recoveryNotice: formatRecoveryNotice(history.recovery) ?? null,
   };
@@ -145,6 +152,13 @@ async function deriveState(
     if (kind) return { kind, meeting };
   }
   if (active) return { kind: "attention", reason: "status_unknown", meeting };
+  return terminalState(history, meeting);
+}
+
+function terminalState(
+  history: MeetingHistory,
+  meeting: FirstMeetingTarget,
+): FirstMeetingState {
   if (
     history.capture?.kind === "interrupted" ||
     history.status === "interrupted"

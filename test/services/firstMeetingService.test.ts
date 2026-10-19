@@ -376,6 +376,11 @@ test("discord_link_requires_permission_and_an_actual_pointer", async () => {
 });
 
 test.each([
+  { notesChannelId: undefined, textChannelId: undefined },
+  {
+    delivery: { notes: { ...notesDelivery("complete", 0), intended: 0 } },
+    notesMessageIds: [],
+  },
   { notesMessageIds: ["one"] },
   { notesMessageIds: ["one", "one"] },
   { notesMessageIds: ["one", " "] },
@@ -423,30 +428,6 @@ test("matching_recovery_lease_verifies_offline_processing", async () => {
     },
   });
 });
-
-test.each([
-  { notesChannelId: undefined, textChannelId: undefined },
-  {
-    delivery: { notes: { ...notesDelivery("complete", 0), intended: 0 } },
-    notesMessageIds: [],
-  },
-])(
-  "missing_delivery_destination_or_zero_acknowledgment_is_saved: %j",
-  async (overrides) => {
-    jest.mocked(getMeetingHistoryService).mockResolvedValue(
-      history({
-        notes: "Saved notes",
-        notesChannelId: textChannelId,
-        notesMessageIds: ["one", "two"],
-        delivery: { notes: notesDelivery("complete") },
-        ...overrides,
-      }),
-    );
-    expect(
-      (await getFirstMeetingState({ guildId, userId, historyId })).kind,
-    ).toBe("saved");
-  },
-);
 
 test("saved_notes_take_priority_over_active_or_failed_processing", async () => {
   jest.mocked(getMeetingHistoryService).mockResolvedValue(
