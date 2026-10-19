@@ -643,3 +643,20 @@ test("a non-complete introduction remains incomplete after bootstrap promotion",
   ];
   expect((await f.collect()).runtime.deploymentIncomplete).toBe(true);
 });
+
+test("source-loss availability does not hide pending settlement or complete deployment", async () => {
+  const f = observationFixture();
+  f.data.runtimes.push({
+    pk: "SOURCELOSS#run",
+    sk: "RECOVERY",
+    recordType: "source_loss_recovery",
+    stage: "availability_restored",
+    settlement: "lost_owner_settlement_pending",
+  });
+  const result = await f.collect();
+  expect(result.runtime.sourceLoss).toEqual({
+    availabilityRestored: 1,
+    settlementPending: 1,
+  });
+  expect(result.runtime.deploymentIncomplete).toBe(true);
+});

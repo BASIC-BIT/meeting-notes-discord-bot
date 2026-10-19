@@ -19,9 +19,10 @@ on:
         description: Inspect a frozen compatible deployment or explicitly continue its existing candidate
         type: choice
         default: none
-        options: [none, inspect, continue]
+        options:
+          [none, inspect, continue, inspect-source-loss, recover-source-loss]
       continuation_binding_sha256:
-        description: Reviewed private operation-binding checksum, required only for continue
+        description: Reviewed private operation-binding checksum for continue or recover-source-loss
         type: string
         default: ""
       probe_without_environment:
@@ -62,7 +63,7 @@ jobs:
           const assert = require("node:assert/strict");
           const e = process.env;
           const action = e.CONTINUATION_ACTION || "none";
-          assert.ok(["none", "inspect", "continue"].includes(action));
+          assert.ok(["none", "inspect", "continue", "inspect-source-loss", "recover-source-loss"].includes(action));
           if (action === "none") assert.equal(e.CONTINUATION_BINDING_SHA256 || "", "");
           else {
             assert.equal(e.GITHUB_RUN_ATTEMPT, "1");
@@ -70,7 +71,7 @@ jobs:
             assert.equal(e.BOOTSTRAP_OPERATION_ID || "", "");
             assert.equal(e.BOOTSTRAP_MANIFEST_SHA256 || "", "");
             assert.notEqual(e.PROBE_WITHOUT_ENVIRONMENT, "true");
-            if (action === "continue") assert.match(e.CONTINUATION_BINDING_SHA256 || "", /^[a-f0-9]{64}$/);
+            if (["continue", "recover-source-loss"].includes(action)) assert.match(e.CONTINUATION_BINDING_SHA256 || "", /^[a-f0-9]{64}$/);
             else assert.equal(e.CONTINUATION_BINDING_SHA256 || "", "");
           }
           NODE
@@ -267,6 +268,7 @@ jobs:
       CONTINUATION_ENVIRONMENT: sandbox
       CONTINUATION_ACTION: ${{ inputs.continuation_action }}
       CONTINUATION_BINDING_SHA256: ${{ inputs.continuation_binding_sha256 }}
+      SOURCE_LOSS_BINDING_SHA256: ${{ inputs.continuation_binding_sha256 }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: "true"
       ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
@@ -304,4 +306,10 @@ jobs:
       - name: Compile protocol helpers
         run: yarn build
       - name: Execute only the selected continuation action
-        run: node scripts/deployment/continue-sandbox.cjs "$CONTINUATION_ACTION"
+        run: |
+          case "$CONTINUATION_ACTION" in
+            inspect|continue) node scripts/deployment/continue-sandbox.cjs "$CONTINUATION_ACTION" ;;
+            inspect-source-loss) node scripts/deployment/recover-sandbox.cjs inspect ;;
+            recover-source-loss) node scripts/deployment/recover-sandbox.cjs recover ;;
+            *) exit 1 ;;
+          esac

@@ -184,3 +184,7 @@ Whole-branch review, published exact-head checks, clean mergeability and the pos
 ## First Sandbox bootstrap tooling
 
 For the separately reviewed one-time introduction from an incompatible runtime, see [Sandbox bootstrap tooling](sandbox-bootstrap.md). Normal deployments still use the existing coordinator. The bootstrap and read-only observation commands do not apply infrastructure, stop legacy work, register an image, alter the listener or start a monitor automatically.
+
+## Sandbox source-loss recovery
+
+A separately approved stopped-source operation uses [Sandbox source-loss recovery](sandbox-source-loss.md). It restores the existing candidate's admission and routing while preserving pending settlement. Healthy-source continuation and normal retirement still require their original evidence.

@@ -288,7 +288,12 @@ test("foreign STS principal refuses before any coordinator operation", async () 
   expect(changes(f)).toEqual([]);
 });
 
-test.each(["continue", "inspect"])(
+test.each([
+  "continue",
+  "inspect",
+  "inspect-source-loss",
+  "recover-source-loss",
+])(
   "workflow rejects mixed bootstrap and %s input before authentication",
   (action) => {
     const workflow = parse(
@@ -306,7 +311,11 @@ test.each(["continue", "inspect"])(
     const env = {
       ...process.env,
       CONTINUATION_ACTION: action,
-      CONTINUATION_BINDING_SHA256: action === "continue" ? "a".repeat(64) : "",
+      CONTINUATION_BINDING_SHA256: ["continue", "recover-source-loss"].includes(
+        action,
+      )
+        ? "a".repeat(64)
+        : "",
       GITHUB_RUN_ATTEMPT: "1",
       BOOTSTRAP_PHASE: "none",
     };

@@ -6,6 +6,7 @@ const {
   CoordinatorFailure,
   awsCli,
   createAwsCaller,
+  listServiceTaskArns,
 } = require("./coordinator-aws.cjs");
 const WARMUP_SECONDS = 900;
 const RETIREMENT_SECONDS = 7500;
@@ -337,24 +338,8 @@ function createCoordinator(options = {}) {
     ).taskDefinition;
   }
   async function tasks() {
-    const arns = [];
-    let nextToken;
-    do {
-      const page = await aws("ecs", "list-tasks", {
-        cluster: config.cluster,
-        serviceName: config.service,
-        desiredStatus: "RUNNING",
-        ...(nextToken ? { nextToken } : {}),
-      });
-      arns.push(...page.taskArns);
-      nextToken = page.nextToken;
-    } while (nextToken);
+    const arns = await listServiceTaskArns(aws, config);
     if (!arns.length) return [];
-    if (arns.length > 100)
-      throw new CoordinatorFailure(
-        "identity_unconfirmed",
-        "Unexpected task count",
-      );
     const result = await aws("ecs", "describe-tasks", {
       cluster: config.cluster,
       tasks: arns,
