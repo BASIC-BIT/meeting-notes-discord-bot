@@ -213,7 +213,6 @@ const openEditor: NonNullable<Story["play"]> = async ({ canvasElement }) => {
   await expect(
     within(document.body).getByRole("combobox", {
       name: "Notes channel",
-      exact: true,
     }),
   ).toBeEnabled();
 };
