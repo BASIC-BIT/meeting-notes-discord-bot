@@ -1,3 +1,4 @@
+import { getFirstMeetingState } from "../../services/firstMeetingService";
 import type { RuntimeApiOperation } from "../../services/runtimeApiOperationService";
 import {
   projectMeetingCapture,
@@ -931,6 +932,37 @@ const resolveMeetingListNotes = (notes: MeetingSummary["notes"]) => notes ?? "";
 
 const resolveMeetingListNotesMessageId = (messageIds: string[] | undefined) =>
   messageIds?.[0];
+
+const firstMeeting = guildMemberProcedure
+  .input(
+    z.object({
+      serverId: z.string().regex(/^\d{17,20}$/),
+      historyId: z
+        .string()
+        .regex(/^\d{17,20}#.+$/)
+        .optional(),
+    }),
+  )
+  .query(async ({ ctx, input }) => {
+    const botCheck = await ensureBotInGuild(input.serverId);
+    if (botCheck === null) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Discord rate limited. Please retry.",
+      });
+    }
+    if (!botCheck) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Bot is not in that guild",
+      });
+    }
+    return getFirstMeetingState({
+      guildId: input.serverId,
+      userId: ctx.user.id,
+      historyId: input.historyId,
+    });
+  });
 
 const list = guildMemberProcedure
   .input(
@@ -2105,6 +2137,7 @@ const setPersonalShareGrants = authedProcedure
   });
 
 export const meetingsRouter = router({
+  firstMeeting,
   list,
   myList,
   detail,
