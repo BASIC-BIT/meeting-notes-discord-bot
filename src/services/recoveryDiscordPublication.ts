@@ -743,16 +743,19 @@ function planSummaryTarget(
     summary && summary.length ? summary : "Summary unavailable.",
     stored,
   );
-  const after = [...embeds];
-  after[slots[0]] = {
-    ...embeds[slots[0]],
-    title:
-      stored.meetingName?.trim() ||
-      stored.summaryLabel?.trim() ||
-      "Meeting Summary",
-    description,
-  };
-  return makeTarget(message, after, "summary", scope.guildId);
+  const title =
+    stored.meetingName?.trim() ||
+    stored.summaryLabel?.trim() ||
+    "Meeting Summary";
+  // Legacy recovery approval covers notes and transcript only.
+  if (
+    embeds[slots[0]].title !== title ||
+    embeds[slots[0]].description !== description
+  )
+    throw new PublicationPreviewBlockedError(
+      "Summary or title changes require separate approval",
+    );
+  return makeTarget(message, embeds, "summary", scope.guildId);
 }
 function previewBlocker(error: unknown): string {
   // Provider errors can contain private response bodies; retain only local blocker messages.

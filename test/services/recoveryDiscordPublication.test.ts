@@ -298,7 +298,7 @@ test("supports one notes embed per recorded message", async () => {
   expect(preview.targets).toHaveLength(2);
 });
 
-test("skipsUnchangedSummary", async () => {
+function fixtureWithSummary() {
   const f = fixture();
   Object.assign(f.history, { summaryMessageId: "401", textChannelId: "300" });
   f.messages.set("401", {
@@ -316,18 +316,36 @@ test("skipsUnchangedSummary", async () => {
       },
     ],
   });
+  return f;
+}
+
+test("skipsUnchangedSummary", async () => {
+  const f = fixtureWithSummary();
   const preview = await previewRecoveryDiscordPublication(input, f.deps);
   expect(preview.kind).toBe("ready");
   expect(
     preview.targets.find((target) => target.role === "summary")?.unchanged,
   ).toBe(true);
-  f.messages.get("401")!.embeds[0].description = "Old summary";
-  expect(
-    (await previewRecoveryDiscordPublication(input, f.deps)).targets.find(
-      (target) => target.role === "summary",
-    )?.afterEmbeds[0].description,
-  ).toContain(f.history.summarySentence);
 });
+
+test.each(["summarySentence", "meetingName"] as const)(
+  "blocks a changed %s without separate approval",
+  async (field) => {
+    const f = fixtureWithSummary();
+    f.history[field] = "Changed stored content";
+    const preview = await previewRecoveryDiscordPublication(input, f.deps);
+    expect(preview.kind).toBe("blocked");
+    expect(preview.blockers).toContain(
+      "Summary or title changes require separate approval",
+    );
+    expect(preview.targets.some((target) => target.role === "summary")).toBe(
+      false,
+    );
+    expect(f.deps.discord.editEmbeds).not.toHaveBeenCalled();
+    for (const operation of Object.values(f.storage))
+      expect(operation).not.toHaveBeenCalled();
+  },
+);
 
 test("preservesRussianUncertainty", async () => {
   const f = fixture();
