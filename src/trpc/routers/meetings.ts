@@ -1,3 +1,5 @@
+import { firstMeeting } from "./firstMeeting";
+import { requireBotInGuild } from "./ensureBotPresence";
 import type { RuntimeApiOperation } from "../../services/runtimeApiOperationService";
 import {
   projectMeetingCapture,
@@ -19,7 +21,6 @@ import {
   updateMeetingNameService,
 } from "../../services/meetingHistoryService";
 import {
-  ensureBotInGuild,
   ensureManageGuildWithUserToken,
   type GuildSessionCache,
 } from "../../services/guildAccessService";
@@ -942,19 +943,7 @@ const list = guildMemberProcedure
     }),
   )
   .query(async ({ ctx, input }) => {
-    const botCheck = await ensureBotInGuild(input.serverId);
-    if (botCheck === null) {
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: "Discord rate limited. Please retry.",
-      });
-    }
-    if (!botCheck) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Bot is not in that guild",
-      });
-    }
+    await requireBotInGuild(input.serverId);
 
     const limit = input.limit ?? config.ask.maxMeetings;
     const meetings = await listRecentMeetingsForGuildService(
@@ -2105,6 +2094,7 @@ const setPersonalShareGrants = authedProcedure
   });
 
 export const meetingsRouter = router({
+  firstMeeting,
   list,
   myList,
   detail,

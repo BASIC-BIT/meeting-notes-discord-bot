@@ -11,7 +11,6 @@ A Discord bot that records voice meetings, transcribes them with OpenAI, generat
 - `/context`: Manage prompt context.
 - `/dictionary`: Manage dictionary terms used in prompts.
 - `/ask`: Ask questions over recent meeting history (guild scope by default).
-- `/onboard`: Guided setup (context, auto-record, feature tour, upgrade CTA).
 
 ## Recording outcomes
 

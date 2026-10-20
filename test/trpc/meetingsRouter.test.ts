@@ -153,12 +153,7 @@ jest.mock("../../src/services/discordCacheService", () => ({
   listGuildRolesCached: async () => [],
 }));
 
-const buildCaller = (user = getMockUser()) =>
-  appRouter.createCaller({
-    req: { session: {} } as Request,
-    res: {} as Response,
-    user,
-  });
+import { buildCaller } from "../utils/trpcCaller";
 
 describe("meetings router detail", () => {
   const mockedEnsureManageGuild = jest.mocked(ensureManageGuildWithUserToken);
