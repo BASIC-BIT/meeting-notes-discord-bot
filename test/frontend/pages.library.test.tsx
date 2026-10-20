@@ -20,6 +20,16 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const buildRecentTimestamp = () =>
   new Date(resolveNowMs() - MS_PER_DAY).toISOString();
 
+function expectFilteredLibrary(view: ReturnType<typeof renderWithMantine>) {
+  Object.assign(meetingsListQuery, { isSuccess: true });
+  view.rerender(
+    <MantineProvider>
+      <Library />
+    </MantineProvider>,
+  );
+  expect(screen.queryByText("Your first meeting goes here.")).toBeNull();
+}
+
 describe("Library page", () => {
   beforeEach(() => {
     resetFrontendMocks();
@@ -58,6 +68,11 @@ describe("Library page", () => {
     ).not.toHaveAttribute("open");
     expect(screen.queryByTestId("library-search")).toBeNull();
     expect(screen.queryByText(/Sorted by recency/)).toBeNull();
+  });
+
+  test("empty library retains its refresh action", () => {
+    renderWithMantine(<Library />);
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeVisible();
   });
 
   test.each(["loading", "error", "placeholder", "disabled", "unknown server"])(
@@ -109,13 +124,7 @@ describe("Library page", () => {
     fireEvent.change(screen.getByTestId("library-search"), {
       target: { value: "not found" },
     });
-    Object.assign(meetingsListQuery, { isSuccess: true });
-    view.rerender(
-      <MantineProvider>
-        <Library />
-      </MantineProvider>,
-    );
-    expect(screen.queryByText("Your first meeting goes here.")).toBeNull();
+    expectFilteredLibrary(view);
     expect(
       screen.getByText(/No meetings match these filters yet/i),
     ).toBeInTheDocument();
@@ -129,13 +138,7 @@ describe("Library page", () => {
     });
     fireEvent.click(screen.getByTestId("library-archive-filter"));
     fireEvent.click(screen.getByRole("option", { name: "Archived" }));
-    Object.assign(meetingsListQuery, { isSuccess: true });
-    view.rerender(
-      <MantineProvider>
-        <Library />
-      </MantineProvider>,
-    );
-    expect(screen.queryByText("Your first meeting goes here.")).toBeNull();
+    expectFilteredLibrary(view);
     expect(screen.getByTestId("library-search")).toBeInTheDocument();
   });
 

@@ -62,15 +62,18 @@ function stateCopy(state: FirstMeetingState): string {
   }
 }
 
-type VerifiedMeetingState = Exclude<FirstMeetingState, { kind: "guide" }>;
-
 function MeetingResult({
   state,
   stale,
 }: {
-  state: VerifiedMeetingState;
+  state: FirstMeetingState;
   stale: boolean;
 }) {
+  if (state.kind === "guide") {
+    return stale ? null : (
+      <Text c="dimmed">No accessible recent meeting found yet.</Text>
+    );
+  }
   const live = state.kind === "recording" || state.kind === "processing";
   const saved =
     state.kind === "ready" ||
@@ -183,7 +186,7 @@ function MeetingProgress({
         ) : progress.isLoading ? (
           <Text c="dimmed">Checking meeting status...</Text>
         ) : null}
-        {displayed && displayed.kind !== "guide" ? (
+        {displayed ? (
           <MeetingResult state={displayed} stale={Boolean(progress.error)} />
         ) : null}
         <Button variant="subtle" onClick={() => void progress.refetch()}>

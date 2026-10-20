@@ -56,6 +56,10 @@ export function redactShareIds(value: string, depth = 0): string {
   return value
     .replace(SHARE_ID_PATTERN, "/share/$1/:serverId/:shareId")
     .replace(
+      /(https:\/\/discord\.com\/channels)\/[^/?#]+(?:\/[^/?#]+){0,2}/gi,
+      "$1/[redacted]",
+    )
+    .replace(
       /\/portal\/meetings\/[^/?#]+\/[^/?#]+/gi,
       "/portal/meetings/:serverId/:historyId",
     )

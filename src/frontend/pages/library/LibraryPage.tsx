@@ -170,6 +170,10 @@ export default function LibraryPage() {
       {firstMeeting ? (
         <>
           <Group justify="flex-end">
+            <RefreshButton
+              onClick={handleRefresh}
+              data-testid="library-refresh"
+            />
             <Button
               size="xs"
               variant="subtle"

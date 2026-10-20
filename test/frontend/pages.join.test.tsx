@@ -53,6 +53,19 @@ const verifyServer = () => {
   setRouteSearch({ serverId });
 };
 
+function showTransientError(view: ReturnType<typeof renderWithMantine>) {
+  result = {
+    ...result,
+    error: { message: "Network unavailable" },
+    isSuccess: false,
+  };
+  view.rerender(
+    <MantineProvider>
+      <Join />
+    </MantineProvider>,
+  );
+}
+
 describe("Join page", () => {
   beforeEach(() => {
     resetFrontendMocks();
@@ -65,6 +78,16 @@ describe("Join page", () => {
       isSuccess: true,
       isPlaceholderData: false,
     };
+  });
+
+  test("successful guide explains which meetings are checked", () => {
+    verifyServer();
+    renderWithMantine(<Join />);
+    expect(
+      screen.getByText("No accessible recent meeting found yet."),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeVisible();
+    expect(screen.queryByText(meeting.title)).toBeNull();
   });
 
   test("unknown_server_stays_generic", () => {
@@ -134,16 +157,7 @@ describe("Join page", () => {
       "href",
       meeting.portalUrl,
     );
-    result = {
-      ...result,
-      error: { message: "Network unavailable" },
-      isSuccess: false,
-    };
-    view.rerender(
-      <MantineProvider>
-        <Join />
-      </MantineProvider>,
-    );
+    showTransientError(view);
     expect(screen.getByText(/Status unavailable/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open meeting" })).toHaveAttribute(
       "href",
@@ -157,16 +171,7 @@ describe("Join page", () => {
     verifyServer();
     result.data = { kind: "recording", meeting };
     const view = renderWithMantine(<Join />);
-    result = {
-      ...result,
-      error: { message: "Network unavailable" },
-      isSuccess: false,
-    };
-    view.rerender(
-      <MantineProvider>
-        <Join />
-      </MantineProvider>,
-    );
+    showTransientError(view);
     expect(screen.queryByText("Recording in progress")).toBeNull();
     expect(screen.queryByRole("link", { name: "View recording" })).toBeNull();
     expect(screen.getByText(meeting.captureNotice)).toBeInTheDocument();
@@ -178,16 +183,7 @@ describe("Join page", () => {
     verifyServer();
     result.data = { kind: "delivery_attention", delivery: "failed", meeting };
     const view = renderWithMantine(<Join />);
-    result = {
-      ...result,
-      error: { message: "Network unavailable" },
-      isSuccess: false,
-    };
-    view.rerender(
-      <MantineProvider>
-        <Join />
-      </MantineProvider>,
-    );
+    showTransientError(view);
     expect(
       screen.getByText("Notes saved. Discord delivery failed."),
     ).toBeInTheDocument();

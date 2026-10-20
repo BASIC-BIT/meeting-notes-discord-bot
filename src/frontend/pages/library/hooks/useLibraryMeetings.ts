@@ -50,7 +50,11 @@ export const useLibraryMeetings = (
       archivedOnly: params.archiveFilter === "archived",
       includeArchived: params.archiveFilter === "all",
     },
-    { enabled: Boolean(params.selectedGuildId), placeholderData: undefined },
+    {
+      enabled: Boolean(params.selectedGuildId),
+      placeholderData: undefined,
+      refetchOnWindowFocus: "always",
+    },
   );
 
   const meetingRows = useMemo<MeetingSummaryRow[]>(

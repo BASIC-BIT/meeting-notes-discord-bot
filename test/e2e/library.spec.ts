@@ -159,3 +159,53 @@ test("server with only archived meetings keeps its archive navigation", async ({
     page.getByRole("button", { name: "View archived meetings" }),
   ).toBeVisible();
 });
+
+for (const action of ["Refresh", "a visibility refresh"]) {
+  test(`empty library discovers a completed meeting after ${action}`, async ({
+    page,
+    libraryPage,
+  }) => {
+    let completed = false;
+    await mockFirstMeetingRequests(page, {
+      "meetings.list": () => ({
+        meetings: completed
+          ? [
+              {
+                id: "completed-meeting",
+                meetingId: "completed-session",
+                channelId: "111111111111111111",
+                channelName: "Planning",
+                timestamp: "2024-12-31T12:00:00.000Z",
+                duration: 600,
+                tags: [],
+                notes: "New meeting notes",
+                meetingName: "Just completed meeting",
+                audioAvailable: false,
+                transcriptAvailable: true,
+              },
+            ]
+          : [],
+      }),
+    });
+    await page.goto(`/portal/server/${mockGuilds.ddm.id}/library`);
+    await expect(page.getByText("Your first meeting goes here.")).toBeVisible();
+    if (action === "Refresh") {
+      completed = true;
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    } else {
+      completed = true;
+      // Playwright keeps pages visible; exercise the installed query focus listener.
+      await page.evaluate(() => {
+        document.dispatchEvent(
+          new Event("visibilitychange", { bubbles: true }),
+        );
+      });
+    }
+    await expect(
+      libraryPage.meetingRowByText("Just completed meeting"),
+    ).toBeVisible();
+    await expect(page.getByText("Your first meeting goes here.")).toHaveCount(
+      0,
+    );
+  });
+}

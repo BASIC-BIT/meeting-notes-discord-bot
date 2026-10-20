@@ -9,8 +9,11 @@ not require a website visit, a setup checklist or a purchase.
 
 BASIC approved the prototype and requested implementation planning on October 16, 2026. On October 19, BASIC selected **B, Steps + example**, for the empty library
 and accepted the accompanying installer DM. The standalone guide command was rejected. The revised
-flow removes `/onboard` and puts help in context. This onboarding flow has
-not been implemented. Related notes-routing changes have merged separately, but
+flow removes `/onboard` and puts help in context. All four source tasks and their
+scoped reviews are complete in the isolated worktree. Local evidence and its
+remaining visual-runner limit are recorded in the
+[implementation evidence](#implementation-evidence-october-20).
+CI, deployment and native Sandbox acceptance remain unverified. Related notes-routing changes have merged separately, but
 their deployed state was not verified during this design refresh.
 
 Keep the first interaction where the person already is. The site opens Discord;
@@ -250,3 +253,30 @@ Implementation planning inspected remote `master` at
 `00813f875433299c5fa2feae544e94b8d7fc6fe1` on October 16, 2026. The earlier
 prototype used `16270f66f07280e12a2644ad96f91f4ae6dbf45c`. Runtime configuration
 and deployed behavior were not checked for this planning pass.
+
+### Implementation evidence, October 20
+
+The source implements the selected library layout, installer guidance, retired
+wizard handling and permission-checked meeting progress. Final review restored
+manual library refresh, added focus refresh to its existing query without
+polling, explained a successful guide-only result and removed Discord destination
+identifiers from analytics copies. Navigation keeps the real links. The final
+review's four findings and four quality duplication findings are addressed; the
+scoped independent review found no new blocking issue.
+
+Storybook passed 274 tests, and VLM review covered the changed guide and library
+captures. All 136 visual tests passed with three workers. The standard runner's
+final retry passed 135 of 136, with one existing library case reaching its
+30-second total limit. Its baselines and timeout were not changed. This remains
+a local runner limitation, not a green standard-runner result.
+
+Final Jest passed 3,646 tests across 386 suites without collecting coverage again;
+the preceding complete run passed 3,639 tests with normal coverage. Builds,
+documentation, lint, formatting and Markdown checks passed. The final quality
+scan covered 1,182 eligible files with zero duplication, complexity or file-size
+findings. The broader frontend typecheck retains 58 unchanged baseline diagnostics.
+
+Task 4 and source implementation are complete. Native Discord rendering, an
+approved Sandbox recording, CI and deployment remain unverified. Commit and
+publication belong to the controller. These source and capture results do not
+establish live acceptance.

@@ -16,19 +16,26 @@ tRPC, Jest, Storybook and Playwright. No new dependencies.
 
 **Spec:** [Approved first-meeting design](../specs/2026-10-16-first-meeting-flow-design.md).
 
-**October 19 status:** BASIC selected **B, Steps + example**, and the accompanying
-installer DM. The library pairs short instructions with the homepage's Discord-styled
-example, then stacks them on smaller screens. Notes routing has merged separately.
-This revision retires `/onboard`, retains safe handling of old interactions, and
-links the installer DM directly to the server library. Product implementation has
-not started. The selected copy and layout are in the spec's
+**October 20 execution status:** All four source tasks are complete in the isolated
+worktree. The final review's four findings and the quality scan's four duplication
+findings are addressed. The scoped independent review found no new blocking issue.
+Complete Jest, Storybook, build, documentation and quality checks passed. All 136
+visual tests passed with three workers; the standard runner's final retry passed
+135, with one existing library test reaching its 30-second limit. Commit and
+publication remain with the controller. CI, deployment and native Sandbox
+acceptance remain unverified.
+
+BASIC selected **B, Steps + example**, and its installer DM on October 19. The
+implemented library pairs short instructions with the existing Discord-styled
+example and stacks them on smaller screens. The installer links to that library;
+`/onboard` is retired with safe handling for old interactions. The selected copy
+and layout remain in the spec's
 [selected layout section](../specs/2026-10-16-first-meeting-flow-design.md#selected-library-layout-and-installer-copy).
 
-**Review decision:** The experience is approved. Review the implementation scope
-below and choose an execution method. Native execution is recommended because the
-four tasks share one status contract and navigation flow; it keeps the work in one
-session with an independent whole-branch review at the end. Subagent-driven
-execution adds independent review after each task at a higher context cost.
+**Execution:** Scoped workers implemented the approved design in one
+isolated worktree, with controller review after each task. The controller owns the
+complete Jest suite and final frozen-tree quality check. No push, deployment or
+provider action is part of this execution.
 
 ## Global constraints
 
@@ -69,7 +76,7 @@ execution adds independent review after each task at a higher context cost.
 | 1: trustworthy status             | New `src/types/firstMeeting.ts` and `src/services/firstMeetingService.ts`; extend `src/trpc/routers/meetings.ts`; new `test/services/firstMeetingService.test.ts`; extend `test/trpc/meetingsRouter.test.ts`.                                                                                                                                                                                                                                                                                                  |
 | 2: installer and recording result | New `src/utils/firstMeetingGuide.ts` for Discord payloads; update `src/commands/onboard.ts`, installer DM in `src/bot.ts`, and existing message components in `src/embed.ts`; new `test/utils/firstMeetingGuide.test.ts`; extend `test/commands/onboard.test.ts` and `test/embed.test.ts`.                                                                                                                                                                                                                     |
 | 3: site guide and handoff         | Update `src/frontend/pages/Join.tsx`, `src/frontend/router.tsx`, `src/frontend/contexts/AuthContext.tsx`, `src/frontend/services/analytics.ts`, `src/frontend/pages/library/hooks/useLibraryMeetings.ts`, and `src/frontend/pages/library/LibraryPage.tsx`; extend `test/frontend/pages.join.test.tsx`, `test/frontend/pages.library.test.tsx`, `test/frontend/authContext.test.tsx`, `test/frontend/analytics.test.ts`, `test/e2e/join.spec.ts`, `test/e2e/library.spec.ts` and `test/e2e/pages/JoinPage.ts`. |
-| 4: visual and public acceptance   | Extend `src/frontend/pages/Join.stories.tsx` and its existing `UpgradePreview` fixture in `src/frontend/pages/UpgradePlans.stories.tsx`; new story-only `src/frontend/components/FirstMeetingDiscord.stories.tsx`; extend `test/e2e/visual.spec.ts` and its snapshots; update `apps/docs-site/docs/getting-started/overview.md` and `apps/docs-site/docs/whats-new/index.md`.                                                                                                                                  |
+| 4: visual and public acceptance   | Extract `src/frontend/storybook/UpgradePreview.tsx` from the existing oversized `UpgradePlans.stories.tsx` and migrate its two callers; extend `Join.stories.tsx`; add sibling `FirstMeetingEmptyState.stories.tsx` and actual-payload `FirstMeetingDiscord.stories.tsx`; add `test/e2e/firstMeeting.visual.spec.ts` and its snapshots, update only intended existing join snapshots; update public getting-started, features, admin permissions, What's New and README guidance.                              |
 
 Task 3 also creates `src/frontend/pages/library/components/FirstMeetingEmptyState.tsx`
 and `FirstMeetingEmptyState.module.css` in that directory. Task 4 adds the sibling
@@ -122,7 +129,7 @@ Expose `meetings.firstMeeting({ serverId: string, historyId?: string })` through
 targets and unavailable permission checks. Server IDs are Discord snowflakes;
 `historyId` is the history sort key (`channelId_timestamp`), never the internal UUID.
 
-- [ ] Write service and router tests named `selects_latest_accessible_candidate`,
+- [x] Write service and router tests named `selects_latest_accessible_candidate`,
       `denied_target_matches_missing_target`, `requires_member_and_bot_presence`,
       `lease_and_delivery_evidence`, and `preserves_incomplete_outcomes`. Assertions:
 
@@ -144,14 +151,14 @@ targets and unavailable permission checks. Server IDs are Discord snowflakes;
   empty transcription, cancellation, interrupted capture and recovery warnings.
   Assert the DTO has no notes body, transcript, provider error or media URL.
 
-- [ ] Run `yarn test --runInBand --runTestsByPath test/services/firstMeetingService.test.ts test/trpc/meetingsRouter.test.ts`.
+- [x] Run `yarn test --runInBand --runTestsByPath test/services/firstMeetingService.test.ts test/trpc/meetingsRouter.test.ts`.
       Confirm failure comes from the absent procedure/service or the new assertions.
-- [ ] Implement the signatures above. With an explicit history key, point-read that
+- [x] Implement the signatures above. With an explicit history key, point-read that
       record and check access without falling back to a different meeting. Otherwise
       read at most 50 recent unarchived guild records, check access before choosing the
       newest permitted candidate, and return `guide` if none is available. This bounded
       lookup is recent activity, not proof that a server has never recorded.
-- [ ] Derive state using persisted notes, processing and delivery outcomes. Only
+- [x] Derive state using persisted notes, processing and delivery outcomes. Only
       matching, unexpired leases justify `recording` or `processing`; a stale active
       row becomes `attention/status_unknown`. Missing history during initialization
       stays generic until a permitted row appears. Saved nonblank notes take priority:
@@ -161,7 +168,7 @@ targets and unavailable permission checks. Server IDs are Discord snowflakes;
       Preserve capture/recovery notices on every target. Terminal rows without notes
       use `attention`, never success. Build URLs with the existing canonical helper
       and authorized message/channel pointers; do not guess a recording message ID.
-- [ ] Rerun the Task 1 command and require all tests to pass. Commit only Task 1
+- [x] Rerun the Task 1 command and require all tests to pass. Commit only Task 1
       files with `feat: expose permission-checked first-meeting progress`.
 
 ## Task 2: retire the wizard and improve existing Discord messages
@@ -174,7 +181,7 @@ The payload uses the spec's exact installer copy, **Open {serverName}** and **Op
 to that server's existing library route. It uses link buttons, not DM-incompatible
 server interaction controls. Do not create a replacement guide command.
 
-- [ ] Add `installer_explains_first_recording`, `legacy_controls_are_read_only`,
+- [x] Add `installer_explains_first_recording`, `legacy_controls_are_read_only`,
       `retired_command_is_not_registered` and `notes_actions_preserve_delivery` tests.
       Assert the exact three steps, interpolated server name, server/portal links
       and retained sign-in destination. Include long and Markdown-bearing server
@@ -201,8 +208,8 @@ server interaction controls. Do not create a replacement guide command.
   fallback tests. Test caught DM failure, component limits, multipart notes,
   existing upgrade actions and finalization acknowledgments. Assert no new capture.
 
-- [ ] Run `yarn test --runInBand --runTestsByPath test/utils/firstMeetingGuide.test.ts test/commands/onboard.test.ts test/embed.test.ts`; confirm the new assertions fail.
-- [ ] Remove `onboardCommand` from registration in `src/bot.ts`. Replace the old
+- [x] Run `yarn test --runInBand --runTestsByPath test/utils/firstMeetingGuide.test.ts test/commands/onboard.test.ts test/embed.test.ts`; confirm the new assertions fail.
+- [x] Remove `onboardCommand` from registration in `src/bot.ts`. Replace the old
       wizard handlers in `src/commands/onboard.ts` with safe acknowledgment of existing
       interaction IDs and cached invocations. The private notice is: "Setup is now in
       the portal." Include **Open portal** for that server; do not return a tutorial,
@@ -210,13 +217,13 @@ server interaction controls. Do not create a replacement guide command.
       response deadline. Preserve the installer-DM feature gate and its fallback logic.
       Delete unused wizard presentation/imports after checking all callers. Leave
       historical state, storage schema and existing configuration commands alone.
-- [ ] Use the installer builder in the existing guild-install DM path. In
+- [x] Use the installer builder in the existing guild-install DM path. In
       `src/embed.ts`, relabel the canonical result link **Open meeting** and add a
       link-style **Optional setup** to `/join?serverId=...#optional-setup`. Put these
       actions on the last notes batch and the summary's existing result row. Preserve
       correction/feedback/tag/upgrade controls and delivery counts. Do not add messages,
       resend paths, completion flags or settings mutations.
-- [ ] Rerun the Task 2 command and
+- [x] Rerun the Task 2 command and
       `yarn test --runInBand --runTestsByPath test/services/guildInstallerOnboardingService.test.ts test/services/guildInstallerService.test.ts`.
       Require passing tests; commit only Task 2 files with
       `feat: retire onboarding wizard and add contextual first-meeting help`.
@@ -241,7 +248,7 @@ library component. It consumes verified server destinations supplied by
 no queries or recording actions. Use a CSS container query on its wrapper for the
 800/600-pixel stacking thresholds. Keep it scoped to the server library.
 
-- [ ] Add `unknown_server_stays_generic`, `normal_member_can_choose_server`,
+- [x] Add `unknown_server_stays_generic`, `normal_member_can_choose_server`,
       `pins_meeting_and_ignores_old_server_response`, `signin_preserves_guide_target`,
       `filtered_empty_is_not_first_meeting`, and `status_error_keeps_verified_result` tests.
       Include private/missing direct target, no bot, invalid search, loading, archives
@@ -279,38 +286,38 @@ no queries or recording actions. Use a CSS container query on its wrapper for th
   Analytics fixtures include guide query parameters, meeting-page URLs, referrers,
   link attributes and encoded nested sign-in return URLs.
 
-- [ ] Run `yarn test --runInBand --runTestsByPath test/frontend/pages.join.test.tsx test/frontend/pages.library.test.tsx test/frontend/authContext.test.tsx test/frontend/analytics.test.ts`; confirm new assertions fail before editing production code.
-- [ ] Add server choice with the existing `ServerPicker` and eligible-server query.
+- [x] Run `yarn test --runInBand --runTestsByPath test/frontend/pages.join.test.tsx test/frontend/pages.library.test.tsx test/frontend/authContext.test.tsx test/frontend/analytics.test.ts`; confirm new assertions fail before editing production code.
+- [x] Add server choice with the existing `ServerPicker` and eligible-server query.
       Keep sign-in optional for the generic guide and necessary for real progress.
       Never trust query parameters as access proof. Preserve explicit target errors
       without silently substituting another meeting. Once an authorized candidate is
       returned, retain its history key in the URL for refetch/reload. Server selection
       clears the previous target and cache display immediately.
-- [ ] Keep **Open Discord** primary before recording and add **Open portal** as a
+- [x] Keep **Open Discord** primary before recording and add **Open portal** as a
       visible secondary link. A verified server opens its existing meeting-library
       route; an unknown server opens the existing portal server picker. Preserve the
       intended destination through the normal sign-in flow.
-- [ ] Render the approved state and primary action from the DTO. Refetch on focus
+- [x] Render the approved state and primary action from the DTO. Refetch on focus
       and **Check again**; poll every 10 seconds only while visible and in verified
       recording/processing state. Before a meeting is found, returning from Discord
       refetches on focus. Stop polling terminal states. Preserve the last verified
       display on transient errors, mark it stale and remove live-state claims; clear
       protected display on authorization loss. No timer or progress percentage.
-- [ ] Preserve `/join` search in sign-in return through the existing same-origin
+- [x] Preserve `/join` search in sign-in return through the existing same-origin
       redirect validation. Use the canonical meeting URL for **Open meeting** so its
       existing protected route returns to the same record after sign-in. Remove the
       reminder sentence; keep optional setup collapsed except on its explicit hash.
-- [ ] Extend the existing `redactShareIds(value: string, depth?: number): string`
+- [x] Extend the existing `redactShareIds(value: string, depth?: number): string`
       and `redactDeep(value: unknown): unknown` pipeline to redact guide `historyId`
       and `serverId` query values and the meeting-key segment of canonical meeting
       paths, including encoded return URLs. Keep real navigation URLs intact; only
       analytics copies are redacted. Reuse the bounded parser, preserve DNT behavior,
       and add no capture calls or properties. This narrows collection.
-- [ ] Implement `FirstMeetingEmptyState` with the spec's exact copy and the existing
+- [x] Implement `FirstMeetingEmptyState` with the spec's exact copy and the existing
       `SampleSummary`, not copied markup. Instructions and primary action precede
       the sample in DOM order. Keep the fictional label visible and optional setup
       collapsed. Use the existing house layout components and the scoped stylesheet.
-- [ ] Render this component from `LibraryPage` only after a successful, unfiltered
+- [x] Render this component from `LibraryPage` only after a successful, unfiltered
       active-library response with no accessible rows before client filtering.
       Return `hasAccessibleMeetings` from the existing hook using `meetingRows.length`
       rather than `filteredMeetings.length`. Require a verified selected server,
@@ -319,7 +326,7 @@ no queries or recording actions. Use a CSS container query on its wrapper for th
       filter/count/sort controls only while this view is active; keep navigation and
       integration status. Preserve `MeetingList` and normal filter controls in all
       other cases, including loading, errors, archives and search-empty states.
-- [ ] Rerun the Task 3 Jest command, then
+- [x] Rerun the Task 3 Jest command, then
       `yarn test:e2e test/e2e/join.spec.ts test/e2e/library.spec.ts --project=chromium`.
       Require passing state transitions, server switches, sign-in return and actual
       scrolling (`scrollHeight > clientHeight` and changed `scrollTop`). Commit only
@@ -327,7 +334,10 @@ no queries or recording actions. Use a CSS container query on its wrapper for th
 
 ## Task 4: capture visual regressions and finish public guidance
 
-**Files:** Task 4 row above. Reuse the existing Storybook router/auth/tRPC fixture;
+**Files:** Task 4 row above. The focused `@visual` spec is discovered by the existing
+runner; do not grow `visual.spec.ts` or change its wrapper. The installer is captured
+by the existing Storybook harness, so standard Playwright CI needs no Storybook
+server. Reuse the existing Storybook router/auth/tRPC fixture;
 the Discord story consumes the actual Task 2 builders' serialized payloads.
 Its small story-only renderer is a review aid, not a new production component.
 
@@ -344,7 +354,7 @@ coverage uses the existing library route with authenticated mocked empty data,
 including ordinary members. The installer story uses Task 2's real payload, not
 another hardcoded version of the DM copy.
 
-- [ ] Add story play assertions for exact copy, links, optional disclosure and
+- [x] Add story play assertions for exact copy, links, optional disclosure and
       available actions before adding fixtures. Add Playwright screenshot assertions
       for these site states at 390, 768 and 1280 pixels, retaining existing join views
       and existing light/dark coverage. Include ready, partial delivery and optional
@@ -358,29 +368,61 @@ another hardcoded version of the DM copy.
       Capture both portal themes and keep the example's Discord colors unchanged.
       Verify filters remain available in search-empty, error, loading and archive
       states. Assert the installer DM's **Open portal** targets the same library.
-- [ ] Implement the fixtures and story-only Discord payload renderer. Record an
+- [x] Implement the fixtures and story-only Discord payload renderer. Record an
       initial screenshot run without updating baselines and inspect its differences;
       update only intended changed/new snapshots, then rerun without update flags.
       Keep `react-docgen-typescript` and the existing screenshot harness intact.
-- [ ] Run Storybook on port 6006, `yarn test-storybook`, and
+- [x] Run Storybook on port 6006, `yarn test-storybook`, and
       `yarn test:visual:update`, followed by `yarn test:visual`.
       The repository wrapper does not forward a custom grep argument.
       Review generated Storybook captures
       and the affected Playwright snapshots with the VLM; repair clipping, wrapping,
       misleading emphasis or stale visual claims before accepting baselines.
-- [ ] Update getting-started docs with the three actions, optional commands and
+- [x] Update getting-started docs with the three actions, optional commands and
       where notes appear. Remove wizard instructions and the guide's reminder copy.
       Add a concise What's New entry. Run `yarn docs:check`, `yarn build`,
       `yarn build:web`, `yarn lint:check`, `yarn prettier:check`, and
-      `yarn markdownlint:check`. Require exit 0, then commit Task 4 files with
-      `test: cover first-meeting journeys and update setup docs`.
-- [ ] Run the complete Jest suite once after integration. Before calling the live
-      flow accepted, use Dev/Sandbox with an approved test server to verify installer
+      `yarn markdownlint:check`. Require exit 0.
+- [x] Run the complete Jest suite after integration and inspect the final quality
+      result and independent review.
+- [ ] Commit the reviewed Task 4 and final fixes after controller checks, then
+      publish only within the user's authorized scope.
+- [ ] Before calling the live flow accepted, use Dev/Sandbox with an approved test
+      server to verify installer
       DM, one recording, saved notes, Discord result actions and the
       site's same-meeting return. Reuse test evidence for delivery failure and private
       channels rather than changing a real user's permissions. Record source, CI,
       deployment and live outcomes separately in the existing private ops owner note.
       Existing recording-safe deploy guards and production authorization still apply.
+
+### Local execution evidence
+
+Task 4 and its final fixes are complete. Storybook passed 43 suites and 274 tests,
+including 28 focused first-meeting checks. Captures use the real components and
+installer payload. All 42 first-meeting visual cases passed. The complete visual
+selection passed all 136 tests with three workers and no update flags. VLM review
+confirmed the responsive layout, fictional-example label, Discord palette,
+restored Refresh action and truthful guide status sentence.
+
+The final standard-runner retry passed 135 of 136 tests. Its existing library
+case reached the 30-second total limit while selecting All time. An earlier
+standard run had five existing timeouts and one Ask scrollbar/footer difference;
+none reproduced in the complete three-worker pass. No unrelated baseline,
+runner, timeout or configuration was changed. The standard runner remains red;
+retain this limit in the publication and CI handoff.
+
+The preceding complete Jest run passed 386 suites and 3,639 tests with normal
+coverage. The final source run passed 386 suites and 3,646 tests without coverage
+collection. It reported a delayed-exit warning, then exited successfully. Backend
+and frontend builds, docs, lint, formatting and Markdown checks passed. The final
+pinned quality scan inspected all 1,182 eligible files and reported zero
+duplication, complexity or file-size findings. The broader frontend typecheck
+retains its unchanged 58 baseline diagnostics.
+
+Scoped independent review confirmed the eight final findings were addressed and
+found no new blocker. This establishes local source and capture evidence. It does
+not establish CI, deployed behavior, native Discord rendering or a Sandbox
+recording.
 
 ## Measurement and completion
 
@@ -415,3 +457,17 @@ service analysis before implementation. Reads were pinned because the planning
 checkout is older and dirty. Execution
 must recheck drift before editing. This planning pass ran no product tests and
 made no provider, deployment, PostHog or Discord mutations.
+
+### Final implementation and review
+
+The implementation follows the approved in-context journey. Existing permissions,
+recording controls and delivery warnings remain authoritative. The empty library
+keeps manual refresh and refreshes its existing query on focus without polling.
+The shared analytics-copy sanitizer removes Discord channel and message link
+identifiers, including encoded return URLs, while navigation keeps its real hrefs.
+
+The final review and quality fixes add no storage, dependencies, collection or
+provider operation. Local checks and reviewed captures are recorded above. The
+standard visual timing failure, existing frontend typecheck debt and unverified
+CI/deployment/native acceptance remain explicit handoff limits. The controller
+owns commit and publication.
