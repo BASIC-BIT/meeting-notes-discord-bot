@@ -47,7 +47,7 @@ describe("Library page", () => {
     expect(screen.getByText("End the recording.")).toBeInTheDocument();
     expect(screen.getAllByTestId("sample-summary")).toHaveLength(1);
     expect(
-      screen.getByText("Example notes ï¿½ Fictional meeting"),
+      screen.getByText("Example notes · Fictional meeting"),
     ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Discord" })).toHaveAttribute(
       "href",

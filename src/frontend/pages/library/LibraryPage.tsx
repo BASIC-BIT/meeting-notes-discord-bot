@@ -168,10 +168,21 @@ export default function LibraryPage() {
       />
 
       {firstMeeting ? (
-        <FirstMeetingEmptyState
-          discordUrl={`https://discord.com/channels/${selectedGuild.id}`}
-          optionalSetupUrl={`/join?serverId=${selectedGuild.id}#optional-setup`}
-        />
+        <>
+          <Group justify="flex-end">
+            <Button
+              size="xs"
+              variant="subtle"
+              onClick={() => setArchiveFilter("archived")}
+            >
+              View archived meetings
+            </Button>
+          </Group>
+          <FirstMeetingEmptyState
+            discordUrl={`https://discord.com/channels/${selectedGuild.id}`}
+            optionalSetupUrl={`/join?serverId=${selectedGuild.id}#optional-setup`}
+          />
+        </>
       ) : (
         <>
           <FiltersBar

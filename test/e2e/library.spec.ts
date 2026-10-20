@@ -112,3 +112,50 @@ for (const width of [390, 768, 1280]) {
     expect(scroll.horizontalOverflow).toBe(false);
   });
 }
+
+test("server with only archived meetings keeps its archive navigation", async ({
+  page,
+  libraryPage,
+}) => {
+  const archived = {
+    id: "archived-only",
+    meetingId: "archived-session",
+    channelId: "111111111111111111",
+    channelName: "Planning",
+    timestamp: "2024-12-31T12:00:00.000Z",
+    duration: 600,
+    tags: [],
+    notes: "Archived planning meeting",
+    meetingName: "Archived planning meeting",
+    audioAvailable: false,
+    transcriptAvailable: true,
+    archivedAt: "2025-01-01T00:00:00.000Z",
+  };
+  await mockFirstMeetingRequests(page, {
+    "meetings.list": (url) => {
+      const input = url.searchParams.get("input") ?? "";
+      const archivedScope =
+        input.includes('"archivedOnly":true') ||
+        input.includes('"includeArchived":true');
+      return { meetings: archivedScope ? [archived] : [] };
+    },
+  });
+  await page.goto(`/portal/server/${mockGuilds.ddm.id}/library`);
+  await expect(page.getByText("Your first meeting goes here.")).toBeVisible();
+  await expect(libraryPage.searchInput()).toHaveCount(0);
+  await page.getByRole("button", { name: "View archived meetings" }).click();
+  await expect(
+    libraryPage.meetingRowByText("Archived planning meeting"),
+  ).toBeVisible();
+  await expect(libraryPage.archiveFilter()).toHaveValue("Archived");
+  await expect(libraryPage.searchInput()).toBeVisible();
+  await libraryPage.selectArchiveView("all");
+  await expect(
+    libraryPage.meetingRowByText("Archived planning meeting"),
+  ).toBeVisible();
+  await libraryPage.selectArchiveView("active");
+  await expect(page.getByText("Your first meeting goes here.")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "View archived meetings" }),
+  ).toBeVisible();
+});

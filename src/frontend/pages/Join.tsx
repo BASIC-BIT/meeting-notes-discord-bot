@@ -332,7 +332,7 @@ export default function Join() {
           </Stack>
           <Stack gap="sm">
             <Text size="sm" c="dimmed">
-              Example notes ï¿½ Fictional meeting
+              Example notes · Fictional meeting
             </Text>
             <SampleSummary />
           </Stack>

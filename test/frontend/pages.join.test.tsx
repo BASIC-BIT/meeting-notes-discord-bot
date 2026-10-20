@@ -300,5 +300,8 @@ describe("Join page", () => {
       screen.getByText("Optional setup").closest("details"),
     ).not.toHaveAttribute("open");
     expect(screen.queryByText(/Let everyone know/)).toBeNull();
+    expect(
+      screen.getByText("Example notes \u00b7 Fictional meeting"),
+    ).toBeInTheDocument();
   });
 });
