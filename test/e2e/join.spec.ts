@@ -183,15 +183,30 @@ test("focus checks before discovery and visible live polling stops at a terminal
   await page.clock.install();
   let state: FirstMeetingState = { kind: "guide" };
   let requests = 0;
+  let releaseInitial!: () => void;
+  const initialResponse = new Promise<void>((resolve) => {
+    releaseInitial = resolve;
+  });
   await mockFirstMeetingRequests(page, {
     "servers.listEligible": () => guilds,
-    "meetings.firstMeeting": () => {
+    "meetings.firstMeeting": async () => {
+      await initialResponse;
       requests += 1;
       return state;
     },
   });
-  await page.goto(`/join?serverId=${serverId}`);
-  await expect(page.getByRole("button", { name: "Check again" })).toBeVisible();
+  try {
+    await page.goto(`/join?serverId=${serverId}`);
+    await expect(
+      page.getByRole("button", { name: "Check again" }),
+    ).toBeVisible();
+    await expect(page.getByText("Checking meeting status...")).toBeVisible();
+  } finally {
+    releaseInitial();
+  }
+  await expect(
+    page.getByText("No accessible recent meeting found yet."),
+  ).toBeVisible();
   const beforeFocus = requests;
   await page.clock.fastForward(30_000);
   expect(requests).toBe(beforeFocus);
