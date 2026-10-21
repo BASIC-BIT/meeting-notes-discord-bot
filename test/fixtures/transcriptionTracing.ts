@@ -9,8 +9,7 @@ import type { SnippetTranscriptionResult } from "../../src/types/audio";
 import type { TranscriptionContentInput } from "../../src/services/transcriptionService";
 
 const EVENT_TIMEOUT_MS = 1_000;
-const ATTACHMENT_WARNING =
-  "Failed to attach transcription audio to Langfuse.";
+const ATTACHMENT_WARNING = "Failed to attach transcription audio to Langfuse.";
 
 export const deferred = <T>() => Promise.withResolvers<T>();
 
@@ -221,8 +220,9 @@ function mockProvider() {
   const create = jest.fn(
     async (
       request: TranscriptionCreateParamsNonStreaming<"json">,
-      _options: { signal: AbortSignal },
+      options: { signal: AbortSignal },
     ) => {
+      expect(options.signal.aborted).toBe(false);
       if (!request.prompt) return validResponse;
       providerEntered.resolve();
       try {
