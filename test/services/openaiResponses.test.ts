@@ -53,7 +53,7 @@ async function loadResponse(response: object | object[]) {
     guild: { id: "guild-1" },
     voiceChannel: { id: "voice-1" },
   };
-  const options = { traceName: "notes", api: "responses" as const };
+  const options = { traceName: "notes" };
   const messages = [{ role: "user" as const, content: "Write the notes." }];
   return {
     run: (signal?: AbortSignal) =>
@@ -77,7 +77,7 @@ async function loadResponse(response: object | object[]) {
   };
 }
 
-test("Responses returns completed text and translates frozen-style parameters", async () => {
+test("Meeting text always uses Responses and translates frozen parameters", async () => {
   const fixture = await loadResponse({
     status: "completed",
     output_text: "Completed notes",
