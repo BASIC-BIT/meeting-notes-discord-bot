@@ -55,7 +55,7 @@ import {
   coalesceTranscription,
   transcribeSnippet,
 } from "./services/transcriptionService";
-import { resolveAudioFileText } from "./utils/audioTranscript";
+import { formatParticipantLabel } from "./utils/participants";
 import { buildModelOverrides, getModelChoice } from "./services/modelFactory";
 import ffmpeg from "fluent-ffmpeg";
 import * as fs from "node:fs";
