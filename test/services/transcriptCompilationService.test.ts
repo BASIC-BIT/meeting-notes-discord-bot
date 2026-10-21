@@ -106,6 +106,15 @@ function buildCompilerFixture(options: { cues?: { text: string }[] } = {}) {
     .join("\n");
   return { client, meeting, files, ack, cleanup: jest.mocked(chat), original };
 }
+function holdNextCleanup(f: ReturnType<typeof buildCompilerFixture>) {
+  const entered = deferred<void>();
+  const pending = deferred<string>();
+  f.cleanup.mockImplementationOnce(() => {
+    entered.resolve();
+    return pending.promise;
+  });
+  return { entered, pending };
+}
 beforeEach(() => {
   jest.clearAllMocks();
   jest.mocked(chat).mockReset().mockResolvedValue(ACCEPTED);
@@ -315,12 +324,7 @@ test("standalone compilation gets a fresh lifetime on every call", async () => {
 });
 test("an unsettled cleanup is never reused", async () => {
   const f = buildCompilerFixture();
-  const entered = deferred<void>();
-  const pending = deferred<string>();
-  f.cleanup.mockImplementationOnce(() => {
-    entered.resolve();
-    return pending.promise;
-  });
+  const { entered, pending } = holdNextCleanup(f);
   const compile = createMeetingTranscriptCompiler(f.client, f.meeting);
   const first = compile();
   await entered.promise;
@@ -381,12 +385,7 @@ test("abort after provider settlement prevents admission", async () => {
 });
 test("a late file stays outside the transcript while cleanup is held", async () => {
   const f = buildCompilerFixture();
-  const entered = deferred<void>();
-  const pending = deferred<string>();
-  f.cleanup.mockImplementationOnce(() => {
-    entered.resolve();
-    return pending.promise;
-  });
+  const { entered, pending } = holdNextCleanup(f);
   const compilation = createMeetingTranscriptCompiler(f.client, f.meeting)();
   await entered.promise;
   f.meeting.audioData.audioFiles.push({
