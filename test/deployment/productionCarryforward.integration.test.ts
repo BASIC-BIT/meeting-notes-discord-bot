@@ -44,6 +44,7 @@ const client = new DynamoDBClient({
 let repository: ReturnType<
   typeof import("../../src/repositories/personalMediaUploadRepository").getPersonalMediaUploadRepository
 >;
+let disabledLifecycle: import("../../src/services/runtimeLifecycleService").RuntimeLifecycle;
 let processJob: typeof import("../../src/services/personalMediaUploadWorkerService").processPersonalMediaUploadJob;
 const binding = {
   accountId: "123456789012",
@@ -115,12 +116,59 @@ beforeAll(async () => {
     servingMembers: { new: candidate.identity },
   });
   await put(names.control, candidate);
+  disabledLifecycle = await startDisabledCandidate();
 });
+afterEach(() => jest.restoreAllMocks());
 afterAll(async () => {
+  disabledLifecycle?.stop();
   for (const TableName of Object.values(names))
     await client.send(new DeleteTableCommand({ TableName }));
   client.destroy();
 });
+async function startDisabledCandidate() {
+  const { createRuntimeLifecycle, installRuntimeLifecycle } =
+    await import("../../src/services/runtimeLifecycleService");
+  const { createRuntimeProtectionService } =
+    await import("../../src/services/runtimeProtectionService");
+  const { createDynamoDeploymentControlRepository } =
+    await import("../../src/repositories/deploymentControlRepository");
+  const identity = runtime("disabled-candidate", "candidate").identity;
+  const protection = createRuntimeProtectionService({
+    identity,
+    now: () => 100,
+    onUnsafe: () => {},
+    agentUri: "http://synthetic.invalid",
+    // The supported transport seam supplies protection proof without provider I/O.
+    request: async () =>
+      Response.json({
+        protection: {
+          TaskArn: identity.taskArn,
+          ProtectionEnabled: true,
+          ExpirationDate: new Date(900_000).toISOString(),
+        },
+      }),
+  });
+  const lifecycle = createRuntimeLifecycle({
+    identity,
+    repository: createDynamoDeploymentControlRepository(client, {
+      deploymentControl: names.control,
+      meetingHistory: names.history,
+      activeMeeting: names.leases,
+    }),
+    protection,
+    now: () => 100,
+    checkpointAndFence: async () => {},
+    probeReadiness: async () => ({
+      gatewayReady: true,
+      cacheReady: true,
+      dependenciesReady: true,
+    }),
+  });
+  installRuntimeLifecycle(lifecycle);
+  await lifecycle.start();
+  lifecycle.closeAdmission();
+  return lifecycle;
+}
 function legacyJob(
   status: "pending_upload" | "queued" = "queued",
 ): PersonalMediaUploadJobRecord {
@@ -233,12 +281,30 @@ test("a persisted processing webhook alone prevents drain after every other inve
   }
 });
 test.each(["pending_upload", "queued"] as const)(
-  "initial disabled admission preserves %s legacy bytes",
+  "initialized disabled admission preserves %s legacy bytes",
   async (status) => {
+    const { getRuntimeLifecycle } =
+      await import("../../src/services/runtimeLifecycleService");
+    const { RuntimeAdmissionUnavailable } =
+      await import("../../src/services/runtimeAdmissionError");
+    const lifecycle = getRuntimeLifecycle();
+    expect(lifecycle.getRole()).toBe("candidate");
+    expect(lifecycle.isAcceptingWork()).toBe(false);
+    const admission = jest.spyOn(lifecycle, "beginRuntimeWork");
+    const processingClaim = jest.spyOn(repository, "claim");
+    const counts = lifecycle.getWorkCounts();
     const job = legacyJob(status);
     await put(names.uploads, job);
     const before = await readBytes(job.uploadId);
     await processJob(job);
+    expect(admission).toHaveBeenCalledTimes(1);
+    expect(admission).toHaveBeenCalledWith("pending_admission");
+    expect(admission.mock.results[0].type).toBe("throw");
+    expect(admission.mock.results[0].value).toBeInstanceOf(
+      RuntimeAdmissionUnavailable,
+    );
+    expect(lifecycle.getWorkCounts()).toEqual(counts);
+    expect(processingClaim).not.toHaveBeenCalled();
     expect(await readBytes(job.uploadId)).toEqual(before);
     expect((await repository.get(job.uploadId))?.attempts).toBeUndefined();
   },
