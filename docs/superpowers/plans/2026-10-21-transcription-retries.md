@@ -88,7 +88,7 @@ The ledger snapshot has logicalCandidateCount, sdkInvocationCount,
 httpDispatchAttemptCount, retryCount, knownUsageAttemptCount,
 unknownUsageAttemptCount, attemptUsageCoverage, optional
 estimatedAttemptAudioSeconds, and returnedUsages. Counts are numbers;
-returnedUsages is Transcription["usage"][]; coverage uses the spec's four
+returnedUsages is `Transcription["usage"][]`; coverage uses the spec's four
 literal values. Prefix these property names with transcription when
 recording the exact metadata keys in the spec, excluding returnedUsages.
 That array is consumed only by usage accounting. Queue wait is recorded

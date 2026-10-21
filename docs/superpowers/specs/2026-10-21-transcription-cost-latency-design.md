@@ -129,7 +129,7 @@ checkpoints independently.
 Record `transcriptionCleanupReuseHit` on the existing compilation observation
 as best-effort metadata. A hit must not fabricate a provider generation.
 
-### Alternatives
+### Cleanup alternatives
 
 A transcript-only key ignores mutable prompt inputs. A process cache or
 WeakMap keyed by meeting gives reuse an unnecessarily broad lifetime.
@@ -273,7 +273,7 @@ failure enum, HTTP status and delay. Do not export request bodies, headers,
 prompts, transcripts, paths, raw errors or new identifiers. Diagnostics must
 be best effort and must not replace the operation's result.
 
-### Alternatives
+### Retry alternatives
 
 Selective outer retries retain duplicated successful work and nested SDK
 retries. SDK-only retries do not supply the selected classification and
