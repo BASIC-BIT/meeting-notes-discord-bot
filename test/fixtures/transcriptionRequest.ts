@@ -37,7 +37,9 @@ export async function buildAsrFixture(options: FixtureOptions) {
         : Readable.from([Buffer.from("synthetic wav bytes")]);
       if (options.multipartError) {
         Object.defineProperty(stream, Symbol.asyncIterator, {
-          get() { throw options.multipartError; },
+          get() {
+            throw options.multipartError;
+          },
         });
       }
       openedStreams.push(stream);
@@ -73,9 +75,9 @@ export async function buildAsrFixture(options: FixtureOptions) {
   const unexpectedFetch = async () => {
     throw new Error("Unexpected uncaptured native transport");
   };
-  jest.spyOn(globalThis, "fetch").mockImplementation(
-    options.defaultTransport ? fetch : unexpectedFetch,
-  );
+  jest
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(options.defaultTransport ? fetch : unexpectedFetch);
   const request = await import("../../src/services/transcriptionRequest");
   if (options.defaultTransport) globalThis.fetch = unexpectedFetch;
   const { createTranscriptionAttemptLedger } =

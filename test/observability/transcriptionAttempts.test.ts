@@ -12,7 +12,9 @@ async function dispatch(
 ) {
   const attempt = ledger.beginAttempt(candidate);
   attempt.markSdkInvocation();
-  await attempt.wrapFetch(async () => Response.json({}))("https://synthetic.invalid");
+  await attempt.wrapFetch(async () => Response.json({}))(
+    "https://synthetic.invalid",
+  );
   if (usage) {
     attempt.recordReturnedUsage(usage);
     attempt.settle({ kind: "success" });
@@ -58,14 +60,15 @@ test("failed dispatch plus returned usage is partial despite one priced response
     estimatedAttemptAudioSeconds: 4,
     returnedUsages: [validResponse.usage],
   });
-  expect(buildLangfuseTranscriptionAccounting(snapshot.returnedUsages, 2, snapshot))
-    .toMatchObject({
-      status: "partial",
-      requestCount: 1,
-      pricedRequestCount: 1,
-      unpricedRequestCount: 0,
-      usageDetails: { input: 23, output: 11, total: 34 },
-    });
+  expect(
+    buildLangfuseTranscriptionAccounting(snapshot.returnedUsages, 2, snapshot),
+  ).toMatchObject({
+    status: "partial",
+    requestCount: 1,
+    pricedRequestCount: 1,
+    unpricedRequestCount: 0,
+    usageDetails: { input: 23, output: 11, total: 34 },
+  });
 });
 
 test("two priced candidates sum tokens without counting a retry", async () => {
@@ -81,12 +84,13 @@ test("two priced candidates sum tokens without counting a retry", async () => {
     knownUsageAttemptCount: 2,
     attemptUsageCoverage: "complete",
   });
-  expect(buildLangfuseTranscriptionAccounting(snapshot.returnedUsages, 2, snapshot))
-    .toMatchObject({
-      status: "priced",
-      requestCount: 2,
-      usageDetails: { input: 46, output: 22, total: 68 },
-    });
+  expect(
+    buildLangfuseTranscriptionAccounting(snapshot.returnedUsages, 2, snapshot),
+  ).toMatchObject({
+    status: "priced",
+    requestCount: 2,
+    usageDetails: { input: 46, output: 22, total: 68 },
+  });
 });
 
 test.each([
@@ -101,8 +105,9 @@ test.each([
     const snapshot = ledger.snapshot();
     expect(snapshot.attemptUsageCoverage).toBe("complete");
     expect(snapshot.knownUsageAttemptCount).toBe(1);
-    expect(buildLangfuseTranscriptionAccounting([usage], undefined, snapshot).status)
-      .toBe("unpriced");
+    expect(
+      buildLangfuseTranscriptionAccounting([usage], undefined, snapshot).status,
+    ).toBe("unpriced");
   },
 );
 
@@ -126,8 +131,9 @@ test.each([Number.NaN, -1, Infinity])(
       returnedUsages: [usage],
     });
     expect(snapshot.estimatedAttemptAudioSeconds).toBeUndefined();
-    expect(buildLangfuseTranscriptionAccounting([usage], undefined, snapshot).status)
-      .toBe("unpriced");
+    expect(
+      buildLangfuseTranscriptionAccounting([usage], undefined, snapshot).status,
+    ).toBe("unpriced");
   },
 );
 
@@ -138,8 +144,17 @@ test("a returned response without usage still contributes to response counts", a
   attempt.recordReturnedUsage(undefined);
   const snapshot = ledger.snapshot();
   expect(snapshot.returnedUsages).toEqual([undefined]);
-  expect(buildLangfuseTranscriptionAccounting(snapshot.returnedUsages, undefined, snapshot))
-    .toMatchObject({ requestCount: 1, unpricedRequestCount: 1, status: "unpriced" });
+  expect(
+    buildLangfuseTranscriptionAccounting(
+      snapshot.returnedUsages,
+      undefined,
+      snapshot,
+    ),
+  ).toMatchObject({
+    requestCount: 1,
+    unpricedRequestCount: 1,
+    status: "unpriced",
+  });
 });
 
 test("attempt-bound fetches keep overlapping candidate usage separate", async () => {
@@ -150,11 +165,15 @@ test("attempt-bound fetches keep overlapping candidate usage separate", async ()
   const second = ledger.beginAttempt("no_prompt");
   first.markSdkInvocation();
   second.markSdkInvocation();
-  const firstFetch = first.wrapFetch(async () => { throw new TypeError("private body"); });
+  const firstFetch = first.wrapFetch(async () => {
+    throw new TypeError("private body");
+  });
   const secondFetch = second.wrapFetch(async () => Response.json({}));
   await secondFetch("https://synthetic.invalid/second");
   second.recordReturnedUsage(validResponse.usage);
-  await expect(firstFetch("https://synthetic.invalid/private-path")).rejects.toThrow();
+  await expect(
+    firstFetch("https://synthetic.invalid/private-path"),
+  ).rejects.toThrow();
   first.settle({ kind: "failure", failure: "connection" });
   second.settle({ kind: "success" });
   expect(ledger.snapshot()).toMatchObject({
@@ -163,7 +182,9 @@ test("attempt-bound fetches keep overlapping candidate usage separate", async ()
     unknownUsageAttemptCount: 1,
     retryCount: 0,
   });
-  expect(JSON.stringify(ledger.snapshot())).not.toMatch(/private body|private-path/);
+  expect(JSON.stringify(ledger.snapshot())).not.toMatch(
+    /private body|private-path/,
+  );
 });
 
 test("snapshot usage survives a later candidate failure and caller mutation", async () => {

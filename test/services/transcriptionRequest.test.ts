@@ -46,11 +46,14 @@ test.each([400, 401, 403, 404, 422])(
 test.each([
   { status: 429, code: "insufficient_quota" },
   { status: 503, headers: { "x-should-retry": "false" } },
-])("terminal provider exclusion %# stops after one dispatch", async (outcome) => {
-  const f = await buildAsrFixture({ outcomes: [outcome] });
-  await expect(f.run()).rejects.toMatchObject({ status: outcome.status });
-  expect(f.fetch).toHaveBeenCalledTimes(1);
-});
+])(
+  "terminal provider exclusion %# stops after one dispatch",
+  async (outcome) => {
+    const f = await buildAsrFixture({ outcomes: [outcome] });
+    await expect(f.run()).rejects.toMatchObject({ status: outcome.status });
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  },
+);
 
 test("exhaustion dispatches exactly four times with SDK retries disabled", async () => {
   const f = await buildAsrFixture({
@@ -58,8 +61,9 @@ test("exhaustion dispatches exactly four times with SDK retries disabled", async
   });
   await expect(f.run()).rejects.toMatchObject({ status: 503 });
   expect(f.fetch).toHaveBeenCalledTimes(4);
-  expect(f.requests.map(({ headers }) => headers.get("x-stainless-retry-count")))
-    .toEqual(["0", "0", "0", "0"]);
+  expect(
+    f.requests.map(({ headers }) => headers.get("x-stainless-retry-count")),
+  ).toEqual(["0", "0", "0", "0"]);
   expect(f.closedStreams).toHaveLength(4);
   expect(f.ledger.snapshot()).toMatchObject({
     logicalCandidateCount: 1,
@@ -91,12 +95,17 @@ test("classification recognizes timeout but excludes input and unrelated errors"
   const { default: OpenAI } = await import("openai");
   const { TranscriptionInputError } =
     await import("../../src/services/transcriptionInput");
-  expect(f.isTransientTranscriptionFailure(new OpenAI.APIConnectionTimeoutError()))
-    .toBe(true);
-  expect(f.isTransientTranscriptionFailure(
-    new TranscriptionInputError(new Error("synthetic read")),
-  )).toBe(false);
-  expect(f.isTransientTranscriptionFailure(new Error("ordinary error"))).toBe(false);
+  expect(
+    f.isTransientTranscriptionFailure(new OpenAI.APIConnectionTimeoutError()),
+  ).toBe(true);
+  expect(
+    f.isTransientTranscriptionFailure(
+      new TranscriptionInputError(new Error("synthetic read")),
+    ),
+  ).toBe(false);
+  expect(f.isTransientTranscriptionFailure(new Error("ordinary error"))).toBe(
+    false,
+  );
   expect(f.isTransientTranscriptionFailure({ status: 503 })).toBe(false);
 });
 
@@ -119,14 +128,21 @@ test.each(["bad", "-1", "Infinity", "60001"])(
   "falls back to jitter for invalid retry-after-ms %s",
   async (value) => {
     const f = await buildAsrFixture({
-      outcomes: [{ status: 503, headers: { "retry-after-ms": value } }, validResponse],
+      outcomes: [
+        { status: 503, headers: { "retry-after-ms": value } },
+        validResponse,
+      ],
     });
     const sleep = jest.spyOn(timers, "setTimeout").mockResolvedValue(undefined);
     jest.spyOn(Math, "random").mockReturnValue(0);
     await f.run();
     const { ExponentialBackoff } = await import("cockatiel");
     expect(sleep.mock.calls[0]?.[0]).toBe(
-      new ExponentialBackoff({ initialDelay: 128, exponent: 2, maxDelay: 30_000 }).next().duration,
+      new ExponentialBackoff({
+        initialDelay: 128,
+        exponent: 2,
+        maxDelay: 30_000,
+      }).next().duration,
     );
   },
 );
@@ -136,7 +152,10 @@ test("uses the HTTP-date retry delay", async () => {
   jest.spyOn(Date, "now").mockReturnValue(now);
   const f = await buildAsrFixture({
     outcomes: [
-      { status: 503, headers: { "retry-after": "Wed, 21 Oct 2026 12:00:02 GMT" } },
+      {
+        status: 503,
+        headers: { "retry-after": "Wed, 21 Oct 2026 12:00:02 GMT" },
+      },
       validResponse,
     ],
   });
@@ -147,7 +166,12 @@ test("uses the HTTP-date retry delay", async () => {
 
 test("advances the configured backoff even when Retry-After overrides a delay", async () => {
   const f = await buildAsrFixture({
-    outcomes: [transientResponse, { status: 503 }, { status: 503 }, validResponse],
+    outcomes: [
+      transientResponse,
+      { status: 503 },
+      { status: 503 },
+      validResponse,
+    ],
   });
   const { ExponentialBackoff } = await import("cockatiel");
   const sequence = new ExponentialBackoff({
@@ -202,7 +226,9 @@ test("issued fetch is drained and returned usage survives a late abort", async (
     holdFetch: release.promise,
   });
   let settled = false;
-  const task = f.run().finally(() => { settled = true; });
+  const task = f.run().finally(() => {
+    settled = true;
+  });
   const rejected = expect(task).rejects.toMatchObject({ name: "AbortError" });
   await f.entered;
   f.controller.abort();
@@ -269,10 +295,16 @@ test.each([false, true])(
     await f.run();
     expect(f.fetch).toHaveBeenCalledTimes(1);
     expect(f.bodies[0]).toContain("synthetic wav bytes");
-    for (const value of ["gpt-4o-transcribe", "Project terminology.", "logprobs"]) {
+    for (const value of [
+      "gpt-4o-transcribe",
+      "Project terminology.",
+      "logprobs",
+    ]) {
       expect(f.bodies[0]).toContain(value);
     }
-    expect(f.requests[0]?.headers.get("authorization")).toBe("Bearer test-openai-api-key");
+    expect(f.requests[0]?.headers.get("authorization")).toBe(
+      "Bearer test-openai-api-key",
+    );
   },
 );
 
@@ -304,7 +336,9 @@ test("exhaustion preserves exact SDK error identity across concurrent failure sc
   const factory = await import("../../src/services/openaiClient");
   const original = factory.createOpenAIClient({ disableTracing: true });
   const failure = new OpenAI.APIConnectionTimeoutError();
-  jest.spyOn(original.audio.transcriptions, "create").mockRejectedValue(failure);
+  jest
+    .spyOn(original.audio.transcriptions, "create")
+    .mockRejectedValue(failure);
   jest.spyOn(factory, "createOpenAIClient").mockReturnValue(original);
   jest.spyOn(timers, "setTimeout").mockResolvedValue(undefined);
   const exhausted = deferred<void>();

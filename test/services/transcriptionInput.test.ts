@@ -57,10 +57,12 @@ test("a successful request cannot hide an observed read error", async () => {
   const readError = new Error("synthetic read failure");
   const stream = new Readable({ read() {} });
   mockOpen.mockReturnValueOnce(stream);
-  await expect(withTranscriptionInput("synthetic", async (file) => {
-    file.emit("error", readError);
-    return "response";
-  })).rejects.toMatchObject({
+  await expect(
+    withTranscriptionInput("synthetic", async (file) => {
+      file.emit("error", readError);
+      return "response";
+    }),
+  ).rejects.toMatchObject({
     name: "TranscriptionInputError",
     cause: readError,
   });
@@ -80,9 +82,11 @@ test.each(["provider", "cancellation", "cyclic cause"])(
       },
     });
     mockOpen.mockReturnValueOnce(stream);
-    await expect(withTranscriptionInput("synthetic", async () => {
-      throw original;
-    })).rejects.toBe(original);
+    await expect(
+      withTranscriptionInput("synthetic", async () => {
+        throw original;
+      }),
+    ).rejects.toBe(original);
     expect(stream.closed).toBe(true);
   },
 );
