@@ -1,4 +1,3 @@
-import { resolveChatParamsForRole } from "./openaiModelParams";
 import { withTranscriptionInput } from "./transcriptionInput";
 import {
   getMeetingProcessingSignal,
@@ -78,10 +77,9 @@ import { evaluateNoiseGate } from "../utils/audioNoiseGate";
 import { countWords } from "../utils/text";
 import {
   getTranscriptionPrompt,
-  getTranscriptionCleanupPrompt,
   getTranscriptionCoalescePrompt,
 } from "./transcriptionPromptService";
-import { chat, type ChatMeetingInput } from "./openaiChatService";
+import { chat } from "./openaiChatService";
 import { getMeetingModelOverrides } from "./meetingModelOverrides";
 import { getTranscriptionTextQuality } from "../utils/transcriptionText";
 
@@ -963,67 +961,6 @@ type CoalesceInput = {
   slowTranscript: string;
   fastTranscripts: TranscriptVariant[];
 };
-
-export async function cleanupTranscription(
-  meeting: MeetingData,
-  transcription: string,
-) {
-  const { messages, langfusePrompt } = await getTranscriptionCleanupPrompt(
-    meeting,
-    transcription,
-  );
-  const modelChoice = getModelChoice(
-    "transcriptionCleanup",
-    getMeetingModelOverrides(meeting),
-  );
-  return cleanupContentTranscription(
-    meeting,
-    { messages, langfusePrompt },
-    {
-      ...modelChoice,
-      params: resolveChatParamsForRole({
-        role: "transcriptionCleanup",
-        model: modelChoice.model,
-        config: meeting.runtimeConfig?.modelParams?.transcriptionCleanup,
-      }),
-    },
-    meeting.langfuseParentSpanContext,
-  );
-}
-export async function cleanupContentTranscription(
-  content: ChatMeetingInput,
-  prompt: Pick<
-    Awaited<ReturnType<typeof getTranscriptionCleanupPrompt>>,
-    "messages" | "langfusePrompt"
-  >,
-  model: import("../types/recordingContent").SavedRecordingSettings["models"]["transcriptionCleanup"],
-  parentSpanContext?: MeetingData["langfuseParentSpanContext"],
-) {
-  return chat(
-    content,
-    { messages: [...prompt.messages] },
-    {
-      model: model.model,
-      frozenModel: model,
-      traceName: "transcription-cleanup",
-      generationName: "transcription-cleanup",
-      tags: ["feature:transcription_cleanup"],
-      langfusePrompt: prompt.langfusePrompt,
-      parentSpanContext,
-      modelParamRole: "transcriptionCleanup",
-    },
-  );
-}
-export function retainCleanupTranscript(
-  original: string,
-  cleaned: string,
-  minimumLineRatio: number,
-) {
-  return (cleaned || "").split("\n").length <
-    original.split("\n").length * minimumLineRatio
-    ? original
-    : cleaned;
-}
 
 export async function coalesceTranscription(
   meeting: MeetingData,

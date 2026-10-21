@@ -32,6 +32,9 @@ jest.mock("../../src/services/transcriptionPromptService", () => ({
   getTranscriptionCleanupPrompt: jest.fn(),
 }));
 jest.mock("../../src/services/modelFactory", () => ({
+  ...jest.requireActual<typeof import("../../src/services/modelFactory")>(
+    "../../src/services/modelFactory",
+  ),
   getModelChoice: () => ({
     provider: mockModel.provider,
     model: mockModel.model,
@@ -144,6 +147,9 @@ test.each([undefined, [], [{ text: "" }]])(
     expect(upload).toBe(notes);
     expect(f.cleanup).toHaveBeenCalledTimes(1);
     expect(f.ack).toHaveBeenLastCalledWith("acknowledged");
+    expect(updateActiveObservation).toHaveBeenLastCalledWith({
+      metadata: { transcriptionCleanupReuseHit: true },
+    });
   },
 );
 

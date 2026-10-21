@@ -113,3 +113,16 @@ The noise gate is a lightweight, peak-based check to skip clips that are very qu
 ## Cleanup behavior
 
 Transcription cleanup runs on the compiled transcript text. The structured transcript JSON stores per snippet text without cleanup. This keeps cleanup optional and limits the risk of rewriting per speaker segments during the capture phase.
+
+During one normal finalization, the notes and upload compilations reuse a
+settled cleanup result only when the existing retention rule accepts it and
+the formatted transcript, rendered prompt and provenance, effective model,
+parameters and retention ratio match. Nonempty cues, including whitespace,
+change that request and require cleanup again. Failed or rejected cleanup
+leaves the upload compilation its retry opportunity.
+
+Reuse belongs to that finalization's compiler and is never persisted or
+shared across meetings. Cancellation artifact compilation has a fresh
+lifetime. Recovery independently uses its saved v1 prompt/settings and durable
+processed-text checkpoints. Selected transcript membership is captured before
+asynchronous cleanup, so files arriving later remain supplemental evidence.
