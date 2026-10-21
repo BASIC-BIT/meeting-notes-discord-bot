@@ -13,18 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SDD_SOURCE_SHA: "7702be2dfa7bfe50e1f71692ba672e9b4ecf8377"
+  SDD_SOURCE_SHA: "d3b2c32d877d41e8d7b12b91d212d9fb8d739bfb"
 
 jobs:
   focused:
-    name: "ASR retry corrected candidate"
+    name: "ASR final legacy mock regressions"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v7
         with:
-          ref: "7702be2dfa7bfe50e1f71692ba672e9b4ecf8377"
+          ref: "d3b2c32d877d41e8d7b12b91d212d9fb8d739bfb"
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact source
@@ -68,4 +68,4 @@ jobs:
         run: yarn markdownlint:check
       - name: Focused synthetic regressions
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: yarn test --runInBand --coverage=false test/services/transcriptionRequest.test.ts test/observability/transcriptionAttempts.test.ts test/services/transcriptionPolicies.test.ts test/services/openaiClient.test.ts test/observability/langfuseUsageDetails.test.ts test/services/transcriptionSnippetResult.test.ts test/services/transcriptionTracing.test.ts test/services/transcriptionInput.test.ts test/services/meetingProcessingLifetime.test.ts test/commands/endMeetingNotesLatency.test.ts
+        run: yarn test --runInBand --coverage=false test/services/transcriptionRequest.test.ts test/observability/transcriptionAttempts.test.ts test/services/transcriptionPolicies.test.ts test/services/openaiClient.test.ts test/observability/langfuseUsageDetails.test.ts test/services/transcriptionSnippetResult.test.ts test/services/transcriptionTracing.test.ts test/services/transcriptionInput.test.ts test/services/meetingProcessingLifetime.test.ts test/commands/endMeetingNotesLatency.test.ts test/services/transcriptionService.test.ts
