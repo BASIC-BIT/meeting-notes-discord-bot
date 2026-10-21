@@ -639,3 +639,70 @@ do not establish maintenance input isolation. Record that proof separately in
 the private activation packet before creating the executable manifest. Never
 derive it from a quiet scan. Keep manifest contents and provider receipts out of
 public logs and artifacts. Normal compatible deployments use the coordinator.
+
+## Production backend deployment identity
+
+The production role is source preparation for a separately approved introduction.
+Terraform selects it with `environment = "prod"`; GitHub must use `production`.
+Its OIDC trust binds the account's existing provider, immutable repository and owner
+IDs, the exact production environment subject, and `refs/heads/master`. Topic
+branches and tags cannot assume it. The role output is
+`production_backend_deploy_role_arn`; Actions receives
+`PRODUCTION_BACKEND_DEPLOY_ROLE_ARN` and `AWS_ACCOUNT_ID`.
+
+An environment name is not an approval gate. Before any mutating introduction job,
+verify that production has the reviewed human approval protections, permitted
+branch policy and bypass controls. The workflow
+must fail closed when required environment protection is absent.
+This source does not configure reviewers or change repository security settings.
+Approval configuration needs its own reviewed owner decision before use.
+
+Service writes bind the existing service; PassRole binds the existing task and
+execution roles for ECS tasks. Routing reuses the existing HTTPS listener policy,
+two target groups and lifecycle ignores. Receipts reuse DeploymentControlTable.
+Observation scans only the eight existing maintenance tables. Runtime managed-policy
+readback covers the six existing application-role attachments. Unexpected policies
+or unreadable state must block preservation checks.
+
+The role can put and delete inline policies only on the existing application role.
+AWS does not offer a condition for the inline policy name or its document. These
+permissions therefore can change other inline policies on that role. Task 5's
+reviewed executor must enforce the operation-owned name, exact deny document and
+hash, preserved original policies, approved predecessor and exact run/session.
+A session policy must narrow actions and resources for each phase; it cannot add
+unsupported name or document restrictions. Fence expiry blocks execution and never
+removes the deny automatically. See the [IAM authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_iam.html).
+
+ECS Exec permission binds this cluster and container. The reviewed session policy
+must narrow it to the exact legacy or candidate task; the executor must constrain
+the probe command. IAM cannot constrain command text. An actual task-principal
+refusal and later authorization are required evidence, not an IAM simulation.
+Only production's existing application role receives the four `ssmmessages`
+channel actions. Their required `Resource = "*"` follows the
+[message gateway authorization model](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ssmmessages.html).
+No general SSM session permission or secret-value read is granted.
+
+Producer discovery is read-only. Application Auto Scaling `DescribeScalableTargets`,
+`DescribeScalingPolicies` and `DescribeScheduledActions`, EventBridge
+`ListEventBuses` and `ListRules`, and Scheduler `ListSchedules` require resource
+wildcards here and are restricted to the deployment region. EventBridge
+`DescribeRule` and `ListTargetsByRule` can read rules in this account and region;
+Scheduler `GetSchedule` can read schedules in this account and region. Those ARN
+wildcards permit complete discovery before producer identities are known. See the
+[scaling](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html),
+[EventBridge](https://docs.aws.amazon.com/service-authorization/latest/reference/list_eventbridge.html)
+and [Scheduler](https://docs.aws.amazon.com/service-authorization/latest/reference/list_scheduler.html)
+authorization references.
+
+No producer suspension or restoration authority is granted. The executor must
+retain complete paginated discovery and absent-controller evidence, then refuse
+unsupported or unbound controllers and competing writers. A producer requiring
+suspension needs an exact reviewed resource binding, a narrow source/session-policy
+extension and separate provider approval. Unrelated Grafana rotation stays outside
+mutation authority. These reads do not prove that every possible external writer
+is absent; the reviewed producer inventory must establish that boundary.
+
+Run the focused production identity source test and normal `terraform test`
+discovery with backend-disabled initialization. Mocked tests establish source
+policy shape, not live assumption, environment protection or runtime acceptance.
+Keep concrete resource bindings, invocation envelopes and provider evidence private.
