@@ -512,8 +512,7 @@ export async function applyRecoveryDiscordPublication(
   const saved = await deps.storage.readReceipt(receiptKey(preview));
   if (saved) {
     const receipt = validateReceipt(preview, saved.value);
-    if (receipt.status === "verified")
-      return verifyReadOnly(preview, receipt, deps);
+    if (receipt.status === "verified") return verifyRerun(preview, deps);
     throw new Error(
       "This preview already has a run; reconcile it and create a fresh preview for any retry",
     );
@@ -569,6 +568,24 @@ async function loadReconciliation(
   if (receipt.runId !== claim.value.runId)
     throw new Error("Claim and receipt owners differ");
   return { receipt, saved, claim };
+}
+
+async function verifyRerun(
+  preview: ReadyPreview,
+  deps: PublicationDependencies,
+) {
+  const { receipt, saved, claim } = await loadReconciliation(preview, deps);
+  if (
+    !saved ||
+    receipt.status !== "verified" ||
+    claim.value.unresolvedMessageIds.length
+  )
+    throw new Error(
+      "Verified receipt and resolved claim evidence do not agree; reconcile the prior run",
+    );
+  await verifyReadOnly(preview, receipt, deps);
+  reportRunningClaim(receipt, claim.value, {});
+  return receipt;
 }
 
 async function reconcileMessages(

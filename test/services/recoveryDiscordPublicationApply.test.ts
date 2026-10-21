@@ -491,3 +491,61 @@ test("a failed final history read reports unverified, not superseded or synchron
   expect(result.status).toBe("partial");
   expect(result.messages[0].reason).toContain("unverified");
 });
+test("verified rerun reports a running claim after final claim persistence fails", async () => {
+  const f = setup();
+  const preview = await f.preview();
+  const write = f.storage.writeClaim.getMockImplementation()!;
+  f.storage.writeClaim.mockImplementation(async (args) => {
+    if (args.claim.state === "terminal")
+      throw new Error("terminal claim not saved");
+    return write(args);
+  });
+  await expect(apply(preview, f.deps)).rejects.toThrow(
+    "Claim ownership is unproven",
+  );
+  const saved = [...f.receipts.values()][0].value;
+  expect(saved.status).toBe("verified");
+  expect([...f.claims.values()][0].value.state).toBe("running");
+  f.storage.saveReceipt.mockClear();
+  f.storage.writeClaim.mockClear();
+  f.storage.savePreview.mockClear();
+  const rerun = await apply(preview, f.deps);
+  expect(rerun.status).toBe("running");
+  expect(rerun.messages[0].reason).toContain(saved.runId);
+  expect(f.storage.saveReceipt).not.toHaveBeenCalled();
+  expect(f.storage.writeClaim).not.toHaveBeenCalled();
+  expect(f.storage.savePreview).not.toHaveBeenCalled();
+  expect(f.deps.discord.editEmbeds).toHaveBeenCalledTimes(1);
+  f.storage.writeClaim.mockImplementation(write);
+  expect(
+    (await reconcile(preview, f.deps, { confirmRunStopped: saved.runId }))
+      .status,
+  ).toBe("verified");
+  expect([...f.claims.values()][0].value.state).toBe("terminal");
+  expect((await apply(preview, f.deps)).status).toBe("verified");
+  expect(f.deps.discord.editEmbeds).toHaveBeenCalledTimes(1);
+});
+
+test.each(["missing", "unreadable", "otherRun", "otherPreview", "unresolved"])(
+  "verified rerun rejects %s claim evidence without writes",
+  async (evidence) => {
+    const f = setup();
+    const preview = await f.preview();
+    await apply(preview, f.deps);
+    const claim = [...f.claims.values()][0].value;
+    if (evidence === "missing") f.claims.clear();
+    if (evidence === "unreadable")
+      f.storage.readClaim.mockRejectedValue(new Error("claim unavailable"));
+    if (evidence === "otherRun") claim.runId = "other-run";
+    if (evidence === "otherPreview") claim.previewDigest = "a".repeat(64);
+    if (evidence === "unresolved") claim.unresolvedMessageIds = ["400"];
+    f.storage.saveReceipt.mockClear();
+    f.storage.writeClaim.mockClear();
+    f.storage.savePreview.mockClear();
+    await expect(apply(preview, f.deps)).rejects.toThrow();
+    expect(f.storage.saveReceipt).not.toHaveBeenCalled();
+    expect(f.storage.writeClaim).not.toHaveBeenCalled();
+    expect(f.storage.savePreview).not.toHaveBeenCalled();
+    expect(f.deps.discord.editEmbeds).toHaveBeenCalledTimes(1);
+  },
+);
