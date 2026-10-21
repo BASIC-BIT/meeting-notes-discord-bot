@@ -1,7 +1,5 @@
 /** @jest-environment node */
-import {
-  completedTextResponse as mockCompletedTextResponse,
-} from "../utils/openaiResponse";
+import { completedTextResponse as mockCompletedTextResponse } from "../../src/testSupport/openaiResponse";
 jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
 jest.mock("../../src/services/transcriptionService", () => ({
   ...jest.requireActual("../../src/services/transcriptionService"),

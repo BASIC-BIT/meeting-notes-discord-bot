@@ -1,5 +1,5 @@
 import { afterEach, expect, jest, test } from "@jest/globals";
-import { completedTextResponse } from "../utils/openaiResponse";
+import { completedTextResponse } from "../../src/testSupport/openaiResponse";
 
 afterEach(() => {
   jest.resetModules();
@@ -87,11 +87,13 @@ test("parseMeetingSummaryResponse keeps valid sentence when label is invalid", a
 });
 
 test("generateMeetingSummaries builds prompts and parses response", async () => {
-  const mockCreate = jest.fn().mockResolvedValue(
-    completedTextResponse(
-      '{"summarySentence":"One sentence.","summaryLabel":"Weekly sync"}',
-    ),
-  );
+  const mockCreate = jest
+    .fn()
+    .mockResolvedValue(
+      completedTextResponse(
+        '{"summarySentence":"One sentence.","summaryLabel":"Weekly sync"}',
+      ),
+    );
   const mockGetLangfuseChatPrompt = jest
     .fn()
     .mockImplementation(({ variables }) => ({

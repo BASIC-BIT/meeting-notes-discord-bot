@@ -1,4 +1,5 @@
 import { describe, expect, test, jest } from "@jest/globals";
+import { completedTextResponse } from "../../src/testSupport/openaiResponse";
 import type { ChatEntry } from "../../src/types/chat";
 import type { MeetingRuntimeConfig } from "../../src/config/types";
 import type { MeetingData } from "../../src/types/meeting-data";
@@ -33,18 +34,8 @@ const loadModule = async (options: LoadOptions = {}) => {
     .fn<() => Promise<void>>()
     .mockResolvedValue(undefined);
   const responsesCreate = jest
-    .fn<
-      () => Promise<{
-        status: "completed";
-        output_text: string;
-        output: [];
-      }>
-    >()
-    .mockResolvedValue({
-      status: "completed",
-      output_text: options.responseContent ?? "",
-      output: [],
-    });
+    .fn<() => Promise<ReturnType<typeof completedTextResponse>>>()
+    .mockResolvedValue(completedTextResponse(options.responseContent ?? ""));
   const createOpenAIClient = jest.fn(() => ({
     responses: { create: responsesCreate },
   }));
@@ -61,8 +52,9 @@ const loadModule = async (options: LoadOptions = {}) => {
     getModelChoice,
   }));
 
-  const module =
-    await import("../../src/services/autoRecordCancellationService");
+  const module = await import(
+    "../../src/services/autoRecordCancellationService"
+  );
   return {
     ...module,
     waitForFinishProcessing,
@@ -78,7 +70,7 @@ const buildChatEntry = (content: string): ChatEntry =>
     channelId: "voice-1",
     content,
     timestamp: "2025-01-01T00:00:00.000Z",
-  }) as ChatEntry;
+  } as ChatEntry);
 
 const buildRuntimeConfig = (
   overrides: Partial<MeetingRuntimeConfig> = {},
@@ -179,7 +171,23 @@ const buildMeeting = (overrides: Partial<MeetingData> = {}): MeetingData =>
     participants: new Map(),
     runtimeConfig: buildRuntimeConfig(),
     ...overrides,
-  }) as MeetingData;
+  } as MeetingData);
+
+const buildSparseMeeting = (): MeetingData =>
+  buildMeeting({
+    audioData: {
+      currentSnippets: new Map(),
+      audioFiles: [
+        {
+          userId: "user-1",
+          timestamp: Date.parse("2025-01-01T00:00:05.000Z"),
+          transcript: "hello",
+          processing: false,
+          audioOnlyProcessing: false,
+        },
+      ],
+    },
+  });
 
 describe("autoRecordCancellationService", () => {
   test("returns false when meeting is not auto-recorded", async () => {
@@ -264,6 +272,20 @@ describe("autoRecordCancellationService", () => {
     });
   });
 
+  test.each(["", " \n\t "])(
+    "keeps the meeting when completed Responses output is blank: %j",
+    async (responseContent) => {
+      const { evaluateAutoRecordCancellation, responsesCreate } =
+        await loadModule({ responseContent });
+      const meeting = buildSparseMeeting();
+
+      await expect(evaluateAutoRecordCancellation(meeting)).resolves.toEqual({
+        cancel: false,
+      });
+      expect(responsesCreate).toHaveBeenCalledTimes(1);
+    },
+  );
+
   test("returns false when model rejects cancellation", async () => {
     const { evaluateAutoRecordCancellation, responsesCreate } =
       await loadModule({
@@ -295,9 +317,9 @@ describe("autoRecordCancellationService", () => {
 });
 
 test("failed sparse transcription is excluded before the actual cancellation provider", async () => {
-  const { evaluateAutoRecordCancellation, responsesCreate } = await loadModule(
-    { responseContent: '{"cancel":true}' },
-  );
+  const { evaluateAutoRecordCancellation, responsesCreate } = await loadModule({
+    responseContent: '{"cancel":true}',
+  });
   const meeting = buildMeeting();
   meeting.audioData.audioFiles = [
     { transcriptionFailed: true, processing: false, transcript: "" },
@@ -326,6 +348,22 @@ test("actual automatic cancellation provider failure is propagated for durable f
       "Auto-record cancellation check failed:",
       failure,
     );
+  } finally {
+    errorOutput.mockRestore();
+  }
+});
+
+test("an ordinary empty-output error still propagates as a provider failure", async () => {
+  const { evaluateAutoRecordCancellation, responsesCreate } =
+    await loadModule();
+  const meeting = buildSparseMeeting();
+  const failure = new Error("OpenAI Responses output empty.");
+  responsesCreate.mockRejectedValueOnce(failure);
+  const errorOutput = jest
+    .spyOn(console, "error")
+    .mockImplementation(() => undefined);
+  try {
+    await expect(evaluateAutoRecordCancellation(meeting)).rejects.toBe(failure);
   } finally {
     errorOutput.mockRestore();
   }

@@ -4,7 +4,10 @@ import {
 } from "./meetingCompletionPolicyService";
 import { waitForFinishProcessing } from "../audio";
 import type { MeetingData } from "../types/meeting-data";
-import { generateOpenAIText } from "./openaiTextService";
+import {
+  EmptyOpenAITextOutputError,
+  generateOpenAIText,
+} from "./openaiTextService";
 import { buildModelOverrides, getModelChoice } from "./modelFactory";
 import { resolveChatParamsForRole } from "./openaiModelParams";
 import { assertMeetingProcessingSucceeded } from "../utils/meetingProcessing";
@@ -59,13 +62,13 @@ export async function evaluateAutoRecordCancellation(
     snapshot?.elapsedMilliseconds !== undefined
       ? Math.floor(snapshot.elapsedMilliseconds / 1000)
       : meeting.endTime
-        ? Math.max(
-            0,
-            Math.floor(
-              (meeting.endTime.getTime() - meeting.startTime.getTime()) / 1000,
-            ),
-          )
-        : 0;
+      ? Math.max(
+          0,
+          Math.floor(
+            (meeting.endTime.getTime() - meeting.startTime.getTime()) / 1000,
+          ),
+        )
+      : 0;
   const chatMessageCount = meeting.chatLog.filter(
     (entry) => entry.type === "message",
   ).length;
@@ -142,9 +145,6 @@ export async function evaluateAutoRecordCancellation(
         },
       },
     });
-    if (!content.trim()) {
-      return { cancel: false };
-    }
     const parsed = JSON.parse(content) as {
       cancel?: boolean;
       reason?: string;
@@ -158,6 +158,7 @@ export async function evaluateAutoRecordCancellation(
         reason && reason.length > 0 ? reason : "Not enough content detected.",
     };
   } catch (error) {
+    if (error instanceof EmptyOpenAITextOutputError) return { cancel: false };
     console.error("Auto-record cancellation check failed:", error);
     throw error;
   }

@@ -1,6 +1,6 @@
 import { describe, expect, test, jest } from "@jest/globals";
 import type { MeetingData } from "../../src/types/meeting-data";
-import { completedTextResponse } from "../utils/openaiResponse";
+import { completedTextResponse } from "../../src/testSupport/openaiResponse";
 
 const buildMeeting = (): MeetingData =>
   ({

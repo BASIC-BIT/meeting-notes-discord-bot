@@ -10,6 +10,13 @@ import { createOpenAIClient } from "./openaiClient";
 
 export const MEETING_TEXT_MAX_REQUESTS = 3;
 
+export class EmptyOpenAITextOutputError extends Error {
+  constructor() {
+    super("OpenAI Responses output empty.");
+    this.name = "EmptyOpenAITextOutputError";
+  }
+}
+
 export type OpenAITextFormat =
   | { kind: "text" }
   | { kind: "json_object" }
@@ -61,7 +68,7 @@ function assertResponseOutput(response: Response, previousText: string): void {
     throw new Error("OpenAI Responses continuation made no progress.");
   }
   if (response.status === "completed" && !response.output_text.trim()) {
-    throw new Error("OpenAI Responses output empty.");
+    throw new EmptyOpenAITextOutputError();
   }
 }
 

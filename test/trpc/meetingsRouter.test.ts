@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import { beforeEach, describe, expect, test, jest } from "@jest/globals";
-import { completedTextResponse } from "../utils/openaiResponse";
+import { completedTextResponse } from "../../src/testSupport/openaiResponse";
 import * as unifiedConfig from "../../src/services/unifiedConfigService";
 import "../deployment/coldNetworkGuard.cjs";
 import { config } from "../../src/services/configService";

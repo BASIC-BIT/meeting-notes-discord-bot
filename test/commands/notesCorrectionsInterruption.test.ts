@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import type { ModalSubmitInteraction, ButtonInteraction } from "discord.js";
-import { completedTextResponse } from "../utils/openaiResponse";
+import { completedTextResponse } from "../../src/testSupport/openaiResponse";
 
 jest.mock("dotenv", () => ({ config: jest.fn() }));
 jest.mock("../../src/services/configService", () => ({

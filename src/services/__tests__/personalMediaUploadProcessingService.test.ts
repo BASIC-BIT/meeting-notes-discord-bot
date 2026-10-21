@@ -2,7 +2,7 @@
 import { UnresolvedNotionMutation } from "../notionOperationLifetime";
 import { maybeAutoExportCompletedMeeting } from "../notionAutomationService";
 import { jest } from "@jest/globals";
-import { completedTextResponse } from "../../../test/utils/openaiResponse";
+import { completedTextResponse } from "../../testSupport/openaiResponse";
 import type {
   PersonalMediaUploadJobRecord,
   PersonalRecordingSegmentRecord,

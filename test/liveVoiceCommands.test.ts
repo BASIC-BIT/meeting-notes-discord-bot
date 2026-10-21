@@ -403,8 +403,7 @@ test("held live gate observes processing cancellation and cannot enqueue a late 
   const result = task.catch(() => {});
   await dispatched;
   const options = mockCreate.mock.calls[0][1] as
-    | { signal?: AbortSignal }
-    | undefined;
+    { signal?: AbortSignal } | undefined;
   expect(options?.signal?.aborted).toBe(false);
   let settled = false;
   const drain = lifetime.stopMeetingProcessing(meeting).then(() => {

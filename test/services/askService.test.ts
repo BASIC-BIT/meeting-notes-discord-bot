@@ -334,6 +334,26 @@ describe("askService (non-mock)", () => {
     });
   });
 
+  test.each(["", " \n "])(
+    "rejects completed Responses output without usable text (%j)",
+    async (responseText) => {
+      const { answerQuestionService, responseCreate } = await loadModule({
+        mockEnabled: false,
+        meetings: [buildMeeting({ notes: "The launch is Thursday." })],
+        responseText,
+      });
+
+      await expect(
+        answerQuestionService({
+          guildId: "guild-1",
+          channelId: "voice-1",
+          question: "When is the launch?",
+        }),
+      ).rejects.toThrow(/empty/i);
+      expect(responseCreate).toHaveBeenCalledTimes(1);
+    },
+  );
+
   test("returns upgrade note when no meetings and maxMeetings is reduced", async () => {
     const { answerQuestionService } = await loadModule({
       mockEnabled: false,

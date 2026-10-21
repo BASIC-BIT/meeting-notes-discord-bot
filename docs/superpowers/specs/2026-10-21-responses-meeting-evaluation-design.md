@@ -65,7 +65,10 @@ format; callers must declare a structured format for the JSON truncation guard.
 
 Pass cancellation to every SDK request and check it after settlement. Preserve
 each caller's existing behavior on errors, including fail-safe live-voice
-decisions, correction fallbacks and auto-cancellation error propagation.
+decisions and correction fallbacks. Completed-empty auto-cancellation output
+means no cancellation, preserving meeting finalization; provider, refusal,
+incomplete and malformed-result errors still propagate. Ask rejects empty answers
+through its existing error UI instead of returning a blank response.
 
 ## Current model support
 

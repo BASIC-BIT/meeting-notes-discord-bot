@@ -4,7 +4,10 @@ import { config } from "./services/configService";
 import { generateOpenAIText } from "./services/openaiTextService";
 import { buildModelOverrides, getModelChoice } from "./services/modelFactory";
 import { resolveChatParamsForRole } from "./services/openaiModelParams";
-import { getLangfuseChatPrompt } from "./services/langfusePromptService";
+import {
+  getLangfuseChatPrompt,
+  type ChatMessage,
+} from "./services/langfusePromptService";
 import {
   buildLiveResponderContext,
   LatestUtterance,
@@ -75,6 +78,36 @@ function isAddressed(text: string, meeting: MeetingData): boolean {
   return botNames.some((name) => name && lower.includes(name));
 }
 
+async function generateGateJson({
+  meeting,
+  input,
+  tracing,
+}: {
+  meeting: MeetingData;
+  input: ChatMessage[];
+  tracing: NonNullable<Parameters<typeof generateOpenAIText>[0]["tracing"]>;
+}) {
+  const { model } = getModelChoice(
+    "liveVoiceGate",
+    buildModelOverrides(meeting.runtimeConfig?.modelChoices),
+  );
+  const modelParams = resolveChatParamsForRole({
+    role: "liveVoiceGate",
+    model,
+    config: meeting.runtimeConfig?.modelParams?.liveVoiceGate,
+  });
+  const content = await generateOpenAIText({
+    model,
+    input,
+    modelParams,
+    format: { kind: "json_object" },
+    maxOutputTokens: config.liveVoice.gateMaxOutputTokens,
+    signal: getMeetingProcessingSignal(meeting),
+    tracing,
+  });
+  return { content, model };
+}
+
 async function shouldAct(
   meeting: MeetingData,
   segment: LiveSegment,
@@ -103,24 +136,11 @@ async function shouldAct(
   });
 
   try {
-    const modelChoice = getModelChoice(
-      "liveVoiceGate",
-      buildModelOverrides(meeting.runtimeConfig?.modelChoices),
-    );
-    const modelParams = resolveChatParamsForRole({
-      role: "liveVoiceGate",
-      model: modelChoice.model,
-      config: meeting.runtimeConfig?.modelParams?.liveVoiceGate,
-    });
     const signal = getMeetingProcessingSignal(meeting);
     signal.throwIfAborted();
-    const content = await generateOpenAIText({
-      model: modelChoice.model,
+    const { content, model } = await generateGateJson({
+      meeting,
       input: messages,
-      modelParams,
-      format: { kind: "json_object" },
-      maxOutputTokens: config.liveVoice.gateMaxOutputTokens,
-      signal,
       tracing: {
         traceName: "live-voice-gate",
         generationName: "live-voice-gate",
@@ -136,7 +156,7 @@ async function shouldAct(
     });
     signal.throwIfAborted();
 
-    console.log(`[live-voice][gate] model=${modelChoice.model} raw=${content}`);
+    console.log(`[live-voice][gate] model=${model} raw=${content}`);
 
     const parsed = JSON.parse(content) as GateDecision;
     if (
@@ -284,24 +304,11 @@ async function classifyConfirmation(
   });
 
   try {
-    const modelChoice = getModelChoice(
-      "liveVoiceGate",
-      buildModelOverrides(meeting.runtimeConfig?.modelChoices),
-    );
-    const modelParams = resolveChatParamsForRole({
-      role: "liveVoiceGate",
-      model: modelChoice.model,
-      config: meeting.runtimeConfig?.modelParams?.liveVoiceGate,
-    });
     const signal = getMeetingProcessingSignal(meeting);
     signal.throwIfAborted();
-    const content = await generateOpenAIText({
-      model: modelChoice.model,
+    const { content, model } = await generateGateJson({
+      meeting,
       input: messages,
-      modelParams,
-      format: { kind: "json_object" },
-      maxOutputTokens: config.liveVoice.gateMaxOutputTokens,
-      signal,
       tracing: {
         traceName: "live-voice-confirm",
         generationName: "live-voice-confirm",
@@ -317,9 +324,7 @@ async function classifyConfirmation(
     });
     signal.throwIfAborted();
 
-    console.log(
-      `[live-voice][confirm] model=${modelChoice.model} raw=${content}`,
-    );
+    console.log(`[live-voice][confirm] model=${model} raw=${content}`);
 
     const parsed = JSON.parse(content) as ConfirmationDecision;
     if (
