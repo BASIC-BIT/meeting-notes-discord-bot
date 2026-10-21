@@ -42,6 +42,7 @@ const loadModule = async (options: { chatError?: Error } = {}) => {
     },
   }));
   jest.doMock("cockatiel", () => ({
+    ...jest.requireActual<typeof import("cockatiel")>("cockatiel"),
     bulkhead: jest.fn(() => ({})),
     circuitBreaker: jest.fn(() => ({})),
     retry: jest.fn(() => ({})),
