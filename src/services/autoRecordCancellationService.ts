@@ -62,13 +62,13 @@ export async function evaluateAutoRecordCancellation(
     snapshot?.elapsedMilliseconds !== undefined
       ? Math.floor(snapshot.elapsedMilliseconds / 1000)
       : meeting.endTime
-      ? Math.max(
-          0,
-          Math.floor(
-            (meeting.endTime.getTime() - meeting.startTime.getTime()) / 1000,
-          ),
-        )
-      : 0;
+        ? Math.max(
+            0,
+            Math.floor(
+              (meeting.endTime.getTime() - meeting.startTime.getTime()) / 1000,
+            ),
+          )
+        : 0;
   const chatMessageCount = meeting.chatLog.filter(
     (entry) => entry.type === "message",
   ).length;

@@ -52,9 +52,8 @@ const loadModule = async (options: LoadOptions = {}) => {
     getModelChoice,
   }));
 
-  const module = await import(
-    "../../src/services/autoRecordCancellationService"
-  );
+  const module =
+    await import("../../src/services/autoRecordCancellationService");
   return {
     ...module,
     waitForFinishProcessing,
@@ -70,7 +69,7 @@ const buildChatEntry = (content: string): ChatEntry =>
     channelId: "voice-1",
     content,
     timestamp: "2025-01-01T00:00:00.000Z",
-  } as ChatEntry);
+  }) as ChatEntry;
 
 const buildRuntimeConfig = (
   overrides: Partial<MeetingRuntimeConfig> = {},
@@ -171,7 +170,7 @@ const buildMeeting = (overrides: Partial<MeetingData> = {}): MeetingData =>
     participants: new Map(),
     runtimeConfig: buildRuntimeConfig(),
     ...overrides,
-  } as MeetingData);
+  }) as MeetingData;
 
 const buildSparseMeeting = (): MeetingData =>
   buildMeeting({
