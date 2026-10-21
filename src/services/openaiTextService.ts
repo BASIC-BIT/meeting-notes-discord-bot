@@ -1,16 +1,14 @@
 import type OpenAI from "openai";
-import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import type {
   Response,
   ResponseCreateParamsNonStreaming,
   ResponseInputItem,
 } from "openai/resources/responses/responses";
 import { toResponseInputItems } from "openai/lib/responses/ResponseInputItems";
-import type { OpenAITextApi } from "../config/openaiText";
 import type { SavedRecordingSettings } from "../types/recordingContent";
-import type { ChatMessage } from "./langfusePromptService";
-import { config } from "./configService";
 import { createOpenAIClient } from "./openaiClient";
+
+export const MEETING_TEXT_MAX_REQUESTS = 3;
 
 export type OpenAITextFormat =
   | { kind: "text" }
@@ -19,9 +17,8 @@ export type OpenAITextFormat =
 
 type TextGenerationOptions = {
   model: string;
-  messages: readonly ChatMessage[];
+  input: readonly ResponseInputItem[];
   modelParams: SavedRecordingSettings["models"]["notes"]["params"];
-  api?: OpenAITextApi;
   format?: OpenAITextFormat;
   maxOutputTokens?: number;
   continuation?: { maxRequests: number };
@@ -31,21 +28,9 @@ type TextGenerationOptions = {
 };
 
 type TextRequest = TextGenerationOptions & {
-  api: OpenAITextApi;
   format: OpenAITextFormat;
   client: OpenAI;
 };
-
-function chatFormat(
-  format: OpenAITextFormat,
-): ChatCompletionCreateParamsNonStreaming["response_format"] {
-  if (format.kind === "text") return undefined;
-  if (format.kind === "json_object") return { type: "json_object" };
-  return {
-    type: "json_schema",
-    json_schema: { name: format.name, schema: format.schema, strict: true },
-  };
-}
 
 function responseText(
   request: TextRequest,
@@ -63,48 +48,6 @@ function responseText(
           strict: true,
         };
   return { format: outputFormat, ...(verbosity ? { verbosity } : {}) };
-}
-
-function createChatCompletion(request: TextRequest, messages: ChatMessage[]) {
-  return request.client.chat.completions.create(
-    {
-      model: request.model,
-      messages,
-      ...request.modelParams,
-      response_format: chatFormat(request.format),
-      max_completion_tokens: request.maxOutputTokens,
-      safety_identifier: request.safetyIdentifier,
-      store: false,
-    },
-    request.signal ? { signal: request.signal } : undefined,
-  );
-}
-
-async function generateChatText(request: TextRequest): Promise<string> {
-  const messages = request.messages.map((message) => ({ ...message }));
-  const maxRequests = request.continuation?.maxRequests ?? 1;
-  let output = "";
-  for (let attempt = 0; attempt < maxRequests; attempt += 1) {
-    request.signal?.throwIfAborted();
-    const completion = await createChatCompletion(request, messages);
-    request.signal?.throwIfAborted();
-    const choice = completion.choices[0];
-    if (choice?.message.refusal) {
-      throw new Error("OpenAI text generation refused.");
-    }
-    const content = choice?.message.content ?? "";
-    if (!content) {
-      if (output) throw new Error("OpenAI text generation incomplete.");
-      return "";
-    }
-    output += content;
-    if (choice?.finish_reason !== "length") return output;
-    if (request.format.kind !== "text") {
-      throw new Error("OpenAI structured output incomplete.");
-    }
-    messages.push({ role: "assistant", content });
-  }
-  throw new Error("OpenAI text generation request limit exhausted.");
 }
 
 function assertResponseOutput(response: Response, previousText: string): void {
@@ -132,9 +75,7 @@ function canContinue(response: Response, format: OpenAITextFormat): boolean {
 }
 
 async function generateResponsesText(request: TextRequest): Promise<string> {
-  const input: ResponseInputItem[] = request.messages.map((message) => ({
-    ...message,
-  }));
+  const input = [...request.input];
   const maxRequests = request.continuation?.maxRequests ?? 1;
   let output = "";
   let previousText = "";
@@ -178,20 +119,16 @@ export async function generateOpenAIText(
   options: TextGenerationOptions,
 ): Promise<string> {
   options.signal?.throwIfAborted();
-  const api = options.api ?? config.openai.textApi;
   const format: OpenAITextFormat = options.format ?? { kind: "text" };
   const client = createOpenAIClient({
     ...options.tracing,
     metadata: {
       ...options.tracing?.metadata,
-      api,
+      api: "responses",
       outputFormat: format.kind,
       reasoningEffort: options.modelParams.reasoning_effort,
       verbosity: options.modelParams.verbosity,
     },
   });
-  const request: TextRequest = { ...options, api, format, client };
-  return api === "responses"
-    ? generateResponsesText(request)
-    : generateChatText(request);
+  return generateResponsesText({ ...options, format, client });
 }

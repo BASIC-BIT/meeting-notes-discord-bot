@@ -1,10 +1,10 @@
 /** @jest-environment node */
 import type { ModalSubmitInteraction, ButtonInteraction } from "discord.js";
+import { completedTextResponse } from "../utils/openaiResponse";
 
 jest.mock("dotenv", () => ({ config: jest.fn() }));
 jest.mock("../../src/services/configService", () => ({
   config: {
-    openai: { textApi: "chat_completions" },
     langfuse: { notesCorrectionPromptName: "synthetic" },
   },
 }));
@@ -46,7 +46,7 @@ jest.mock("../../src/commands/summaryFeedback", () => ({
   buildSummaryFeedbackButtonIds: () => ({ up: "up", down: "down" }),
 }));
 jest.mock("../../src/services/openaiClient", () => ({
-  createOpenAIClient: () => ({ chat: { completions: { create: mockCreate } } }),
+  createOpenAIClient: () => ({ responses: { create: mockCreate } }),
 }));
 jest.mock("../../src/services/modelFactory", () => ({
   getModelChoice: () => ({ model: "synthetic" }),
@@ -62,9 +62,7 @@ jest.mock("../../src/services/openaiModelParams", () => ({
 jest.mock("../../src/services/modelChoiceService", () => ({
   resolveModelChoicesForContext: async () => ({}),
 }));
-const mockCreate = jest.fn(async () => ({
-  choices: [{ message: { content: "Corrected" } }],
-}));
+const mockCreate = jest.fn(async () => completedTextResponse("Corrected"));
 import {
   handleNotesCorrectionModal,
   handleNotesCorrectionAccept,
@@ -101,7 +99,7 @@ test("held correction provider cannot publish proposal after interaction fence",
   const run = handleNotesCorrectionModal(interaction, controller.signal);
   await entered.promise;
   controller.abort();
-  provider.resolve({ choices: [{ message: { content: "Late" } }] });
+  provider.resolve(completedTextResponse("Late"));
   await run.catch(() => {});
   expect(interaction.editReply).not.toHaveBeenCalled();
 });

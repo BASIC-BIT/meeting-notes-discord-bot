@@ -1060,7 +1060,7 @@ const generatePersonalUploadNotes = async (input: {
   input.signal?.throwIfAborted();
   const content = await generateOpenAIText({
     model: modelChoice.model,
-    messages,
+    input: messages,
     modelParams: chatParams,
     signal: input.signal,
     tracing: {

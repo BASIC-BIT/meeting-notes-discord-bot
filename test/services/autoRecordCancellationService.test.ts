@@ -32,13 +32,21 @@ const loadModule = async (options: LoadOptions = {}) => {
   const waitForFinishProcessing = jest
     .fn<() => Promise<void>>()
     .mockResolvedValue(undefined);
-  const completionCreate = jest
-    .fn<() => Promise<{ choices: { message: { content: string } }[] }>>()
+  const responsesCreate = jest
+    .fn<
+      () => Promise<{
+        status: "completed";
+        output_text: string;
+        output: [];
+      }>
+    >()
     .mockResolvedValue({
-      choices: [{ message: { content: options.responseContent ?? "" } }],
+      status: "completed",
+      output_text: options.responseContent ?? "",
+      output: [],
     });
   const createOpenAIClient = jest.fn(() => ({
-    chat: { completions: { create: completionCreate } },
+    responses: { create: responsesCreate },
   }));
   const getModelChoice = jest.fn(() => ({ model: "gpt-4o-mini" }));
   const buildModelOverrides = jest.fn(() => undefined);
@@ -58,7 +66,7 @@ const loadModule = async (options: LoadOptions = {}) => {
   return {
     ...module,
     waitForFinishProcessing,
-    completionCreate,
+    responsesCreate,
     createOpenAIClient,
   };
 };
@@ -178,17 +186,17 @@ describe("autoRecordCancellationService", () => {
     const {
       evaluateAutoRecordCancellation,
       waitForFinishProcessing,
-      completionCreate,
+      responsesCreate,
     } = await loadModule();
     const meeting = buildMeeting({ isAutoRecording: false });
     const result = await evaluateAutoRecordCancellation(meeting);
     expect(result).toEqual({ cancel: false });
     expect(waitForFinishProcessing).not.toHaveBeenCalled();
-    expect(completionCreate).not.toHaveBeenCalled();
+    expect(responsesCreate).not.toHaveBeenCalled();
   });
 
   test("returns false when auto-cancel is disabled in config", async () => {
-    const { evaluateAutoRecordCancellation, completionCreate } =
+    const { evaluateAutoRecordCancellation, responsesCreate } =
       await loadModule();
     const meeting = buildMeeting({
       runtimeConfig: buildRuntimeConfig({
@@ -197,24 +205,24 @@ describe("autoRecordCancellationService", () => {
     });
     const result = await evaluateAutoRecordCancellation(meeting);
     expect(result).toEqual({ cancel: false });
-    expect(completionCreate).not.toHaveBeenCalled();
+    expect(responsesCreate).not.toHaveBeenCalled();
   });
 
   test("returns false when duration exceeds heuristic threshold", async () => {
-    const { evaluateAutoRecordCancellation, completionCreate } =
+    const { evaluateAutoRecordCancellation, responsesCreate } =
       await loadModule();
     const meeting = buildMeeting({
       endTime: new Date("2025-01-01T00:03:00.000Z"),
     });
     const result = await evaluateAutoRecordCancellation(meeting);
     expect(result).toEqual({ cancel: false });
-    expect(completionCreate).not.toHaveBeenCalled();
+    expect(responsesCreate).not.toHaveBeenCalled();
   });
 
   test("returns cancel decision with default reason when model omits reason", async () => {
     const {
       evaluateAutoRecordCancellation,
-      completionCreate,
+      responsesCreate,
       waitForFinishProcessing,
     } = await loadModule({
       responseContent: JSON.stringify({ cancel: true }),
@@ -238,7 +246,18 @@ describe("autoRecordCancellationService", () => {
     const result = await evaluateAutoRecordCancellation(meeting);
 
     expect(waitForFinishProcessing).toHaveBeenCalled();
-    expect(completionCreate).toHaveBeenCalled();
+    expect(responsesCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        max_output_tokens: 120,
+        text: { format: { type: "json_object" } },
+        store: false,
+        input: [
+          expect.objectContaining({ role: "system" }),
+          expect.objectContaining({ role: "user" }),
+        ],
+      }),
+      undefined,
+    );
     expect(result).toEqual({
       cancel: true,
       reason: "Not enough content detected.",
@@ -246,7 +265,7 @@ describe("autoRecordCancellationService", () => {
   });
 
   test("returns false when model rejects cancellation", async () => {
-    const { evaluateAutoRecordCancellation, completionCreate } =
+    const { evaluateAutoRecordCancellation, responsesCreate } =
       await loadModule({
         responseContent: JSON.stringify({
           cancel: false,
@@ -270,13 +289,13 @@ describe("autoRecordCancellationService", () => {
 
     const result = await evaluateAutoRecordCancellation(meeting);
 
-    expect(completionCreate).toHaveBeenCalled();
+    expect(responsesCreate).toHaveBeenCalled();
     expect(result).toEqual({ cancel: false });
   });
 });
 
 test("failed sparse transcription is excluded before the actual cancellation provider", async () => {
-  const { evaluateAutoRecordCancellation, completionCreate } = await loadModule(
+  const { evaluateAutoRecordCancellation, responsesCreate } = await loadModule(
     { responseContent: '{"cancel":true}' },
   );
   const meeting = buildMeeting();
@@ -286,18 +305,18 @@ test("failed sparse transcription is excluded before the actual cancellation pro
   await expect(evaluateAutoRecordCancellation(meeting)).rejects.toThrow(
     "processing",
   );
-  expect(completionCreate).not.toHaveBeenCalled();
+  expect(responsesCreate).not.toHaveBeenCalled();
 });
 
 test("actual automatic cancellation provider failure is propagated for durable failure", async () => {
-  const { evaluateAutoRecordCancellation, completionCreate } =
+  const { evaluateAutoRecordCancellation, responsesCreate } =
     await loadModule();
   const meeting = buildMeeting();
   meeting.audioData.audioFiles = [
     { transcript: "Hello", processing: false },
   ] as never;
   const failure = new Error("fixture cancellation provider unavailable");
-  completionCreate.mockRejectedValueOnce(failure);
+  responsesCreate.mockRejectedValueOnce(failure);
   const errorOutput = jest
     .spyOn(console, "error")
     .mockImplementation(() => undefined);

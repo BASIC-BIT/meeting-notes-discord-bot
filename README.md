@@ -182,7 +182,7 @@ Coverage update rule:
 - Feature toggle evaluation checklist: `docs/feature-toggles.md`.
 - OpenAI: gpt-4o-transcribe for ASR, gpt-5.2 for notes/corrections, gpt-5-mini for live gate, DALL-E 3 for images.
 - Transcription can run a finalized audio verification pass at meeting end to auto-apply high-confidence hallucination fixes before notes are generated.
-- Text API migration: Chat Completions remains the default. See the [Responses and model evaluation design](docs/superpowers/specs/2026-10-21-responses-meeting-evaluation-design.md) for opt-in evaluation.
+- Text generation uses OpenAI's Responses API through one shared service for notes, corrections, Ask, live-voice text decisions, captions and dictionary suggestions. See the [Responses and model evaluation design](docs/superpowers/specs/2026-10-21-responses-meeting-evaluation-design.md) for request contracts and model comparisons.
 - Prompt management and tracing: Langfuse for prompt versioning, tracing, and prompt sync scripts.
 - Langfuse transcription traces attach compressed MP3 snippets (mono 16 kHz VBR, 8 MB cap) for observability.
 - Billing: Stripe Checkout + Billing Portal; webhook handler persists GuildSubscription and PaymentTransaction in DynamoDB and handles payment_failed / subscription_deleted to downgrade appropriately (guild-scoped billing only).

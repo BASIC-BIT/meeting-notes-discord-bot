@@ -22,15 +22,9 @@ async function loadResponse(response: object | object[]) {
     callIndex += 1;
     return Promise.resolve(current);
   });
-  const completionCreate = jest.fn().mockResolvedValue({
-    choices: [
-      { finish_reason: "stop", message: { content: "Legacy transport" } },
-    ],
-  });
   jest.doMock("../../src/services/openaiClient", () => ({
     createOpenAIClient: jest.fn(() => ({
       responses: { create: responsesCreate },
-      chat: { completions: { create: completionCreate } },
     })),
     buildOpenAISafetyIdentifier: jest.fn(() => "safety-id"),
   }));
@@ -72,7 +66,6 @@ async function loadResponse(response: object | object[]) {
         },
       ),
     responsesCreate,
-    completionCreate,
     messages,
   };
 }
@@ -92,7 +85,6 @@ test("Meeting text always uses Responses and translates frozen parameters", asyn
   });
 
   await expect(fixture.run()).resolves.toBe("Completed notes");
-  expect(fixture.completionCreate).not.toHaveBeenCalled();
   expect(fixture.responsesCreate).toHaveBeenCalledWith(
     expect.objectContaining({
       model: "gpt-6.1-sol",
@@ -239,10 +231,9 @@ test("Responses rejects truncated JSON instead of concatenating partial objects"
 
   await expect(
     textService.generateOpenAIText({
-      api: "responses",
       model: "gpt-5.2",
       modelParams: { reasoning_effort: "none" },
-      messages: [{ role: "user", content: "Return a summary." }],
+      input: [{ role: "user", content: "Return a summary." }],
       format: { kind: "json_object" },
       maxOutputTokens: 160,
     }),
@@ -316,9 +307,8 @@ test("Responses maps strict structured output to the requested schema", async ()
 
   await expect(
     textService.generateOpenAIText({
-      api: "responses",
       model: "gpt-5.2",
-      messages: [{ role: "user", content: "Return a title as JSON." }],
+      input: [{ role: "user", content: "Return a title as JSON." }],
       modelParams: { reasoning_effort: "none" },
       format: { kind: "json_schema", name: "meeting_title", schema },
       maxOutputTokens: 200,

@@ -220,7 +220,7 @@ async function generateCorrectedNotes({
     signal?.throwIfAborted();
     const content = await generateOpenAIText({
       model: modelChoice.model,
-      messages,
+      input: messages,
       modelParams: chatParams,
       signal,
       tracing: {

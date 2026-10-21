@@ -595,7 +595,7 @@ async function generateCorrectedNotes(options: {
     options.signal?.throwIfAborted();
     const content = await generateOpenAIText({
       model: modelChoice.model,
-      messages,
+      input: messages,
       modelParams: chatParams,
       signal: options.signal,
       tracing: {

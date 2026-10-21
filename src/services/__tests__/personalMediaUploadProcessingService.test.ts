@@ -2,6 +2,7 @@
 import { UnresolvedNotionMutation } from "../notionOperationLifetime";
 import { maybeAutoExportCompletedMeeting } from "../notionAutomationService";
 import { jest } from "@jest/globals";
+import { completedTextResponse } from "../../../test/utils/openaiResponse";
 import type {
   PersonalMediaUploadJobRecord,
   PersonalRecordingSegmentRecord,
@@ -70,11 +71,9 @@ const mockTranscribe = jest.fn<
     options?: { signal?: AbortSignal },
   ) => Promise<{ text: string }>
 >(async () => ({ text: "segment transcript" }));
-const mockChatComplete = jest.fn<
-  () => Promise<{ choices: { message: { content: string | null } }[] }>
->(async () => ({
-  choices: [{ message: { content: "Generated notes" } }],
-}));
+const mockCreateResponse = jest.fn<
+  () => Promise<ReturnType<typeof completedTextResponse>>
+>(async () => completedTextResponse("Generated notes"));
 const mockGenerateSummaries = jest.fn<() => Promise<MeetingSummaries>>(
   async () => ({
     summarySentence: "Summary",
@@ -230,7 +229,7 @@ jest.mock("../tempFileService", () => ({
 jest.mock("../openaiClient", () => ({
   createOpenAIClient: jest.fn(() => ({
     audio: { transcriptions: { create: mockTranscribe } },
-    chat: { completions: { create: mockChatComplete } },
+    responses: { create: mockCreateResponse },
   })),
 }));
 
@@ -360,9 +359,9 @@ describe("personalMediaUploadProcessingService", () => {
     recordingSegments = [];
     mockWorkerJob = undefined;
     mockTranscribe.mockResolvedValue({ text: "segment transcript" });
-    mockChatComplete.mockResolvedValue({
-      choices: [{ message: { content: "Generated notes" } }],
-    });
+    mockCreateResponse.mockResolvedValue(
+      completedTextResponse("Generated notes"),
+    );
     mockGenerateSummaries.mockResolvedValue({
       summarySentence: "Summary",
       summaryLabel: "Label",
@@ -453,12 +452,10 @@ describe("personalMediaUploadProcessingService", () => {
       recordingSegments = [buildSegment(0)];
     });
 
-    it.each(["   ", null, "<@123456789012345678>"])(
+    it.each(["   ", "", "<@123456789012345678>"])(
       "requeues then fails blank sanitized notes (%s)",
       async (content) => {
-        mockChatComplete.mockResolvedValue({
-          choices: [{ message: { content } }],
-        });
+        mockCreateResponse.mockResolvedValue(completedTextResponse(content));
         await processPersonalMediaUpload(
           { ...jobForOrigin(), attempts: 2 },
           "instance-1",
@@ -1083,7 +1080,7 @@ describe("personalMediaUploadProcessingService", () => {
 
     await processPersonalMediaUpload(buildDesktopJob(), "instance-1");
 
-    expect(mockChatComplete).not.toHaveBeenCalled();
+    expect(mockCreateResponse).not.toHaveBeenCalled();
     expect(writeMeetingHistoryService).toHaveBeenLastCalledWith(
       expect.objectContaining({
         notes: "",
@@ -1101,7 +1098,7 @@ describe("personalMediaUploadProcessingService", () => {
 
     await processPersonalMediaUpload(buildJob(), "instance-1");
 
-    expect(mockChatComplete).not.toHaveBeenCalled();
+    expect(mockCreateResponse).not.toHaveBeenCalled();
     expect(writeMeetingHistoryService).toHaveBeenLastCalledWith(
       expect.objectContaining({
         notes: "",
@@ -1247,7 +1244,7 @@ describe("personalMediaUploadProcessingService", () => {
         processing: expect.objectContaining({ transcription: "failed" }),
       }),
     );
-    expect(mockChatComplete).not.toHaveBeenCalled();
+    expect(mockCreateResponse).not.toHaveBeenCalled();
   });
 
   it("keeps an S3 artifact failure as a failed job", async () => {
@@ -1325,7 +1322,7 @@ describe("personalMediaUploadProcessingService", () => {
 
     await processPersonalMediaUpload(buildJob(), "instance-1");
 
-    expect(mockChatComplete).not.toHaveBeenCalled();
+    expect(mockCreateResponse).not.toHaveBeenCalled();
     expect(writeMeetingHistoryService).toHaveBeenLastCalledWith(
       expect.objectContaining({
         notes: "",
@@ -1360,7 +1357,7 @@ describe("personalMediaUploadProcessingService", () => {
       "instance-1",
     );
 
-    expect(mockChatComplete).not.toHaveBeenCalled();
+    expect(mockCreateResponse).not.toHaveBeenCalled();
     expect(uploadObjectToS3).not.toHaveBeenCalledWith(
       expect.stringContaining("owner_mic-000001.transcript.json"),
       expect.anything(),
@@ -1416,7 +1413,7 @@ describe("personalMediaUploadProcessingService", () => {
       }),
     );
     mockTranscribe.mockRejectedValue(new Error("provider failed"));
-    mockChatComplete.mockRejectedValueOnce(new Error("notes failed"));
+    mockCreateResponse.mockRejectedValueOnce(new Error("notes failed"));
 
     await processPersonalMediaUpload(
       { ...buildDesktopJob(), attempts: 3 },

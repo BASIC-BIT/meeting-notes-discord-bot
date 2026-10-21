@@ -1,12 +1,11 @@
 import { getMeetingProcessingSignal } from "./meetingProcessingLifetime";
 import type { SpanContext } from "@opentelemetry/api";
 import type { MeetingData, MeetingNotesInput } from "../types/meeting-data";
-import {
-  MEETING_TEXT_MAX_REQUESTS,
-  type OpenAITextApi,
-} from "../config/openaiText";
 import { buildOpenAISafetyIdentifier } from "./openaiClient";
-import { generateOpenAIText } from "./openaiTextService";
+import {
+  generateOpenAIText,
+  MEETING_TEXT_MAX_REQUESTS,
+} from "./openaiTextService";
 import { getModelChoice } from "./modelFactory";
 import { resolveChatParamsForRole } from "./openaiModelParams";
 import type { ModelParamRole } from "../config/types";
@@ -16,7 +15,6 @@ import { getMeetingModelOverrides } from "./meetingModelOverrides";
 type ChatInput = { messages: ChatMessage[] };
 
 type ChatOptions = {
-  api?: OpenAITextApi;
   frozenModel?: import("../types/recordingContent").SavedRecordingSettings["models"]["notes"];
   signal?: AbortSignal;
   model?: string;
@@ -68,9 +66,8 @@ export async function chat(
   const traceName = options.traceName ?? "notes";
   const { model, modelParams } = resolveMeetingChatModel(meeting, options);
   return generateOpenAIText({
-    api: options.api,
     model,
-    messages: body.messages,
+    input: body.messages,
     modelParams,
     continuation: { maxRequests: MEETING_TEXT_MAX_REQUESTS },
     signal: AbortSignal.any([

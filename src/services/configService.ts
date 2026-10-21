@@ -1,5 +1,4 @@
 import dotenv from "dotenv";
-import { resolveOpenAITextApi } from "../config/openaiText";
 import path from "node:path";
 import { resolveLangfuseBaseUrl } from "./langfuseDefaults";
 
@@ -54,7 +53,6 @@ class ConfigService {
     apiKey: process.env.OPENAI_API_KEY!,
     organizationId: process.env.OPENAI_ORGANIZATION_ID,
     projectId: process.env.OPENAI_PROJECT_ID,
-    textApi: resolveOpenAITextApi(process.env.OPENAI_TEXT_API),
   };
 
   // Langfuse Configuration

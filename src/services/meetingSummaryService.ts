@@ -153,7 +153,7 @@ export async function generateMeetingSummaries(
     input.signal?.throwIfAborted();
     const content = await generateOpenAIText({
       model: modelChoice.model,
-      messages,
+      input: messages,
       modelParams: chatParams,
       format: { kind: "json_object" },
       maxOutputTokens: 160,

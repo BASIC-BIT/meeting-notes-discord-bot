@@ -2,106 +2,90 @@
 
 Date: 2026-10-21
 
-## Goal and design
+## Goal
 
-Implement the approved transport and current-model evaluation foundation from
-the [design](../specs/2026-10-21-responses-meeting-evaluation-design.md).
+Implement the [design](../specs/2026-10-21-responses-meeting-evaluation-design.md)
+with one Responses request boundary for all text callers. Remove the old Chat
+Completions branch, transport configuration and obsolete compatibility tests.
+Keep model defaults, saved recording schemas, prompts and billing unchanged.
 
-Keep existing models and Chat Completions as defaults. Do not change production
-routing, saved recording schema, quality settings, billing, live prompts or
-provider credentials.
+## Task 1: prove the required default
 
-## Task 1: prove the missing behavior
+Require ordinary meeting text calls to use Responses without an opt-in.
+Retain completion, refusal, filtered-output, empty-output, continuation,
+cancellation and frozen-parameter contracts. Existing initial migration tests
+first produced 12 failures with 3,646 baseline tests passing; the Responses-only
+default receives its own regression assertion.
 
-- Add Responses completion, refusal, filtered-output and empty-output assertions.
-- Add GPT-6 reasoning and temperature compatibility assertions.
-- Run the complete unit suite against the original implementation.
+## Task 2: simplify the boundary
 
-Observed RED on commit 224c3711b68fdfc04f820c4a57f6e26dbef32981:
-all 12 new assertions failed, while 3,646 existing tests passed. All other CI jobs
-completed successfully or were intentionally skipped. Source and tests are on
-the isolated feature/responses-meeting-evaluation branch.
+Keep openaiTextService.ts as the only SDK text dispatch boundary. Accept native
+Responses input items and the existing frozen-style model parameters. Support
+text, JSON object and strict JSON schema formats with store:false.
 
-## Task 2: add the shared text request boundary
+Delete the transport selector and Chat request/continuation implementation.
+Export the shared meeting text request budget from the service rather than a
+transport configuration module. Preserve complete SDK item replay, refusal and
+terminal-state checks, repeated-chunk rejection and cancellation.
 
-Create src/config/openaiText.ts and src/services/openaiTextService.ts. Validate
-OPENAI_TEXT_API, preserving chat_completions as the default and accepting
-responses explicitly.
+## Task 3: migrate every caller
 
-The service owns SDK client creation and sanitized API/format/parameter tracing
-metadata. Map frozen-style settings to the selected request format. Keep
-Responses stateless with store:false. Support text, JSON object and strict JSON
-schema output formats.
+Use the service for notes, cleanup, coalescing, final-pass reconciliation,
+summaries, Discord/web corrections, personal-upload notes, the notes evaluator,
+Ask, live-voice gate/replies/confirmation, image captions, dictionary suggestions
+and auto-record cancellation decisions.
 
-Retain single-request behavior for summary and correction callers. Production
-notes and the notes evaluator share a named budget of three SDK calls; provider
-retries may add HTTP attempts. Continue Responses only on text max_output_tokens
-truncation with usable output, replaying the SDK output items. Responses rejects
-refusals, declared incomplete JSON, filtered or empty results, identical
-consecutive chunks and request-budget exhaustion. Propagate cancellation through
-every dispatch and settlement.
+Preserve prompt construction, frozen settings, token caps, tracing metadata,
+mention allowlists, citations, image detail, cancellation and each caller's
+actual error behavior. Audio transcription, speech and image-generation
+endpoints remain dedicated to their respective media operations.
 
-## Task 3: migrate the meeting text callers
+Update SDK fixture shapes and assertions for input, reasoning.effort, text.format
+and max_output_tokens. Keep meaningful fallback, privacy, mention, cancellation
+and recovery tests exercising the shared service.
 
-Route the existing shared chat service through the new boundary. Migrate direct
-summary, Discord correction, web correction, personal-upload notes and notes-eval
-requests through the same service.
+## Task 4: keep model evaluation separate
 
-Preserve prompt construction, frozen settings, mention allowlists, output
-rendering, cancellation and each caller's fallback. Audio transcription stays
-on its existing endpoint. Other direct text features are outside this first
-migration wave.
+Retain the GPT-6.1 Sol, GPT-6 Sol, GPT-6 Luna and GPT-6 Astra capability profiles.
+Do not change default role models as part of the API migration.
 
-## Task 4: support current models
-
-Extend src/config/modelChoices.ts and src/services/openaiModelParams.ts with
-GPT-6.1 Sol, GPT-6 Sol, GPT-6 Luna and GPT-6 Astra.
-
-Require supported reasoning for Sol 6.1 and Astra. Allow temperature only with
-none reasoning on Sol 6 and Luna. Map unsupported minimal reasoning to low for
-these new models while preserving legacy GPT-5 fallback behavior. Do not alter
-model defaults.
+Capture the existing-model baseline from the prior source revision, then compare
+the same model on Responses before comparing newer models. Historical API
+comparisons run from separate revisions or worktrees, not a production toggle.
 
 ## Task 5: validate and review
 
-Cover continuation item preservation, budget exhaustion, frozen parameters,
-incomplete JSON and configuration validation. Run unit, build, lint, format,
-Markdown, documentation, quality-ratchet and existing integration checks.
-Request an independent code review, then fix material findings and re-run the
-affected gates. Keep the PR in draft until validation is complete.
+Run unit, build, lint, format, Markdown, documentation, quality-ratchet and
+integration checks. Request independent review of the full cleanup and address
+material findings. Keep the PR in draft until validation completes.
 
-The local execution environment failed to start. Existing GitHub CI provides
-the executable validation; no quality exception or production workflow is added.
+The local execution environment has been unavailable. Existing GitHub CI supplies
+executable verification when it remains unavailable; do not add workflow or
+quality exceptions.
 
-## Evaluation after source validation
+## Paid evaluation stage
 
-Run the existing notes dataset through the shared transport with fixed prompt
-versions and identical rendered inputs. Example process configurations:
+Use fixed prompt versions, identical rendered inputs and distinct experiment
+names. Verify the traced model and effective parameters for each run.
 
-- OPENAI_TEXT_API=chat_completions and NOTES_MODEL=gpt-5.2.
-- OPENAI_TEXT_API=responses and NOTES_MODEL=gpt-5.2.
-- OPENAI_TEXT_API=responses and NOTES_MODEL=gpt-6.1-sol.
-- OPENAI_TEXT_API=responses and NOTES_MODEL=gpt-6-luna.
+- NOTES_MODEL=gpt-5.2 on Responses.
+- NOTES_MODEL=gpt-6.1-sol on Responses with low reasoning.
+- NOTES_MODEL=gpt-6-luna on Responses with the chosen none or low profile.
+- A separately reported difficult-meeting experiment for Astra.
 
-Use separate experiment names. Check the traced effective model, reasoning and
-API for every run. Existing mention graders establish formatting and mention
-contracts, not factual meeting-note quality.
-
-The summary's current 160-token cap includes reasoning. Keep that cap for
-same-model transport parity; choose and record a suitable separate total-output
-budget before comparing models that require reasoning.
+The summary's 160-token budget includes reasoning. Record a suitable independent
+budget before comparing models that require reasoning. Existing mention graders
+verify formatting and mention contracts, not factual meeting quality.
 
 Curate representative permitted recordings and a separate challenge set before
-paid full-pipeline replays. Measure audio-grounded decisions, actions, owners,
-deadlines, unsupported claims, complete cost and actual delivered-notes latency.
-Do not claim savings or quality parity from source tests.
+full-pipeline replays. Measure audio-grounded facts, decisions, actions, owners,
+deadlines, unsupported claims, complete cost and delivered-notes latency.
+Source tests cannot establish savings or quality parity.
 
-Strict output schema adoption, combined notes/title/summary generation,
-duplicate cleanup removal and selective final verification remain separate
-experiments after this foundation. They must not be conflated with API or model
-effects.
+Strict schema adoption, combined notes/title/summary generation, duplicate
+cleanup removal and selective final verification are separate experiments.
 
 ## Rollback
 
-Restore OPENAI_TEXT_API=chat_completions and the prior role model choices.
-Existing recording v1 settings and prompts remain readable without migration.
+Revert the source migration if necessary. Restore prior role model choices to
+roll back model experiments. Existing saved recording v1 settings remain readable.

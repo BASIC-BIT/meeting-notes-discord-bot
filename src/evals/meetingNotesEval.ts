@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { MEETING_TEXT_MAX_REQUESTS } from "../config/openaiText";
 import { config } from "../services/configService";
 import { getLangfuseChatPrompt } from "../services/langfusePromptService";
 import {
@@ -7,7 +6,10 @@ import {
   isLangfuseEnabled,
 } from "../services/langfuseClient";
 import { getModelChoice } from "../services/modelFactory";
-import { generateOpenAIText } from "../services/openaiTextService";
+import {
+  generateOpenAIText,
+  MEETING_TEXT_MAX_REQUESTS,
+} from "../services/openaiTextService";
 import { resolveChatParamsForRole } from "../services/openaiModelParams";
 import { getEvalDataset } from "./evalDataset";
 import { expectedOutputSchema } from "./expectedOutput";
@@ -73,7 +75,7 @@ const generateNotesForEval = async (input: EvalInput): Promise<string> => {
   const modelParams = resolveChatParamsForRole({ role: "notes", model });
   return generateOpenAIText({
     model,
-    messages,
+    input: messages,
     modelParams,
     continuation: { maxRequests: MEETING_TEXT_MAX_REQUESTS },
     tracing: {

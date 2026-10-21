@@ -1,4 +1,7 @@
 /** @jest-environment node */
+import {
+  completedTextResponse as mockCompletedTextResponse,
+} from "../utils/openaiResponse";
 jest.mock("dotenv", () => ({ config: () => ({ parsed: {} }) }));
 jest.mock("../../src/services/transcriptionService", () => ({
   ...jest.requireActual("../../src/services/transcriptionService"),
@@ -24,17 +27,10 @@ jest.mock("../../src/services/mixedPcmService", () => ({
 jest.mock("../../src/services/openaiClient", () => ({
   buildOpenAISafetyIdentifier: (id: string) => id,
   createOpenAIClient: jest.fn(() => ({
-    chat: {
-      completions: {
-        create: jest.fn(async () => ({
-          choices: [
-            {
-              finish_reason: "stop",
-              message: { content: "Original saved cleanup result." },
-            },
-          ],
-        })),
-      },
+    responses: {
+      create: jest.fn(async () =>
+        mockCompletedTextResponse("Original saved cleanup result."),
+      ),
     },
   })),
 }));
@@ -152,6 +148,15 @@ test("partial capture uses frozen cleanup and explicitly skips finalized-only st
       langfusePrompt: expect.objectContaining({ version: 31 }),
       userId: "123",
     }),
+  );
+  const client = jest.mocked(createOpenAIClient).mock.results[0].value;
+  expect(client.responses.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      model: "original-model",
+      input: expect.any(Array),
+      store: false,
+    }),
+    { signal: f.signal },
   );
 });
 test("complete verified PCM uses shared mixer and plain finalized-pass with frozen budgets", async () => {
