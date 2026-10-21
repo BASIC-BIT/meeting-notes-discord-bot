@@ -48,6 +48,7 @@
   - Prompt builders live in `src/services/*PromptService.ts`.
   - Builds context from server/channel/meeting and recent history (`services/contextService.ts`).
 - Transcription prompt is Langfuse-managed (`chronote-transcription-prompt`). Guardrails include a loudness gate (noise gate metrics, hard silence threshold, syllable rate, and logprobs), a prompt echo gate, and a low-confidence prompt/no-prompt vote fallback on slow snippets.
+  - Snippet ASR attempts belong to `services/transcriptionRequest.ts`, with at most four attempts per candidate. Keep successful prompted work when a no-prompt vote retries; use attempt-aware accounting and operation-local exhausted-error provenance for the breaker. See `docs/audio-transcription.md`.
   - A finalized audio verification pass can run at meeting end (`transcription.finalPass.enabled`) to auto-apply high-confidence hallucination fixes before notes generation.
   - GPT prompts tuned for cleanup, notes, and optional image generation.
 - Dictionary management: `commands/dictionary.ts`, `services/dictionaryService.ts`

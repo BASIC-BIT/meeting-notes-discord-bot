@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
+**Status:** Implementation candidate after strengthened RED; GREEN and final review pending.
+
 **Goal:** Retry only transient snippet ASR failures and report attempted work honestly.
 
 **Architecture:** One request helper owns each candidate's attempts and fresh
@@ -76,8 +78,13 @@ OpenAI`, using the SDK's named `ClientOptions` export.
 - `runTranscriptionRequest(input): Promise<Transcription>` consumes
   `candidate`, `file`, `signal`, the existing model/prompt ASR request
   fields excluding file, the operation ledger and tracing client options.
+  It also accepts optional `transport?: Pick<ClientOptions, "fetch">`.
   Its request type is
   `Omit<TranscriptionCreateParamsNonStreaming<"json">, "file">`.
+- `createTranscriptionFailureScope()` supplies generic `run(callback)` over
+  an operation-local WeakSet through AsyncLocalStorage.
+- `isExhaustedTranscriptionFailure(error: unknown): boolean` requires current
+  scope membership and the transient classifier while preserving error identity.
 - `isTransientTranscriptionFailure(error: unknown): boolean` owns the
   normalized retry classification. The caller checks its signal first.
 - `buildLangfuseTranscriptionAccounting(usages, fallbackAudioSeconds?,
@@ -102,7 +109,7 @@ not_attempted coverage; any missing valid usage makes coverage partial or
 unknown. Valid duration usage is known usage but does not establish token
 pricing.
 
-- [ ] **Step 1: pin request, cancellation and accounting contracts.**
+- [x] **Step 1: pin request, cancellation and accounting contracts.**
 
 Use the real pinned OpenAI client with an injected fake fetch in the request
 test. Mock file input at its own boundary with readable synthetic bytes.
@@ -166,7 +173,7 @@ a secondary stream teardown error must preserve provider error identity.
 File/prompt/guard/attachment/bulkhead/breaker-open failures must not become
 ASR retries or counted transient provider failures.
 
-- [ ] **Step 2: demonstrate failures before implementation.**
+- [x] **Step 2: demonstrate failures before implementation.**
 
 Run:
 
@@ -175,14 +182,17 @@ yarn test --runInBand test/services/transcriptionRequest.test.ts test/observabil
 ```
 
 Expected RED: missing boundary/ledger or existing repeated workflow,
-unbounded nested attempts and retry-on-terminal behavior. Inspect installed
-OpenAI/Cockatiel APIs and versions. Record any discrepancy with the pinned
-source before changing the agreed contract.
+repeated successful candidates and retry-on-terminal behavior. The pinned
+OpenAI 7.32.0 client suppresses its own retries for streaming multipart bodies,
+so do not infer a current nested retry multiplier. Inspect pinned APIs and
+record discrepancies before changing the agreed contract.
 
-- [ ] **Step 3: implement the single request owner and attempt ledger.**
+- [x] **Step 3: implement the single request owner and attempt ledger.**
 
 Create one ledger per logical transcription and one backoff sequence per
-candidate. Within each attempt, create an attempt-bound fetch wrapper and
+candidate. Capture globalThis.fetch once in the request module and delegate
+to an explicitly supplied transport when present; no prior captured fetch
+existed. Within each attempt, create an attempt-bound fetch wrapper and
 ASR client, open a fresh input, and call SDK create with signal/maxRetries 0.
 Record returned usage before checking late cancellation. Settle the attempt
 and close input on every outcome.
@@ -204,8 +214,11 @@ abortable timer; never race an issued provider operation to early settlement.
 Remove the outer Cockatiel retry import/policy. Keep bulkhead/limiter
 ownership around the complete logical transcription and retain the breaker
 threshold of 5 exhausted transient failures with 10,000 ms half-open delay.
-Use the same transient predicate for breaker classification. Keep explicit
-dequeued signal guards rather than change Cockatiel queue cancellation.
+Require operation-local exhausted-error membership and the same transient
+predicate for breaker classification. Enter the failure scope around breaker
+execution after bulkhead admission and again inside the limiter callback.
+Keep explicit dequeued signal guards rather than change Cockatiel queue
+cancellation.
 
 Wire per-candidate requests so a successful prompted candidate is retained.
 Flush ledger metadata/known usage in finally inside the existing generation,
@@ -273,3 +286,23 @@ Audit current PR checks and review feedback. Inspect actual metadata on a
 permitted test run before relying on cost-completeness labels operationally.
 Deployment, live baselines and model/quality experiments remain separate
 authorized work; this plan does not claim dollar or latency savings.
+
+## Execution evidence and consequences
+
+The initial tests-only commit `ee09a07e8e246f275ad3401decaeca2d6de2d665`
+produced 55 failures and 47 passes. After fixing the audited queue-admission,
+accounting-failure and classifier-premise tests,
+`68652d426b03ea71a659ecba66a3c8847019df2f` produced 56 failures and 47
+passes across 7 failed and 3 passed suites in 29.636 seconds. Build, lint,
+formatting, Markdown and census passed. The independent test audit accepted
+all three repairs. Actual retry GREEN and full-change review remain pending.
+
+The four-attempt budget applies independently to each candidate, allowing
+eight ASR attempts across both. It can change recovery opportunity and
+worst-case work relative to the prior whole-workflow budget. Keeping a
+successful prompted candidate avoids repeating that work when its vote
+retries; no universal cost or latency improvement follows.
+
+Follow [PR #430 checks](https://github.com/Chronote-gg/Chronote/pull/430/checks)
+for validation. Production cost, latency and quality effects remain
+unmeasured and require a separate operational comparison.

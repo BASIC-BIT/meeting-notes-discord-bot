@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
+**Status:** Implemented and validated before retry integration.
+
 **Goal:** Avoid duplicate successful cleanup requests during one finalization.
 
 **Architecture:** A compiler closure holds one accepted prepared-request result.
@@ -64,7 +66,7 @@ transcription: string): Promise<PreparedTranscriptionCleanup>`.
 - Consumes existing capture, prompt builders, parameter resolution and chat
   execution. Recovery uses saved-input execution without live preparation.
 
-- [ ] **Step 1: write failing compiler contracts.**
+- [x] **Step 1: write failing compiler contracts.**
 
 Build a local fixture in the new compiler test using real compilation with
 prompt/provider boundaries mocked. Expose client, meeting, cleanup mock and
@@ -105,13 +107,13 @@ calls for empty/disabled input; separate compiler closures and standalone
 calls execute separately. Abort before a hit, during preparation and after
 provider settlement must prevent reuse/admission.
 
-- [ ] **Step 2: run the focused tests and record the expected failure.**
+- [x] **Step 2: run the focused tests and record the expected failure.**
 
 Run `yarn test --runInBand test/services/transcriptCompilationService.test.ts`.
 Expected RED: missing new module/factory or two provider calls instead of one.
 Do not weaken existing checkpoint or failure assertions.
 
-- [ ] **Step 3: extract modules, then implement the compiler contract.**
+- [x] **Step 3: extract modules, then implement the compiler contract.**
 
 Move existing code and headers verbatim before adding reuse. Use one private
 compilation implementation behind the standalone and closure APIs. Capture
@@ -134,7 +136,7 @@ returned compiler, first-call acknowledgement callback, second-call
 `includeCues: true`, final transcript/checkpoint and upload contents.
 Keep best-effort reuse metadata failure from affecting compilation.
 
-- [ ] **Step 4: verify feature and regression contracts.**
+- [x] **Step 4: verify feature and regression contracts.**
 
 Run:
 
@@ -153,9 +155,20 @@ src test`. No moved API may remain exported/imported through its old module.
 Review audio.ts and transcriptionService.ts line counts against the PR base;
 both should shrink. Inspect changed documentation for accuracy.
 
-- [ ] **Step 5: commit the independently working change.**
+- [x] **Step 5: commit the independently working change.**
 
 Stage only the files in this plan and any necessary architecture-reference
 updates. Commit with `[AGENT] perf: reuse accepted identical transcription cleanup`.
 Request review of key identity, fallback retry and checkpoint capture before
 the next plan. Preserve recording v1 and notes mention regression results.
+
+## Validation status
+
+Cleanup reuse is implemented. The integrated pre-retry baseline
+`5e9ceec5f56e1a22215ea8ba9b57f6e7849c0acc` passed 395 suites and 3,866
+tests, 136 visual tests and strict quality. Tracing additionally passed
+39 focused tests and independent review. Retry integration must rerun these
+regressions; its GREEN and final whole-change review remain pending.
+
+See [PR #430 checks](https://github.com/Chronote-gg/Chronote/pull/430/checks).
+Production cost, latency and quality effects remain unmeasured.

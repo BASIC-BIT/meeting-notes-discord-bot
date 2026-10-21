@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
+**Status:** Implemented and validated before retry integration.
+
 **Goal:** Start ASR while independent tracing audio preparation runs.
 
 **Architecture:** Keep both operations in the existing generation scope and
@@ -48,7 +50,7 @@ drain the complete owned attachment promise in finally before returning.
   remains a handled `Promise<void>`; successful transcription returns only
   after its drain and a final signal fence.
 
-- [ ] **Step 1: write failing overlap and lifetime tests.**
+- [x] **Step 1: write failing overlap and lifetime tests.**
 
 Build a tracing-enabled fixture with deferred attachment/provider promises,
 an execution-entered barrier, fake ffmpeg/fs and observation-scope end spy.
@@ -88,14 +90,14 @@ boundary. Combine the same provider error with attachment rejection,
 observation-update throw and attachment-warning throw. Assert identical
 provider error identity and no unhandled rejection.
 
-- [ ] **Step 2: demonstrate the serial-order regression.**
+- [x] **Step 2: demonstrate the serial-order regression.**
 
 Run `yarn test --runInBand test/services/transcriptionTracing.test.ts`.
 Expected RED: the provider-entered barrier is not reached while attachment
 preparation is blocked. Use a bounded test harness timeout only to report
 the missing event; do not add implementation delays.
 
-- [ ] **Step 3: change dispatch and settlement ordering.**
+- [x] **Step 3: change dispatch and settlement ordering.**
 
 Start the existing complete owned attachment chain, immediately attach its
 terminal nonthrowing catch, and save the promise. Run ASR/selection/accounting
@@ -107,7 +109,7 @@ successful value from inside try, detach work, or use Promise.all to release
 the generation after the first rejection. Keep the current queued-start
 signal fence and running ffmpeg drainage.
 
-- [ ] **Step 4: verify lifetime, metadata and feature regressions.**
+- [x] **Step 4: verify lifetime, metadata and feature regressions.**
 
 Run:
 
@@ -124,8 +126,19 @@ updates and owned effects settle, and temporary MP3/WAV cleanup remains
 correct on each failure/abort path. This proves overlap and lifecycle
 behavior, not a production latency percentage.
 
-- [ ] **Step 5: commit the independently working change.**
+- [x] **Step 5: commit the independently working change.**
 
 Commit `[AGENT] perf: overlap transcription tracing preparation with ASR`.
 Request review of late cancellation and error precedence. Preserve this
 suite as a required regression when executing the retry plan next.
+
+## Validation status
+
+Tracing overlap is implemented. The integrated pre-retry baseline
+`5e9ceec5f56e1a22215ea8ba9b57f6e7849c0acc` passed 395 suites and 3,866
+tests, 136 visual tests and strict quality. Tracing additionally passed
+39 focused tests and independent review. Retry integration must rerun these
+regressions; its GREEN and final whole-change review remain pending.
+
+See [PR #430 checks](https://github.com/Chronote-gg/Chronote/pull/430/checks).
+Production cost, latency and quality effects remain unmeasured.
