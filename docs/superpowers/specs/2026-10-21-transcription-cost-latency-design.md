@@ -280,6 +280,13 @@ retries. SDK-only retries do not supply the selected classification and
 existing application budget. A single ASR request owner gives the budget,
 stream lifetime and accounting one boundary.
 
+Consolidating layers deliberately reduces the recovery attempts currently
+possible during a prolonged provider incident. Four attempts per candidate
+is the proposed work bound, not a promise of unchanged availability.
+Operational acceptance must compare transcription failure and partial
+delivery rates alongside latency and known usage. Keep the failure/recovery
+path intact when this budget exhausts.
+
 The lock pins Cockatiel 4.0.0 and OpenAI 7.32.0. Inspect installed pinned
 behavior during execution and test real SDK/policy objects; current mocks
 do not prove retry, queue or stream semantics. No dependency upgrade is part
