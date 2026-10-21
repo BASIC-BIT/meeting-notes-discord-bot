@@ -561,7 +561,7 @@ async function transcribeInternal(
             { asType: "generation" },
           );
 
-          await meeting
+          const attachment = meeting
             .effect(() =>
               langfuseAttachmentLimiter
                 .schedule(() => {
@@ -594,114 +594,122 @@ async function transcribeInternal(
             )
             .catch(() => {});
 
-          const openAIClient = createOpenAIClient({
-            disableTracing: true,
-            langfusePrompt,
-          });
-          const selection = await runAndSelectTranscription(openAIClient);
-          const {
-            guardResult,
-            transcriptStats,
-            suppressionEnabled,
-            promptEchoEnabled,
-            hardSilenceDbfs,
-            rateMaxSeconds,
-            rateMinWords,
-            rateMinSyllables,
-            maxSyllablesPerSecond,
-          } = selection.selected;
-
-          const accounting = buildLangfuseTranscriptionAccounting(
-            [
-              selection.promptCandidate.usage,
-              ...(selection.noPromptCandidate
-                ? [selection.noPromptCandidate.usage]
-                : []),
-            ],
-            context?.audioSeconds,
-          );
-          if (accounting.unpricedRequestCount > 0) {
-            console.warn("Transcription cost accounting is incomplete.", {
-              ...traceMetadata,
-              transcriptionCostAccountingStatus: accounting.status,
-              transcriptionRequestCount: accounting.requestCount,
-              transcriptionPricedRequestCount: accounting.pricedRequestCount,
-              transcriptionUnpricedRequestCount:
-                accounting.unpricedRequestCount,
+          let selectedText: string;
+          try {
+            const openAIClient = createOpenAIClient({
+              disableTracing: true,
+              langfusePrompt,
             });
-          }
-          updateActiveObservation(
-            {
-              output: guardResult.text,
-              usageDetails: accounting.usageDetails,
-              metadata: {
+            const selection = await runAndSelectTranscription(openAIClient);
+            const {
+              guardResult,
+              transcriptStats,
+              suppressionEnabled,
+              promptEchoEnabled,
+              hardSilenceDbfs,
+              rateMaxSeconds,
+              rateMinWords,
+              rateMinSyllables,
+              maxSyllablesPerSecond,
+            } = selection.selected;
+
+            const accounting = buildLangfuseTranscriptionAccounting(
+              [
+                selection.promptCandidate.usage,
+                ...(selection.noPromptCandidate
+                  ? [selection.noPromptCandidate.usage]
+                  : []),
+              ],
+              context?.audioSeconds,
+            );
+            if (accounting.unpricedRequestCount > 0) {
+              console.warn("Transcription cost accounting is incomplete.", {
+                ...traceMetadata,
                 transcriptionCostAccountingStatus: accounting.status,
                 transcriptionRequestCount: accounting.requestCount,
                 transcriptionPricedRequestCount: accounting.pricedRequestCount,
                 transcriptionUnpricedRequestCount:
                   accounting.unpricedRequestCount,
-                transcriptionFlags: guardResult.flags,
-                transcriptionCandidate: selection.selected.candidateId,
-                quietAudio: guardResult.quietAudio,
-                quietByPeak: guardResult.quietByPeak,
-                quietByActivity: guardResult.quietByActivity,
-                hardSilenceDetected: guardResult.hardSilenceDetected,
-                suppressionEnabled,
-                promptEchoEnabled,
-                hardSilenceDbfs,
-                rateMaxSeconds,
-                rateMinWords,
-                rateMinSyllables,
-                maxSyllablesPerSecond,
-                ...transcriptStats,
-                transcriptionRawTextTrivial:
-                  selection.selected.rawTextQuality.trivial,
-                transcriptionRawTextReasons:
-                  selection.selected.rawTextQuality.reasons,
-                transcriptionTextTrivial:
-                  selection.selected.selectedTextQuality.trivial,
-                transcriptionTextReasons:
-                  selection.selected.selectedTextQuality.reasons,
-                transcriptionAlnumCharCount:
-                  selection.selected.selectedTextQuality.alnumCharCount,
-                logprobMetrics: guardResult.logprobMetrics,
-                promptEchoDetected: guardResult.promptEchoDetected,
-                promptEchoMetrics: guardResult.promptEchoMetrics,
-                rateMismatchDetected: guardResult.rateMismatchDetected,
-                noiseGateEnabled: context?.noiseGateEnabled,
-                noiseGateMode: passMode,
-                noiseGateMetrics: context?.noiseGateMetrics,
-                suppressed: guardResult.suppressed,
-                transcriptionVoteEnabled: voteEnabled,
-                transcriptionVoteGateReasons: selection.voteGate.reasons,
-                transcriptionVoteAttempted: Boolean(
-                  selection.noPromptCandidate,
-                ),
-                transcriptionVoteSelected: selection.selected.candidateId,
-                transcriptionVoteDecisionReasons:
-                  selection.voteDecision?.reasons,
-                transcriptionVotePromptScore:
-                  selection.voteDecision?.promptScore,
-                transcriptionVoteNoPromptScore:
-                  selection.voteDecision?.noPromptScore,
-                transcriptionVotePromptFlags:
-                  selection.promptCandidate.guardResult.flags,
-                transcriptionVoteNoPromptFlags:
-                  selection.noPromptCandidate?.guardResult.flags,
-                transcriptionVotePromptTrivialText:
-                  selection.promptCandidate.selectedTextQuality.trivial,
-                transcriptionVotePromptTrivialReasons:
-                  selection.promptCandidate.selectedTextQuality.reasons,
-                transcriptionVoteNoPromptTrivialText:
-                  selection.noPromptCandidate?.selectedTextQuality.trivial,
-                transcriptionVoteNoPromptTrivialReasons:
-                  selection.noPromptCandidate?.selectedTextQuality.reasons,
+              });
+            }
+            updateActiveObservation(
+              {
+                output: guardResult.text,
+                usageDetails: accounting.usageDetails,
+                metadata: {
+                  transcriptionCostAccountingStatus: accounting.status,
+                  transcriptionRequestCount: accounting.requestCount,
+                  transcriptionPricedRequestCount:
+                    accounting.pricedRequestCount,
+                  transcriptionUnpricedRequestCount:
+                    accounting.unpricedRequestCount,
+                  transcriptionFlags: guardResult.flags,
+                  transcriptionCandidate: selection.selected.candidateId,
+                  quietAudio: guardResult.quietAudio,
+                  quietByPeak: guardResult.quietByPeak,
+                  quietByActivity: guardResult.quietByActivity,
+                  hardSilenceDetected: guardResult.hardSilenceDetected,
+                  suppressionEnabled,
+                  promptEchoEnabled,
+                  hardSilenceDbfs,
+                  rateMaxSeconds,
+                  rateMinWords,
+                  rateMinSyllables,
+                  maxSyllablesPerSecond,
+                  ...transcriptStats,
+                  transcriptionRawTextTrivial:
+                    selection.selected.rawTextQuality.trivial,
+                  transcriptionRawTextReasons:
+                    selection.selected.rawTextQuality.reasons,
+                  transcriptionTextTrivial:
+                    selection.selected.selectedTextQuality.trivial,
+                  transcriptionTextReasons:
+                    selection.selected.selectedTextQuality.reasons,
+                  transcriptionAlnumCharCount:
+                    selection.selected.selectedTextQuality.alnumCharCount,
+                  logprobMetrics: guardResult.logprobMetrics,
+                  promptEchoDetected: guardResult.promptEchoDetected,
+                  promptEchoMetrics: guardResult.promptEchoMetrics,
+                  rateMismatchDetected: guardResult.rateMismatchDetected,
+                  noiseGateEnabled: context?.noiseGateEnabled,
+                  noiseGateMode: passMode,
+                  noiseGateMetrics: context?.noiseGateMetrics,
+                  suppressed: guardResult.suppressed,
+                  transcriptionVoteEnabled: voteEnabled,
+                  transcriptionVoteGateReasons: selection.voteGate.reasons,
+                  transcriptionVoteAttempted: Boolean(
+                    selection.noPromptCandidate,
+                  ),
+                  transcriptionVoteSelected: selection.selected.candidateId,
+                  transcriptionVoteDecisionReasons:
+                    selection.voteDecision?.reasons,
+                  transcriptionVotePromptScore:
+                    selection.voteDecision?.promptScore,
+                  transcriptionVoteNoPromptScore:
+                    selection.voteDecision?.noPromptScore,
+                  transcriptionVotePromptFlags:
+                    selection.promptCandidate.guardResult.flags,
+                  transcriptionVoteNoPromptFlags:
+                    selection.noPromptCandidate?.guardResult.flags,
+                  transcriptionVotePromptTrivialText:
+                    selection.promptCandidate.selectedTextQuality.trivial,
+                  transcriptionVotePromptTrivialReasons:
+                    selection.promptCandidate.selectedTextQuality.reasons,
+                  transcriptionVoteNoPromptTrivialText:
+                    selection.noPromptCandidate?.selectedTextQuality.trivial,
+                  transcriptionVoteNoPromptTrivialReasons:
+                    selection.noPromptCandidate?.selectedTextQuality.reasons,
+                },
               },
-            },
-            { asType: "generation" },
-          );
+              { asType: "generation" },
+            );
 
-          return guardResult.text;
+            selectedText = guardResult.text;
+          } finally {
+            await attachment;
+          }
+          meeting.signal.throwIfAborted();
+          return selectedText;
         },
         { asType: "generation" },
       ),

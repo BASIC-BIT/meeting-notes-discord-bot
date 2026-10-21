@@ -13,18 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SDD_SOURCE_SHA: "78dc091208f2e4e9e1e981212300c070fc204914"
+  SDD_SOURCE_SHA: "4db613b656b789c2bbc438770beeed97000f6641"
 
 jobs:
   focused:
-    name: "Tracing overlap expected RED"
+    name: "Tracing overlap focused verification"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v7
         with:
-          ref: "78dc091208f2e4e9e1e981212300c070fc204914"
+          ref: "4db613b656b789c2bbc438770beeed97000f6641"
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact source

@@ -32,8 +32,15 @@ When Langfuse tracing is enabled, each transcription snippet uploads an audio at
 - The attachment is always an MP3 generated from the snippet WAV file.
 - Encoding is VBR quality 6, mono, 16 kHz to keep size down while staying intelligible.
 - Attachments are skipped if the MP3 exceeds 8 MB.
-- The MP3 file is temporary and is deleted after upload.
+- The MP3 file is temporary and is deleted after its bytes are prepared for the attachment.
 - The compressed MP3 is for observability only and does not affect transcription quality.
+
+Attachment preparation and ASR run concurrently inside the same transcription
+generation. The generation and snippet WAV remain owned until attachment work
+and its trace update have settled, including when ASR fails. A cancellation
+check after this drain prevents a late abort from publishing a successful
+snippet. Queued attachment work skips encoding after cancellation; running
+ffmpeg encoding still cannot be cancelled and must finish before cleanup.
 
 ## Langfuse usage and cost
 

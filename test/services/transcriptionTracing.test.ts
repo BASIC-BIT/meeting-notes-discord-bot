@@ -97,7 +97,10 @@ test.each([
       const result = f.transcribe();
       await waitFor(f.executionEntered, "policy execution entered");
       await waitFor(f.attachmentEntered, "attachment entered");
-      await waitFor(f.providerEntered, "provider entered while attachment held");
+      await waitFor(
+        f.providerEntered,
+        "provider entered while attachment held",
+      );
       if (attachmentFirst) {
         f.attachment.resolve();
         await waitFor(f.attachmentRecorded, "attachment input recorded");
@@ -124,7 +127,9 @@ test.each([
       });
       expectReleased(f);
       expectPreservedTrace(f, vote);
-      const earlier = attachmentFirst ? "attachment-recorded" : "usage-recorded";
+      const earlier = attachmentFirst
+        ? "attachment-recorded"
+        : "usage-recorded";
       const later = attachmentFirst ? "usage-recorded" : "attachment-recorded";
       expect(f.events.indexOf(earlier)).toBeLessThan(f.events.indexOf(later));
     });
@@ -205,41 +210,47 @@ test("queued attachment abort skips encoding and settles its owned queue work", 
 });
 
 const attachmentFailures: AttachmentFailure[] = ["helper", "update", "warning"];
-describe.each(attachmentFailures)("%s attachment failure", (attachmentFailure) => {
-  test.each(["success", "provider failure"])(
-    "preserves %s without an unhandled rejection",
-    async (outcome) => {
-      await withTracingFixture({ attachmentFailure }, async (f) => {
-        const providerError = new Error("original provider failure");
-        const result = f.transcribe();
-        await waitFor(f.providerEntered, "provider entered with attachment fault");
-        if (outcome === "success") {
-          f.provider.resolve(validResponse);
-          await waitFor(f.usageRecorded, "successful ASR accounting");
-        } else {
-          f.provider.reject(providerError);
-          await waitFor(f.providerSettled, "rejected provider settled");
-        }
-        await expectOwned(f);
-        f.attachment.resolve();
-        const expected =
-          outcome === "success"
-            ? { status: "succeeded", text: validResponse.text }
-            : { status: "failed", reason: "transcription_error" };
-        await expect(result).resolves.toEqual(expected);
-        if (outcome === "success") {
-          expect(f.policyRejected).not.toHaveBeenCalled();
-        } else {
-          expect(f.policyRejected).toHaveBeenCalledTimes(1);
-          expect(f.policyRejected).toHaveBeenCalledWith(providerError);
-          expect(f.policyRejected.mock.calls[0][0]).toBe(providerError);
-        }
-        expect(f.warning).toHaveBeenCalledWith(
-          "Failed to attach transcription audio to Langfuse.",
-          expect.any(Error),
-        );
-        expectReleased(f);
-      });
-    },
-  );
-});
+describe.each(attachmentFailures)(
+  "%s attachment failure",
+  (attachmentFailure) => {
+    test.each(["success", "provider failure"])(
+      "preserves %s without an unhandled rejection",
+      async (outcome) => {
+        await withTracingFixture({ attachmentFailure }, async (f) => {
+          const providerError = new Error("original provider failure");
+          const result = f.transcribe();
+          await waitFor(
+            f.providerEntered,
+            "provider entered with attachment fault",
+          );
+          if (outcome === "success") {
+            f.provider.resolve(validResponse);
+            await waitFor(f.usageRecorded, "successful ASR accounting");
+          } else {
+            f.provider.reject(providerError);
+            await waitFor(f.providerSettled, "rejected provider settled");
+          }
+          await expectOwned(f);
+          f.attachment.resolve();
+          const expected =
+            outcome === "success"
+              ? { status: "succeeded", text: validResponse.text }
+              : { status: "failed", reason: "transcription_error" };
+          await expect(result).resolves.toEqual(expected);
+          if (outcome === "success") {
+            expect(f.policyRejected).not.toHaveBeenCalled();
+          } else {
+            expect(f.policyRejected).toHaveBeenCalledTimes(1);
+            expect(f.policyRejected).toHaveBeenCalledWith(providerError);
+            expect(f.policyRejected.mock.calls[0][0]).toBe(providerError);
+          }
+          expect(f.warning).toHaveBeenCalledWith(
+            "Failed to attach transcription audio to Langfuse.",
+            expect.any(Error),
+          );
+          expectReleased(f);
+        });
+      },
+    );
+  },
+);
