@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import * as timers from "node:timers/promises";
+import timers from "node:timers/promises";
 import {
   buildAsrFixture,
   transientResponse,
@@ -219,7 +219,7 @@ test("abort interrupts a Retry-After wait without another dispatch", async () =>
   expect(f.closedStreams).toHaveLength(1);
 });
 
-test("issued fetch is drained and returned usage survives a late abort", async () => {
+test("issued fetch drains after abort without claiming unreturned SDK usage", async () => {
   const release = deferred<void>();
   const f = await buildAsrFixture({
     outcomes: [validResponse],
@@ -237,8 +237,48 @@ test("issued fetch is drained and returned usage survives a late abort", async (
   release.resolve();
   await rejected;
   expect(f.closedStreams).toHaveLength(1);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
   expect(f.ledger.snapshot()).toMatchObject({
+    sdkInvocationCount: 1,
+    httpDispatchAttemptCount: 1,
+    retryCount: 0,
+    knownUsageAttemptCount: 0,
+    unknownUsageAttemptCount: 1,
+    attemptUsageCoverage: "unknown",
+    returnedUsages: [],
+  });
+});
+
+test("SDK-returned usage survives abort before the result publication fence", async () => {
+  const f = await buildAsrFixture({ outcomes: [validResponse] });
+  const beginAttempt = f.ledger.beginAttempt;
+  const returned = jest.fn();
+  jest.spyOn(f.ledger, "beginAttempt").mockImplementation((candidate) => {
+    const attempt = beginAttempt(candidate);
+    const recordReturnedUsage = attempt.recordReturnedUsage;
+    jest.spyOn(attempt, "recordReturnedUsage").mockImplementation((usage) => {
+      expect(f.signal.aborted).toBe(false);
+      recordReturnedUsage(usage);
+      returned(usage);
+      f.controller.abort();
+    });
+    return attempt;
+  });
+
+  await expect(f.run()).rejects.toMatchObject({ name: "AbortError" });
+
+  expect(returned).toHaveBeenCalledTimes(1);
+  expect(returned).toHaveBeenCalledWith(validResponse.usage);
+  expect(f.fetch).toHaveBeenCalledTimes(1);
+  expect(f.closedStreams).toEqual(f.openedStreams);
+  expect(f.closedStreams).toHaveLength(1);
+  expect(f.ledger.snapshot()).toMatchObject({
+    sdkInvocationCount: 1,
+    httpDispatchAttemptCount: 1,
+    retryCount: 0,
     knownUsageAttemptCount: 1,
+    unknownUsageAttemptCount: 0,
+    attemptUsageCoverage: "complete",
     returnedUsages: [validResponse.usage],
   });
 });

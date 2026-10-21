@@ -263,7 +263,6 @@ async function transcribeInternal(
     "transcription",
     getMeetingModelOverrides(meeting),
   );
-  const ledger = createTranscriptionAttemptLedger(context?.audioSeconds);
   const traceMetadata = {
     transcriptionQueueWaitMs: queueWaitMs,
     guildId: meeting.guild.id,
@@ -281,6 +280,7 @@ async function transcribeInternal(
     promptFallback: langfusePrompt?.isFallback ?? false,
     transcriptionVoteEnabled: voteEnabled,
   };
+  const ledger = createTranscriptionAttemptLedger(traceMetadata.audioSeconds);
 
   const runTranscription = async (
     candidate: TranscriptionCandidateId,
@@ -686,7 +686,7 @@ async function transcribeInternal(
           } finally {
             recordLangfuseTranscriptionAccounting(
               ledger.snapshot(),
-              context?.audioSeconds,
+              traceMetadata.audioSeconds,
             );
             await attachment;
           }
@@ -698,12 +698,15 @@ async function transcribeInternal(
   );
 }
 
-const breakerPolicy = circuitBreaker(handleWhen(isExhaustedTranscriptionFailure), {
-  halfOpenAfter: TRANSCRIPTION_BREAK_DURATION,
-  breaker: new ConsecutiveBreaker(
-    TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
-  ),
-});
+const breakerPolicy = circuitBreaker(
+  handleWhen(isExhaustedTranscriptionFailure),
+  {
+    halfOpenAfter: TRANSCRIPTION_BREAK_DURATION,
+    breaker: new ConsecutiveBreaker(
+      TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
+    ),
+  },
+);
 const bulkheadPolicy = bulkhead(
   TRANSCRIPTION_MAX_CONCURRENT,
   TRANSCRIPTION_MAX_QUEUE,

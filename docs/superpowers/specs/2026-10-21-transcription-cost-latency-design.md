@@ -1,7 +1,7 @@
 # Transcription cost and latency design
 
 Date: 2026-10-21
-Status: Implementation candidate. Cleanup and tracing validated; retry GREEN pending.
+Status: Accepted design. Historical execution evidence is recorded below.
 Source baseline: PR #430, commit `3ef9548fd6523f33cdd80857c562a320108f89bc`.
 
 ## Intent and success criteria
@@ -338,7 +338,7 @@ dollar or user-wait reduction is established by this planning change.
   public backoff generator and policy behavior. Verify installed package
   behavior before execution; this source pointer is not a tarball-integrity claim.
 
-## Implementation validation status
+## Implementation evidence recorded on 2026-10-21
 
 Cleanup reuse and tracing overlap are implemented and were validated before
 retry integration. The integrated baseline
@@ -350,8 +350,8 @@ Retry tests at `ee09a07e8e246f275ad3401decaeca2d6de2d665` demonstrated
 RED (55 failures, 47 passes). After formatting and independent test-audit
 repairs, `68652d426b03ea71a659ecba66a3c8847019df2f` demonstrated
 strengthened RED (56 failures, 47 passes) with build, lint, formatting and
-Markdown passing. The request/ledger implementation and integration await
-actual GREEN and final review; these RED counts are not post-change results.
+Markdown passing. These RED counts describe pre-implementation evidence;
+current implementation checks and review are tracked in the PR.
 
 See [PR #430 checks](https://github.com/Chronote-gg/Chronote/pull/430/checks)
 and [the combined ADR](../../adr-20261021-transcription-pipeline-work.md).

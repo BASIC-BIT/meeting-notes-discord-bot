@@ -9,8 +9,7 @@ export class TranscriptionInputError extends Error {
 }
 
 type RequestOutcome<T> =
-  | { kind: "success"; value: T }
-  | { kind: "failure"; error: unknown };
+  { kind: "success"; value: T } | { kind: "failure"; error: unknown };
 
 function causedBy(error: unknown, readError: Error) {
   const seen = new Set<Error>();

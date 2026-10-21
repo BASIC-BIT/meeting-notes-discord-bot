@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Status:** Implementation candidate after strengthened RED; GREEN and final review pending.
+**Status:** Approved implementation plan. The checklist records the
+2026-10-21 implementation handoff before post-change CI; PR checks and
+review record subsequent validation.
 
 **Goal:** Retry only transient snippet ASR failures and report attempted work honestly.
 
@@ -295,7 +297,8 @@ accounting-failure and classifier-premise tests,
 `68652d426b03ea71a659ecba66a3c8847019df2f` produced 56 failures and 47
 passes across 7 failed and 3 passed suites in 29.636 seconds. Build, lint,
 formatting, Markdown and census passed. The independent test audit accepted
-all three repairs. Actual retry GREEN and full-change review remain pending.
+all three repairs. These are pre-implementation results recorded on
+2026-10-21; subsequent checks and review are tracked in the PR.
 
 The four-attempt budget applies independently to each candidate, allowing
 eight ASR attempts across both. It can change recovery opportunity and

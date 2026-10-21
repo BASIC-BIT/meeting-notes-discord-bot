@@ -1,6 +1,6 @@
 # ADR-20261021: Transcription Work Ownership
 
-Status: Accepted design; retry implementation validation pending  
+Status: Accepted  
 Date: 2026-10-21  
 Owners: Audio pipeline
 
@@ -66,8 +66,9 @@ Cleanup/tracing and their integrated pre-retry baseline passed 395 suites,
 3,866 tests, 136 visuals and strict quality. Strengthened retry RED at
 `68652d426b03ea71a659ecba66a3c8847019df2f` passed build, lint, formatting
 and Markdown while 56 tests failed as expected before implementation.
-Retry GREEN and final review are pending in
-[PR #430 checks](https://github.com/Chronote-gg/Chronote/pull/430/checks).
+These results record pre-implementation evidence from 2026-10-21.
+[PR #430 checks](https://github.com/Chronote-gg/Chronote/pull/430/checks)
+provide current implementation validation; the PR records final review.
 
 Production dollar, latency and quality comparisons remain unmeasured.
 Deployment and live comparison are separate work.

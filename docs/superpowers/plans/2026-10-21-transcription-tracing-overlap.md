@@ -132,13 +132,14 @@ Commit `[AGENT] perf: overlap transcription tracing preparation with ASR`.
 Request review of late cancellation and error precedence. Preserve this
 suite as a required regression when executing the retry plan next.
 
-## Validation status
+## Validation evidence recorded on 2026-10-21
 
 Tracing overlap is implemented. The integrated pre-retry baseline
 `5e9ceec5f56e1a22215ea8ba9b57f6e7849c0acc` passed 395 suites and 3,866
 tests, 136 visual tests and strict quality. Tracing additionally passed
-39 focused tests and independent review. Retry integration must rerun these
-regressions; its GREEN and final whole-change review remain pending.
+39 focused tests and independent review. These results describe the
+pre-retry baseline; subsequent integration checks and review are tracked
+in the PR.
 
 See [PR #430 checks](https://github.com/Chronote-gg/Chronote/pull/430/checks).
 Production cost, latency and quality effects remain unmeasured.

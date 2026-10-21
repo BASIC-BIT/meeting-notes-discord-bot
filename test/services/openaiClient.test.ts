@@ -39,8 +39,8 @@ test("optional fetch preserves API credentials and delegates the request", async
   const client = createOpenAIClient({ disableTracing: true }, { fetch });
   await client.models.list();
   expect(client.apiKey).toBe(config.openai.apiKey);
-  expect(client.organization).toBe(config.openai.organizationId);
-  expect(client.project).toBe(config.openai.projectId);
+  expect(client.organization).toBe(config.openai.organizationId ?? null);
+  expect(client.project).toBe(config.openai.projectId ?? null);
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(client.maxRetries).toBe(2);
 });
@@ -70,4 +70,26 @@ test("Responses requests retain SDK retry behavior with an injected transport", 
   });
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(client.maxRetries).toBe(2);
+});
+
+test("factory forwards explicitly configured organization and project headers", async () => {
+  const organizationId = config.openai.organizationId;
+  const projectId = config.openai.projectId;
+  let headers = new Headers();
+  const fetch = jest.fn(async (_url: unknown, init?: RequestInit) => {
+    headers = new Headers(init?.headers);
+    return Response.json({ data: [] });
+  });
+  try {
+    config.openai.organizationId = "synthetic-organization";
+    config.openai.projectId = "synthetic-project";
+    const client = createOpenAIClient({ disableTracing: true }, { fetch });
+    await client.models.list();
+    expect(headers.get("openai-organization")).toBe("synthetic-organization");
+    expect(headers.get("openai-project")).toBe("synthetic-project");
+    expect(headers.get("authorization")).toBe(`Bearer ${config.openai.apiKey}`);
+  } finally {
+    config.openai.organizationId = organizationId;
+    config.openai.projectId = projectId;
+  }
 });
