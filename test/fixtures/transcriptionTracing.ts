@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import { setImmediate } from "node:timers";
+import type { ClientOptions } from "openai";
 import type {
   Transcription,
   TranscriptionCreateParamsNonStreaming,
@@ -13,7 +14,11 @@ const ATTACHMENT_WARNING = "Failed to attach transcription audio to Langfuse.";
 
 export const deferred = <T>() => Promise.withResolvers<T>();
 
-export async function waitFor<T>(event: Promise<T>, label: string) {
+export async function waitFor<T>(
+  event: Promise<T>,
+  label: string,
+  timeoutMs = EVENT_TIMEOUT_MS,
+) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -21,7 +26,7 @@ export async function waitFor<T>(event: Promise<T>, label: string) {
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () => reject(new Error(`Missing tracing event: ${label}`)),
-          EVENT_TIMEOUT_MS,
+          timeoutMs,
         );
       }),
     ]);
@@ -37,6 +42,9 @@ export type AttachmentFailure = "helper" | "update" | "warning";
 type FixtureOptions = {
   queued?: boolean;
   attachmentFailure?: AttachmentFailure;
+  realPolicies?: boolean;
+  transport?: NonNullable<ClientOptions["fetch"]>;
+  accountingFailure?: boolean;
 };
 
 type ObservationUpdate = {
@@ -139,6 +147,9 @@ function mockObservation(options: FixtureOptions, events: string[]) {
     events.push("generation-ended");
   });
   const update = jest.fn((value: ObservationUpdate) => {
+    if (value.usageDetails && options.accountingFailure) {
+      throw new Error("accounting observation failed");
+    }
     if (value.input?.audio && options.attachmentFailure === "update") {
       throw new Error("attachment update failed");
     }
@@ -175,7 +186,10 @@ function mockObservation(options: FixtureOptions, events: string[]) {
   };
 }
 
-function mockScheduling(queue: ReturnType<typeof deferred<void>>) {
+function mockScheduling(
+  queue: ReturnType<typeof deferred<void>>,
+  realPolicies = false,
+) {
   const executionEntered = deferred<void>();
   const attachmentQueued = deferred<void>();
   const policyRejected = jest.fn();
@@ -192,10 +206,13 @@ function mockScheduling(queue: ReturnType<typeof deferred<void>>) {
       }
     },
   }));
-  jest.doMock("cockatiel", () => ({
-    ...jest.requireActual<typeof import("cockatiel")>("cockatiel"),
-    wrap: () => ({
-      execute: async (run: () => Promise<unknown>) => {
+  if (realPolicies) {
+    jest.dontMock("cockatiel");
+    jest.dontMock("bottleneck");
+  } else {
+    jest.doMock("cockatiel", () => {
+      const actual = jest.requireActual<typeof import("cockatiel")>("cockatiel");
+      const observe = async <T>(run: () => Promise<T>) => {
         executionEntered.resolve();
         try {
           return await run();
@@ -203,9 +220,14 @@ function mockScheduling(queue: ReturnType<typeof deferred<void>>) {
           policyRejected(error);
           throw error;
         }
-      },
-    }),
-  }));
+      };
+      return {
+        ...actual,
+        bulkhead: () => ({ execute: observe }),
+        wrap: () => ({ execute: observe }),
+      };
+    });
+  }
   return {
     executionEntered: executionEntered.promise,
     attachmentQueued: attachmentQueued.promise,
@@ -213,7 +235,7 @@ function mockScheduling(queue: ReturnType<typeof deferred<void>>) {
   };
 }
 
-function mockProvider() {
+function mockProvider(realTransport: boolean) {
   const provider = deferred<Transcription>();
   const providerEntered = deferred<void>();
   const providerSettled = deferred<void>();
@@ -232,9 +254,13 @@ function mockProvider() {
       }
     },
   );
-  jest.doMock("../../src/services/openaiClient", () => ({
-    createOpenAIClient: () => ({ audio: { transcriptions: { create } } }),
-  }));
+  if (realTransport) {
+    jest.dontMock("../../src/services/openaiClient");
+  } else {
+    jest.doMock("../../src/services/openaiClient", () => ({
+      createOpenAIClient: () => ({ audio: { transcriptions: { create } } }),
+    }));
+  }
   jest.doMock("../../src/services/modelFactory", () => ({
     getModelChoice: () => ({ model: "gpt-4o-transcribe" }),
   }));
@@ -292,8 +318,11 @@ export async function buildTracingFixture(options: FixtureOptions = {}) {
   if (!options.queued) queue.resolve();
   const files = mockAudioFiles(attachment, events);
   const observation = mockObservation(options, events);
-  const scheduling = mockScheduling(queue);
-  const provider = mockProvider();
+  const scheduling = mockScheduling(queue, options.realPolicies);
+  const provider = mockProvider(Boolean(options.transport));
+  const transport = options.transport
+    ? jest.spyOn(globalThis, "fetch").mockImplementation(options.transport)
+    : undefined;
   const helper = mockAttachment(attachment, options);
   const originalWarn = console.warn.bind(console);
   const warning = jest.spyOn(console, "warn");
@@ -309,23 +338,24 @@ export async function buildTracingFixture(options: FixtureOptions = {}) {
   const service = await import("../../src/services/transcriptionService");
   const owner = {} as MeetingData;
   const signal = lifetime.getMeetingProcessingSignal(owner);
+  const preparePrompt = jest.fn(async () => ({
+    prompt: "  Project Orion delivery terminology.  ",
+    langfusePrompt: undefined,
+  }));
   const input: TranscriptionContentInput = {
     meetingId: "tracing-meeting",
     creator: { id: "creator" },
     guild: { id: "guild" },
     voiceChannel: { id: "voice" },
     signal,
-    prompt: async () => ({
-      prompt: "  Project Orion delivery terminology.  ",
-      langfusePrompt: undefined,
-    }),
+    prompt: preparePrompt,
     effect: (run) => lifetime.runMeetingProcessingEffect(owner, run),
   };
   const tasks: Promise<SnippetTranscriptionResult>[] = [];
-  const transcribe = () => {
+  const transcribe = (overrides: Partial<TranscriptionContentInput> = {}) => {
     const task = lifetime.runMeetingProcessingEffect(owner, () =>
       service.transcribeContentSnippet(
-        input,
+        { ...input, ...overrides },
         {
           userId: "speaker",
           timestamp: 123,
@@ -351,6 +381,7 @@ export async function buildTracingFixture(options: FixtureOptions = {}) {
     } finally {
       process.off("unhandledRejection", unhandled);
       warning.mockRestore();
+      transport?.mockRestore();
     }
   };
   return {
@@ -364,6 +395,7 @@ export async function buildTracingFixture(options: FixtureOptions = {}) {
     events,
     signal,
     warning,
+    preparePrompt,
     transcribe,
     stop: () => lifetime.stopMeetingProcessing(owner),
     dispose,

@@ -40,7 +40,7 @@ function expectPreservedTrace(f: TracingFixture, vote: boolean) {
       include: ["logprobs"],
       prompt: "Project Orion delivery terminology.",
     }),
-    { signal: f.signal },
+    { signal: f.signal, maxRetries: 0 },
   ]);
   if (vote) {
     expect(f.create.mock.calls[1][0]).not.toHaveProperty("prompt");
