@@ -12,7 +12,7 @@ const buildMeeting = (): MeetingData =>
       modelParams: {},
       modelChoices: {},
     },
-  } as MeetingData);
+  }) as MeetingData;
 
 const loadModule = async (options: { chatError?: Error } = {}) => {
   jest.resetModules();

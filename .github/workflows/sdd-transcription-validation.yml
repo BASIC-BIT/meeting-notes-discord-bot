@@ -13,18 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SDD_SOURCE_SHA: "1e1a54219d41f670e8c10c46a383f902b23fc600"
+  SDD_SOURCE_SHA: "4c6651a4cd8445f256394ce886b0a7a92f1d72b0"
 
 jobs:
   focused:
-    name: "Cleanup fixture correction"
+    name: "Cleanup final focused verification"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v7
         with:
-          ref: "1e1a54219d41f670e8c10c46a383f902b23fc600"
+          ref: "4c6651a4cd8445f256394ce886b0a7a92f1d72b0"
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact source
