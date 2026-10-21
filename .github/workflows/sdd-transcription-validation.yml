@@ -1,0 +1,57 @@
+name: SDD transcription validation
+
+on:
+  push:
+    branches:
+      - "agent/sdd-validation-430-20261021-2208"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdd-transcription-validation-430
+  cancel-in-progress: true
+
+env:
+  SDD_SOURCE_SHA: "11746fb1c9f36c5ff0666d3a08998459276f7d35"
+
+jobs:
+  focused:
+    name: "Cleanup reuse regressions"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v7
+        with:
+          ref: "11746fb1c9f36c5ff0666d3a08998459276f7d35"
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SDD_SOURCE_SHA"
+          git rev-parse HEAD
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.15.0"
+          cache: "yarn"
+      - name: Install dependencies
+        run: bash scripts/ci-install-dependencies.sh
+      - name: Exact-source compilation API census
+        run: |
+          if command -v rg >/dev/null 2>&1; then
+            rg -n 'compileTranscriptions|cleanupTranscription|cleanupContentTranscription|retainCleanupTranscript' src test
+          else
+            git grep -n -E 'compileTranscriptions|cleanupTranscription|cleanupContentTranscription|retainCleanupTranscript' -- src test
+          fi
+      - name: TypeScript build
+        run: yarn build
+      - name: Lint
+        run: yarn lint:check
+      - name: Format
+        run: yarn prettier:check
+      - name: Markdown
+        run: yarn markdownlint:check
+      - name: Focused synthetic regressions
+        run: yarn test --runInBand --coverage=false test/services/transcriptCompilationService.test.ts test/services/transcriptionCleanupService.test.ts test/services/transcriptionService.test.ts test/services/recordingContentService.test.ts test/commands/endMeeting.test.ts test/commands/endMeetingNotesLatency.test.ts test/services/recoveryTranscriptionProcessing.test.ts test/services/notesService.test.ts test/services/meetingProcessingLifetime.test.ts test/audio/startProcessingSnippet.test.ts
