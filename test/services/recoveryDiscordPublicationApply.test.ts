@@ -280,22 +280,28 @@ test("5xx acknowledgment is uncertain", async () => {
   expect((await apply(preview, f.deps)).status).toBe("uncertain");
 });
 
+async function expectAcknowledgementOutcome(
+  f: ReturnType<typeof setup>,
+  persisted: boolean,
+) {
+  const preview = await f.preview();
+  if (persisted) expect((await apply(preview, f.deps)).status).toBe("verified");
+  else {
+    await expect(apply(preview, f.deps)).rejects.toThrow();
+    expect(f.deps.discord.editEmbeds).not.toHaveBeenCalled();
+  }
+}
+
 test.each([true, false])(
   "lost claim acknowledgment persisted=%s",
   async (persisted) => {
     const f = setup();
-    const preview = await f.preview();
     const write = f.storage.writeClaim.getMockImplementation()!;
     f.storage.writeClaim.mockImplementationOnce(async (args) => {
       if (persisted) await write(args);
       throw new Error("lost acknowledgment");
     });
-    if (persisted)
-      expect((await apply(preview, f.deps)).status).toBe("verified");
-    else {
-      await expect(apply(preview, f.deps)).rejects.toThrow();
-      expect(f.deps.discord.editEmbeds).not.toHaveBeenCalled();
-    }
+    await expectAcknowledgementOutcome(f, persisted);
   },
 );
 
@@ -303,7 +309,6 @@ test.each([true, false])(
   "lost intent acknowledgment persisted=%s",
   async (persisted) => {
     const f = setup();
-    const preview = await f.preview();
     const save = f.storage.saveReceipt.getMockImplementation()!;
     f.storage.saveReceipt.mockImplementation(async (args) => {
       if (args.receipt.messages[0].state === "submitted") {
@@ -312,12 +317,7 @@ test.each([true, false])(
       }
       return save(args);
     });
-    if (persisted)
-      expect((await apply(preview, f.deps)).status).toBe("verified");
-    else {
-      await expect(apply(preview, f.deps)).rejects.toThrow();
-      expect(f.deps.discord.editEmbeds).not.toHaveBeenCalled();
-    }
+    await expectAcknowledgementOutcome(f, persisted);
   },
 );
 

@@ -14,9 +14,9 @@
 
 Stored notes and Discord can currently disagree after a recovery. This command updates the existing posts to the reviewed stored content while preserving their links, controls and uncertainty notices. It does not recover audio, regenerate text or increment the notes version.
 
-The recommended first version is an operator CLI. A portal action, new-message fallback, recovery announcements and Notion synchronization are deferred. The tradeoff is deliberate: a missing post or incompatible layout requires another operator decision instead of an automatic replacement message.
+The approved first version is an operator CLI. A portal action, new-message fallback, recovery announcements and Notion synchronization are deferred. The tradeoff is deliberate: a missing post or incompatible layout requires another operator decision instead of an automatic replacement message.
 
-This plan is ready for review, not implemented. Implementation approval and the execution method remain open. Running the finished command against a real server remains a separate operational action; approving this plan does not lift the current server-delivery hold.
+The design, plan and subagent execution were approved. Tasks 1 through 3 are implemented and reviewed. Task 4 source is implemented and its required checks pass. Task 4 review and whole-change review remain pending. Hosted Sandbox acceptance remains pending without an authorized credential route and synthetic fixture. Running the command against a real server remains a separate operational action; implementation approval does not lift the current server-delivery hold.
 
 ## Global constraints
 
@@ -25,11 +25,11 @@ This plan is ready for review, not implemented. Implementation approval and the 
 - No Discord POST or DELETE, no new announcements, no Notion calls and no LLM calls.
 - Patch only the reviewed embed array with `allowed_mentions: { parse: [] }`. Omit message content, components, attachments and flags from the PATCH.
 - Preserve uncertainty text and partial-capture or partial-transcription notices. Retain the source language.
-- A separate summary card is eligible only for approved stored summary/title changes. Do not derive a new summary from the notes. Skip it if the stored approved summary already matches.
+- A separate summary card is eligible only for approved stored summary/title changes. Do not derive a new summary from the notes. Skip it if the stored approved summary already matches. The current legacy manifest proves notes/transcript approval only, so this adapter blocks a differing separate summary or title and preserves an already-matching card unchanged.
 - Reuse `buildMeetingNotesEmbeds`, `batchMeetingNotesEmbeds` and existing summary presentation rules. Do not invoke `editOrReplaceNotesEmbeds`, which can create or delete messages.
 - Private previews, before-images and receipts contain meeting content. Keep them outside Git and out of console logs. Repository fixtures must be synthetic.
 - Use existing AWS credential resolution and an explicitly selected account, region, table and bucket. Read the bot identity using the selected token. Do not discover or copy production secrets automatically.
-- No new dependency, database table, background worker, public endpoint, analytics event or frontend change.
+- No new database table, background worker, public endpoint, analytics event or frontend change. The approved dependency exception adds only the official `@aws-sdk/client-sts` client, pinned to the existing AWS client family, so actual caller account identity can be verified.
 
 ## Approved behavior
 
@@ -96,20 +96,25 @@ Discord PATCH and DynamoDB reads cannot form one transaction. The command detect
 
 ## File map
 
-| File | Responsibility |
-| --- | --- |
-| `src/services/discordMessageEditor.ts` (new) | Small token-injected read/edit client with validated bot, channel and message identities; no send/delete capability. |
-| `src/services/discordMessageService.ts` | Delegate existing fetch/update wrappers to that client while preserving signatures and behavior for current callers. |
-| `src/services/recoveryDiscordPublication.ts` (new) | Validated preview/receipt types, exact embed planning, apply and read-only reconciliation. |
-| `src/services/recoveryDiscordPublicationStore.ts` (new) | Exact meeting reads and S3 preview, claim and receipt operations using existing SDK packages. |
-| `scripts/publish-recovered-meeting.ts` (new) | Argument validation, credential/client setup, private review output and exit status. |
-| `test/services/discordMessageEditor.test.ts` (new) | Transport contracts and schema boundaries. |
-| `test/services/recoveryDiscordPublication.test.ts` (new) | Planning and publication state transitions with synthetic posts. |
-| `test/services/recoveryDiscordPublicationStore.test.ts` (new) | Conditional S3 claims, uncertain writes and exact DynamoDB reads. |
-| `test/scripts/publishRecoveredMeeting.test.ts` (new) | Operator command parsing and cross-module dry-run/apply tests. |
-| `docs/operations/recovery-discord-publication.md` (new) | Sanitized operator instructions. Live IDs, payloads and acceptance receipts stay in private operations evidence. |
+| File                                                          | Responsibility                                                                                                       |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `src/services/discordMessageEditor.ts` (new)                  | Small token-injected read/edit client with validated bot, channel and message identities; no send/delete capability. |
+| `src/services/discordMessageService.ts`                       | Delegate existing fetch/update wrappers to that client while preserving signatures and behavior for current callers. |
+| `src/services/recoveryDiscordPublication.ts` (new)            | Compatible public re-export facade.                                                                                  |
+| `src/services/recoveryDiscordPublicationTypes.ts` (new)       | Shared runtime schemas, binding and normalization helpers.                                                           |
+| `src/services/recoveryDiscordPublicationPlan.ts` (new)        | Read-only exact embed planning.                                                                                      |
+| `src/services/recoveryDiscordPublicationApply.ts` (new)       | Durable apply and read-only reconciliation.                                                                          |
+| `src/services/recoveryDiscordPublicationStore.ts` (new)       | Exact meeting reads and S3 preview, claim and receipt operations using existing SDK packages.                        |
+| `scripts/publish-recovered-meeting.ts` (new)                  | Argument validation, credential/client setup, private review output and exit status.                                 |
+| `test/services/discordMessageEditor.test.ts` (new)            | Transport contracts and schema boundaries.                                                                           |
+| `test/services/recoveryDiscordPublication.test.ts` (new)      | Planning with synthetic posts.                                                                                       |
+| `test/services/recoveryDiscordPublicationApply.test.ts` (new) | Publication and reconciliation state transitions.                                                                    |
+| `test/services/recoveryDiscordPublication.fixture.ts` (new)   | Shared synthetic history, manifest and message fixture.                                                              |
+| `test/services/recoveryDiscordPublicationStore.test.ts` (new) | Conditional S3 claims, uncertain writes and exact DynamoDB reads.                                                    |
+| `test/scripts/publishRecoveredMeeting.test.ts` (new)          | Operator command parsing and cross-module dry-run/apply tests.                                                       |
+| `docs/operations/recovery-discord-publication.md` (new)       | Sanitized operator instructions. Live IDs, payloads and acceptance receipts stay in private operations evidence.     |
 
-Leave portal callers, `notesCorrections.ts`, the recording recovery worker, package scripts and infrastructure unchanged. Inspect all existing client-wrapper callers before the transport extraction. If a source-layout change makes that extraction broader than described, stop and revise this task rather than changing unrelated callers.
+The approved module split keeps files within enforced size/complexity limits and avoids circular imports without changing public contracts. Leave portal callers, `notesCorrections.ts`, the recording recovery worker, package scripts and infrastructure unchanged. Inspect all existing client-wrapper callers before the transport extraction. If a source-layout change makes that extraction broader than described, stop and revise this task rather than changing unrelated callers.
 
 ## Review focus
 
@@ -125,10 +130,10 @@ Leave portal callers, `notesCorrections.ts`, the recording recovery worker, pack
 
 **Interfaces:** Export `createDiscordMessageEditor({ token, fetchImpl? })`. It returns `getBotIdentity()`, `getChannel(channelId)`, `getMessage({ channelId, messageId })` and `editEmbeds({ channelId, messageId, embeds })`. Parse external responses with Zod and derive exported types from the schemas. The edit method returns `"acknowledged" | "missing"`; transport failures throw and are reconciled by Task 3. The client exposes no message creation or deletion.
 
-- [ ] Write failing tests for identity/channel/message validation, a missing post, 403/429 responses and a timeout. Assert the edit body has exactly `embeds` and `allowed_mentions: { parse: [] }`. Assert importing this client does not require OpenAI, OAuth or full application config.
-- [ ] Run `yarn jest --runInBand --coverage=false test/services/discordMessageEditor.test.ts test/services/discordMessageService.test.ts`; confirm the new tests fail before implementation.
-- [ ] Implement the token-injected client using the existing REST behavior. Delegate legacy fetch/update calls without changing their general payload support, return values or public signatures. Keep create/delete wrappers as they are. Do not force edit-only semantics on ordinary portal edits.
-- [ ] Run those tests again; expect all to pass. Commit the transport and tests as one scoped change.
+- [x] Write failing tests for identity/channel/message validation, a missing post, 403/429 responses and a timeout. Assert the edit body has exactly `embeds` and `allowed_mentions: { parse: [] }`. Assert importing this client does not require OpenAI, OAuth or full application config.
+- [x] Run `yarn jest --runInBand --coverage=false test/services/discordMessageEditor.test.ts test/services/discordMessageService.test.ts`; confirm the new tests fail before implementation.
+- [x] Implement the token-injected client using the existing REST behavior. Delegate legacy fetch/update calls without changing their general payload support, return values or public signatures. Keep create/delete wrappers as they are. Do not force edit-only semantics on ordinary portal edits.
+- [x] Run those tests again; expect all to pass. Commit the transport and tests as one scoped change.
 
 ## Task 2: Produce an exact, private publication preview
 
@@ -136,34 +141,36 @@ Leave portal callers, `notesCorrections.ts`, the recording recovery worker, pack
 
 **Interfaces:** Export schema-derived `RecoveryDiscordPreview`, `PublicationReceipt` and `PublicationDependencies`. Define `previewRecoveryDiscordPublication(input, deps): Promise<RecoveryDiscordPreview>`. Input contains the explicit provider scope and exact meeting/manifest keys. Dependencies supply the Task 1 client, consistent history and manifest reads, receipt operations and a clock. Preview returns a discriminated `ready` or `blocked` result with its stored-field digest, snapshot fingerprints, exact target edits, blockers and preview digest. Define the receipt states and dependency signatures here so Task 3 consumes the same contract.
 
-- [ ] Write failing tests named `previewIsReadOnly`, `rejectsWrongMeetingOrBot`, `preservesBatchedEmbedsAndControls`, `blocksChangedPagination`, `skipsUnchangedSummary`, and `preservesRussianUncertainty`. Assert zero message or provider-storage mutations, no title-only ownership inference, deterministic digest, unchanged stored notes/version and preservation of unrelated embed fields. Include missing IDs, aliases between summary and notes IDs, a webhook and an unknown layout.
-- [ ] Run `yarn jest --runInBand --coverage=false test/services/recoveryDiscordPublication.test.ts`; expect the missing implementation to fail.
-- [ ] Implement preview binding and layout rules above. Use existing types through `Pick` or schema derivation instead of parallel meeting models. Introduce no LLM summary generation or arbitrary replacement text input. Keep normalization limited to Discord's editable fields and documented response-only differences, never whitespace or language normalization.
-- [ ] Run the tests; expect all preview cases to pass. Commit the preview planner and tests.
+- [x] Write failing tests named `previewIsReadOnly`, `rejectsWrongMeetingOrBot`, `preservesBatchedEmbedsAndControls`, `blocksChangedPagination`, `skipsUnchangedSummary`, and `preservesRussianUncertainty`. Assert zero message or provider-storage mutations, no title-only ownership inference, deterministic digest, unchanged stored notes/version and preservation of unrelated embed fields. Include missing IDs, aliases between summary and notes IDs, a webhook and an unknown layout.
+- [x] Run `yarn jest --runInBand --coverage=false test/services/recoveryDiscordPublication.test.ts`; expect the missing implementation to fail.
+- [x] Implement preview binding and layout rules above. Use existing types through `Pick` or schema derivation instead of parallel meeting models. Introduce no LLM summary generation or arbitrary replacement text input. Keep normalization limited to Discord's editable fields and documented response-only differences, never whitespace or language normalization.
+- [x] Run the tests; expect all preview cases to pass. Commit the preview planner and tests.
 
 ## Task 3: Apply with durable intent and verify uncertain outcomes
 
 **Files:** Extend `src/services/recoveryDiscordPublication.ts` and its test; create `src/services/recoveryDiscordPublicationStore.ts` and `test/services/recoveryDiscordPublicationStore.test.ts`.
 
-**Interfaces:** Export `applyRecoveryDiscordPublication(preview, deps): Promise<PublicationReceipt>` and `reconcileRecoveryDiscordPublication(preview, deps): Promise<PublicationReceipt>`. Implement `createRecoveryDiscordPublicationStore({ dynamo, s3, scope })` against Task 2's dependency contracts. Use consistent `GetItem`, S3 `GetObject` and conditional `PutObject`; expose no meeting-update, message-send or delete operation. A receipt records run/preview identity, target version/digests, per-message state, timestamps and normalized content hashes. Keep original delivery metadata untouched.
+**Interfaces:** Export `applyRecoveryDiscordPublication(preview, deps): Promise<PublicationReceipt>` and `reconcileRecoveryDiscordPublication(preview, deps, { confirmRunStopped? }): Promise<PublicationReceipt>`. Implement `createRecoveryDiscordPublicationStore({ dynamo, s3, sts, scope })` against Task 2's dependency contracts. Use consistent `GetItem`, S3 `GetObject` and conditional `PutObject`; expose no meeting-update, message-send or delete operation. A receipt records run/preview identity, target version/digests, per-message state, timestamps and normalized content hashes. Keep original delivery metadata untouched.
 
-- [ ] Write failing tests for all five review-focus conditions, plus verified no-op reruns, known rejections, receipt-save failure after a successful edit, preflight failure on the final target, and a changed post between two edits. Assert every target is preflighted before the first PATCH, each PATCH has persisted intent, each success requires readback, and uncertain results prevent further PATCH calls.
-- [ ] Write store tests for account/scope mismatch, consistent history reads, immutable preview conflicts with different bytes, competing claims, a lost claim response followed by readback, lost intent acknowledgement, and failed ETag preconditions. Confirm these cases issue no Discord writes unless ownership and intent are proven.
-- [ ] Run `yarn jest --runInBand --coverage=false test/services/recoveryDiscordPublication.test.ts test/services/recoveryDiscordPublicationStore.test.ts`; expect failures for the unimplemented apply/store behavior.
-- [ ] Implement the apply, claim and reconciliation rules above. Never release or steal a claim based on elapsed time. Reconciliation cannot silently clear a potentially active run; report that operator confirmation of process termination is required. Use existing AWS SDK clients with credential-chain resolution and no automatic write retries. Store content receipts only under the manifest-bound prefix.
-- [ ] Run both suites; expect all cases to pass. Commit apply, store and tests together.
+- [x] Write failing tests for all five review-focus conditions, plus verified no-op reruns, known rejections, receipt-save failure after a successful edit, preflight failure on the final target, and a changed post between two edits. Assert every target is preflighted before the first PATCH, each PATCH has persisted intent, each success requires readback, and uncertain results prevent further PATCH calls.
+- [x] Write store tests for account/scope mismatch, consistent history reads, immutable preview conflicts with different bytes, competing claims, a lost claim response followed by readback, lost intent acknowledgement, and failed ETag preconditions. Confirm these cases issue no Discord writes unless ownership and intent are proven.
+- [x] Run `yarn jest --runInBand --coverage=false test/services/recoveryDiscordPublication.test.ts test/services/recoveryDiscordPublicationStore.test.ts`; expect failures for the unimplemented apply/store behavior.
+- [x] Implement the apply, claim and reconciliation rules above. Never release or steal a claim based on elapsed time. Reconciliation cannot silently clear a potentially active run; report that operator confirmation of process termination is required. Use existing AWS SDK clients with credential-chain resolution and no automatic write retries. Store content receipts only under the manifest-bound prefix.
+- [x] Run both suites; expect all cases to pass. Commit apply, store and tests together.
 
 ## Task 4: Deliver the command and prove the complete operator flow
 
 **Files:** Create `scripts/publish-recovered-meeting.ts`, `test/scripts/publishRecoveredMeeting.test.ts` and `docs/operations/recovery-discord-publication.md`.
 
+Source validation passed: seven focused suites and 154 tests; full Jest passed 388 suites and 3,680 tests. Build, lint, formatting, Markdown and all three strict quality checks passed. The quality gate covered 1,179 source files. A test-only shared assertion extraction followed the full Jest run and its 41-test apply suite passed again. Task review and whole-change review remain pending. Hosted Sandbox acceptance remains pending because the authorized local credential route and synthetic fixture are unavailable.
+
 **Interfaces:** Export `parseRecoveryDiscordPublicationArgs(args)` as a discriminated union for `preview`, `apply` and `reconcile`, plus `runRecoveryDiscordPublication(args, deps): Promise<0 | 1 | 2>`. Exit 0 means ready preview, verified apply or verified reconciliation; 1 means blocked, failed, partial, uncertain or superseded; 2 means invalid input. `main` alone constructs clients and reads environment variables. Do not import full application config into the CLI dependency path.
 
-- [ ] Write failing argument tests for the default preview mode, missing exact targets, conflicting mode flags, tampered preview digest, apply-time target overrides and `--confirm-run-stopped` on the wrong mode or run. Include a test that dry-run never obtains a claim or modifies provider storage.
-- [ ] Add a synthetic end-to-end test from private preview files through apply and reconcile. Use the real planner/renderers, in-memory history/receipt adapters and a fake HTTP Discord server. Assert exact PATCH targets/body, unchanged buttons/attachments/content, retained Russian warnings, unchanged database version, no POST/DELETE and no Notion/LLM imports or requests. Exercise one timeout and one already-verified rerun.
-- [ ] Run `yarn jest --runInBand --coverage=false test/scripts/publishRecoveredMeeting.test.ts`; expect failures before the command exists.
-- [ ] Implement the CLI and private `preview.json`, `preview.md` and receipt copies. Create local files exclusively with restrictive permissions appropriate to the host; do not overwrite unrelated output. Document required operator credentials, source validation, preview digest approval, blocked layouts, stopping a prior process before reconciliation and the separately reviewed rollback path. No real IDs or meeting text in the guide.
-- [ ] Run the focused suites, then `yarn build`, `yarn lint:check`, `yarn prettier:check`, `yarn markdownlint:check` and `yarn check:quality`. Run existing Discord-client and notes-renderer tests alongside the new suites. Fix regressions; do not lower quality gates or add complexity exemptions for this command.
+- [x] Write failing argument tests for the default preview mode, missing exact targets, conflicting mode flags, tampered preview digest, apply-time target overrides and `--confirm-run-stopped` on the wrong mode or run. Include a test that dry-run never obtains a claim or modifies provider storage.
+- [x] Add a synthetic end-to-end test from private preview files through apply and reconcile. Use the real planner/renderers, in-memory history/receipt adapters and a fake HTTP Discord server. Assert exact PATCH targets/body, unchanged buttons/attachments/content, retained Russian warnings, unchanged database version, no POST/DELETE and no Notion/LLM imports or requests. Exercise one timeout and one already-verified rerun.
+- [x] Run `yarn jest --runInBand --coverage=false test/scripts/publishRecoveredMeeting.test.ts`; expect failures before the command exists.
+- [x] Implement the CLI and private `preview.json`, `preview.md` and receipt copies. Create local files exclusively with restrictive permissions appropriate to the host; do not overwrite unrelated output. Document required operator credentials, source validation, preview digest approval, blocked layouts, stopping a prior process before reconciliation and the separately reviewed rollback path. No real IDs or meeting text in the guide.
+- [x] Run the focused suites, then `yarn build`, `yarn lint:check`, `yarn prettier:check`, `yarn markdownlint:check` and `yarn check:quality`. Run existing Discord-client and notes-renderer tests alongside the new suites. Fix regressions; do not lower quality gates or add complexity exemptions for this command.
 - [ ] Perform an authorized Sandbox exercise with synthetic posts: one batched-notes case, one partial failure and one verified rerun. Capture actual before/after message readbacks, version and claim/receipt evidence privately. If Sandbox credentials or a live fixture are unavailable, mark hosted acceptance pending instead of substituting mocked success.
 - [ ] Commit command, tests and operator guide. Obtain a whole-change review focused on wrong-server writes, lost acknowledgements and preserving existing editor behavior. Follow repository PR/readiness requirements if a PR is opened. Do not run production apply or publish this incident's posts without separate authorization.
 
