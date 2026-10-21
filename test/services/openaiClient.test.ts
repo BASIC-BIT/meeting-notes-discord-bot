@@ -7,9 +7,9 @@ import {
 import { config } from "../../src/services/configService";
 
 beforeEach(() => {
-  jest.spyOn(globalThis, "fetch").mockRejectedValue(
-    new Error("Unexpected native transport"),
-  );
+  jest
+    .spyOn(globalThis, "fetch")
+    .mockRejectedValue(new Error("Unexpected native transport"));
 });
 afterEach(() => jest.restoreAllMocks());
 
@@ -64,7 +64,10 @@ test("Responses requests retain SDK retry behavior with an injected transport", 
       : Response.json({ id: "synthetic-response", output: [] });
   });
   const client = createOpenAIClient({ disableTracing: true }, { fetch });
-  await client.responses.create({ model: "synthetic-text", input: "synthetic" });
+  await client.responses.create({
+    model: "synthetic-text",
+    input: "synthetic",
+  });
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(client.maxRetries).toBe(2);
 });

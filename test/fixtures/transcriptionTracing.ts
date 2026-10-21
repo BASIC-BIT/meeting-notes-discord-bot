@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import { setImmediate } from "node:timers";
 import type { ClientOptions } from "openai";
+import type { BulkheadPolicy } from "cockatiel";
 import type {
   Transcription,
   TranscriptionCreateParamsNonStreaming,
@@ -193,6 +194,7 @@ function mockScheduling(
   const executionEntered = deferred<void>();
   const attachmentQueued = deferred<void>();
   const policyRejected = jest.fn();
+  const bulkheadCreated = deferred<BulkheadPolicy>();
   jest.doMock("bottleneck", () => ({
     __esModule: true,
     default: class ControlledScheduler {
@@ -207,11 +209,23 @@ function mockScheduling(
     },
   }));
   if (realPolicies) {
-    jest.dontMock("cockatiel");
+    jest.doMock("cockatiel", () => {
+      const actual =
+        jest.requireActual<typeof import("cockatiel")>("cockatiel");
+      return {
+        ...actual,
+        bulkhead: (...args: Parameters<typeof actual.bulkhead>) => {
+          const policy = actual.bulkhead(...args);
+          bulkheadCreated.resolve(policy);
+          return policy;
+        },
+      };
+    });
     jest.dontMock("bottleneck");
   } else {
     jest.doMock("cockatiel", () => {
-      const actual = jest.requireActual<typeof import("cockatiel")>("cockatiel");
+      const actual =
+        jest.requireActual<typeof import("cockatiel")>("cockatiel");
       const observe = async <T>(run: () => Promise<T>) => {
         executionEntered.resolve();
         try {
@@ -228,10 +242,21 @@ function mockScheduling(
       };
     });
   }
+  const waitForQueuedJobs = async (count: number) => {
+    const policy = await bulkheadCreated.promise;
+    const expectedSlots = 100 - count;
+    const deadline = Date.now() + EVENT_TIMEOUT_MS;
+    while (policy.queueSlots !== expectedSlots && Date.now() < deadline) {
+      await flushTurn();
+    }
+    expect(policy.executionSlots).toBe(0);
+    expect(policy.queueSlots).toBe(expectedSlots);
+  };
   return {
     executionEntered: executionEntered.promise,
     attachmentQueued: attachmentQueued.promise,
     policyRejected,
+    waitForQueuedJobs,
   };
 }
 
