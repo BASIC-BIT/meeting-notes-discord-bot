@@ -153,3 +153,34 @@ test.each(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])(
     expect(params).toEqual({ reasoning_effort: "max" });
   },
 );
+
+test.each(["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])(
+  "maps unsupported minimal reasoning to low for %s",
+  (model) => {
+    expect(
+      resolveChatParamsForRole({
+        role: "notes",
+        model,
+        config: {
+          ...baseConfig,
+          samplingMode: "reasoning",
+          reasoningEffort: "minimal",
+        },
+      }),
+    ).toEqual({ reasoning_effort: "low" });
+  },
+);
+
+test("preserves legacy GPT-5.6 minimal effort fallback", () => {
+  expect(
+    resolveChatParamsForRole({
+      role: "notes",
+      model: "gpt-5.6-sol",
+      config: {
+        ...baseConfig,
+        samplingMode: "reasoning",
+        reasoningEffort: "minimal",
+      },
+    }),
+  ).toEqual({ reasoning_effort: "none" });
+});

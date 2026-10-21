@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { config } from "../services/configService";
 import { getLangfuseChatPrompt } from "../services/langfusePromptService";
 import {
@@ -7,7 +6,7 @@ import {
   isLangfuseEnabled,
 } from "../services/langfuseClient";
 import { getModelChoice } from "../services/modelFactory";
-import { createOpenAIClient } from "../services/openaiClient";
+import { generateOpenAIText } from "../services/openaiTextService";
 import { resolveChatParamsForRole } from "../services/openaiModelParams";
 import { getEvalDataset } from "./evalDataset";
 import { expectedOutputSchema } from "./expectedOutput";
@@ -71,19 +70,17 @@ const generateNotesForEval = async (input: EvalInput): Promise<string> => {
 
   const { model } = getModelChoice("notes");
   const modelParams = resolveChatParamsForRole({ role: "notes", model });
-  const openAIClient = createOpenAIClient({
-    traceName: "meeting-notes-eval",
-    generationName: "meeting-notes-eval",
-    tags: ["feature:notes", "eval"],
-    langfusePrompt,
-  });
-  const completion = await openAIClient.chat.completions.create({
+  return generateOpenAIText({
     model,
-    messages: messages as ChatCompletionMessageParam[],
-    ...modelParams,
+    messages,
+    modelParams,
+    tracing: {
+      traceName: "meeting-notes-eval",
+      generationName: "meeting-notes-eval",
+      tags: ["feature:notes", "eval"],
+      langfusePrompt,
+    },
   });
-
-  return completion.choices[0]?.message?.content ?? "";
 };
 
 async function run() {

@@ -65,7 +65,7 @@ import {
   updateDiscordMessageEmbeds,
 } from "../../services/discordMessageService";
 import { generateMeetingSummaries } from "../../services/meetingSummaryService";
-import { createOpenAIClient } from "../../services/openaiClient";
+import { generateOpenAIText } from "../../services/openaiTextService";
 import { getLangfuseChatPrompt } from "../../services/langfusePromptService";
 import {
   buildModelOverrides,
@@ -592,27 +592,22 @@ async function generateCorrectedNotes(options: {
       model: modelChoice.model,
       config: options.modelParams,
     });
-    const openAIClient = createOpenAIClient({
-      traceName: "notes-correction-web",
-      generationName: "notes-correction-web",
-      tags: ["feature:notes_correction", "surface:web"],
-      metadata: {
-        requesterTag: options.requesterTag,
+    options.signal?.throwIfAborted();
+    const content = await generateOpenAIText({
+      model: modelChoice.model,
+      messages,
+      modelParams: chatParams,
+      signal: options.signal,
+      tracing: {
+        traceName: "notes-correction-web",
+        generationName: "notes-correction-web",
+        tags: ["feature:notes_correction", "surface:web"],
+        metadata: { requesterTag: options.requesterTag },
+        langfusePrompt,
       },
-      langfusePrompt,
     });
     options.signal?.throwIfAborted();
-    const completion = await openAIClient.chat.completions.create(
-      {
-        model: modelChoice.model,
-        messages,
-        ...chatParams,
-      },
-      options.signal ? { signal: options.signal } : undefined,
-    );
-    options.signal?.throwIfAborted();
 
-    const content = completion.choices[0]?.message?.content;
     if (content && content.trim().length > 0) {
       // A correction may keep the mentions already in the notes and may add one
       // the rosters offered, but anything outside both was invented.

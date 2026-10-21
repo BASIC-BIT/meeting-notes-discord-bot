@@ -1,28 +1,19 @@
 import { getMeetingProcessingSignal } from "./meetingProcessingLifetime";
-import type OpenAI from "openai";
 import type { SpanContext } from "@opentelemetry/api";
 import type { MeetingData, MeetingNotesInput } from "../types/meeting-data";
-import {
-  buildOpenAISafetyIdentifier,
-  createOpenAIClient,
-} from "./openaiClient";
+import type { OpenAITextApi } from "../config/openaiText";
+import { buildOpenAISafetyIdentifier } from "./openaiClient";
+import { generateOpenAIText } from "./openaiTextService";
 import { getModelChoice } from "./modelFactory";
 import { resolveChatParamsForRole } from "./openaiModelParams";
 import type { ModelParamRole } from "../config/types";
-import type { LangfusePromptMeta } from "./langfusePromptService";
+import type { ChatMessage, LangfusePromptMeta } from "./langfusePromptService";
 import { getMeetingModelOverrides } from "./meetingModelOverrides";
 
-type ChatInput = Omit<
-  OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
-  | "model"
-  | "user"
-  | "safety_identifier"
-  | "temperature"
-  | "reasoning_effort"
-  | "verbosity"
->;
+type ChatInput = { messages: ChatMessage[] };
 
 type ChatOptions = {
+  api?: OpenAITextApi;
   frozenModel?: import("../types/recordingContent").SavedRecordingSettings["models"]["notes"];
   signal?: AbortSignal;
   model?: string;
@@ -33,90 +24,6 @@ type ChatOptions = {
   langfusePrompt?: LangfusePromptMeta;
   parentSpanContext?: SpanContext;
   modelParamRole?: ModelParamRole;
-};
-
-type ChatLoopInput = {
-  signal?: AbortSignal;
-  openAIClient: ReturnType<typeof createOpenAIClient>;
-  body: ChatInput;
-  model: string;
-  modelParams: ReturnType<typeof resolveChatParamsForRole>;
-  traceName: string;
-  userId: string;
-};
-
-type ChatLoopResult = {
-  output: string;
-  count: number;
-  truncated: boolean;
-};
-
-const logFinishReason = (
-  traceName: string,
-  model: string,
-  finishReason: string,
-) => {
-  console.log(
-    `Chat completion finish reason: ${finishReason} (trace=${traceName} model=${model})`,
-  );
-};
-
-const logEmptyContent = (traceName: string, model: string) => {
-  console.warn(
-    `Chat completion returned empty content (trace=${traceName} model=${model}).`,
-  );
-};
-
-const logChatSummary = (
-  traceName: string,
-  model: string,
-  count: number,
-  truncated: boolean,
-) => {
-  const detail = truncated ? "due to length" : "without continuation";
-  console.log(
-    `Chat completed in ${count} call(s) ${detail} (trace=${traceName} model=${model}).`,
-  );
-};
-
-const runChatLoop = async (input: ChatLoopInput): Promise<ChatLoopResult> => {
-  let output = "";
-  let count = 0;
-  let truncated = false;
-
-  for (;;) {
-    input.signal?.throwIfAborted();
-    const response = await input.openAIClient.chat.completions.create(
-      {
-        model: input.model,
-        safety_identifier: buildOpenAISafetyIdentifier(input.userId),
-        ...input.body,
-        ...input.modelParams,
-      },
-      input.signal ? { signal: input.signal } : undefined,
-    );
-    input.signal?.throwIfAborted();
-    const choice = response.choices[0];
-    logFinishReason(input.traceName, input.model, choice.finish_reason);
-    count += 1;
-
-    const responseValue = choice.message.content ?? "";
-    if (!responseValue) {
-      logEmptyContent(input.traceName, input.model);
-      return { output, count, truncated };
-    }
-
-    output += responseValue;
-    input.body.messages.push({
-      role: "assistant",
-      content: responseValue,
-    });
-
-    if (choice.finish_reason !== "length") {
-      return { output, count, truncated };
-    }
-    truncated = true;
-  }
 };
 
 export type ChatMeetingInput = Pick<
@@ -157,32 +64,30 @@ export async function chat(
 ): Promise<string> {
   const traceName = options.traceName ?? "notes";
   const { model, modelParams } = resolveMeetingChatModel(meeting, options);
-  const openAIClient = createOpenAIClient({
-    traceName,
-    generationName: options.generationName ?? traceName,
-    userId: meeting.creator.id,
-    sessionId: meeting.meetingId,
-    tags: options.tags ?? ["feature:notes"],
-    metadata: {
-      guildId: meeting.guild.id,
-      channelId: meeting.voiceChannel.id,
-      ...options.metadata,
-    },
-    langfusePrompt: options.langfusePrompt,
-    parentSpanContext: options.parentSpanContext,
-  });
-  const { output, count, truncated } = await runChatLoop({
+  return generateOpenAIText({
+    api: options.api,
+    model,
+    messages: body.messages,
+    modelParams,
+    continuation: { maxRequests: 3 },
     signal: AbortSignal.any([
       meeting.signal ?? getMeetingProcessingSignal(meeting),
       ...(options.signal ? [options.signal] : []),
     ]),
-    openAIClient,
-    body,
-    model,
-    modelParams,
-    traceName,
-    userId: meeting.creator.id,
+    safetyIdentifier: buildOpenAISafetyIdentifier(meeting.creator.id),
+    tracing: {
+      traceName,
+      generationName: options.generationName ?? traceName,
+      userId: meeting.creator.id,
+      sessionId: meeting.meetingId,
+      tags: options.tags ?? ["feature:notes"],
+      metadata: {
+        guildId: meeting.guild.id,
+        channelId: meeting.voiceChannel.id,
+        ...options.metadata,
+      },
+      langfusePrompt: options.langfusePrompt,
+      parentSpanContext: options.parentSpanContext,
+    },
   });
-  logChatSummary(traceName, model, count, truncated);
-  return output;
 }

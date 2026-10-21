@@ -1,8 +1,14 @@
 import { expect, jest, test } from "@jest/globals";
 
-async function loadResponse(response: object) {
+async function loadResponse(response: object | object[]) {
   jest.resetModules();
-  const responsesCreate = jest.fn().mockResolvedValue(response);
+  const responses = Array.isArray(response) ? response : [response];
+  let callIndex = 0;
+  const responsesCreate = jest.fn().mockImplementation(() => {
+    const current = responses[Math.min(callIndex, responses.length - 1)];
+    callIndex += 1;
+    return Promise.resolve(current);
+  });
   const completionCreate = jest.fn().mockResolvedValue({
     choices: [
       { finish_reason: "stop", message: { content: "Legacy transport" } },
@@ -38,6 +44,15 @@ async function loadResponse(response: object) {
   const messages = [{ role: "user" as const, content: "Write the notes." }];
   return {
     run: () => chat(meeting, { messages }, options),
+    runFrozen: () =>
+      chat(meeting, { messages }, {
+        ...options,
+        frozenModel: {
+          provider: "openai",
+          model: "gpt-5.2",
+          params: { reasoning_effort: "none", temperature: 0 },
+        },
+      }),
     responsesCreate,
     completionCreate,
     messages,
@@ -111,4 +126,108 @@ test("Responses rejects a completed generation without usable text", async () =>
   });
 
   await expect(fixture.run()).rejects.toThrow(/empty/i);
+});
+
+test("Responses keeps frozen model parameters instead of new live defaults", async () => {
+  const fixture = await loadResponse({
+    status: "completed",
+    output_text: "Recovered notes",
+    output: [],
+  });
+
+  await expect(fixture.runFrozen()).resolves.toBe("Recovered notes");
+  expect(fixture.responsesCreate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      model: "gpt-5.2",
+      reasoning: { effort: "none" },
+      temperature: 0,
+    }),
+    expect.anything(),
+  );
+});
+
+test("Responses continuation preserves encrypted reasoning and assistant phase", async () => {
+  const fixture = await loadResponse([
+    {
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output_text: "First ",
+      output: [
+        {
+          type: "reasoning",
+          id: "reasoning-1",
+          summary: [],
+          encrypted_content: "encrypted-reasoning",
+        },
+        {
+          type: "message",
+          id: "message-1",
+          role: "assistant",
+          phase: "final",
+          status: "incomplete",
+          content: [{ type: "output_text", text: "First ", annotations: [] }],
+        },
+      ],
+    },
+    { status: "completed", output_text: "second", output: [] },
+  ]);
+
+  await expect(fixture.run()).resolves.toBe("First second");
+  expect(fixture.responsesCreate.mock.calls[1][0].input).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: "reasoning",
+        encrypted_content: "encrypted-reasoning",
+      }),
+      expect.objectContaining({ role: "assistant", phase: "final" }),
+    ]),
+  );
+});
+
+test("Responses never publishes a prefix when the request budget is exhausted", async () => {
+  const fixture = await loadResponse(
+    ["one", "two", "three"].map((text) => ({
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output_text: text,
+      output: [],
+    })),
+  );
+
+  await expect(fixture.run()).rejects.toThrow(/request limit/i);
+  expect(fixture.responsesCreate).toHaveBeenCalledTimes(3);
+});
+
+test("Responses rejects reasoning-only truncation without repeating requests", async () => {
+  const fixture = await loadResponse({
+    status: "incomplete",
+    incomplete_details: { reason: "max_output_tokens" },
+    output_text: "",
+    output: [],
+  });
+
+  await expect(fixture.run()).rejects.toThrow(/incomplete/i);
+  expect(fixture.responsesCreate).toHaveBeenCalledTimes(1);
+});
+
+test("Responses rejects truncated JSON instead of concatenating partial objects", async () => {
+  await loadResponse({
+    status: "incomplete",
+    incomplete_details: { reason: "max_output_tokens" },
+    output_text: '{"summarySentence":',
+    output: [],
+  });
+  const { generateOpenAIText } =
+    await import("../../src/services/openaiTextService");
+
+  await expect(
+    generateOpenAIText({
+      api: "responses",
+      model: "gpt-5.2",
+      modelParams: { reasoning_effort: "none" },
+      messages: [{ role: "user", content: "Return a summary." }],
+      format: { kind: "json_object" },
+      maxOutputTokens: 160,
+    }),
+  ).rejects.toThrow(/incomplete/i);
 });
