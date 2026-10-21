@@ -48,6 +48,21 @@ const collectChatLines = (meeting: MeetingData) =>
     })
     .filter((line): line is string => Boolean(line && line.trim()));
 
+function parseCancellationDecision(content: string): CancellationDecision {
+  const parsed = JSON.parse(content) as {
+    cancel?: boolean;
+    reason?: string;
+  };
+  const cancel = Boolean(parsed.cancel);
+  const reason = parsed.reason?.trim();
+  if (!cancel) return { cancel: false };
+  return {
+    cancel: true,
+    reason:
+      reason && reason.length > 0 ? reason : "Not enough content detected.",
+  };
+}
+
 export async function evaluateAutoRecordCancellation(
   meeting: MeetingData,
 ): Promise<CancellationDecision> {
@@ -145,18 +160,7 @@ export async function evaluateAutoRecordCancellation(
         },
       },
     });
-    const parsed = JSON.parse(content) as {
-      cancel?: boolean;
-      reason?: string;
-    };
-    const cancel = Boolean(parsed.cancel);
-    const reason = parsed.reason?.trim();
-    if (!cancel) return { cancel: false };
-    return {
-      cancel: true,
-      reason:
-        reason && reason.length > 0 ? reason : "Not enough content detected.",
-    };
+    return parseCancellationDecision(content);
   } catch (error) {
     if (error instanceof EmptyOpenAITextOutputError) return { cancel: false };
     console.error("Auto-record cancellation check failed:", error);

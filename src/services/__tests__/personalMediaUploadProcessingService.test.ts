@@ -351,6 +351,20 @@ function heldOperation() {
   };
 }
 
+function expectEmptyUploadWithoutNotes() {
+  expect(mockCreateResponse).not.toHaveBeenCalled();
+  expect(writeMeetingHistoryService).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      notes: "",
+      processing: {
+        transcription: "empty",
+        notes: "skipped",
+        summary: "skipped",
+      },
+    }),
+  );
+}
+
 describe("personalMediaUploadProcessingService", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -1080,17 +1094,7 @@ describe("personalMediaUploadProcessingService", () => {
 
     await processPersonalMediaUpload(buildDesktopJob(), "instance-1");
 
-    expect(mockCreateResponse).not.toHaveBeenCalled();
-    expect(writeMeetingHistoryService).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        notes: "",
-        processing: {
-          transcription: "empty",
-          notes: "skipped",
-          summary: "skipped",
-        },
-      }),
-    );
+    expectEmptyUploadWithoutNotes();
   });
 
   it("records an empty ordinary upload without generating notes", async () => {
@@ -1098,17 +1102,7 @@ describe("personalMediaUploadProcessingService", () => {
 
     await processPersonalMediaUpload(buildJob(), "instance-1");
 
-    expect(mockCreateResponse).not.toHaveBeenCalled();
-    expect(writeMeetingHistoryService).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        notes: "",
-        processing: {
-          transcription: "empty",
-          notes: "skipped",
-          summary: "skipped",
-        },
-      }),
-    );
+    expectEmptyUploadWithoutNotes();
   });
 
   it("salvages cached text on the last attempt and leaves the failed segment failed", async () => {

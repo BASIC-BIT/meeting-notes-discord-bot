@@ -1,6 +1,15 @@
 import { afterEach, expect, jest, test } from "@jest/globals";
 import { completedTextResponse } from "../../src/testSupport/openaiResponse";
 
+function mockResponsesClient(createResponse: () => unknown) {
+  jest.doMock("openai", () => ({
+    __esModule: true,
+    default: jest.fn().mockImplementation(() => ({
+      responses: { create: createResponse },
+    })),
+  }));
+}
+
 afterEach(() => {
   jest.resetModules();
   jest.dontMock("openai");
@@ -123,12 +132,7 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
         isFallback: true,
       },
     }));
-  jest.doMock("openai", () => ({
-    __esModule: true,
-    default: jest.fn().mockImplementation(() => ({
-      responses: { create: mockCreate },
-    })),
-  }));
+  mockResponsesClient(mockCreate);
   jest.doMock("../../src/services/langfusePromptService", () => ({
     __esModule: true,
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
@@ -197,12 +201,7 @@ test("generateMeetingSummaries returns empty object on error", async () => {
       isFallback: true,
     },
   });
-  jest.doMock("openai", () => ({
-    __esModule: true,
-    default: jest.fn().mockImplementation(() => ({
-      responses: { create: mockCreate },
-    })),
-  }));
+  mockResponsesClient(mockCreate);
   jest.doMock("../../src/services/langfusePromptService", () => ({
     __esModule: true,
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
