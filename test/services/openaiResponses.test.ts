@@ -1,5 +1,18 @@
 import { expect, jest, test } from "@jest/globals";
 
+const completed = (text: string) => ({
+  status: "completed",
+  output_text: text,
+  output: [],
+});
+
+const truncated = (text: string) => ({
+  status: "incomplete",
+  incomplete_details: { reason: "max_output_tokens" },
+  output_text: text,
+  output: [],
+});
+
 async function loadResponse(response: object | object[]) {
   jest.resetModules();
   const responses = Array.isArray(response) ? response : [response];
@@ -43,16 +56,21 @@ async function loadResponse(response: object | object[]) {
   const options = { traceName: "notes", api: "responses" as const };
   const messages = [{ role: "user" as const, content: "Write the notes." }];
   return {
-    run: () => chat(meeting, { messages }, options),
+    run: (signal?: AbortSignal) =>
+      chat(meeting, { messages }, { ...options, signal }),
     runFrozen: () =>
-      chat(meeting, { messages }, {
-        ...options,
-        frozenModel: {
-          provider: "openai",
-          model: "gpt-5.2",
-          params: { reasoning_effort: "none", temperature: 0 },
+      chat(
+        meeting,
+        { messages },
+        {
+          ...options,
+          frozenModel: {
+            provider: "openai",
+            model: "gpt-5.2",
+            params: { reasoning_effort: "none", temperature: 0 },
+          },
         },
-      }),
+      ),
     responsesCreate,
     completionCreate,
     messages,
@@ -230,4 +248,96 @@ test("Responses rejects truncated JSON instead of concatenating partial objects"
       maxOutputTokens: 160,
     }),
   ).rejects.toThrow(/incomplete/i);
+});
+
+test.each(["completed", "incomplete"])(
+  "Responses rejects repeated text in a %s continuation",
+  async (status) => {
+    const repeated = { ...truncated("Repeated"), status };
+    const fixture = await loadResponse([truncated("Repeated"), repeated]);
+
+    await expect(fixture.run()).rejects.toThrow(/no progress/i);
+    expect(fixture.responsesCreate).toHaveBeenCalledTimes(2);
+  },
+);
+
+test("Responses rejects the accumulated prefix after continuation fails", async () => {
+  const fixture = await loadResponse(truncated("First"));
+  fixture.responsesCreate
+    .mockResolvedValueOnce(truncated("First"))
+    .mockRejectedValueOnce(new Error("provider failed"));
+
+  await expect(fixture.run()).rejects.toThrow("provider failed");
+});
+
+test("Responses does not dispatch when already cancelled", async () => {
+  const fixture = await loadResponse(completed("Unused"));
+  const controller = new AbortController();
+  controller.abort(new Error("cancelled"));
+
+  await expect(fixture.run(controller.signal)).rejects.toThrow("cancelled");
+  expect(fixture.responsesCreate).not.toHaveBeenCalled();
+});
+
+test("Responses checks cancellation when a continuation settles", async () => {
+  const fixture = await loadResponse(truncated("First"));
+  const controller = new AbortController();
+  fixture.responsesCreate
+    .mockResolvedValueOnce(truncated("First"))
+    .mockImplementationOnce(() => {
+      controller.abort(new Error("cancelled"));
+      return Promise.resolve(completed("Second"));
+    });
+
+  await expect(fixture.run(controller.signal)).rejects.toThrow("cancelled");
+  expect(fixture.responsesCreate).toHaveBeenCalledTimes(2);
+});
+
+test("Responses stops after cancellation at the first settlement", async () => {
+  const fixture = await loadResponse(truncated("First"));
+  const controller = new AbortController();
+  fixture.responsesCreate.mockImplementationOnce(() => {
+    controller.abort(new Error("cancelled"));
+    return Promise.resolve(truncated("First"));
+  });
+
+  await expect(fixture.run(controller.signal)).rejects.toThrow("cancelled");
+  expect(fixture.responsesCreate).toHaveBeenCalledTimes(1);
+});
+
+test("Responses maps strict structured output to the requested schema", async () => {
+  const fixture = await loadResponse(completed('{"title":"Notes"}'));
+  const { generateOpenAIText } =
+    await import("../../src/services/openaiTextService");
+  const schema = {
+    type: "object",
+    properties: { title: { type: "string" } },
+    required: ["title"],
+    additionalProperties: false,
+  };
+
+  await expect(
+    generateOpenAIText({
+      api: "responses",
+      model: "gpt-5.2",
+      messages: [{ role: "user", content: "Return a title as JSON." }],
+      modelParams: { reasoning_effort: "none" },
+      format: { kind: "json_schema", name: "meeting_title", schema },
+      maxOutputTokens: 200,
+    }),
+  ).resolves.toBe('{"title":"Notes"}');
+  expect(fixture.responsesCreate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      text: {
+        format: {
+          type: "json_schema",
+          name: "meeting_title",
+          schema,
+          strict: true,
+        },
+      },
+      max_output_tokens: 200,
+    }),
+    undefined,
+  );
 });
