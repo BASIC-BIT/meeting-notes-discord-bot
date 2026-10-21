@@ -139,7 +139,9 @@ describe("handleEndMeetingOther", () => {
     mockedRetainMeetingTempDir.mockResolvedValue(
       "tmp/retained-meetings/meeting-1",
     );
-    mockedRunTranscriptionFinalPass.mockResolvedValue(successfulFinalPassResult);
+    mockedRunTranscriptionFinalPass.mockResolvedValue(
+      successfulFinalPassResult,
+    );
   });
 
   afterEach(() => {
