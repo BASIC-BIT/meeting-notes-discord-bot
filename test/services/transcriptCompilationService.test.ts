@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { beforeEach, expect, jest, test } from "@jest/globals";
+import { afterEach, beforeEach, expect, jest, test } from "@jest/globals";
 import type { Client } from "discord.js";
 import type { MeetingData } from "../../src/types/meeting-data";
 import type { ChatPromptResult } from "../../src/services/langfusePromptService";
@@ -7,10 +7,15 @@ import type { SavedRecordingSettings } from "../../src/types/recordingContent";
 import { chat } from "../../src/services/openaiChatService";
 import { getTranscriptionCleanupPrompt } from "../../src/services/transcriptionPromptService";
 import { updateActiveObservation } from "@langfuse/tracing";
+import * as constants from "../../src/constants";
 import {
   compileTranscriptions,
   createMeetingTranscriptCompiler,
 } from "../../src/services/transcriptCompilationService";
+
+const cleanupSettings: {
+  readonly TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE: number;
+} = constants;
 
 type CleanupModel = SavedRecordingSettings["models"]["transcriptionCleanup"];
 const mockModel: CleanupModel = {
@@ -18,15 +23,6 @@ const mockModel: CleanupModel = {
   model: "synthetic-cleanup-model",
   params: { temperature: 0.2, verbosity: "low" },
 };
-let mockRetentionRatio = 0.8;
-jest.mock("../../src/constants", () => ({
-  ...jest.requireActual<typeof import("../../src/constants")>(
-    "../../src/constants",
-  ),
-  get TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE() {
-    return mockRetentionRatio;
-  },
-}));
 jest.mock("../../src/services/openaiChatService", () => ({ chat: jest.fn() }));
 jest.mock("../../src/services/transcriptionPromptService", () => ({
   getTranscriptionCleanupPrompt: jest.fn(),
@@ -128,13 +124,21 @@ beforeEach(() => {
   jest.mocked(updateActiveObservation).mockReset();
   mockModel.model = "synthetic-cleanup-model";
   mockModel.params = { temperature: 0.2, verbosity: "low" };
-  mockRetentionRatio = 0.8;
+  jest.replaceProperty(
+    cleanupSettings,
+    "TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE",
+    0.8,
+  );
   prompt.messages = [{ role: "system", content: "Synthetic cleanup context" }];
   prompt.langfusePrompt = {
     name: "synthetic-cleanup",
     version: 1,
     isFallback: false,
   };
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 test.each([undefined, [], [{ text: "" }]])(
@@ -216,7 +220,11 @@ const misses: [string, (f: Fixture) => void][] = [
   [
     "retention ratio",
     () => {
-      mockRetentionRatio = 0.7;
+      jest.replaceProperty(
+        cleanupSettings,
+        "TRANSCRIPTION_CLEANUP_LINES_DIFFERENCE_ISSUE",
+        0.7,
+      );
     },
   ],
 ];
