@@ -248,8 +248,8 @@ type TranscriptionTraceContext = {
 async function transcribeInternal(
   meeting: TranscriptionContentInput,
   file: string,
-  context?: TranscriptionTraceContext,
-  queueWaitMs = 0,
+  context: TranscriptionTraceContext | undefined,
+  queueWaitMs: number,
 ): Promise<string> {
   meeting.signal.throwIfAborted();
   const { prompt, langfusePrompt } = await meeting.prompt();
