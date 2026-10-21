@@ -1,7 +1,7 @@
 # Transcription cost and latency design
 
 Date: 2026-10-21
-Status: Proposed design and implementation plans. Product implementation pending.
+Status: Accepted design. Historical execution evidence is recorded below.
 Source baseline: PR #430, commit `3ef9548fd6523f33cdd80857c562a320108f89bc`.
 
 ## Intent and success criteria
@@ -29,7 +29,7 @@ unmeasured until an operational comparison is performed.
 - Use existing Langfuse observations for numeric diagnostics; add no content, identifiers or PostHog properties.
 - Add no dependencies, rollout toggles, schema migrations or quality exceptions.
 
-## Current behavior and ownership
+## Baseline behavior and ownership
 
 `audio.ts:1260-1356` compiles a transcript, optionally adds cues and runs
 cleanup. Normal finalization invokes it at `endMeeting.ts:554` for notes and
@@ -44,10 +44,11 @@ issued effects. The snippet owner deletes PCM/WAV files after transcription
 settles. Attachment preparation currently cannot cancel running ffmpeg.
 
 `transcriptionService.ts:713-746` wraps the entire transcription in a
-Cockatiel retry, breaker and bulkhead. SDK retries are additionally implicit.
-That outer retry can repeat preparation and a successful prompted candidate
+Cockatiel retry, breaker and bulkhead. The pinned OpenAI 7.32.0 SDK disables
+its own retries for streamed multipart inputs such as these ReadStreams.
+The outer retry can repeat preparation and a successful prompted candidate
 after a no-prompt request fails. Returned-candidate usage does not describe
-every transport dispatch.
+every transport dispatch. These are the pre-implementation source behaviors.
 
 Stop-to-first and complete acknowledged notes timing already exists. Use
 `meetingNotesLatency.ts` and its documented coverage rules rather than create
@@ -179,6 +180,15 @@ existing bulkhead and a breaker around each complete logical transcription.
 The breaker handles only the transient provider failures defined below and
 counts an exhausted transcription once, not every internal attempt.
 
+The internal `createTranscriptionFailureScope()` returns generic
+`run(callback)`. Its operation-local WeakSet, accessed through Node
+AsyncLocalStorage, records only the final exhausted transient ASR Error.
+`isExhaustedTranscriptionFailure(error)` requires current-scope membership
+and the shared transient classifier. Rethrow the original error object.
+Enter the scope around breaker execution after bulkhead admission and again
+inside the Bottleneck callback: queued schedulers can otherwise inherit the
+releasing job's context. Non-ASR errors never acquire ASR provenance.
+
 A candidate has 3 retries, at most 4 total attempts. Each attempt opens a fresh
 input through `withTranscriptionInput` and issues ASR with
 `{ signal, maxRetries: 0 }`. Prepare prompt/model/guards once per logical
@@ -226,8 +236,10 @@ Use the SDK's named `ClientOptions` export. Existing callers retain their
 defaults. Never access private `client.fetch` or mutate global fetch.
 
 Each retry iteration creates an attempt record and an ASR client whose fetch
-wrapper is bound to that record. Use the existing captured native fetch as
-the delegate. This avoids a shared mutable "current attempt" pointer. Keep
+wrapper is bound to that record. Capture `globalThis.fetch` once in transcriptionRequest.ts as the default
+delegate; there was no prior captured native fetch. The internal request input
+also accepts optional `transport?: Pick<ClientOptions, "fetch">` for an
+explicit delegate. This avoids a shared mutable "current attempt" pointer. Keep
 the single existing manual generation observation for the whole transcription.
 
 Add `observability/transcriptionAttempts.ts` for a per-operation ledger.
@@ -275,17 +287,20 @@ be best effort and must not replace the operation's result.
 
 ### Retry alternatives
 
-Selective outer retries retain duplicated successful work and nested SDK
-retries. SDK-only retries do not supply the selected classification and
-existing application budget. A single ASR request owner gives the budget,
-stream lifetime and accounting one boundary.
+Selective outer retries retain duplicated successful candidate work.
+SDK-only retry ownership does not supply the selected classification and
+budget; the pinned SDK suppresses retries for these streaming bodies.
+A single ASR request owner gives the budget, stream lifetime and accounting
+one boundary.
 
-Consolidating layers deliberately reduces the recovery attempts currently
-possible during a prolonged provider incident. Four attempts per candidate
-is the proposed work bound, not a promise of unchanged availability.
-Operational acceptance must compare transcription failure and partial
-delivery rates alongside latency and known usage. Keep the failure/recovery
-path intact when this budget exhausts.
+Four attempts per candidate permit up to eight ASR attempts when both
+candidates need their full budgets. Compared with the previous single
+whole-workflow budget on streamed inputs, this can change recovery opportunity
+and worst-case work. The concrete avoided work is repeating a successful
+prompted candidate solely to retry its vote. It is not a claim that every path
+gets cheaper or faster. Operational acceptance must compare transcription
+failure and partial delivery rates alongside latency and known usage. Keep
+the failure/recovery path intact when a candidate exhausts its budget.
 
 The lock pins Cockatiel 4.0.0 and OpenAI 7.32.0. Inspect installed pinned
 behavior during execution and test real SDK/policy objects; current mocks
@@ -322,3 +337,22 @@ dollar or user-wait reduction is established by this planning change.
 - [Cockatiel version-4 source](https://github.com/connor4312/cockatiel/tree/0731c99f39cc7d88ba3cba89bb19f0e453321e42):
   public backoff generator and policy behavior. Verify installed package
   behavior before execution; this source pointer is not a tarball-integrity claim.
+
+## Implementation evidence recorded on 2026-10-21
+
+Cleanup reuse and tracing overlap are implemented and were validated before
+retry integration. The integrated baseline
+`5e9ceec5f56e1a22215ea8ba9b57f6e7849c0acc` passed 395 suites and 3,866
+tests, 136 visual tests and strict quality checks. Tracing separately passed
+39 focused tests and independent review.
+
+Retry tests at `ee09a07e8e246f275ad3401decaeca2d6de2d665` demonstrated
+RED (55 failures, 47 passes). After formatting and independent test-audit
+repairs, `68652d426b03ea71a659ecba66a3c8847019df2f` demonstrated
+strengthened RED (56 failures, 47 passes) with build, lint, formatting and
+Markdown passing. These RED counts describe pre-implementation evidence;
+current implementation checks and review are tracked in the PR.
+
+See [PR #430 checks](https://github.com/Chronote-gg/Chronote/pull/430/checks)
+and [the combined ADR](../../adr-20261021-transcription-pipeline-work.md).
+Production dollar, latency and quality comparisons remain unmeasured.

@@ -19,7 +19,10 @@ import {
   type TranscriptionCandidateId,
 } from "../observability/transcriptionAttempts";
 import { createOpenAIClient } from "./openaiClient";
-import { TranscriptionInputError, withTranscriptionInput } from "./transcriptionInput";
+import {
+  TranscriptionInputError,
+  withTranscriptionInput,
+} from "./transcriptionInput";
 
 const nativeFetch = globalThis.fetch;
 const failureScopes = new AsyncLocalStorage<WeakSet<Error>>();
@@ -115,8 +118,9 @@ function retryAfterDelay(error: unknown) {
   const preferred = milliseconds?.trim()
     ? boundedDelay(Number(milliseconds))
     : undefined;
-  return preferred ?? retryAfterSecondsOrDate(
-    error.headers?.get("retry-after") ?? null,
+  return (
+    preferred ??
+    retryAfterSecondsOrDate(error.headers?.get("retry-after") ?? null)
   );
 }
 

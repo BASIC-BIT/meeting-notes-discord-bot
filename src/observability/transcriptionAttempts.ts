@@ -11,9 +11,7 @@ export type TranscriptionAttemptOutcome =
     };
 
 type Usage = Transcription["usage"];
-type ReturnedUsage =
-  | { kind: "missing" }
-  | { kind: "returned"; usage: Usage };
+type ReturnedUsage = { kind: "missing" } | { kind: "returned"; usage: Usage };
 type Attempt = {
   candidate: TranscriptionCandidateId;
   invocations: number;
@@ -59,7 +57,10 @@ function usageCoverage(known: number, dispatched: number) {
   return known > 0 ? "partial" : "unknown";
 }
 
-function estimatedAudioSeconds(audioSeconds: number | undefined, count: number) {
+function estimatedAudioSeconds(
+  audioSeconds: number | undefined,
+  count: number,
+) {
   if (audioSeconds === undefined || !validNumber(audioSeconds) || count === 0) {
     return undefined;
   }

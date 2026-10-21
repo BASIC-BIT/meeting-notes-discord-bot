@@ -13,18 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SDD_SOURCE_SHA: "8a832cdfb496d8236318d5a06561f12fa40a9191"
+  SDD_SOURCE_SHA: "7702be2dfa7bfe50e1f71692ba672e9b4ecf8377"
 
 jobs:
   focused:
-    name: "ASR retry production checkpoint"
+    name: "ASR retry corrected candidate"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v7
         with:
-          ref: "8a832cdfb496d8236318d5a06561f12fa40a9191"
+          ref: "7702be2dfa7bfe50e1f71692ba672e9b4ecf8377"
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact source
