@@ -13,18 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SDD_SOURCE_SHA: "11746fb1c9f36c5ff0666d3a08998459276f7d35"
+  SDD_SOURCE_SHA: "1e1a54219d41f670e8c10c46a383f902b23fc600"
 
 jobs:
   focused:
-    name: "Cleanup reuse regressions"
+    name: "Cleanup fixture correction"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v7
         with:
-          ref: "11746fb1c9f36c5ff0666d3a08998459276f7d35"
+          ref: "1e1a54219d41f670e8c10c46a383f902b23fc600"
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact source
@@ -37,8 +37,10 @@ jobs:
           node-version: "24.15.0"
           cache: "yarn"
       - name: Install dependencies
+        id: install
         run: bash scripts/ci-install-dependencies.sh
       - name: Exact-source compilation API census
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           if command -v rg >/dev/null 2>&1; then
             rg -n 'compileTranscriptions|cleanupTranscription|cleanupContentTranscription|retainCleanupTranscript' src test
@@ -46,12 +48,24 @@ jobs:
             git grep -n -E 'compileTranscriptions|cleanupTranscription|cleanupContentTranscription|retainCleanupTranscript' -- src test
           fi
       - name: TypeScript build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn build
       - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn lint:check
       - name: Format
+        id: format
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn prettier:check
+      - name: Formatting diagnostics
+        if: ${{ !cancelled() && steps.format.outcome == 'failure' }}
+        run: |
+          trap 'git restore --worktree .' EXIT
+          ./node_modules/.bin/prettier --write . --log-level silent
+          git diff --no-ext-diff
       - name: Markdown
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn markdownlint:check
       - name: Focused synthetic regressions
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: yarn test --runInBand --coverage=false test/services/transcriptCompilationService.test.ts test/services/transcriptionCleanupService.test.ts test/services/transcriptionService.test.ts test/services/recordingContentService.test.ts test/commands/endMeeting.test.ts test/commands/endMeetingNotesLatency.test.ts test/services/recoveryTranscriptionProcessing.test.ts test/services/notesService.test.ts test/services/meetingProcessingLifetime.test.ts test/audio/startProcessingSnippet.test.ts
