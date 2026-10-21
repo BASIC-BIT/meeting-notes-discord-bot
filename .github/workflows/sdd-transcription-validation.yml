@@ -13,18 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SDD_SOURCE_SHA: "4c6651a4cd8445f256394ce886b0a7a92f1d72b0"
+  SDD_SOURCE_SHA: "78dc091208f2e4e9e1e981212300c070fc204914"
 
 jobs:
   focused:
-    name: "Cleanup final focused verification"
+    name: "Tracing overlap expected RED"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v7
         with:
-          ref: "4c6651a4cd8445f256394ce886b0a7a92f1d72b0"
+          ref: "78dc091208f2e4e9e1e981212300c070fc204914"
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact source
@@ -68,4 +68,4 @@ jobs:
         run: yarn markdownlint:check
       - name: Focused synthetic regressions
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: yarn test --runInBand --coverage=false test/services/transcriptCompilationService.test.ts test/services/transcriptionCleanupService.test.ts test/services/transcriptionService.test.ts test/services/recordingContentService.test.ts test/commands/endMeeting.test.ts test/commands/endMeetingNotesLatency.test.ts test/services/recoveryTranscriptionProcessing.test.ts test/services/notesService.test.ts test/services/meetingProcessingLifetime.test.ts test/audio/startProcessingSnippet.test.ts
+        run: yarn test --runInBand --coverage=false test/services/transcriptionTracing.test.ts test/observability/langfuseAudioAttachment.test.ts test/services/transcriptionSnippetResult.test.ts test/services/meetingProcessingLifetime.test.ts test/commands/endMeetingNotesLatency.test.ts
