@@ -1,13 +1,17 @@
-import { withTranscriptionInput } from "./transcriptionInput";
+import {
+  createTranscriptionFailureScope,
+  isExhaustedTranscriptionFailure,
+  runTranscriptionRequest,
+} from "./transcriptionRequest";
+import {
+  createTranscriptionAttemptLedger,
+  type TranscriptionCandidateId,
+} from "../observability/transcriptionAttempts";
 import {
   getMeetingProcessingSignal,
   runMeetingProcessingEffect,
 } from "./meetingProcessingLifetime";
-import type OpenAI from "openai";
-import type {
-  Transcription,
-  TranscriptionCreateParamsNonStreaming,
-} from "openai/resources/audio";
+import type { Transcription } from "openai/resources/audio";
 import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import ffmpeg from "fluent-ffmpeg";
@@ -15,10 +19,7 @@ import {
   bulkhead,
   circuitBreaker,
   ConsecutiveBreaker,
-  ExponentialBackoff,
-  handleAll,
-  retry,
-  wrap,
+  handleWhen,
 } from "cockatiel";
 import Bottleneck from "bottleneck";
 import type {
@@ -49,7 +50,6 @@ import {
   TRANSCRIPTION_RATE_MIN_WORDS,
   TRANSCRIPTION_MAX_CONCURRENT,
   TRANSCRIPTION_MAX_QUEUE,
-  TRANSCRIPTION_MAX_RETRIES,
   TRANSCRIPTION_RATE_MIN_TIME,
   TRANSCRIBE_SAMPLE_RATE,
 } from "../constants";
@@ -61,7 +61,7 @@ import {
   type TranscriptionVoteDecision,
   type TranscriptionVoteGateResult,
 } from "../utils/transcriptionVote";
-import { createOpenAIClient } from "./openaiClient";
+import type { createOpenAIClient } from "./openaiClient";
 import { getModelChoice } from "./modelFactory";
 import { isLangfuseTracingEnabled } from "./langfuseClient";
 import {
@@ -70,7 +70,7 @@ import {
   updateActiveObservation,
 } from "@langfuse/tracing";
 import { buildLangfuseTranscriptionAudioAttachment } from "../observability/langfuseAudioAttachment";
-import { buildLangfuseTranscriptionAccounting } from "../observability/langfuseUsageDetails";
+import { recordLangfuseTranscriptionAccounting } from "../observability/langfuseUsageDetails";
 import { toLangfuseAttributeMetadata } from "../observability/langfuseMetadata";
 import { ensureMeetingTempDirSync } from "./tempFileService";
 import { evaluateNoiseGate } from "../utils/audioNoiseGate";
@@ -249,6 +249,7 @@ async function transcribeInternal(
   meeting: TranscriptionContentInput,
   file: string,
   context?: TranscriptionTraceContext,
+  queueWaitMs = 0,
 ): Promise<string> {
   meeting.signal.throwIfAborted();
   const { prompt, langfusePrompt } = await meeting.prompt();
@@ -262,7 +263,9 @@ async function transcribeInternal(
     "transcription",
     getMeetingModelOverrides(meeting),
   );
+  const ledger = createTranscriptionAttemptLedger(context?.audioSeconds);
   const traceMetadata = {
+    transcriptionQueueWaitMs: queueWaitMs,
     guildId: meeting.guild.id,
     channelId: meeting.voiceChannel.id,
     meetingId: meeting.meetingId,
@@ -280,32 +283,30 @@ async function transcribeInternal(
   };
 
   const runTranscription = async (
-    openAIClient: OpenAI,
+    candidate: TranscriptionCandidateId,
+    clientOptions: Parameters<typeof createOpenAIClient>[0],
     promptText?: string,
   ) => {
-    const signal = meeting.signal;
-    signal.throwIfAborted();
-    return withTranscriptionInput(file, async (input) => {
-      const request: TranscriptionCreateParamsNonStreaming<"json"> = {
-        file: input,
+    const transcription = await runTranscriptionRequest({
+      candidate,
+      file,
+      signal: meeting.signal,
+      ledger,
+      clientOptions,
+      request: {
         model: modelChoice.model,
         language: "en",
         temperature: 0,
         response_format: "json",
         include: ["logprobs"],
         ...(promptText ? { prompt: promptText } : {}),
-      };
-      const transcription = await openAIClient.audio.transcriptions.create(
-        request,
-        { signal },
-      );
-      signal.throwIfAborted();
-      return {
-        text: transcription.text ?? "",
-        logprobs: transcription.logprobs ?? [],
-        usage: transcription.usage,
-      };
+      },
     });
+    return {
+      text: transcription.text ?? "",
+      logprobs: transcription.logprobs ?? [],
+      usage: transcription.usage,
+    };
   };
 
   const guardConfig = resolveGuardConfig(meeting, context);
@@ -455,9 +456,13 @@ async function transcribeInternal(
   };
 
   const runAndSelectTranscription = async (
-    openAIClient: OpenAI,
+    clientOptions: Parameters<typeof createOpenAIClient>[0],
   ): Promise<TranscriptionSelection> => {
-    const promptOutput = await runTranscription(openAIClient, resolvedPrompt);
+    const promptOutput = await runTranscription(
+      "prompt",
+      clientOptions,
+      resolvedPrompt,
+    );
     const promptCandidate = await applyGuardsAndLog(promptOutput, {
       id: "prompt",
       promptText: resolvedPrompt,
@@ -478,7 +483,7 @@ async function transcribeInternal(
       };
     }
 
-    const noPromptOutput = await runTranscription(openAIClient);
+    const noPromptOutput = await runTranscription("no_prompt", clientOptions);
     const noPromptCandidate = await applyGuardsAndLog(noPromptOutput, {
       id: "no_prompt",
     });
@@ -519,7 +524,7 @@ async function transcribeInternal(
   };
 
   if (!isLangfuseTracingEnabled()) {
-    const openAIClient = createOpenAIClient({
+    const selection = await runAndSelectTranscription({
       traceName: "transcription",
       generationName: "transcription",
       userId: meeting.creator.id,
@@ -528,7 +533,7 @@ async function transcribeInternal(
       metadata: traceMetadata,
       langfusePrompt,
     });
-    const selection = await runAndSelectTranscription(openAIClient);
+    meeting.signal.throwIfAborted();
     return selection.selected.guardResult.text;
   }
 
@@ -596,11 +601,10 @@ async function transcribeInternal(
 
           let selectedText: string;
           try {
-            const openAIClient = createOpenAIClient({
+            const selection = await runAndSelectTranscription({
               disableTracing: true,
               langfusePrompt,
             });
-            const selection = await runAndSelectTranscription(openAIClient);
             const {
               guardResult,
               transcriptStats,
@@ -613,36 +617,10 @@ async function transcribeInternal(
               maxSyllablesPerSecond,
             } = selection.selected;
 
-            const accounting = buildLangfuseTranscriptionAccounting(
-              [
-                selection.promptCandidate.usage,
-                ...(selection.noPromptCandidate
-                  ? [selection.noPromptCandidate.usage]
-                  : []),
-              ],
-              context?.audioSeconds,
-            );
-            if (accounting.unpricedRequestCount > 0) {
-              console.warn("Transcription cost accounting is incomplete.", {
-                ...traceMetadata,
-                transcriptionCostAccountingStatus: accounting.status,
-                transcriptionRequestCount: accounting.requestCount,
-                transcriptionPricedRequestCount: accounting.pricedRequestCount,
-                transcriptionUnpricedRequestCount:
-                  accounting.unpricedRequestCount,
-              });
-            }
             updateActiveObservation(
               {
                 output: guardResult.text,
-                usageDetails: accounting.usageDetails,
                 metadata: {
-                  transcriptionCostAccountingStatus: accounting.status,
-                  transcriptionRequestCount: accounting.requestCount,
-                  transcriptionPricedRequestCount:
-                    accounting.pricedRequestCount,
-                  transcriptionUnpricedRequestCount:
-                    accounting.unpricedRequestCount,
                   transcriptionFlags: guardResult.flags,
                   transcriptionCandidate: selection.selected.candidateId,
                   quietAudio: guardResult.quietAudio,
@@ -706,6 +684,10 @@ async function transcribeInternal(
 
             selectedText = guardResult.text;
           } finally {
+            recordLangfuseTranscriptionAccounting(
+              ledger.snapshot(),
+              context?.audioSeconds,
+            );
             await attachment;
           }
           meeting.signal.throwIfAborted();
@@ -716,11 +698,7 @@ async function transcribeInternal(
   );
 }
 
-const retryPolicy = retry(handleAll, {
-  maxAttempts: TRANSCRIPTION_MAX_RETRIES,
-  backoff: new ExponentialBackoff(),
-});
-const breakerPolicy = circuitBreaker(handleAll, {
+const breakerPolicy = circuitBreaker(handleWhen(isExhaustedTranscriptionFailure), {
   halfOpenAfter: TRANSCRIPTION_BREAK_DURATION,
   breaker: new ConsecutiveBreaker(
     TRANSCRIPTION_BREAK_AFTER_CONSECUTIVE_FAILURES,
@@ -730,8 +708,6 @@ const bulkheadPolicy = bulkhead(
   TRANSCRIPTION_MAX_CONCURRENT,
   TRANSCRIPTION_MAX_QUEUE,
 );
-
-const policies = wrap(bulkheadPolicy, breakerPolicy, retryPolicy);
 
 const limiter = new Bottleneck({
   minTime: TRANSCRIPTION_RATE_MIN_TIME,
@@ -747,10 +723,22 @@ async function transcribe(
   file: string,
   context?: TranscriptionTraceContext,
 ): Promise<string> {
-  return await policies.execute(() => {
-    meeting.signal.throwIfAborted();
-    return limiter.schedule(() => transcribeInternal(meeting, file, context));
-  });
+  const queuedAt = performance.now();
+  const scope = createTranscriptionFailureScope();
+  return bulkheadPolicy.execute(() =>
+    scope.run(() => {
+      meeting.signal.throwIfAborted();
+      return breakerPolicy.execute(() =>
+        limiter.schedule(() =>
+          scope.run(() => {
+            meeting.signal.throwIfAborted();
+            const queueWaitMs = Math.max(0, performance.now() - queuedAt);
+            return transcribeInternal(meeting, file, context, queueWaitMs);
+          }),
+        ),
+      );
+    }),
+  );
 }
 
 type TempSnippetFiles = {
