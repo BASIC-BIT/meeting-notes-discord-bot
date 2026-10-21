@@ -1,7 +1,10 @@
 import { getMeetingProcessingSignal } from "./meetingProcessingLifetime";
 import type { SpanContext } from "@opentelemetry/api";
 import type { MeetingData, MeetingNotesInput } from "../types/meeting-data";
-import type { OpenAITextApi } from "../config/openaiText";
+import {
+  MEETING_TEXT_MAX_REQUESTS,
+  type OpenAITextApi,
+} from "../config/openaiText";
 import { buildOpenAISafetyIdentifier } from "./openaiClient";
 import { generateOpenAIText } from "./openaiTextService";
 import { getModelChoice } from "./modelFactory";
@@ -69,7 +72,7 @@ export async function chat(
     model,
     messages: body.messages,
     modelParams,
-    continuation: { maxRequests: 3 },
+    continuation: { maxRequests: MEETING_TEXT_MAX_REQUESTS },
     signal: AbortSignal.any([
       meeting.signal ?? getMeetingProcessingSignal(meeting),
       ...(options.signal ? [options.signal] : []),

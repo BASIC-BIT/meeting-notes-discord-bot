@@ -3,7 +3,10 @@ import type { ModalSubmitInteraction, ButtonInteraction } from "discord.js";
 
 jest.mock("dotenv", () => ({ config: jest.fn() }));
 jest.mock("../../src/services/configService", () => ({
-  config: { langfuse: { notesCorrectionPromptName: "synthetic" } },
+  config: {
+    openai: { textApi: "chat_completions" },
+    langfuse: { notesCorrectionPromptName: "synthetic" },
+  },
 }));
 jest.mock("../../src/services/meetingHistoryService", () => ({
   getMeetingHistoryService: jest.fn(async () => ({

@@ -58,10 +58,16 @@ permitted only for text output stopped by max_output_tokens when usable text was
 produced. Replay complete typed output items with the pinned SDK helper so
 encrypted reasoning and assistant metadata survive.
 
-Reject JSON truncation, refusals, filtered results, empty output, failed states,
-no-progress continuations and exhausted request budgets. Never publish the
-accumulated prefix after failure. Pass the existing abort signal to every SDK
-request and recheck it after settlement.
+Responses rejects declared JSON truncation, refusals, filtered results, empty
+output, failed states, identical consecutive continuation chunks and exhausted
+request budgets. This repetition check does not remove overlaps or establish
+semantic progress. Never publish the accumulated prefix after failure. Pass the
+existing abort signal to every SDK request and recheck it after settlement.
+
+Production notes and the notes evaluator share a three-call SDK request budget.
+Provider retries may add HTTP attempts, cost and latency within each SDK call.
+Callers requesting JSON only in their prompt still use the text format; explicit
+structured formats are required for the JSON truncation guard.
 
 Existing Chat completion behavior remains the compatibility control. Do not
 silently replace recovered model settings with current live configuration.

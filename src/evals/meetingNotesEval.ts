@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MEETING_TEXT_MAX_REQUESTS } from "../config/openaiText";
 import { config } from "../services/configService";
 import { getLangfuseChatPrompt } from "../services/langfusePromptService";
 import {
@@ -74,6 +75,7 @@ const generateNotesForEval = async (input: EvalInput): Promise<string> => {
     model,
     messages,
     modelParams,
+    continuation: { maxRequests: MEETING_TEXT_MAX_REQUESTS },
     tracing: {
       traceName: "meeting-notes-eval",
       generationName: "meeting-notes-eval",

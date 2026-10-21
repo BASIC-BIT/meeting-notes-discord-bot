@@ -1074,10 +1074,7 @@ const generatePersonalUploadNotes = async (input: {
   // This prompt supplies no mention strings at all, so every allowlist is
   // empty: any mention in the output was invented, including one that happens
   // to match the uploader.
-  return stripUnknownMentions(
-    content.trim(),
-    { userIds: [], roleIds: [] },
-  );
+  return stripUnknownMentions(content.trim(), { userIds: [], roleIds: [] });
 };
 
 function personalArtifactPrefix(job: PersonalMediaUploadJobRecord): string {

@@ -1,3 +1,5 @@
+export const MEETING_TEXT_MAX_REQUESTS = 3;
+
 export type OpenAITextApi = "chat_completions" | "responses";
 
 export function resolveOpenAITextApi(value?: string): OpenAITextApi {

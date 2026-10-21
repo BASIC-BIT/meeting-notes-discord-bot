@@ -1,7 +1,5 @@
 import type OpenAI from "openai";
-import type {
-  ChatCompletionCreateParamsNonStreaming,
-} from "openai/resources/chat/completions";
+import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import type {
   Response,
   ResponseCreateParamsNonStreaming,
@@ -67,24 +65,28 @@ function responseText(
   return { format: outputFormat, ...(verbosity ? { verbosity } : {}) };
 }
 
+function createChatCompletion(request: TextRequest, messages: ChatMessage[]) {
+  return request.client.chat.completions.create(
+    {
+      model: request.model,
+      messages,
+      ...request.modelParams,
+      response_format: chatFormat(request.format),
+      max_completion_tokens: request.maxOutputTokens,
+      safety_identifier: request.safetyIdentifier,
+      store: false,
+    },
+    request.signal ? { signal: request.signal } : undefined,
+  );
+}
+
 async function generateChatText(request: TextRequest): Promise<string> {
   const messages = request.messages.map((message) => ({ ...message }));
   const maxRequests = request.continuation?.maxRequests ?? 1;
   let output = "";
   for (let attempt = 0; attempt < maxRequests; attempt += 1) {
     request.signal?.throwIfAborted();
-    const completion = await request.client.chat.completions.create(
-      {
-        model: request.model,
-        messages,
-        ...request.modelParams,
-        response_format: chatFormat(request.format),
-        max_completion_tokens: request.maxOutputTokens,
-        safety_identifier: request.safetyIdentifier,
-        store: false,
-      },
-      request.signal ? { signal: request.signal } : undefined,
-    );
+    const completion = await createChatCompletion(request, messages);
     request.signal?.throwIfAborted();
     const choice = completion.choices[0];
     if (choice?.message.refusal) {
@@ -105,13 +107,19 @@ async function generateChatText(request: TextRequest): Promise<string> {
   throw new Error("OpenAI text generation request limit exhausted.");
 }
 
-function assertResponseHasNoRefusal(response: Response): void {
+function assertResponseOutput(response: Response, previousText: string): void {
   const refused = response.output.some(
     (item) =>
       item.type === "message" &&
       item.content.some((part) => part.type === "refusal"),
   );
   if (refused) throw new Error("OpenAI Responses generation refused.");
+  if (previousText && response.output_text === previousText) {
+    throw new Error("OpenAI Responses continuation made no progress.");
+  }
+  if (response.status === "completed" && !response.output_text.trim()) {
+    throw new Error("OpenAI Responses output empty.");
+  }
 }
 
 function canContinue(response: Response, format: OpenAITextFormat): boolean {
@@ -149,28 +157,19 @@ async function generateResponsesText(request: TextRequest): Promise<string> {
       request.signal ? { signal: request.signal } : undefined,
     );
     request.signal?.throwIfAborted();
-    assertResponseHasNoRefusal(response);
+    assertResponseOutput(response, previousText);
     const text = response.output_text;
-    if (response.status === "completed") {
-      if (!text.trim()) throw new Error("OpenAI Responses output empty.");
-      return output + text;
-    }
+    if (response.status === "completed") return output + text;
     if (!canContinue(response, request.format)) {
       throw new Error("OpenAI Responses generation incomplete or failed.");
     }
-    if (text === previousText) {
-      throw new Error("OpenAI Responses continuation made no progress.");
-    }
     output += text;
     previousText = text;
-    input.push(
-      ...toResponseInputItems(response.output),
-      {
-        role: "user",
-        content:
-          "Continue exactly where the previous output stopped. Do not repeat earlier text.",
-      },
-    );
+    input.push(...toResponseInputItems(response.output), {
+      role: "user",
+      content:
+        "Continue exactly where the previous output stopped. Do not repeat earlier text.",
+    });
   }
   throw new Error("OpenAI Responses request limit exhausted.");
 }

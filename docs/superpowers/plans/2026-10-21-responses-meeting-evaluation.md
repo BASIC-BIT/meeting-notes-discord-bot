@@ -33,12 +33,13 @@ metadata. Map frozen-style settings to the selected request format. Keep
 Responses stateless with store:false. Support text, JSON object and strict JSON
 schema output formats.
 
-Retain single-request behavior for summary and correction callers. Permit at
-most three requests in the existing shared long-text path. Continue Responses
-only on text max_output_tokens truncation with usable progress, replaying the
-SDK output items. Reject refusals, incomplete JSON, filtered or empty results,
-no progress and request-budget exhaustion. Propagate cancellation through every
-dispatch and settlement.
+Retain single-request behavior for summary and correction callers. Production
+notes and the notes evaluator share a named budget of three SDK calls; provider
+retries may add HTTP attempts. Continue Responses only on text max_output_tokens
+truncation with usable output, replaying the SDK output items. Responses rejects
+refusals, declared incomplete JSON, filtered or empty results, identical
+consecutive chunks and request-budget exhaustion. Propagate cancellation through
+every dispatch and settlement.
 
 ## Task 3: migrate the meeting text callers
 

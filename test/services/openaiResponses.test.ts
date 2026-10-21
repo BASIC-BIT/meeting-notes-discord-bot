@@ -235,11 +235,10 @@ test("Responses rejects truncated JSON instead of concatenating partial objects"
     output_text: '{"summarySentence":',
     output: [],
   });
-  const { generateOpenAIText } =
-    await import("../../src/services/openaiTextService");
+  const textService = await import("../../src/services/openaiTextService");
 
   await expect(
-    generateOpenAIText({
+    textService.generateOpenAIText({
       api: "responses",
       model: "gpt-5.2",
       modelParams: { reasoning_effort: "none" },
@@ -307,8 +306,7 @@ test("Responses stops after cancellation at the first settlement", async () => {
 
 test("Responses maps strict structured output to the requested schema", async () => {
   const fixture = await loadResponse(completed('{"title":"Notes"}'));
-  const { generateOpenAIText } =
-    await import("../../src/services/openaiTextService");
+  const textService = await import("../../src/services/openaiTextService");
   const schema = {
     type: "object",
     properties: { title: { type: "string" } },
@@ -317,7 +315,7 @@ test("Responses maps strict structured output to the requested schema", async ()
   };
 
   await expect(
-    generateOpenAIText({
+    textService.generateOpenAIText({
       api: "responses",
       model: "gpt-5.2",
       messages: [{ role: "user", content: "Return a title as JSON." }],
