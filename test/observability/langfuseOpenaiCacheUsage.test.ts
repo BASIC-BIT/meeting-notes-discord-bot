@@ -1,20 +1,24 @@
 /** @jest-environment node */
 import OpenAI from "openai";
-import { observeOpenAI } from "@langfuse/openai";
+import { startObservation } from "@langfuse/tracing";
+
+const { observeOpenAI } = jest.requireActual<
+  typeof import("@langfuse/openai")
+>("@langfuse/openai");
 
 const mockUpdate = jest.fn();
 
 jest.mock("@langfuse/tracing", () => ({
   propagateAttributes: (_attributes: unknown, callback: () => unknown) =>
     callback(),
-  startObservation: () => ({
+  startObservation: jest.fn(() => ({
     update: mockUpdate.mockReturnThis(),
     end: jest.fn(),
-  }),
+  })),
 }));
 
 beforeEach(() => {
-  mockUpdate.mockClear();
+  jest.clearAllMocks();
 });
 
 describe("Langfuse Responses cache usage", () => {
@@ -72,10 +76,14 @@ describe("Langfuse Responses cache usage", () => {
         new OpenAI({ apiKey: "synthetic", fetch, maxRetries: 0 }),
       );
 
-      const response = await client.responses.create({
+      const request = client.responses.create({
         model: "synthetic",
         input: "synthetic",
       });
+
+      expect(startObservation).toHaveBeenCalledTimes(1);
+      expect(request).toBeInstanceOf(Promise);
+      const response = await request;
 
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(response).toMatchObject(providerResponse);
