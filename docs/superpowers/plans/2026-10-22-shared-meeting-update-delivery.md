@@ -58,16 +58,16 @@ task-interface conflict table. A pending/offline executor is not test evidence.
 
 ## File boundaries
 
-| Unit | Ownership |
-| --- | --- |
-| `src/types/meetingUpdateDelivery.ts` | Schemas, discriminated state, per-part revisions, cursors and pure transitions |
+| Unit                                                  | Ownership                                                                                   |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `src/types/meetingUpdateDelivery.ts`                  | Schemas, discriminated state, per-part revisions, cursors and pure transitions              |
 | `src/repositories/meetingUpdateDeliveryRepository.ts` | Strong reads, due discovery, content/intent CAS, claims, operation progress and pointer CAS |
-| `src/services/meetingUpdateService.ts` | Shared canonical update action and single existing Notion hook |
-| `src/services/meetingUpdatePlan.ts` | Scoped embed merge and bounded ordered pagination plan |
-| `src/services/meetingUpdateDeliveryService.ts` | Durable provider operations and read-only reconciliation |
-| `src/services/meetingUpdateDeliveryWorkerService.ts` | Bounded due polling and runtime ownership |
-| Existing callers and lifecycle code | Authorization, generation/approval, initial publication and common delivery barrier |
-| Existing meeting detail UI | Save versus delivery status, no new administration surface |
+| `src/services/meetingUpdateService.ts`                | Shared canonical update action and single existing Notion hook                              |
+| `src/services/meetingUpdatePlan.ts`                   | Scoped embed merge and bounded ordered pagination plan                                      |
+| `src/services/meetingUpdateDeliveryService.ts`        | Durable provider operations and read-only reconciliation                                    |
+| `src/services/meetingUpdateDeliveryWorkerService.ts`  | Bounded due polling and runtime ownership                                                   |
+| Existing callers and lifecycle code                   | Authorization, generation/approval, initial publication and common delivery barrier         |
+| Existing meeting detail UI                            | Save versus delivery status, no new administration surface                                  |
 
 Keep provider planning/execution helpers focused when complexity warrants a
 module split. Do not create a general workflow framework or duplicate the
@@ -101,10 +101,10 @@ legacy notes/version/provenance rules.
   `updateDeliveryQueue` and `updateDeliveryDueAt`.
 
 - [ ] Write tests named `notes edit preserves pending rename watermarks`,
-  `request retains submitted attempt`, `completion acknowledges only captured parts`,
-  `held state retains unsettled attempt`, `expired lease cannot authorize replay`
-  and `legacy revisions remain zero and one`. Assert actual parsed state and transitions.
-  Representative assertions for a rename followed by notes revision 2:
+      `request retains submitted attempt`, `completion acknowledges only captured parts`,
+      `held state retains unsettled attempt`, `expired lease cannot authorize replay`
+      and `legacy revisions remain zero and one`. Assert actual parsed state and transitions.
+      Representative assertions for a rename followed by notes revision 2:
 
   ```ts
   expect(after.parts.notesBody).toEqual({ desired: 2, acknowledged: 0 });
@@ -114,8 +114,8 @@ legacy notes/version/provenance rules.
 
 - [ ] Run the new test file and record its expected feature-missing failure.
 - [ ] Implement the minimal domain model. Use unions for policy, progress,
-  provider operation and submission state. No contradictory optional-state bags
-  or duplicated payload bodies.
+      provider operation and submission state. No contradictory optional-state bags
+      or duplicated payload bodies.
 - [ ] Run the new suite plus relevant history/processing type tests and typecheck.
 - [ ] Run the scoped quality gate, commit, self-review and produce the task report.
 
@@ -143,27 +143,34 @@ implementations; create
   integration tests; normal construction binds configured app dependencies.
 
 - [ ] Write failing unit and real Dynamo tests for one content-plus-intent write,
-  nonexistent-row rejection, legacy CAS, simultaneous save/worker transition,
-  stale acknowledgments, exact claim ownership, pointer registration, sparse due
-  pagination, malformed cursors and item-size rejection without partial changes.
-  For a legacy row, strongly read actual Dynamo state after the action:
+      nonexistent-row rejection, legacy CAS, simultaneous save/worker transition,
+      stale acknowledgments, exact claim ownership, pointer registration, sparse due
+      pagination, malformed cursors and item-size rejection without partial changes.
+      For a legacy row, strongly read actual Dynamo state after the action:
 
   ```ts
-  expect(saved).toMatchObject({ notes: "Edited", notesVersion: 2, contentRevision: 1 });
-  expect(saved.updateDelivery.parts.notesBody).toEqual({ desired: 1, acknowledged: 0 });
+  expect(saved).toMatchObject({
+    notes: "Edited",
+    notesVersion: 2,
+    contentRevision: 1,
+  });
+  expect(saved.updateDelivery.parts.notesBody).toEqual({
+    desired: 1,
+    acknowledged: 0,
+  });
   expect(await readMissingMeeting()).toBeUndefined();
   ```
 
 - [ ] Run unit tests and the integration command below; record expected failures.
 - [ ] Implement field-specific conditional updates preserving current notes
-  history, suggestion provenance and Delta removal. Require row identity,
-  notes-version CAS for notes edits, content revision and delivery token.
-  Return `ALL_NEW`; propagate unexpected errors.
+      history, suggestion provenance and Delta removal. Require row identity,
+      notes-version CAS for notes edits, content revision and delivery token.
+      Return `ALL_NEW`; propagate unexpected errors.
 - [ ] Use existing deployment admission transaction checks for claims. Strongly
-  reread after discovery and unknown acknowledgments. Never expose a generic row
-  patch or convert arbitrary errors into conflicts.
+      reread after discovery and unknown acknowledgments. Never expose a generic row
+      patch or convert arbitrary errors into conflicts.
 - [ ] Run both suites, existing history tests and typecheck; verify real Dynamo
-  state, not command shape alone. Commit after the scoped quality gate.
+      state, not command shape alone. Commit after the scoped quality gate.
 
 Integration command:
 
@@ -188,12 +195,12 @@ cleanup operations and compact before/desired fingerprints. Rendered provider
 payloads remain local to a prepared execution, not copied into durable history.
 
 - [ ] Write failing tests for a notes-only edit with a differing untouched
-  summary, title-only rename with a pending notes body, shared summary warnings,
-  preserved controls/attachments/unrelated embeds, multiple notes embeds in one
-  post, Discord aggregate limits and unfamiliar layouts.
+      summary, title-only rename with a pending notes body, shared summary warnings,
+      preserved controls/attachments/unrelated embeds, multiple notes embeds in one
+      post, Discord aggregate limits and unfamiliar layouts.
 - [ ] Write growth/shrink tests proving surviving post IDs are reused and
-  additions/removals affect only positively identified notes slots.
-  Assert the proposed payloads, including an intentionally different summary:
+      additions/removals affect only positively identified notes slots.
+      Assert the proposed payloads, including an intentionally different summary:
 
   ```ts
   expect(proposedSummary).toEqual(beforeSummary);
@@ -204,13 +211,13 @@ payloads remain local to a prepared execution, not copied into durable history.
 
 - [ ] Run the tests to establish the expected failure.
 - [ ] Implement requested-part merging using current canonical fields and shared
-  notice/notes builders. Body includes its version footer, required notice and
-  pagination dependencies. Do not regenerate content.
+      notice/notes builders. Body includes its version footer, required notice and
+      pagination dependencies. Do not regenerate content.
 - [ ] Preflight the complete plan before the first mutation. A missing saved
-  target blocks, rather than becoming a POST fallback. Protected surplus posts
-  require safe embed removal or a specific layout hold.
+      target blocks, rather than becoming a POST fallback. Protected surplus posts
+      require safe embed removal or a specific layout hold.
 - [ ] Run new tests and existing recovery planner/editor/processing presentation
-  tests; scoped lint, typecheck and quality gate; commit and report.
+      tests; scoped lint, typecheck and quality gate; commit and report.
 
 ### Task 4: Durable provider execution and reconciliation
 
@@ -229,14 +236,14 @@ notes-only creation/deletion operations without changing existing callers.
   uncertain effect and superseded work. They never claim a synced newer revision.
 
 - [ ] Write failing tests using the real planner and state transitions with
-  controlled provider boundaries. Cover crash before/after submitted marker,
-  lost marker acknowledgment, definite 429, a crash after POST response before
-  returned-ID persistence, unknown PATCH/POST, lost completion
-  acknowledgment, stale content during a target loop and replayed work.
+      controlled provider boundaries. Cover crash before/after submitted marker,
+      lost marker acknowledgment, definite 429, a crash after POST response before
+      returned-ID persistence, unknown PATCH/POST, lost completion
+      acknowledgment, stale content during a target loop and replayed work.
 - [ ] Add reflow tests for returned new IDs before registration, lost pointer
-  acknowledgment, supersession with created candidates, obsolete-ID cleanup
-  and protected surplus messages.
-  With a controlled HTTP boundary, inspect both remote content and durable state:
+      acknowledgment, supersession with created candidates, obsolete-ID cleanup
+      and protected surplus messages.
+      With a controlled HTTP boundary, inspect both remote content and durable state:
 
   ```ts
   expect(await readRemoteMessage()).toEqual(expectedPreservedMessage);
@@ -245,18 +252,18 @@ notes-only creation/deletion operations without changing existing callers.
   ```
 
 - [ ] Observe RED, then implement exact-claim checks and durable operation
-  progress before every POST/PATCH/DELETE. Persist each returned POST ID before
-  continuing. Register pointers before any obsolete-post cleanup.
+      progress before every POST/PATCH/DELETE. Persist each returned POST ID before
+      continuing. Register pointers before any obsolete-post cleanup.
 - [ ] Read back edits and prove intended fingerprints. Suppress mentions and
-  omit ordinary content/components/attachments from PATCH.
+      omit ordinary content/components/attachments from PATCH.
 - [ ] For ambiguous effects do GET-only reconciliation. Lease expiry, a matching
-  unrelated GET, or a nonce is not replay authorization. Preserve unknown POSTs
-  without an ID as uncertainty holds. Do not issue a newer write over an
-  unsettled older effect.
+      unrelated GET, or a nonce is not replay authorization. Preserve unknown POSTs
+      without an ID as uncertainty holds. Do not issue a newer write over an
+      unsettled older effect.
 - [ ] Retire settled superseded attempts while carrying known created candidates
-  into latest replanning. Preserve newer desired work on every completion.
+      into latest replanning. Preserve newer desired work on every completion.
 - [ ] Run service, transport, planner and repository tests; typecheck, scoped
-  lint/quality; commit and report.
+      lint/quality; commit and report.
 
 ### Task 5: Due index, worker and runtime lifetime
 
@@ -272,11 +279,11 @@ following `test/scripts/renewalRecoveryIndex.test.ts`.
 `verifyMeetingUpdateDeliveryReadiness(): Promise<void>`.
 
 - [ ] Write failing tests for immediate/nonoverlapping bounded polling, due
-  pagination, stale GSI rows, two-owner contention, serving denial, lease loss,
-  lost wakeup, restart, shutdown with a held provider tail and missing index.
+      pagination, stale GSI rows, two-owner contention, serving denial, lease loss,
+      lost wakeup, restart, shutdown with a held provider tail and missing index.
 - [ ] Write fresh/existing local-table index tests and Terraform/IAM assertions
-  for exact names, `KEYS_ONLY`, no Streams and no broad permissions.
-  Assert admitted work and actual effect settlement under the controlled clock:
+      for exact names, `KEYS_ONLY`, no Streams and no broad permissions.
+      Assert admitted work and actual effect settlement under the controlled clock:
 
   ```ts
   expect(admittedMeetingKeys).toHaveLength(25);
@@ -288,16 +295,16 @@ following `test/scripts/renewalRecoveryIndex.test.ts`.
   ```
 
 - [ ] Observe RED, then implement the sparse index and idempotent local upgrade.
-  Verify ACTIVE readiness before enabling the shared writers/worker. No Scan
-  fallback. Keep Terraform application outside feature implementation.
+      Verify ACTIVE readiness before enabling the shared writers/worker. No Scan
+      fallback. Keep Terraform application outside feature implementation.
 - [ ] Register one REST worker through `whenRuntimeServing` in bootstrap for
-  combined/API-only/bot-only modes. Use existing deployment admission and
-  `ancillary_delivery` work accounting with a specific delivery domain.
+      combined/API-only/bot-only modes. Use existing deployment admission and
+      `ancillary_delivery` work accounting with a specific delivery domain.
 - [ ] Poll using the exact Global Constraints budgets, jitter/backoff and two
-  concurrent meetings. Renew claims without replacing immutable submission
-  identity. Stop admission and await actual effect/promise tails at shutdown.
+      concurrent meetings. Renew claims without replacing immutable submission
+      identity. Stop admission and await actual effect/promise tails at shutdown.
 - [ ] Run worker/index/runtime lifetime and shutdown suites plus relevant
-  deployment integration tests; typecheck, lint/quality; commit and report.
+      deployment integration tests; typecheck, lint/quality; commit and report.
 
 ### Task 6: Shared action, caller migration and one publication owner
 
@@ -316,15 +323,15 @@ projection. The projection has a `status` field; domain state remains a
 discriminated `progress` union, rather than duplicated status flags.
 
 - [ ] Write failing action/caller tests for successful notes mutation, CAS
-  conflict, rename, import, approved corrections and lost wakeup. Assert durable
-  intent and zero remaining caller-owned Discord mutations.
+      conflict, rename, import, approved corrections and lost wakeup. Assert durable
+      intent and zero remaining caller-owned Discord mutations.
 - [ ] Assert Notion is called once after acknowledged notes+intent persistence,
-  never on conflict/name-only/Discord retry; preserve existing opt-in and
-  `assertNotionOutcomeKnown` behavior and interruption ownership.
+      never on conflict/name-only/Discord retry; preserve existing opt-in and
+      `assertNotionOutcomeKnown` behavior and interruption ownership.
 - [ ] Write adoption/ownership tests for legacy unknown outcomes, explicit
-  stored-only recovery holds, unsettled initial publication, overlapping repair
-  apply, and initial pointer registration racing a newer edit.
-  Assert canonical success independently of an intentionally held Discord send:
+      stored-only recovery holds, unsettled initial publication, overlapping repair
+      apply, and initial pointer registration racing a newer edit.
+      Assert canonical success independently of an intentionally held Discord send:
 
   ```ts
   expect(result.kind).toBe("saved");
@@ -334,19 +341,19 @@ discriminated `progress` union, rather than duplicated status flags.
   ```
 
 - [ ] Observe RED, then implement the action and remove old Notion/Discord side
-  effects from migrated service/callers in the same task. Keep authorization,
-  generation, approval/token and teaching-context responsibilities unchanged.
+      effects from migrated service/callers in the same task. Keep authorization,
+      generation, approval/token and teaching-context responsibilities unchanged.
 - [ ] Keep legacy notes-version rules and existing Delta/provenance/history
-  behavior. Rename requests both managed titles without bumping notes version.
+      behavior. Rename requests both managed titles without bumping notes version.
 - [ ] Make repair apply/reconcile use the same per-meeting barrier; preserve
-  existing approved preview and durable receipt meanings. Do not create a
-  second independent lock. Unknown legacy publishers remain held.
+      existing approved preview and durable receipt meanings. Do not create a
+      second independent lock. Unknown legacy publishers remain held.
 - [ ] Prevent broad artifact-repair PutItem from overwriting new canonical or
-  delivery fields. Keep initial/personal/recovery generation ownership intact;
-  updates become eligible only after initial publication is settled.
+      delivery fields. Keep initial/personal/recovery generation ownership intact;
+      updates become eligible only after initial publication is settled.
 - [ ] Run action, portal, command, Notion interruption, recovery publication,
-  initial delivery and personal/recovery ownership suites. Run integration
-  races against real local Dynamo. Scoped quality, lint/typecheck; commit.
+      initial delivery and personal/recovery ownership suites. Run integration
+      races against real local Dynamo. Scoped quality, lint/typecheck; commit.
 
 ### Task 7: Delivery status, documentation and complete validation
 
@@ -357,33 +364,35 @@ short ADR, AGENTS/copilot/README where material. Do not add an admin dashboard.
 **Consumes:** Shared action result and durable delivery state.
 
 - [ ] Write failing API/UI tests for saved+pending, synced, needs-attention and
-  held states, with no raw provider messages or private channel details.
-  Render the real status component with the saved-and-pending API fixture:
+      held states, with no raw provider messages or private channel details.
+      Render the real status component with the saved-and-pending API fixture:
 
   ```tsx
   expect(screen.getByText("Saved. Updating Discord.")).toBeVisible();
-  expect(screen.queryByText("Saved. Discord is up to date.")).not.toBeInTheDocument();
+  expect(
+    screen.queryByText("Saved. Discord is up to date."),
+  ).not.toBeInTheDocument();
   ```
 
 - [ ] Implement the spec's compact save/delivery copy and expose desired/synced
-  revision, last success and sanitized state. Reuse edit/operator permissions
-  for retry or release-hold. Neither clears an unsettled attempt.
+      revision, last success and sanitized state. Reuse edit/operator permissions
+      for retry or release-hold. Neither clears an unsettled attempt.
 - [ ] Run covering component/router tests; capture Storybook screenshots and
-  review them visually; cover changed user flow in Playwright.
+      review them visually; cover changed user flow in Playwright.
 - [ ] Document automatic updates, explicit holds, retry/uncertainty limits,
-  index-before-code rollout and separate notification behavior. Add a short ADR
-  with the repository's required headings and explain the no-Streams choice.
+      index-before-code rollout and separate notification behavior. Add a short ADR
+      with the repository's required headings and explain the no-Streams choice.
 - [ ] Run full required lint, format, quality, TypeScript, unit/integration,
-  docs and relevant UI/E2E checks. Do not run local Docker image builds unless
-  separately requested; use repository CI for required image validation.
+      docs and relevant UI/E2E checks. Do not run local Docker image builds unless
+      separately requested; use repository CI for required image validation.
 - [ ] Perform fresh whole-branch review, fix material findings through a
-  subagent and scoped re-review, then create/update the draft PR with concise
-  sanitized behavior and non-obvious validation/rollout limits.
+      subagent and scoped re-review, then create/update the draft PR with concise
+      sanitized behavior and non-obvious validation/rollout limits.
 - [ ] Follow the repository post-push audit and review-recycle workflow,
-  including the five-minute late-comment audit before merge-ready claims.
+      including the five-minute late-comment audit before merge-ready claims.
 - [ ] Hosted synthetic Sandbox acceptance follows an authorized Sandbox rollout
-  and reviewed index setup. Do not claim it from unit tests or a merged PR.
-  Do not deploy production or release any live publication hold.
+      and reviewed index setup. Do not claim it from unit tests or a merged PR.
+      Do not deploy production or release any live publication hold.
 
 ## Verification commands
 
@@ -411,18 +420,18 @@ tests or adding exception labels.
 Copy this table into the SDD ledger and confirm against the final plan before
 Task 1. Any implementation ruling must preserve the approved spec.
 
-| Tasks | Shared interface or file | Expected relationship |
-| --- | --- | --- |
+| Tasks | Shared interface or file                  | Expected relationship                                                          |
+| ----- | ----------------------------------------- | ------------------------------------------------------------------------------ |
 | 1 / 2 | Delivery state, tokens and history fields | Repository validates the exact domain model and independent delivery CAS token |
-| 1 / 3 | Part watermarks and captured revisions | Scoped plan acknowledges only requested captured parts |
-| 2 / 4 | Claims, transitions and pointer CAS | Executor has no unrestricted write escape hatch |
-| 3 / 4 | Immutable operation plan and fingerprints | Known results advance operations; unknown results do not replay |
-| 2 / 5 | Due query and readiness | Bounded GSI discovery followed by strong base-row checks |
-| 4 / 5 | Actual effect lifetime | Worker shutdown waits for owned effects; lease timeout is not settlement |
-| 2 / 6 | Canonical action and atomic write | Save never commits without the corresponding intent |
-| 4 / 6 | Repair/initial/worker ownership | One common barrier precedes every competing publication path |
-| 5 / 6 | Runtime ownership and wakeups | Durable index is authoritative; in-memory wakeup is optional |
-| 6 / 7 | Public save/delivery status | Canonical success does not falsely acknowledge Discord delivery |
+| 1 / 3 | Part watermarks and captured revisions    | Scoped plan acknowledges only requested captured parts                         |
+| 2 / 4 | Claims, transitions and pointer CAS       | Executor has no unrestricted write escape hatch                                |
+| 3 / 4 | Immutable operation plan and fingerprints | Known results advance operations; unknown results do not replay                |
+| 2 / 5 | Due query and readiness                   | Bounded GSI discovery followed by strong base-row checks                       |
+| 4 / 5 | Actual effect lifetime                    | Worker shutdown waits for owned effects; lease timeout is not settlement       |
+| 2 / 6 | Canonical action and atomic write         | Save never commits without the corresponding intent                            |
+| 4 / 6 | Repair/initial/worker ownership           | One common barrier precedes every competing publication path                   |
+| 5 / 6 | Runtime ownership and wakeups             | Durable index is authoritative; in-memory wakeup is optional                   |
+| 6 / 7 | Public save/delivery status               | Canonical success does not falsely acknowledge Discord delivery                |
 
 Each task's named tests, code, files and outputs are consistent with its stated
 deliverable. New implementation details may refine internal helpers without

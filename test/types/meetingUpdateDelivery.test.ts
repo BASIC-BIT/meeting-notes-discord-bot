@@ -139,7 +139,9 @@ test("notes edit preserves pending rename watermarks", () => {
   expect(after.parts.notesTitle).toEqual(before.parts.notesTitle);
   expect(after.parts.summaryTitle).toEqual(before.parts.summaryTitle);
   expect(after.progress).toEqual(before.progress);
-  expect(() => assertMeetingUpdateDeliveryTransition(before, after)).not.toThrow();
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, after),
+  ).not.toThrow();
 });
 
 test("request retains submitted attempt", () => {
@@ -159,7 +161,9 @@ test("request retains submitted attempt", () => {
   expect(after.progress).toEqual(before.progress);
   expect(after.revision).toBe("delivery-2");
   expect(before.parts.notesBody.desired).toBe(1);
-  expect(() => assertMeetingUpdateDeliveryTransition(before, after)).not.toThrow();
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, after),
+  ).not.toThrow();
 });
 
 test("completion acknowledges only captured parts", () => {
@@ -180,7 +184,9 @@ test("completion acknowledges only captured parts", () => {
     },
     progress: { kind: "pending", nextCheckAt: now },
   });
-  expect(() => assertMeetingUpdateDeliveryTransition(before, after)).not.toThrow();
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, after),
+  ).not.toThrow();
   expect(after.parts.notesBody).toEqual({ desired: 2, acknowledged: 1 });
   expect(after.parts.summaryTitle).toEqual(before.parts.summaryTitle);
   expect(meetingUpdateDeliveryNextCheck(after)).toBe(now);
@@ -218,7 +224,9 @@ test("held state retains unsettled attempt", () => {
   expect(after.progress).toEqual(before.progress);
   expect(after.parts.notesBody.desired).toBe(2);
   expect(meetingUpdateDeliveryNextCheck(after)).toBeUndefined();
-  expect(() => assertMeetingUpdateDeliveryTransition(before, after)).not.toThrow();
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, after),
+  ).not.toThrow();
   const discarded = meetingUpdateDeliverySchema.parse({
     ...after,
     revision: "discarded-attempt",
@@ -256,13 +264,17 @@ test("expired lease cannot authorize replay", () => {
       attempt: { ...attempt(), attemptId: "replacement-attempt" },
     },
   });
-  expect(() => assertMeetingUpdateDeliveryTransition(before, replaced)).toThrow();
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, replaced),
+  ).toThrow();
   const reconcile = meetingUpdateDeliverySchema.parse({
     ...before,
     revision: "reconcile-2",
     progress: { ...before.progress, kind: "reconciling" },
   });
-  expect(reconcile.progress).toMatchObject({ attempt: before.progress.attempt });
+  expect(reconcile.progress).toMatchObject({
+    attempt: before.progress.attempt,
+  });
   expect(() =>
     assertMeetingUpdateDeliveryTransition(before, reconcile),
   ).not.toThrow();
@@ -439,4 +451,208 @@ test("due cursor rejects malformed or widened discovery keys", () => {
     expect(() => readMeetingUpdateDeliveryCursor(encode(value))).toThrow();
   }
   expect(() => readMeetingUpdateDeliveryCursor("not-json")).toThrow();
+});
+
+test("a save after sync schedules the new desired work", () => {
+  const synced = meetingUpdateDeliverySchema.parse({
+    ...pending(),
+    parts: { ...parts(), notesBody: { desired: 1, acknowledged: 1 } },
+    progress: { kind: "synced", syncedAt: now - 10 },
+  });
+  const after = requestMeetingUpdateDelivery({
+    history: { ...history(), contentRevision: 1, updateDelivery: synced },
+    mutation: notes,
+    revision: "after-sync",
+    now,
+    policy: { kind: "active" },
+  });
+  expect(after.parts.notesBody).toEqual({ desired: 2, acknowledged: 1 });
+  expect(after.progress).toEqual({ kind: "pending", nextCheckAt: now });
+});
+
+test("corrections request only their changed content and warning refresh is explicit", () => {
+  const correction = meetingUpdateMutationSchema.parse({
+    kind: "correction",
+    changes: [
+      { kind: "notes", notes: "Corrected synthetic notes" },
+      { kind: "summarySentence", value: "Corrected synthetic summary" },
+      { kind: "rename", meetingName: "Corrected synthetic name" },
+    ],
+  });
+  expect(requestedPartsForMutation(correction)).toEqual([
+    "notesBody",
+    "notesTitle",
+    "summaryBody",
+    "summaryTitle",
+  ]);
+  const warning = meetingUpdateMutationSchema.parse({
+    kind: "warning",
+    target: "both",
+  });
+  expect(requestedPartsForMutation(warning)).toEqual([
+    "notesWarning",
+    "summaryWarning",
+  ]);
+  expect(
+    meetingUpdateMutationSchema.safeParse({
+      kind: "correction",
+      changes: [
+        { kind: "notes", notes: "A" },
+        { kind: "notes", notes: "B" },
+      ],
+    }).success,
+  ).toBe(false);
+});
+
+test("submission evidence cannot change identity during reconciliation", () => {
+  const before = running();
+  if (before.progress.kind !== "running")
+    throw new Error("Expected running fixture");
+  const after = meetingUpdateDeliverySchema.parse({
+    ...before,
+    revision: "altered-evidence",
+    progress: {
+      ...before.progress,
+      kind: "reconciling",
+      operations: [
+        {
+          operationId: "patch-notes",
+          submission: {
+            kind: "uncertain",
+            submissionId: "another-submission",
+            submittedAt: now - 30,
+            reason: "provider_outcome_unknown",
+          },
+        },
+      ],
+    },
+  });
+  expect(() => assertMeetingUpdateDeliveryTransition(before, after)).toThrow();
+});
+
+test("cursor writer validates its input", () => {
+  expect(() =>
+    writeMeetingUpdateDeliveryCursor({
+      ...key,
+      updateDeliveryQueue: "meeting-update:v1",
+      updateDeliveryDueAt: -1,
+    }),
+  ).toThrow();
+});
+
+test("retiring a verified POST retains its unregistered created message", () => {
+  const postAttempt = preparedMeetingUpdateAttemptSchema.parse({
+    ...attempt(),
+    operations: [
+      {
+        kind: "post",
+        operationId: "post-notes",
+        channelId: pointers.notesChannelId,
+        desiredFingerprint: "b".repeat(64),
+      },
+    ],
+  });
+  const before = meetingUpdateDeliverySchema.parse({
+    ...pending(),
+    progress: {
+      kind: "running",
+      attempt: postAttempt,
+      claim: { ownerInstanceId: "synthetic-owner", leaseExpiresAt: now + 30 },
+      nextCheckAt: now,
+      operations: [
+        {
+          operationId: "post-notes",
+          submission: {
+            kind: "verified",
+            submissionId: "post-submission",
+            submittedAt: now - 30,
+            verifiedAt: now - 2,
+            fingerprint: "b".repeat(64),
+            receipt: { kind: "message", messageId: "999999999999999994" },
+          },
+        },
+      ],
+    },
+  });
+  const discarded = meetingUpdateDeliverySchema.parse({
+    ...before,
+    revision: "retired-post",
+    progress: { kind: "pending", nextCheckAt: now },
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, discarded),
+  ).toThrow();
+  const retained = meetingUpdateDeliverySchema.parse({
+    ...discarded,
+    createdCandidates: [
+      {
+        operationId: "post-notes",
+        channelId: pointers.notesChannelId,
+        messageId: "999999999999999994",
+        fingerprint: "b".repeat(64),
+      },
+    ],
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, retained),
+  ).not.toThrow();
+  const requested = requestMeetingUpdateDelivery({
+    history: { ...history(), contentRevision: 1, updateDelivery: retained },
+    mutation: notes,
+    revision: "retained-next-save",
+    now,
+    policy: { kind: "active" },
+  });
+  expect(requested.createdCandidates).toEqual(retained.createdCandidates);
+});
+
+test("acknowledgment cannot regress even while a newer revision is requested", () => {
+  const before = meetingUpdateDeliverySchema.parse({
+    ...pending(),
+    parts: { ...parts(), notesBody: { desired: 2, acknowledged: 1 } },
+  });
+  const after = meetingUpdateDeliverySchema.parse({
+    ...before,
+    revision: "regressed-ack",
+    parts: { ...before.parts, notesBody: { desired: 3, acknowledged: 0 } },
+  });
+  expect(() => assertMeetingUpdateDeliveryTransition(before, after)).toThrow();
+});
+
+test("uncertain publication retains its attempt without scheduling replay", () => {
+  const before = running();
+  if (before.progress.kind !== "running")
+    throw new Error("Expected running fixture");
+  const { nextCheckAt, ...attemptState } = before.progress;
+  void nextCheckAt;
+  const uncertain = meetingUpdateDeliverySchema.parse({
+    ...before,
+    revision: "uncertainty-hold",
+    progress: {
+      ...attemptState,
+      kind: "uncertain",
+      reason: "provider_outcome_unknown",
+    },
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, uncertain),
+  ).not.toThrow();
+  expect(meetingUpdateDeliveryNextCheck(uncertain)).toBeUndefined();
+  const requested = requestMeetingUpdateDelivery({
+    history: { ...history(), contentRevision: 1, updateDelivery: uncertain },
+    mutation: notes,
+    revision: "saved-behind-uncertainty",
+    now,
+    policy: { kind: "active" },
+  });
+  expect(requested.progress).toEqual(uncertain.progress);
+  expect(requested.parts.notesBody.desired).toBe(2);
+  const replay = meetingUpdateDeliverySchema.parse({
+    ...before,
+    revision: "uncertain-replay",
+    progress: { ...before.progress, nextCheckAt: now },
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(uncertain, replay),
+  ).toThrow();
 });

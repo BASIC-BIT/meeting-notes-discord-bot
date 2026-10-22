@@ -72,13 +72,13 @@ is never the only record of delivery.
 
 Migrate supported post-publication writers together:
 
-| Entry point | Responsibility after migration |
-| --- | --- |
-| Portal editor and import | Validate access and input, call the shared action |
-| Portal and Discord corrections | Generate and approve once, then call the action with the approved result |
-| Portal and Discord rename | Resolve authorized name, then call the action |
-| Presentation refresh | Explicitly request changed warning/title/summary fields through the action |
-| Operator recovery delivery | Respect stored-content and publication holds; join the common delivery barrier |
+| Entry point                    | Responsibility after migration                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------ |
+| Portal editor and import       | Validate access and input, call the shared action                              |
+| Portal and Discord corrections | Generate and approve once, then call the action with the approved result       |
+| Portal and Discord rename      | Resolve authorized name, then call the action                                  |
+| Presentation refresh           | Explicitly request changed warning/title/summary fields through the action     |
+| Operator recovery delivery     | Respect stored-content and publication holds; join the common delivery barrier |
 
 Delete the migrated caller-owned Discord edit/replacement helpers. Retain a
 single renderer/delivery implementation. No retry reruns an LLM, a correction
@@ -338,16 +338,16 @@ publication remain separate operational actions.
 
 ## Changeset map
 
-| Area | Files and intended responsibility |
-| --- | --- |
-| Domain and persistence | `src/types/db.ts`, a focused update-delivery schema, `src/db.ts`, `src/repositories/meetingHistoryRepository.ts`, and a delivery-only repository |
-| Shared action | `src/services/meetingHistoryService.ts`, a focused meeting-update action; retain existing Notion policy at the action boundary |
-| Rendering and provider work | Extract general managed-field planning from `recoveryDiscordPublicationPlan.ts`; reuse `discordMessageEditor.ts`; add focused delivery/reconciliation service |
-| Worker and runtime | New delivery worker; `src/apps/bootstrap.ts`, runtime admission/lifetime/shutdown services and domain types |
-| Callers | Portal editor/import/correction/rename in `src/trpc/routers/meetings.ts`; `src/commands/notesCorrections.ts`, `src/commands/meetingName.ts`; remove migrated `meetingNotesEmbedService.ts` behavior |
-| Lifecycle and repair | Initial target registration, recovery eligibility, `scripts/recover-meeting-artifacts.ts`, recovery publication apply/reconcile barrier |
-| Infrastructure | `_infra/main.tf`, `scripts/init-dynamodb.js`; review deployment ordering and local/mock configuration |
-| Visibility and docs | Meeting detail delivery status, component stories/tests, public feature docs, delivery/operator docs and short ADR; review AGENTS/copilot/README accuracy |
+| Area                        | Files and intended responsibility                                                                                                                                                                   |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Domain and persistence      | `src/types/db.ts`, a focused update-delivery schema, `src/db.ts`, `src/repositories/meetingHistoryRepository.ts`, and a delivery-only repository                                                    |
+| Shared action               | `src/services/meetingHistoryService.ts`, a focused meeting-update action; retain existing Notion policy at the action boundary                                                                      |
+| Rendering and provider work | Extract general managed-field planning from `recoveryDiscordPublicationPlan.ts`; reuse `discordMessageEditor.ts`; add focused delivery/reconciliation service                                       |
+| Worker and runtime          | New delivery worker; `src/apps/bootstrap.ts`, runtime admission/lifetime/shutdown services and domain types                                                                                         |
+| Callers                     | Portal editor/import/correction/rename in `src/trpc/routers/meetings.ts`; `src/commands/notesCorrections.ts`, `src/commands/meetingName.ts`; remove migrated `meetingNotesEmbedService.ts` behavior |
+| Lifecycle and repair        | Initial target registration, recovery eligibility, `scripts/recover-meeting-artifacts.ts`, recovery publication apply/reconcile barrier                                                             |
+| Infrastructure              | `_infra/main.tf`, `scripts/init-dynamodb.js`; review deployment ordering and local/mock configuration                                                                                               |
+| Visibility and docs         | Meeting detail delivery status, component stories/tests, public feature docs, delivery/operator docs and short ADR; review AGENTS/copilot/README accuracy                                           |
 
 ## Verification requirements
 
