@@ -25,9 +25,9 @@ changing prompt layout and saved prompt snapshots.
   model-parameter overrides and keep frozen DynamoDB v1 model, parameter and
   prompt snapshots authoritative.
 - Send `prompt_cache_options: { mode: "explicit", ttl: "30m" }` with no
-  `prompt_cache_breakpoint` markers for Sol-capable notes Responses requests,
-  including every continuation. Omit unsupported cache fields for older
-  `gpt-5.2` overrides.
+  `prompt_cache_breakpoint` markers for notes Responses requests using supported
+  model profiles, including GPT-6.1 Sol. Apply the same policy to every
+  continuation. Older overrides omit unsupported cache fields.
 - Preserve prompt content ordering and input semantics. Defer static-prefix
   optimization to a separate design that addresses prompt layout and snapshots.
 - Improve notes guidance for explicit assignments, volunteered follow-ups,

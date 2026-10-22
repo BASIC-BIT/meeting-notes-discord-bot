@@ -232,10 +232,9 @@ These buttons appear on meeting embeds:
 
 ## Action items
 
-Chronote looks for explicit assignments and volunteered follow-ups when writing
-notes, with owners and deadlines when stated. Suggestions and conditional plans
-keep their qualifiers, and completed work stays marked complete. Chronote does not infer an owner or
-deadline just because a topic was discussed.
+Chronote aims to capture explicit assignments and volunteered follow-ups with
+stated owners and deadlines. Suggestions and conditional plans should retain
+their qualifiers, and completed work should remain marked complete.
 
 Review the notes and use [Suggest correction](#notes-correction-flow) when a task
 is missing or inaccurate.

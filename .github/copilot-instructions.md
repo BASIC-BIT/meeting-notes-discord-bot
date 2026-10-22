@@ -68,7 +68,11 @@ This file provides Copilot review context. AGENTS.md remains the source of truth
 - OpenAI org/project IDs are optional (defaults empty).
 - Text generation uses the Responses API through `openaiTextService.ts`. Migrate callers together and delete superseded request paths. Preserve frozen recording settings, cancellation, mention checks and caller fallbacks; audio and image generation keep their dedicated endpoints.
 - `NOTES_MODEL` defaults to `gpt-6.1-sol` for notes only; other previously coupled roles retain independent `gpt-5.2` defaults. Existing `models.*` and compatible `modelParams.*` overrides still apply. Frozen DynamoDB v1 snapshots remain authoritative.
-- Notes use low reasoning by default and omit temperature. Sol-capable notes requests and continuations use explicit 30-minute cache control without breakpoints; older model overrides omit unsupported fields. Preserve prompt ordering. See `docs/adr-20261022-sol-notes-caching.md`.
+- Notes use low reasoning by default and omit temperature. Notes requests using
+  supported model profiles, including GPT-6.1 Sol, request explicit 30-minute
+  cache control without breakpoints, including continuations. Older overrides
+  omit unsupported fields. Preserve prompt ordering. See
+  `docs/adr-20261022-sol-notes-caching.md`.
 - Langfuse prompt sync uses `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`. Optional: `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_TRANSCRIPTION`, `LANGFUSE_PROMPT_DICTIONARY_TEACHING`.
 - Optional Langfuse prompt override for the finalized audio pass: `LANGFUSE_PROMPT_TRANSCRIPTION_FINAL_PASS`.
 - Langfuse MCP tooling uses `node scripts/setup-langfuse-mcp-auth.js` to write `.opencode/langfuse.mcp.auth`, `.opencode/langfuse.public`, and `.opencode/langfuse.secret` for OpenCode. Codex and Claude Code still expect `LANGFUSE_MCP_AUTH` in the environment.

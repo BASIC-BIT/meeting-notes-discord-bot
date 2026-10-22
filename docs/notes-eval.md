@@ -98,15 +98,15 @@ model is involved:
 
 The mention grades do not establish whether notes captured every task, the right
 owner or deadline, or the status of conditional and completed work. Synthetic
-action-item fixtures and prompt assertions can catch missing instructions, but
-they are not automated proof of output quality.
+action-item fixtures support manual semantic review, not automated proof of
+output quality.
 
 For an action-item prompt change, manually compare generated notes with the
 synthetic transcript. Check explicit assignments, volunteered follow-ups, stated
 deadlines, tentative plans and completed work. Keep this review separate from
 request-contract checks, which verify model selection, parameters, cache policy
-and frozen snapshot behavior. The prompt instructs a silent completeness check within
-the notes generation call and does not add a separate model request.
+and frozen snapshot behavior. The prompt instructs a silent completeness check
+within the notes generation call and does not add a separate model request.
 
 ## Harvesting cases from downvoted meetings
 
