@@ -1,3 +1,8 @@
+import {
+  sequentialCleanupPlan,
+  advanceCleanup,
+} from "../types/meetingUpdateCleanup.fixture";
+import { meetingUpdateDeliveryTransitionSchema } from "../../src/types/meetingUpdateDelivery";
 import type { Harness } from "./meetingUpdateDeliveryContract";
 import type { authority, write } from "./meetingUpdateDeliveryContract";
 import { deliveryRow } from "./meetingUpdateDeliveryFixtures";
@@ -246,5 +251,60 @@ export function planningContract(
       progress: { kind: "synced" },
     });
     expect((await h.read())?.updateDeliveryQueue).toBeUndefined();
+  });
+  it("persists sequential current-attempt cleanup verification with no root candidates", async () => {
+    const h = current();
+    let delivery = sequentialCleanupPlan();
+    await h.seed(deliveryRow(delivery));
+    for (const index of [1, 2])
+      for (const verified of [false, true]) {
+        const change = meetingUpdateDeliveryTransitionSchema.parse(
+          advanceCleanup(delivery, index, verified),
+        );
+        expect(
+          await h.repository.transition({
+            key,
+            expectedDeliveryRevision: delivery.revision,
+            attemptId: "attempt-1",
+            ownerInstanceId: "synthetic-owner",
+            change,
+          }),
+        ).toBe("applied");
+        const actual = await h.read();
+        if (!actual?.updateDelivery)
+          throw new Error("Expected persisted cleanup");
+        delivery = actual.updateDelivery;
+        expect(delivery.cleanupCandidates).toEqual([]);
+        if (!("attempt" in delivery.progress))
+          throw new Error("Expected attempt");
+        expect(delivery.progress.operations[index].submission.kind).toBe(
+          verified ? "verified" : "submitted",
+        );
+      }
+  });
+
+  it("persists the eighth known preclaim failure without an invented attempt", async () => {
+    const h = current();
+    const before = { ...pending(), attempts: 7 };
+    await h.seed(deliveryRow(before));
+    expect(
+      await h.repository.transition({
+        key,
+        expectedDeliveryRevision: before.revision,
+        attemptId: null,
+        ownerInstanceId: null,
+        change: {
+          kind: "progress",
+          revision: "preclaim-exhausted",
+          progress: { kind: "blocked", reason: "retry_exhausted" },
+        },
+      }),
+    ).toBe("applied");
+    expect((await h.read())?.updateDelivery).toMatchObject({
+      attempts: 8,
+      progress: { kind: "blocked", reason: "retry_exhausted" },
+      parts: { notesBody: { desired: 1, acknowledged: 0 } },
+      lastSuccess: null,
+    });
   });
 }

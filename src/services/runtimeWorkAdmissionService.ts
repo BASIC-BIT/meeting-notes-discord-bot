@@ -21,7 +21,8 @@ type Domain =
   | "interaction"
   | "ancillary"
   | "api_correction"
-  | "billing";
+  | "billing"
+  | "meeting_update_delivery";
 type ClaimCheckpoint = {
   claimId: string;
   instanceId: string;

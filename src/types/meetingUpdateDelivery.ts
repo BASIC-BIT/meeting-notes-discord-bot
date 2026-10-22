@@ -279,7 +279,7 @@ export const meetingUpdateSubmissionSchema = z.discriminatedUnion("kind", [
       kind: z.literal("rejected"),
       rejectedAt: seconds,
       retryAt: seconds,
-      reason: z.enum(["rate_limited", "provider_rejected"]),
+      reason: z.enum(["rate_limited", "provider_rejected", "not_submitted"]),
     })
     .strict(),
   submittedFields
@@ -859,7 +859,13 @@ function isRetryFailure(
   const notSubmitted =
     after.progress.kind === "retrying" &&
     after.progress.reason === "not_submitted";
-  if (!hasAttempt(before.progress)) return notSubmitted;
+  if (!hasAttempt(before.progress))
+    return (
+      notSubmitted ||
+      (exhausted &&
+        (before.progress.kind === "pending" ||
+          before.progress.kind === "retrying"))
+    );
   const submissions = before.progress.operations.map((op) => op.submission);
   return (
     submissions.every(

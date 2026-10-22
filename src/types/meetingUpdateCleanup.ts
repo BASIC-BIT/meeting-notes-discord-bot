@@ -134,6 +134,7 @@ export function assertCleanupCandidates(
   if (
     required.some(
       (candidate) =>
+        !cleanupCandidateDisposed(candidate, after.progress) &&
         !retained.some((next) => isDeepStrictEqual(candidate, next)),
     )
   )
