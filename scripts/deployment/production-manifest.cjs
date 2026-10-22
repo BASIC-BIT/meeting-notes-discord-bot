@@ -22,25 +22,44 @@ function parseProductionManifest(input, expectedSha256) {
   assertHash(input, expectedSha256);
   const m = validateManifest(productionSchema.parse(input));
   const tables = [...Object.values(m.binding.tableArns), m.controlTableArn];
-  for (const value of [
+  const roles = [
+    m.deploymentRoleArn,
+    m.executionRoleArn,
+    m.binding.taskRoleArn,
+  ];
+  const definitions = [
+    m.taskDefinition,
+    m.legacyTaskDefinition,
+    m.fallbackTaskDefinition,
+  ];
+  const groups = [m.targetGroupA, m.targetGroupB];
+  const names = [
     m.cluster,
     m.service,
     m.bucket,
     m.tablePrefix,
     m.containerName,
     m.imageRepository,
+  ];
+  for (const value of [
+    ...names,
     ...tables,
-    m.taskDefinition,
-    m.legacyTaskDefinition,
-    m.fallbackTaskDefinition,
-    m.deploymentRoleArn,
-    m.executionRoleArn,
-    m.binding.taskRoleArn,
+    ...definitions,
+    ...roles,
     m.listenerArn,
-    m.targetGroupA,
-    m.targetGroupB,
+    ...groups,
   ])
     assert.ok(!/sandbox|rehearsal/i.test(value), "Nonproduction resource");
+  const resourceNames = [
+    ...names,
+    ...roles.map((arn) => arn.split("/").at(-1)),
+    ...tables.map((arn) => arn.split("/")[1]),
+    ...definitions.map((arn) => arn.split("/")[1].split(":")[0]),
+    m.listenerArn.split("/")[2],
+    ...groups.map((arn) => arn.split("/")[1]),
+  ];
+  for (const name of resourceNames)
+    assert.ok(!/^cr-[a-f0-9]{16}-/.test(name), "Nonproduction resource");
   return m;
 }
 function parsePhaseAuthorization(input, manifest, expectedSha256) {

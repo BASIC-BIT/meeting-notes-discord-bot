@@ -13,6 +13,9 @@ import {
   parsePhaseAuthorization,
 } from "../../scripts/deployment/production-manifest.cjs";
 
+import { rehearsalFixture } from "../fixtures/deployment/rehearsalIntroduction.js";
+import { buildMaintenancePolicy } from "../../scripts/deployment/maintenance-fence.cjs";
+
 const authorization = (m) => phaseAuthorization(m, "fence");
 test("strict production manifest accepts exact operation and Sandbox rejects it", () => {
   const m = manifestFixture();
@@ -97,3 +100,89 @@ test.each(["taskDefinition", "fallbackTaskDefinition"])(
     expect(() => parseProductionManifest(m, manifestHash(m))).toThrow();
   },
 );
+
+// Production must reject the reserved namespace even after valid packet rehashing.
+const reservedName = "cr-0123456789abcdef-resource";
+function expectNonproduction(m) {
+  m.ownedPolicySha256 = manifestHash(buildMaintenancePolicy(m.binding));
+  expect(() => parseProductionManifest(m, manifestHash(m))).toThrow(
+    "Nonproduction resource",
+  );
+}
+test("rejects a correctly rehashed rehearsal inventory relabeled as production", () => {
+  const m = rehearsalFixture();
+  delete m.disposablePrefix;
+  delete m.resourceEvidence;
+  m.kind = "production-introduction";
+  m.environment = "production";
+  expectNonproduction(m);
+});
+test.each(["service", "bucket", "containerName", "imageRepository"])(
+  "rejects an isolated reserved %s from another operation",
+  (field) => {
+    const m = manifestFixture();
+    m[field] = reservedName;
+    expectNonproduction(m);
+  },
+);
+test("rejects a reserved cluster with its matching legacy task ARN", () => {
+  const m = manifestFixture();
+  m.legacyTaskArn = m.legacyTaskArn.replace(m.cluster, reservedName);
+  m.cluster = reservedName;
+  expectNonproduction(m);
+});
+test.each(["deploymentRoleArn", "executionRoleArn", "taskRoleArn"])(
+  "rejects an isolated reserved %s after an IAM path",
+  (field) => {
+    const m = manifestFixture();
+    const holder = field === "taskRoleArn" ? m.binding : m;
+    holder[field] =
+      `arn:aws:iam::${m.binding.accountId}:role/production/${reservedName}`;
+    expectNonproduction(m);
+  },
+);
+test.each(["taskDefinition", "legacyTaskDefinition", "fallbackTaskDefinition"])(
+  "rejects an isolated reserved %s family",
+  (field) => {
+    const m = manifestFixture();
+    m[field] = m[field].replace("chronote-bot", reservedName);
+    expectNonproduction(m);
+  },
+);
+test.each(["listenerArn", "targetGroupA", "targetGroupB"])(
+  "rejects an isolated reserved %s resource name",
+  (field) => {
+    const m = manifestFixture();
+    m[field] = m[field].replace(/chronote(?:-[ab])?/, reservedName);
+    expectNonproduction(m);
+  },
+);
+test("rejects one reserved table among otherwise production table names", () => {
+  const m = manifestFixture();
+  m.tablePrefix = "cr-";
+  for (const slot of Object.keys(m.binding.tableArns)) {
+    m.binding.tableArns[slot] = m.binding.tableArns[slot].replace(
+      "chronote-",
+      "cr-production-",
+    );
+  }
+  m.binding.activeMeetingTableArn = m.binding.tableArns.leases;
+  m.binding.personalMediaUploadJobTableArn = m.binding.tableArns.uploads;
+  m.controlTableArn = m.controlTableArn.replace("chronote-", "cr-");
+  m.binding.tableArns.history = m.binding.tableArns.history.replace(
+    "cr-production-MeetingHistoryTable",
+    reservedName,
+  );
+  expectNonproduction(m);
+});
+test("does not treat unrelated ARN path and identifier text as reserved names", () => {
+  const m = manifestFixture();
+  m.deploymentRoleArn = m.deploymentRoleArn.replace(
+    "role/",
+    `role/${reservedName}/`,
+  );
+  m.listenerArn += `/${reservedName}`;
+  m.targetGroupA += `/${reservedName}`;
+  m.bucket = `production-${reservedName}`;
+  expect(parseProductionManifest(m, manifestHash(m))).toEqual(m);
+});
