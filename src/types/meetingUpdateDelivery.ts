@@ -184,16 +184,18 @@ export const preparedMeetingUpdateAttemptSchema = z
         code: "custom",
         message: "Invalid attempt revisions or operation identity",
       });
-    for (const operation of attempt.operations) {
+    for (const [index, operation] of attempt.operations.entries()) {
       if (
         operation.kind === "register" &&
         operation.slots.some(
           (entry) =>
             entry.kind === "created" &&
-            !attempt.operations.some(
-              (op) =>
-                op.kind === "post" && op.operationId === entry.operationId,
-            ),
+            !attempt.operations
+              .slice(0, index)
+              .some(
+                (op) =>
+                  op.kind === "post" && op.operationId === entry.operationId,
+              ),
         )
       )
         context.addIssue({
@@ -277,7 +279,6 @@ export const meetingUpdateProgressSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("retrying"),
       nextCheckAt: seconds,
-      attempts: revisionNumber.positive(),
       reason: z.enum(["rate_limited", "provider_rejected", "not_submitted"]),
     })
     .strict(),
@@ -324,10 +325,18 @@ export const meetingUpdateCreatedCandidateSchema = z
 export type MeetingUpdateCreatedCandidate = z.infer<
   typeof meetingUpdateCreatedCandidateSchema
 >;
+export const meetingUpdateLastSuccessSchema = z
+  .object({ at: seconds, contentRevision: revisionNumber.positive() })
+  .strict();
+export type MeetingUpdateLastSuccess = z.infer<
+  typeof meetingUpdateLastSuccessSchema
+>;
 export const meetingUpdateDeliverySchema = z
   .object({
     revision: id,
     policy: meetingUpdatePolicySchema,
+    attempts: revisionNumber.default(0),
+    lastSuccess: meetingUpdateLastSuccessSchema.nullable().default(null),
     createdCandidates: z
       .array(meetingUpdateCreatedCandidateSchema)
       .max(300)
@@ -347,6 +356,20 @@ export const meetingUpdateDeliverySchema = z
       context.addIssue({
         code: "custom",
         message: "Synced delivery has pending parts",
+      });
+    if (delivery.progress.kind === "retrying" && delivery.attempts === 0)
+      context.addIssue({
+        code: "custom",
+        message: "Retrying requires retained failure history",
+      });
+    if (
+      delivery.progress.kind === "synced" &&
+      delivery.lastSuccess &&
+      delivery.progress.syncedAt !== delivery.lastSuccess.at
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Synced time must match verified last success",
       });
     if (hasAttempt(delivery.progress))
       validateAttemptProgress(delivery.progress, delivery.parts, context);
@@ -368,6 +391,7 @@ function validateAttemptProgress(
   context: z.RefinementCtx,
 ): void {
   const plan = progress.attempt;
+  validateOperationOrder(progress.operations, context);
   if (
     progress.operations.length !== plan.operations.length ||
     progress.operations.some(
@@ -388,6 +412,20 @@ function validateAttemptProgress(
       progress.operations[index]?.submission,
       context,
     );
+}
+function validateOperationOrder(
+  operations: AttemptProgress["operations"],
+  context: z.RefinementCtx,
+): void {
+  const first = operations.findIndex((op) => op.submission.kind !== "verified");
+  if (
+    first !== -1 &&
+    operations.slice(first + 1).some((op) => op.submission.kind !== "prepared")
+  )
+    context.addIssue({
+      code: "custom",
+      message: "Operations require a verified predecessor prefix",
+    });
 }
 function validateOperationReceipt(
   operation: MeetingUpdateProviderOperation,
@@ -465,13 +503,23 @@ export function requestMeetingUpdateDelivery(input: {
     policy: previous?.policy ?? input.policy,
     parts,
     createdCandidates: previous?.createdCandidates,
-    progress:
-      previous && previous.progress.kind !== "synced"
-        ? previous.progress
-        : { kind: "pending", nextCheckAt: input.now },
+    lastSuccess: previous?.lastSuccess,
+    attempts: previous && hasAttempt(previous.progress) ? previous.attempts : 0,
+    progress: requestedProgress(previous?.progress, input.now),
   });
   if (previous) assertMeetingUpdateDeliveryTransition(previous, next);
   return next;
+}
+
+function requestedProgress(
+  previous: MeetingUpdateProgress | undefined,
+  now: number,
+): MeetingUpdateProgress {
+  if (!previous || previous.kind === "synced")
+    return { kind: "pending", nextCheckAt: seconds.parse(now) };
+  if (previous.kind === "retrying")
+    return { kind: "pending", nextCheckAt: previous.nextCheckAt };
+  return previous;
 }
 
 export function meetingUpdateDeliveryNextCheck(
@@ -493,6 +541,9 @@ export function assertMeetingUpdateDeliveryTransition(
     throw new Error("Delivery transitions require a fresh revision");
   assertWatermarks(before, after);
   assertCreatedCandidates(before, after);
+  assertSubmissionAdmission(before, after);
+  assertRetryHistory(before, after);
+  assertLastSuccess(before, after);
   if (hasAttempt(before.progress))
     assertAttemptTransition(before.progress, after.progress);
 }
@@ -568,9 +619,30 @@ function candidateRegisteredOrDeleted(
     return plan.slots.some((slot) =>
       slot.kind === "existing"
         ? slot.messageId === candidate.messageId
-        : slot.operationId === candidate.operationId,
+        : createdSlotMessage(
+            slot.operationId,
+            candidate.channelId,
+            progress,
+          ) === candidate.messageId,
     );
   });
+}
+function createdSlotMessage(
+  operationId: string,
+  channelId: string,
+  progress: AttemptProgress,
+): string | undefined {
+  const index = progress.attempt.operations.findIndex(
+    (op) => op.operationId === operationId,
+  );
+  const operation = progress.attempt.operations[index];
+  const result = progress.operations[index]?.submission;
+  if (operation?.kind !== "post" || operation.channelId !== channelId)
+    return undefined;
+  if (result?.kind === "returned") return result.messageId;
+  return result?.kind === "verified" && result.receipt.kind === "message"
+    ? result.receipt.messageId
+    : undefined;
 }
 function assertCreatedCandidates(
   before: MeetingUpdateDelivery,
@@ -654,6 +726,127 @@ function assertSubmissionTransition(
   if (after.kind === "submitted")
     throw new Error(
       "Submitted effects can only advance to known results or reconciliation",
+    );
+}
+
+function assertSubmissionAdmission(
+  before: MeetingUpdateDelivery,
+  after: MeetingUpdateDelivery,
+): void {
+  if (!hasAttempt(after.progress)) return;
+  if (!hasAttempt(before.progress)) {
+    if (
+      after.progress.operations.some((op) => op.submission.kind !== "prepared")
+    )
+      throw new Error("New claims must start with prepared operations");
+    return;
+  }
+  const operations = before.progress.operations;
+  const newlySubmitted = after.progress.operations.flatMap((op, index) =>
+    operations[index]?.submission.kind === "prepared" &&
+    op.submission.kind !== "prepared"
+      ? [index]
+      : [],
+  );
+  if (newlySubmitted.length > 1)
+    throw new Error("Only one operation can be admitted per transition");
+  for (const index of newlySubmitted) {
+    if (before.policy.kind !== "active" || after.policy.kind !== "active")
+      throw new Error("Publication policy must be active before submission");
+    if (
+      operations.slice(0, index).some((op) => op.submission.kind !== "verified")
+    )
+      throw new Error(
+        "Predecessors must already be verified before submission",
+      );
+  }
+}
+function isVerifiedCompletion(
+  before: MeetingUpdateDelivery,
+  after: MeetingUpdateDelivery,
+): boolean {
+  if (
+    !hasAttempt(before.progress) ||
+    (after.progress.kind !== "pending" && after.progress.kind !== "synced") ||
+    !before.progress.operations.every((op) => op.submission.kind === "verified")
+  )
+    return false;
+  return Object.entries(before.progress.attempt.capturedParts).every(
+    ([part, captured]) =>
+      after.parts[presentationPartSchema.parse(part)].acknowledged ===
+      Math.max(
+        before.parts[presentationPartSchema.parse(part)].acknowledged,
+        captured,
+      ),
+  );
+}
+function isRetryFailure(
+  before: MeetingUpdateDelivery,
+  after: MeetingUpdateDelivery,
+): boolean {
+  const retrying = after.progress.kind === "retrying";
+  const exhausted =
+    after.progress.kind === "blocked" &&
+    after.progress.reason === "retry_exhausted";
+  if (!retrying && !exhausted) return false;
+  const notSubmitted =
+    after.progress.kind === "retrying" &&
+    after.progress.reason === "not_submitted";
+  if (!hasAttempt(before.progress)) return notSubmitted;
+  const submissions = before.progress.operations.map((op) => op.submission);
+  return (
+    submissions.every(
+      (result) => result.kind === "prepared" || isSettled(result),
+    ) &&
+    (submissions.some((result) => result.kind === "rejected") ||
+      (notSubmitted &&
+        submissions.some((result) => result.kind === "prepared")))
+  );
+}
+function assertRetryHistory(
+  before: MeetingUpdateDelivery,
+  after: MeetingUpdateDelivery,
+): void {
+  const completed = isVerifiedCompletion(before, after);
+  if (completed && after.attempts !== 0)
+    throw new Error("Verified completion resets retry history");
+  if (before.attempts === after.attempts) return;
+  const superseded =
+    !hasAttempt(before.progress) &&
+    presentationPartSchema.options.some(
+      (part) => after.parts[part].desired > before.parts[part].desired,
+    );
+  if (after.attempts === 0 && (completed || superseded)) return;
+  if (after.attempts === before.attempts + 1 && isRetryFailure(before, after))
+    return;
+  throw new Error(
+    "Retry history can only advance on failure or reset for settled/new work",
+  );
+}
+function assertLastSuccess(
+  before: MeetingUpdateDelivery,
+  after: MeetingUpdateDelivery,
+): void {
+  if (!isVerifiedCompletion(before, after)) {
+    if (!isDeepStrictEqual(before.lastSuccess, after.lastSuccess))
+      throw new Error("Last success only changes on verified completion");
+    return;
+  }
+  if (!hasAttempt(before.progress)) return;
+  const success = after.lastSuccess;
+  const verifiedAt = before.progress.operations.flatMap((op) =>
+    op.submission.kind === "verified" ? [op.submission.verifiedAt] : [],
+  );
+  if (
+    !success ||
+    success.contentRevision !== before.progress.attempt.contentRevision ||
+    success.at < Math.max(...verifiedAt) ||
+    (before.lastSuccess &&
+      (success.at < before.lastSuccess.at ||
+        success.contentRevision < before.lastSuccess.contentRevision))
+  )
+    throw new Error(
+      "Last success requires monotonic verified completion evidence",
     );
 }
 

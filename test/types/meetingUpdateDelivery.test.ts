@@ -1,5 +1,4 @@
 /** @jest-environment node */
-import type { MeetingHistory } from "../../src/types/db";
 import {
   assertMeetingUpdateDeliveryTransition,
   meetingUpdateDeliveryNextCheck,
@@ -13,106 +12,27 @@ import {
   writeMeetingUpdateDeliveryCursor,
 } from "../../src/types/meetingUpdateDelivery";
 
-const now = 1792670400;
-const key = {
-  guildId: "999999999999999990",
-  channelId_timestamp: "999999999999999991#2026-10-22T12:00:00.000Z",
-};
-const pointers = {
-  notesChannelId: "999999999999999992",
-  notesMessageIds: ["999999999999999993"],
-};
-const history = (): MeetingHistory => ({
-  ...key,
-  meetingId: "synthetic-meeting",
-  channelId: "999999999999999991",
-  timestamp: "2026-10-22T12:00:00.000Z",
-  notes: "Original synthetic notes",
-  participants: [],
-  duration: 60,
-  transcribeMeeting: true,
-  generateNotes: true,
-});
-const notes = meetingUpdateMutationSchema.parse({
-  kind: "notes",
-  notes: "Edited synthetic notes",
-});
-const rename = meetingUpdateMutationSchema.parse({
-  kind: "rename",
-  meetingName: "Synthetic planning",
-});
-function parts() {
-  return {
-    notesBody: { desired: 0, acknowledged: 0 },
-    notesTitle: { desired: 0, acknowledged: 0 },
-    notesWarning: { desired: 0, acknowledged: 0 },
-    summaryBody: { desired: 0, acknowledged: 0 },
-    summaryTitle: { desired: 0, acknowledged: 0 },
-    summaryWarning: { desired: 0, acknowledged: 0 },
-  };
-}
-function pending() {
-  return meetingUpdateDeliverySchema.parse({
-    revision: "delivery-1",
-    policy: { kind: "active" },
-    parts: {
-      ...parts(),
-      notesBody: { desired: 1, acknowledged: 0 },
-    },
-    progress: { kind: "pending", nextCheckAt: now },
-  });
-}
-function attempt() {
-  return preparedMeetingUpdateAttemptSchema.parse({
-    attemptId: "attempt-1",
-    contentRevision: 1,
-    capturedParts: { notesBody: 1 },
-    expectedPointers: pointers,
-    operations: [
-      {
-        kind: "patch",
-        operationId: "patch-notes",
-        channelId: pointers.notesChannelId,
-        messageId: pointers.notesMessageIds[0],
-        beforeFingerprint: "a".repeat(64),
-        desiredFingerprint: "b".repeat(64),
-      },
-    ],
-  });
-}
-function running(submission: "submitted" | "verified" = "submitted") {
-  return meetingUpdateDeliverySchema.parse({
-    ...pending(),
-    progress: {
-      kind: "running",
-      attempt: attempt(),
-      claim: {
-        ownerInstanceId: "synthetic-owner",
-        leaseExpiresAt: now - 1,
-      },
-      nextCheckAt: now,
-      operations: [
-        {
-          operationId: "patch-notes",
-          submission:
-            submission === "submitted"
-              ? {
-                  kind: "submitted",
-                  submissionId: "submission-1",
-                  submittedAt: now - 30,
-                }
-              : {
-                  kind: "verified",
-                  submissionId: "submission-1",
-                  submittedAt: now - 30,
-                  verifiedAt: now - 2,
-                  fingerprint: "b".repeat(64),
-                },
-        },
-      ],
-    },
-  });
-}
+import {
+  now,
+  key,
+  pointers,
+  history,
+  notes,
+  rename,
+  parts,
+  pending,
+  attempt,
+  running,
+  submittedState,
+  rejectedState,
+  verifiedState,
+  patchOperation,
+  postOperation,
+  registerOperation,
+  deleteOperation,
+  planDelivery,
+  changedProgress,
+} from "./meetingUpdateDelivery.fixture";
 
 test("notes edit preserves pending rename watermarks", () => {
   const before = requestMeetingUpdateDelivery({
@@ -178,6 +98,7 @@ test("completion acknowledges only captured parts", () => {
   const after = meetingUpdateDeliverySchema.parse({
     ...before,
     revision: "completion-2",
+    lastSuccess: { at: now, contentRevision: 1 },
     parts: {
       ...before.parts,
       notesBody: { desired: 2, acknowledged: 1 },
@@ -655,4 +576,316 @@ test("uncertain publication retains its attempt without scheduling replay", () =
   expect(() =>
     assertMeetingUpdateDeliveryTransition(uncertain, replay),
   ).toThrow();
+});
+
+test.each(["held", "unpublished"])(
+  "%s blocks new submissions but retains reconciliation",
+  (kind) => {
+    const before = meetingUpdateDeliverySchema.parse({
+      ...planDelivery([patchOperation("patch")], [{ kind: "prepared" }]),
+      policy: kind === "held" ? { kind, reason: "stored_only" } : { kind },
+    });
+    const after = meetingUpdateDeliverySchema.parse({
+      ...before,
+      revision: "held-submit",
+      progress: changedProgress(before, [submittedState]),
+    });
+    expect(() =>
+      assertMeetingUpdateDeliveryTransition(before, after),
+    ).toThrow();
+    const submitted = meetingUpdateDeliverySchema.parse({
+      ...before,
+      progress: changedProgress(before, [submittedState]),
+    });
+    const reconciled = meetingUpdateDeliverySchema.parse({
+      ...submitted,
+      revision: "held-reconciled",
+      progress: {
+        ...changedProgress(submitted, [verifiedState()]),
+        kind: "reconciling",
+      },
+    });
+    expect(() =>
+      assertMeetingUpdateDeliveryTransition(submitted, reconciled),
+    ).not.toThrow();
+  },
+);
+
+test.each([
+  ["registration is prepared", "register", { kind: "prepared" }, false],
+  ["registration is rejected", "register", rejectedState, false],
+  ["earlier write is submitted", "patch", submittedState, false],
+  [
+    "earlier write is uncertain",
+    "patch",
+    {
+      ...submittedState,
+      kind: "uncertain",
+      reason: "provider_outcome_unknown",
+    },
+    false,
+  ],
+  ["both writes are admitted", "patch", { kind: "prepared" }, true],
+  ["predecessor settles in same transition", "register", submittedState, true],
+])("ordered admission rejects %s", (_name, first, prior, advance) => {
+  const operations =
+    first === "register"
+      ? [registerOperation(), deleteOperation]
+      : [patchOperation("patch-a"), patchOperation("patch-b")];
+  const before = planDelivery(operations, [prior, { kind: "prepared" }]);
+  const nextFirst = advance
+    ? first === "register"
+      ? verifiedState()
+      : submittedState
+    : prior;
+  expect(() => {
+    const after = meetingUpdateDeliverySchema.parse({
+      ...before,
+      revision: "out-of-order",
+      progress: changedProgress(before, [nextFirst, submittedState]),
+    });
+    assertMeetingUpdateDeliveryTransition(before, after);
+  }).toThrow();
+});
+
+test("registration and cleanup advance one verified predecessor at a time", () => {
+  let before = planDelivery(
+    [registerOperation(), deleteOperation],
+    [{ kind: "prepared" }, { kind: "prepared" }],
+  );
+  for (const [index, submissions] of [
+    [submittedState, { kind: "prepared" }],
+    [verifiedState(), { kind: "prepared" }],
+    [verifiedState(), submittedState],
+    [verifiedState(), verifiedState()],
+  ].entries()) {
+    const after = meetingUpdateDeliverySchema.parse({
+      ...before,
+      revision: "sequential-" + index,
+      progress: changedProgress(before, submissions),
+    });
+    expect(() =>
+      assertMeetingUpdateDeliveryTransition(before, after),
+    ).not.toThrow();
+    before = after;
+  }
+});
+
+test("reused operation IDs cannot release an older candidate with another message ID", () => {
+  const oldId = "999999999999999994";
+  const newId = "999999999999999995";
+  const origin = planDelivery([postOperation], [verifiedState(oldId)]);
+  const oldCandidate = {
+    operationId: "post-notes",
+    channelId: pointers.notesChannelId,
+    messageId: oldId,
+    fingerprint: "b".repeat(64),
+  };
+  const retained = meetingUpdateDeliverySchema.parse({
+    ...origin,
+    revision: "retired-origin",
+    createdCandidates: [oldCandidate],
+    progress: { kind: "pending", nextCheckAt: now },
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(origin, retained),
+  ).not.toThrow();
+  const newer = meetingUpdateDeliverySchema.parse({
+    ...planDelivery(
+      [postOperation, registerOperation(true)],
+      [verifiedState(newId), verifiedState()],
+    ),
+    createdCandidates: retained.createdCandidates,
+  });
+  const cleared = meetingUpdateDeliverySchema.parse({
+    ...newer,
+    revision: "wrong-candidate-cleared",
+    createdCandidates: [],
+    progress: { kind: "pending", nextCheckAt: now },
+  });
+  expect(() => assertMeetingUpdateDeliveryTransition(newer, cleared)).toThrow();
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(
+      newer,
+      meetingUpdateDeliverySchema.parse({
+        ...cleared,
+        createdCandidates: [oldCandidate],
+      }),
+    ),
+  ).not.toThrow();
+});
+
+test.each(["registration", "cleanup"])(
+  "exact candidate %s permits retirement",
+  (mode) => {
+    const candidate = {
+      operationId: "post-notes",
+      channelId: pointers.notesChannelId,
+      messageId: pointers.notesMessageIds[0],
+      fingerprint: "b".repeat(64),
+    };
+    const before = meetingUpdateDeliverySchema.parse({
+      ...planDelivery(
+        mode === "registration"
+          ? [postOperation, registerOperation(true)]
+          : [deleteOperation],
+        mode === "registration"
+          ? [verifiedState(candidate.messageId), verifiedState()]
+          : [verifiedState()],
+      ),
+      createdCandidates: [candidate],
+    });
+    const after = meetingUpdateDeliverySchema.parse({
+      ...before,
+      revision: "exact-candidate-retired",
+      createdCandidates: [],
+      progress: { kind: "pending", nextCheckAt: now },
+    });
+    expect(() =>
+      assertMeetingUpdateDeliveryTransition(before, after),
+    ).not.toThrow();
+  },
+);
+
+test("retry count survives claim and reconciliation before the next failure", () => {
+  const retrying = meetingUpdateDeliverySchema.parse({
+    ...pending(),
+    attempts: 5,
+    progress: {
+      kind: "retrying",
+      nextCheckAt: now + 100,
+      reason: "rate_limited",
+    },
+  });
+  const claimed = meetingUpdateDeliverySchema.parse({
+    ...retrying,
+    revision: "retry-claimed",
+    progress: planDelivery([patchOperation("patch")], [{ kind: "prepared" }])
+      .progress,
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(retrying, claimed),
+  ).not.toThrow();
+  const executing = meetingUpdateDeliverySchema.parse({
+    ...claimed,
+    revision: "retry-submitted",
+    progress: changedProgress(claimed, [submittedState]),
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(claimed, executing),
+  ).not.toThrow();
+  const { nextCheckAt, ...unsettled } = changedProgress(executing, [
+    submittedState,
+  ]);
+  void nextCheckAt;
+  const uncertain = meetingUpdateDeliverySchema.parse({
+    ...executing,
+    revision: "retry-uncertain",
+    progress: {
+      ...unsettled,
+      kind: "uncertain",
+      reason: "provider_outcome_unknown",
+    },
+  });
+  expect(uncertain.attempts).toBe(5);
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(executing, uncertain),
+  ).not.toThrow();
+  const reconciling = meetingUpdateDeliverySchema.parse({
+    ...uncertain,
+    revision: "retry-reconcile",
+    progress: {
+      ...changedProgress(executing, [rejectedState]),
+      kind: "reconciling",
+    },
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(uncertain, reconciling),
+  ).not.toThrow();
+  const retried = meetingUpdateDeliverySchema.parse({
+    ...reconciling,
+    revision: "retry-six",
+    attempts: reconciling.attempts + 1,
+    progress: {
+      kind: "retrying",
+      nextCheckAt: rejectedState.retryAt,
+      reason: "rate_limited",
+    },
+  });
+  expect(retried.attempts).toBe(6);
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(reconciling, retried),
+  ).not.toThrow();
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(
+      executing,
+      meetingUpdateDeliverySchema.parse({
+        ...reconciling,
+        attempts: 0,
+      }),
+    ),
+  ).toThrow();
+  const superseded = requestMeetingUpdateDelivery({
+    history: { ...history(), contentRevision: 1, updateDelivery: retried },
+    mutation: notes,
+    revision: "new-retry-sequence",
+    now,
+    policy: { kind: "active" },
+  });
+  expect(superseded.attempts).toBe(0);
+  expect(meetingUpdateDeliveryNextCheck(superseded)).toBe(
+    rejectedState.retryAt,
+  );
+});
+
+test("verified completion records durable last success through a later save", () => {
+  const before = meetingUpdateDeliverySchema.parse({
+    ...planDelivery([patchOperation("patch")], [verifiedState()]),
+    attempts: 5,
+  });
+  const completed = meetingUpdateDeliverySchema.parse({
+    ...before,
+    revision: "known-success",
+    attempts: 0,
+    parts: { ...before.parts, notesBody: { desired: 1, acknowledged: 1 } },
+    lastSuccess: { at: now + 2, contentRevision: 1 },
+    progress: { kind: "synced", syncedAt: now + 2 },
+  });
+  expect(() =>
+    assertMeetingUpdateDeliveryTransition(before, completed),
+  ).not.toThrow();
+  const pendingAgain = requestMeetingUpdateDelivery({
+    history: { ...history(), contentRevision: 1, updateDelivery: completed },
+    mutation: notes,
+    revision: "new-save-after-success",
+    now: now + 3,
+    policy: { kind: "active" },
+  });
+  expect(pendingAgain.lastSuccess).toEqual(completed.lastSuccess);
+  expect(pendingAgain.parts.notesBody).toEqual({ desired: 2, acknowledged: 1 });
+  for (const lastSuccess of [
+    null,
+    { at: now + 99, contentRevision: 2 },
+    { at: now, contentRevision: 1 },
+  ]) {
+    expect(() =>
+      assertMeetingUpdateDeliveryTransition(
+        pendingAgain,
+        meetingUpdateDeliverySchema.parse({
+          ...pendingAgain,
+          revision: "forged-last-success",
+          lastSuccess,
+        }),
+      ),
+    ).toThrow();
+  }
+});
+
+test("created registration slots require their POST before registration", () => {
+  expect(
+    preparedMeetingUpdateAttemptSchema.safeParse({
+      ...attempt(),
+      operations: [registerOperation(true), postOperation],
+    }).success,
+  ).toBe(false);
 });
