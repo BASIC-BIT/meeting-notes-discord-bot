@@ -9,7 +9,9 @@ import {
   verifiedState,
   now,
 } from "../types/meetingUpdateDelivery.fixture";
-export function deliveryRow(delivery: MeetingUpdateDelivery): MeetingHistory {
+export function deliveryRow(
+  delivery: MeetingUpdateDelivery,
+): MeetingHistory & { updateDelivery: MeetingUpdateDelivery } {
   return {
     ...history(),
     ...pointers,

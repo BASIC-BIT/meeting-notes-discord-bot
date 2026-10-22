@@ -1,4 +1,7 @@
-import { paginationPlan } from "../repositories/meetingUpdateDeliveryFixtures";
+import {
+  paginationPlan,
+  deliveryRow,
+} from "../repositories/meetingUpdateDeliveryFixtures";
 import { randomUUID } from "node:crypto";
 import {
   CreateTableCommand,
@@ -16,6 +19,7 @@ import { createDynamoMeetingUpdateDeliveryRepository } from "../../src/repositor
 import type { MeetingHistory } from "../../src/types/db";
 import {
   deliveryContract,
+  numericHeavyWrite,
   authority,
   write,
 } from "../repositories/meetingUpdateDeliveryContract";
@@ -431,4 +435,219 @@ it("CAS-checks a no-change pointer registration against a save racing after its 
   } finally {
     spy.mockRestore();
   }
+});
+
+async function observeServiceWriteFailure<T>(
+  operation: () => Promise<T>,
+  error: Error,
+  committed: boolean,
+  readFailure?: Error,
+) {
+  const trace = { strongReads: 0, writes: 0 };
+  const send = client.send.bind(client);
+  const spy = jest
+    .spyOn(client, "send")
+    .mockImplementation(async (command, options) => {
+      if (command instanceof GetItemCommand && command.input.ConsistentRead) {
+        trace.strongReads++;
+        if (trace.strongReads > 1 && readFailure) throw readFailure;
+      }
+      const writing =
+        command instanceof UpdateItemCommand ||
+        command instanceof TransactWriteItemsCommand;
+      if (writing) {
+        trace.writes++;
+        if (!committed) throw error;
+      }
+      const result = await send(command, options);
+      if (writing) throw error;
+      return result;
+    });
+  try {
+    const outcome = await operation().then(
+      (value) => ({ kind: "returned" as const, value }),
+      (failure: unknown) => ({ kind: "threw" as const, error: failure }),
+    );
+    return { ...trace, outcome };
+  } finally {
+    spy.mockRestore();
+  }
+}
+const serviceCases = [
+  ["InternalServerError", true],
+  ["InternalServerError", false],
+  ["DynamoDBServiceException", true],
+  ["DynamoDBServiceException", false],
+] as const;
+it.each(serviceCases)(
+  "strongly resolves canonical %s HTTP 500 with committed=%s",
+  async (name, committed) => {
+    await put(tables.meetingHistory, history());
+    const error = Object.assign(new Error("Synthetic Dynamo service failure"), {
+      name,
+      $metadata: { httpStatusCode: 500 },
+    });
+    const observed = await observeServiceWriteFailure(
+      () => repository.updateContentAndDelivery(write()),
+      error,
+      committed,
+    );
+    if (committed) {
+      expect(observed.outcome).toMatchObject({
+        kind: "returned",
+        value: { kind: "committed" },
+      });
+      expect(await read()).toMatchObject({
+        notesVersion: 2,
+        contentRevision: 1,
+        contentMutation: { id: "save-1" },
+      });
+    } else {
+      expect(observed.outcome).toEqual({ kind: "threw", error });
+      expect(await read()).toEqual(history());
+    }
+    expect(observed.strongReads).toBe(2);
+    expect(observed.writes).toBe(1);
+  },
+);
+function deliveryServiceCase(kind: "completion" | "pointers") {
+  const delivery =
+    kind === "completion" ? running("verified") : paginationPlan("grow");
+  const row = deliveryRow(delivery);
+  const nextPointers = {
+    ...pointers,
+    notesMessageIds: [...pointers.notesMessageIds, "created-message"],
+  };
+  const operation =
+    kind === "completion"
+      ? () =>
+          repository.transition({
+            key,
+            expectedDeliveryRevision: delivery.revision,
+            attemptId: "attempt-1",
+            ownerInstanceId: "synthetic-owner",
+            change: {
+              kind: "complete",
+              revision: "service-complete",
+              attemptId: "attempt-1",
+              completedAt: now,
+            },
+          })
+      : () =>
+          repository.registerNotesPointers({
+            key,
+            expectedContentRevision: 1,
+            expectedDeliveryRevision: delivery.revision,
+            attemptId: "attempt-1",
+            expectedPointers: pointers,
+            nextPointers,
+          });
+  return {
+    row,
+    operation,
+    expected:
+      kind === "completion"
+        ? {
+            updateDelivery: {
+              revision: "service-complete",
+              progress: { kind: "synced" },
+            },
+          }
+        : nextPointers,
+  };
+}
+it.each([
+  ["completion", true],
+  ["completion", false],
+  ["pointers", true],
+  ["pointers", false],
+] as const)(
+  "strongly resolves %s HTTP 500 with committed=%s",
+  async (kind, committed) => {
+    const fixture = deliveryServiceCase(kind);
+    await put(tables.meetingHistory, fixture.row);
+    const error = Object.assign(new Error("Synthetic Dynamo service failure"), {
+      name: "InternalServerError",
+      $metadata: { httpStatusCode: 500 },
+    });
+    const observed = await observeServiceWriteFailure(
+      fixture.operation,
+      error,
+      committed,
+    );
+    if (committed) {
+      expect(observed.outcome).toEqual({ kind: "returned", value: "applied" });
+      expect(await read()).toMatchObject(fixture.expected);
+    } else {
+      expect(observed.outcome).toEqual({ kind: "threw", error });
+      expect(await read()).toEqual(fixture.row);
+    }
+    expect(observed.strongReads).toBe(2);
+    expect(observed.writes).toBe(1);
+  },
+);
+it.each(["ValidationException", "ResourceNotFoundException"])(
+  "propagates definite %s without ambiguity readback",
+  async (name) => {
+    await put(tables.meetingHistory, history());
+    const error = Object.assign(
+      new Error("Synthetic definite Dynamo failure"),
+      { name, $metadata: { httpStatusCode: 400 } },
+    );
+    const observed = await observeServiceWriteFailure(
+      () => repository.updateContentAndDelivery(write()),
+      error,
+      false,
+    );
+    expect(observed.outcome).toEqual({ kind: "threw", error });
+    expect(observed.strongReads).toBe(1);
+    expect(observed.writes).toBe(1);
+    expect(await read()).toEqual(history());
+  },
+);
+it.each(["N", "NS"] as const)(
+  "rejects numeric-heavy %s state before submitting any Dynamo write",
+  async (kind) => {
+    await put(tables.meetingHistory, history());
+    const send = client.send.bind(client);
+    let writes = 0;
+    const spy = jest
+      .spyOn(client, "send")
+      .mockImplementation((command, options) => {
+        if (
+          command instanceof UpdateItemCommand ||
+          command instanceof TransactWriteItemsCommand
+        )
+          writes++;
+        return send(command, options);
+      });
+    try {
+      await expect(
+        repository.updateContentAndDelivery(numericHeavyWrite(kind)),
+      ).rejects.toThrow("Meeting item size exceeds DynamoDB limit");
+      expect(writes).toBe(0);
+      expect(await read()).toEqual(history());
+    } finally {
+      spy.mockRestore();
+    }
+  },
+);
+
+it("preserves the original ambiguous HTTP 500 when its strong readback fails", async () => {
+  await put(tables.meetingHistory, history());
+  const error = Object.assign(new Error("Synthetic unknown write"), {
+    name: "InternalServerError",
+    $metadata: { httpStatusCode: 500 },
+  });
+  const readFailure = new Error("Synthetic unavailable strong read");
+  const observed = await observeServiceWriteFailure(
+    () => repository.updateContentAndDelivery(write()),
+    error,
+    true,
+    readFailure,
+  );
+  expect(observed.outcome).toEqual({ kind: "threw", error });
+  expect(observed.strongReads).toBe(2);
+  expect(observed.writes).toBe(1);
+  expect(await read()).toMatchObject({ contentRevision: 1, notesVersion: 2 });
 });

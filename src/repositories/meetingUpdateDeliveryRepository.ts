@@ -420,11 +420,19 @@ const ackError = z.object({
     "RequestTimeoutException",
     "NetworkingError",
     "AbortError",
+    "InternalServerError",
   ]),
   message: z.string().optional(),
 });
+const ambiguousServiceWrite = z.object({
+  $metadata: z.object({ httpStatusCode: z.literal(500) }),
+});
 function mayHaveCommitted(error: unknown): boolean {
-  return ackError.safeParse(error).success;
+  // DynamoDB HTTP 500 writes may have committed despite the service error.
+  return (
+    ackError.safeParse(error).success ||
+    ambiguousServiceWrite.safeParse(error).success
+  );
 }
 export function createDynamoMeetingUpdateDeliveryRepository(
   client: DynamoDBClient,
@@ -448,6 +456,14 @@ export function createDynamoMeetingUpdateDeliveryRepository(
     )
       throw new Error("Stored meeting identity mismatch");
     return history;
+  }
+  async function readAfterWriteError(key: MeetingUpdateKey, error: unknown) {
+    try {
+      return await getStrong(key);
+    } catch (readError) {
+      if (mayHaveCommitted(error)) throw error;
+      throw readError;
+    }
   }
   async function persist(
     before: MeetingHistory,
@@ -495,10 +511,13 @@ export function createDynamoMeetingUpdateDeliveryRepository(
     } catch (error) {
       const kind = classifyDeploymentTransactionError(error);
       if (kind !== "stale" && !mayHaveCommitted(error)) throw error;
-      const actual = await getStrong({
-        guildId: row.guildId,
-        channelId_timestamp: row.channelId_timestamp,
-      });
+      const actual = await readAfterWriteError(
+        {
+          guildId: row.guildId,
+          channelId_timestamp: row.channelId_timestamp,
+        },
+        error,
+      );
       if (
         actual &&
         isDeepStrictEqual(actual.updateDelivery, next.updateDelivery) &&
@@ -523,7 +542,7 @@ export function createDynamoMeetingUpdateDeliveryRepository(
       } catch (error) {
         const kind = classifyDeploymentTransactionError(error);
         if (kind !== "stale" && !mayHaveCommitted(error)) throw error;
-        const actual = await getStrong(input.key);
+        const actual = await readAfterWriteError(input.key, error);
         if (isExactContentMutation(actual, input))
           return { kind: "committed", history: actual };
         if (kind === "stale") return { kind: "conflict" };

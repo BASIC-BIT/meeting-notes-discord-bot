@@ -52,6 +52,17 @@ export function write(
     at: now,
   };
 }
+
+export function numericHeavyWrite(kind: "N" | "NS"): MeetingContentWrite {
+  const input = write();
+  input.mutation = {
+    kind: "notes",
+    notes: "n".repeat(50000),
+    notesDelta: Array(150000).fill(kind === "N" ? 1 : new Set([1])),
+  };
+  return input;
+}
+
 export interface Harness {
   repository: MeetingUpdateDeliveryRepository;
   seed(row: MeetingHistory): Promise<void>;
@@ -153,6 +164,7 @@ export function deliveryContract(make: () => Harness) {
   });
   it("preserves correction fields and suggestion provenance while advancing notes once", async () => {
     const input = write();
+    if (notes.kind !== "notes") throw new Error("Expected notes fixture");
     input.mutation = {
       kind: "correction",
       changes: [
@@ -777,4 +789,14 @@ export function deliveryContract(make: () => Harness) {
         .sort(),
     ).toEqual(["contract-due-0", "contract-due-1", "contract-due-2"]);
   });
+
+  it.each(["N", "NS"] as const)(
+    "rejects numeric-heavy %s items before persistence",
+    async (kind) => {
+      await expect(
+        h.repository.updateContentAndDelivery(numericHeavyWrite(kind)),
+      ).rejects.toThrow("Meeting item size exceeds DynamoDB limit");
+      expect(await h.read()).toEqual(history());
+    },
+  );
 }

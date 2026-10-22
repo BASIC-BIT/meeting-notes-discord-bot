@@ -26,6 +26,7 @@ import {
 import { trimNotesForHistory } from "../utils/notesHistory";
 
 export const MAX_MEETING_ITEM_BYTES = 400 * 1024;
+const NUMBER_STORAGE_OVERHEAD_BYTES = 2;
 const seconds = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const meetingUpdateKeySchema = z
   .object({
@@ -292,9 +293,13 @@ function completeCapturedDelivery(
   };
 }
 
+function numberBytes(value: string): number {
+  // Text length plus two bytes bounds packed digits, exponent and sign overhead.
+  return Buffer.byteLength(value) + NUMBER_STORAGE_OVERHEAD_BYTES;
+}
 function attributeBytes(value: AttributeValue): number {
   if (value.S !== undefined) return Buffer.byteLength(value.S);
-  if (value.N !== undefined) return Buffer.byteLength(value.N);
+  if (value.N !== undefined) return numberBytes(value.N);
   if (value.B !== undefined) return value.B.byteLength;
   if (value.M !== undefined)
     return (
@@ -310,14 +315,13 @@ function attributeBytes(value: AttributeValue): number {
   if (value.SS !== undefined)
     return value.SS.reduce((sum, item) => sum + Buffer.byteLength(item), 0);
   if (value.NS !== undefined)
-    return value.NS.reduce((sum, item) => sum + Buffer.byteLength(item), 0);
+    return value.NS.reduce((sum, item) => sum + numberBytes(item), 0);
   if (value.BS !== undefined)
     return value.BS.reduce((sum, item) => sum + item.byteLength, 0);
   return 1;
 }
 export function assertMeetingItemSize(history: MeetingHistory): void {
   const item = marshall(history, { removeUndefinedValues: true });
-  // Number text is an upper bound on Dynamo's packed numeric representation.
   const size = Object.entries(item).reduce(
     (sum, [key, value]) => sum + Buffer.byteLength(key) + attributeBytes(value),
     0,
