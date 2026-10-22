@@ -18,6 +18,22 @@ const capture = {
   detectedAt: "2026-01-01T01:00:00Z",
 } as const;
 
+function refreshWarning(
+  input: ReturnType<typeof notesWarningFixture>,
+  revision: number,
+) {
+  input.history.contentRevision = revision;
+  input.history.updateDelivery.parts.notesWarning = {
+    desired: revision,
+    acknowledged: revision - 1,
+  };
+  const result = planMeetingUpdate(input);
+  expect(result).toMatchObject({ kind: "ready" });
+  if (result.kind !== "ready")
+    throw new Error("Expected ready warning refresh");
+  return result;
+}
+
 it("renames real footerless batched initial pages twice with exact surviving surfaces", () => {
   const body = "x".repeat(4500);
   const input = titleOnlyFixture("Old name", body);
@@ -106,14 +122,7 @@ it.each(["already-partial", "becomes-partial"])(
     expect(expected).toContain("Saved recording coverage is unknown.");
     expect(expected).toContain("The exact recording end time is unknown.");
     for (let refresh = 1; refresh <= 2; refresh++) {
-      input.history.contentRevision = refresh;
-      input.history.updateDelivery.parts.notesWarning = {
-        desired: refresh,
-        acknowledged: refresh - 1,
-      };
-      const result = planMeetingUpdate(input);
-      expect(result).toMatchObject({ kind: "ready" });
-      if (result.kind !== "ready") return;
+      const result = refreshWarning(input, refresh);
       const after = result.targets[0].after;
       expect(after.embeds[0]).toMatchObject({
         title,
@@ -128,3 +137,30 @@ it.each(["already-partial", "becomes-partial"])(
     }
   },
 );
+
+it("preserves a literal full interruption paragraph in non-interrupted partial notes through repeated warning refreshes", () => {
+  const literal =
+    "Partial notes: recording was interrupted. These notes cover only the saved recording. Saved recording coverage is unknown. The exact recording end time is unknown. Some audio could not be transcribed. These notes may be incomplete.";
+  const body = literal + "\n\nUser-authored notes after the literal paragraph.";
+  const input = notesWarningFixture(body);
+  input.history.notes = body;
+  input.history.status = "complete";
+  delete input.history.capture;
+  input.history.meetingName = "Literal notes";
+  const original = buildMeetingNotesEmbeds({
+    ...input.history,
+    notesBody: body,
+    footerText: "v1",
+    color: 456,
+  })[0].toJSON();
+  expect(original.description).toBe(body);
+  expect(original.footer?.text).toBe("v1 • " + PARTIAL_TRANSCRIPT_NOTICE);
+  input.messages[0].embeds = [{ ...original }];
+  for (let refresh = 1; refresh <= 2; refresh++) {
+    const result = refreshWarning(input, refresh);
+    expect(result.targets[0].after.embeds[0]).toEqual(original);
+    expect(result.targets[0].after.embeds[0].description).toBe(body);
+    expect(result.attempt.operations).toEqual([]);
+    input.messages[0] = result.targets[0].after;
+  }
+});

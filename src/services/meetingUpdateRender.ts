@@ -123,7 +123,7 @@ export function renderNotesUpdate(
         ...slot.footer,
         text: footerNotice ? `${prefix} • ${footerNotice}` : prefix,
       };
-      const body = notesBodyWithoutManagedNotice(slot);
+      const body = notesBodyWithoutManagedNotice(slot, captureNotice);
       next.description = captureNotice ? `${captureNotice}\n\n${body}` : body;
     }
     return next;
@@ -134,13 +134,17 @@ function footerHasNotice(slot: EditableEmbed, notice: string): boolean {
   const footer = slot.footer?.text ?? "";
   return footer === notice || footer.endsWith(" • " + notice);
 }
-function notesBodyWithoutManagedNotice(slot: EditableEmbed): string {
+function notesBodyWithoutManagedNotice(
+  slot: EditableEmbed,
+  capturePrefix: string | undefined,
+): string {
   const description = slot.description ?? "";
   const prefix = description.split("\n\n", 1)[0];
   const provenCapturePrefix =
     interruptedNotice.test(prefix) &&
     (footerHasNotice(slot, prefix) ||
-      (prefix.endsWith(" " + PARTIAL_TRANSCRIPT_NOTICE) &&
+      (prefix === capturePrefix &&
+        prefix.endsWith(" " + PARTIAL_TRANSCRIPT_NOTICE) &&
         footerHasNotice(slot, PARTIAL_TRANSCRIPT_NOTICE)));
   return provenCapturePrefix
     ? description.slice(prefix.length + 2)
