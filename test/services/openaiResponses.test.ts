@@ -13,10 +13,7 @@ const truncated = (text: string) => ({
   output: [],
 });
 
-async function loadResponse(
-  response: object | object[],
-  model = "gpt-6.1-sol",
-) {
+async function loadResponse(response: object | object[], model = "gpt-6.1-sol") {
   jest.resetModules();
   const responses = Array.isArray(response) ? response : [response];
   let callIndex = 0;
