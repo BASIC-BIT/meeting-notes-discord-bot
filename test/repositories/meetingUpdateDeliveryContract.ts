@@ -1,3 +1,4 @@
+import { planningContract } from "./meetingUpdatePlanningContract";
 import { deliveryRow, paginationPlan } from "./meetingUpdateDeliveryFixtures";
 import type { MeetingHistory } from "../../src/types/db";
 import type {
@@ -71,6 +72,7 @@ export interface Harness {
 }
 export function deliveryContract(make: () => Harness) {
   let h: Harness;
+  planningContract(() => h, { authority, write });
   const claimCurrent = (delivery: ReturnType<typeof pending>) =>
     h.repository.claim({
       key,

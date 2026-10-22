@@ -23,6 +23,7 @@ import {
   type NotesPointers,
   type MeetingUpdateMutation,
 } from "../types/meetingUpdateDelivery";
+import { retainCleanupCandidates } from "../types/meetingUpdateCleanup";
 import { trimNotesForHistory } from "../utils/notesHistory";
 
 export const MAX_MEETING_ITEM_BYTES = 400 * 1024;
@@ -256,6 +257,10 @@ export function applyDeliveryChange(
       candidates.findIndex((other) => isDeepStrictEqual(candidate, other)) ===
         index,
   );
+  next.cleanupCandidates =
+    "attempt" in next.progress
+      ? before.cleanupCandidates
+      : retainCleanupCandidates(before);
   assertMeetingUpdateDeliveryTransition(before, next);
   return meetingUpdateDeliverySchema.parse(next);
 }

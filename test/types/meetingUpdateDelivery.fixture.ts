@@ -188,3 +188,18 @@ export function changedProgress(
     })),
   };
 }
+
+export function observedAttemptInput() {
+  return {
+    ...attempt(),
+    operations: [],
+    observations: [
+      {
+        channelId: pointers.notesChannelId,
+        messageId: pointers.notesMessageIds[0],
+        fingerprint: "b".repeat(64),
+        observedAt: now,
+      },
+    ],
+  };
+}

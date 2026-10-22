@@ -1,6 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { MeetingHistory } from "./db";
+import {
+  meetingUpdateCleanupCandidateSchema,
+  MAX_MEETING_UPDATE_CLEANUP_CANDIDATES,
+  assertCleanupCandidates,
+  cleanupCapacityExceeded,
+} from "./meetingUpdateCleanup";
 
 export const MEETING_UPDATE_DELIVERY_QUEUE = "meeting-update:v1";
 export const MEETING_UPDATE_DELIVERY_DUE_INDEX = "UpdateDeliveryDueIndex";
@@ -88,6 +94,7 @@ export type MeetingUpdateMutation = z.infer<typeof meetingUpdateMutationSchema>;
 
 export function requestedPartsForMutation(
   mutation: MeetingUpdateMutation,
+  history?: Pick<MeetingHistory, "meetingName" | "summaryLabel">,
 ): PresentationPart[] {
   const parsed = meetingUpdateMutationSchema.parse(mutation);
   switch (parsed.kind) {
@@ -103,8 +110,15 @@ export function requestedPartsForMutation(
           : ["summaryWarning"];
     case "correction":
       return presentationPartSchema.options.filter((part) =>
-        parsed.changes.some((change) =>
-          partsForContentChange(change).includes(part),
+        parsed.changes.some(
+          (change) =>
+            partsForContentChange(change).includes(part) ||
+            (part === "summaryTitle" &&
+              change.kind === "summaryLabel" &&
+              history !== undefined &&
+              !history.meetingName?.trim() &&
+              (history.summaryLabel?.trim() || "Meeting Summary") !==
+                (change.value.trim() || "Meeting Summary")),
         ),
       );
     default: {
@@ -169,10 +183,39 @@ export const preparedMeetingUpdateAttemptSchema = z
       .partialRecord(presentationPartSchema, revisionNumber.positive())
       .refine((parts) => Object.keys(parts).length > 0),
     expectedPointers: notesPointersSchema,
-    operations: z.array(meetingUpdateProviderOperationSchema).min(1).max(300),
+    operations: z.array(meetingUpdateProviderOperationSchema).max(300),
+    observations: z
+      .array(
+        z
+          .object({
+            channelId: id,
+            messageId: id,
+            fingerprint,
+            observedAt: seconds,
+          })
+          .strict(),
+      )
+      .max(400)
+      .default([]),
   })
   .strict()
   .superRefine((attempt, context) => {
+    if (attempt.operations.length === 0 && attempt.observations.length === 0)
+      context.addIssue({
+        code: "custom",
+        message: "A no-mutation attempt requires exact target observations",
+      });
+    if (
+      new Set(
+        attempt.observations.map(
+          (target) => target.channelId + "/" + target.messageId,
+        ),
+      ).size !== attempt.observations.length
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Observation identities must be unique",
+      });
     if (
       Object.values(attempt.capturedParts).some(
         (revision) => revision > attempt.contentRevision,
@@ -259,7 +302,7 @@ const attemptProgress = z.object({
   attempt: preparedMeetingUpdateAttemptSchema,
   claim: z.object({ ownerInstanceId: id, leaseExpiresAt: seconds }).strict(),
   nextCheckAt: seconds,
-  operations: z.array(operationProgress).min(1).max(300),
+  operations: z.array(operationProgress).max(300),
 });
 const pendingProgress = z
   .object({ kind: z.literal("pending"), nextCheckAt: seconds })
@@ -341,6 +384,10 @@ export const meetingUpdateDeliverySchema = z
       .array(meetingUpdateCreatedCandidateSchema)
       .max(300)
       .default([]),
+    cleanupCandidates: z
+      .array(meetingUpdateCleanupCandidateSchema)
+      .max(MAX_MEETING_UPDATE_CLEANUP_CANDIDATES)
+      .default([]),
     parts: partWatermarksSchema,
     progress: meetingUpdateProgressSchema,
   })
@@ -356,6 +403,14 @@ export const meetingUpdateDeliverySchema = z
       context.addIssue({
         code: "custom",
         message: "Synced delivery has pending parts",
+      });
+    if (
+      delivery.progress.kind === "synced" &&
+      (delivery.createdCandidates.length || delivery.cleanupCandidates.length)
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Synced delivery cannot retain undisposed targets",
       });
     if (delivery.progress.kind === "retrying" && delivery.attempts === 0)
       context.addIssue({
@@ -373,6 +428,12 @@ export const meetingUpdateDeliverySchema = z
       });
     if (hasAttempt(delivery.progress))
       validateAttemptProgress(delivery.progress, delivery.parts, context);
+    if (cleanupCapacityExceeded(delivery))
+      context.addIssue({
+        code: "custom",
+        message:
+          "Cleanup candidate capacity must be reserved before registration",
+      });
   });
 export type MeetingUpdateDelivery = z.infer<typeof meetingUpdateDeliverySchema>;
 
@@ -473,7 +534,11 @@ export function readMeetingUpdateRevisions(
 export function requestMeetingUpdateDelivery(input: {
   history: Pick<
     MeetingHistory,
-    "contentRevision" | "notesVersion" | "updateDelivery"
+    | "contentRevision"
+    | "notesVersion"
+    | "updateDelivery"
+    | "meetingName"
+    | "summaryLabel"
   >;
   mutation: MeetingUpdateMutation;
   revision: string;
@@ -496,13 +561,14 @@ export function requestMeetingUpdateDelivery(input: {
           ]),
         ),
       );
-  for (const part of requestedPartsForMutation(input.mutation))
+  for (const part of requestedPartsForMutation(input.mutation, input.history))
     parts[part].desired = contentRevision;
   const next = meetingUpdateDeliverySchema.parse({
     revision: input.revision,
     policy: previous?.policy ?? input.policy,
     parts,
     createdCandidates: previous?.createdCandidates,
+    cleanupCandidates: previous?.cleanupCandidates,
     lastSuccess: previous?.lastSuccess,
     attempts: previous && hasAttempt(previous.progress) ? previous.attempts : 0,
     progress: requestedProgress(previous?.progress, input.now),
@@ -541,6 +607,7 @@ export function assertMeetingUpdateDeliveryTransition(
     throw new Error("Delivery transitions require a fresh revision");
   assertWatermarks(before, after);
   assertCreatedCandidates(before, after);
+  assertCleanupCandidates(before, after);
   assertSubmissionAdmission(before, after);
   assertRetryHistory(before, after);
   assertLastSuccess(before, after);
@@ -840,7 +907,14 @@ function assertLastSuccess(
   if (
     !success ||
     success.contentRevision !== before.progress.attempt.contentRevision ||
-    success.at < Math.max(...verifiedAt) ||
+    success.at <
+      Math.max(
+        0,
+        ...verifiedAt,
+        ...before.progress.attempt.observations.map(
+          (target) => target.observedAt,
+        ),
+      ) ||
     (before.lastSuccess &&
       (success.at < before.lastSuccess.at ||
         success.contentRevision < before.lastSuccess.contentRevision))
