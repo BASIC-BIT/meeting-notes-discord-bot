@@ -451,9 +451,11 @@ describe("personalMediaUploadProcessingService", () => {
         model: "gpt-6.1-sol",
       });
 
+      const controller = new AbortController();
       await processPersonalMediaUpload(
         { ...jobForOrigin(), attempts: 3 },
         "instance-1",
+        controller.signal,
       );
 
       expect(mockCreateResponse).toHaveBeenCalledWith(
@@ -462,7 +464,7 @@ describe("personalMediaUploadProcessingService", () => {
           input: [{ role: "user", content: "notes" }],
           prompt_cache_options: { mode: "explicit", ttl: "30m" },
         }),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        { signal: controller.signal },
       );
     });
 
