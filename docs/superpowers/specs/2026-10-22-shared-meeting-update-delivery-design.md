@@ -1,6 +1,6 @@
 # Shared meeting updates and durable Discord delivery
 
-Status: Proposed for review
+Status: Proposed for review; independent source/design review passed
 Date: 2026-10-22
 Repository baseline: `bb7b2e89b0b0be256efdd27de744f250334ea67e`
 
@@ -56,6 +56,14 @@ renames, and explicit presentation refresh or recovery delivery requests. Actors
 and permissions remain at the existing API, command and operator boundaries.
 A background worker receives previously authorized work, not a new public
 permission model.
+
+Move the existing best-effort Notion hook to exactly one successful notes-update
+path in the shared action and remove the old service hook in the same changeset.
+Call it only after canonical content and Discord intent are acknowledged. Retain
+its canonical re-read, opt-in checks, interruption ownership and
+\`assertNotionOutcomeKnown\` handling. CAS failures, name-only updates and Discord
+worker retries do not invoke it. This preserves current behavior without a
+second Notion invocation or a claim of durable Notion synchronization.
 
 The action owns canonical content changes, audit/provenance/version updates and
 the atomic durable delivery request. It returns a committed save result plus
@@ -118,7 +126,12 @@ from acknowledging newer work. The final typed model must make contradictory
 claim/submission states unrepresentable.
 
 An ordinary notes-only edit requests notes changes. It does not request summary
-rewrites. A rename requests the managed notes and summary title parts.
+rewrites. A body update includes its version footer, required notice and any
+pagination labels needed to render that body coherently. Likewise, an explicitly
+requested summary body update uses the shared capture-notice renderer. These
+dependencies do not authorize changing an unrelated summary.
+
+A rename requests the managed notes and summary title parts.
 Corrections request any notes, summaries or automatic name actually changed by
 the existing correction flow. A warning refresh explicitly requests notice
 changes. An informational difference in an untouched summary never blocks a
@@ -128,7 +141,12 @@ A new save may advance desired work while a delivery attempt is running. It must
 not replace that attempt's identity, submitted markers or uncertainty. Completion
 advances only the captured part revisions under the exact attempt condition.
 The newer desired work remains pending. A failed compare-and-set is re-read,
-never interpreted as successful delivery.
+never interpreted as successful delivery. If a newer revision supersedes a
+settled pagination attempt before pointer registration, retire that attempt
+without losing its created IDs. Carry its known owned candidates into latest
+replanning, reuse or clean them up only under fresh claim/pointer checks, and do
+not leave stale work blocking the newer revision. An unsettled submission
+continues to hold newer work.
 
 Store hashes, IDs and bounded metadata in the intent, not duplicated notes,
 transcripts or Discord message bodies. Validate the DynamoDB item size before a
