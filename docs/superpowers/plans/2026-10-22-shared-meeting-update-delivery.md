@@ -52,7 +52,7 @@ task-interface conflict table. A pending/offline executor is not test evidence.
 
 1. A notes save races with a worker transition: neither may erase newer work or an immutable submitted attempt. Exercise in Tasks 1 and 2.
 2. Rename races with pending body delivery: both title changes and the newer body must eventually remain requested. Exercise in Tasks 1, 3 and 6.
-3. A process dies after POST returns but before pointer registration: created IDs remain discoverable and cannot become duplicate or orphaned pages. Exercise in Tasks 4 and 6.
+3. A process dies after a POST ID is durably recorded but before pointer registration: keep that candidate for safe replanning; a crash before ID persistence instead remains an unknown-POST hold. Exercise in Tasks 4 and 6.
 4. An old repair publisher or initial-delivery owner overlaps adoption: there must be one delivery barrier before any provider write. Exercise in Task 6.
 5. A save succeeds while Discord fails: the user sees saved data plus pending/attention status, and retry does not rerun correction generation or Notion. Exercise in Tasks 6 and 7.
 
@@ -198,7 +198,8 @@ payloads remain local to a prepared execution, not copied into durable history.
   ```ts
   expect(proposedSummary).toEqual(beforeSummary);
   expect(proposedNotes.description).toBe(editedNotes);
-  expect(proposedMessage.components).toEqual(beforeMessage.components);
+  expect(mergedMessage.components).toEqual(beforeMessage.components);
+  expect(outgoingPatch).not.toHaveProperty("components");
   ```
 
 - [ ] Run the tests to establish the expected failure.
@@ -229,7 +230,8 @@ notes-only creation/deletion operations without changing existing callers.
 
 - [ ] Write failing tests using the real planner and state transitions with
   controlled provider boundaries. Cover crash before/after submitted marker,
-  lost marker acknowledgment, definite 429, unknown PATCH/POST, lost completion
+  lost marker acknowledgment, definite 429, a crash after POST response before
+  returned-ID persistence, unknown PATCH/POST, lost completion
   acknowledgment, stale content during a target loop and replayed work.
 - [ ] Add reflow tests for returned new IDs before registration, lost pointer
   acknowledgment, supersession with created candidates, obsolete-ID cleanup
@@ -327,7 +329,7 @@ discriminated `progress` union, rather than duplicated status flags.
   ```ts
   expect(result.kind).toBe("saved");
   expect(await readCanonicalNotes()).toBe(editedNotes);
-  expect(await readDeliveryState()).toMatchObject({ status: "pending" });
+  expect(await readPublicDeliveryStatus()).toMatchObject({ status: "pending" });
   expect(await readRemoteNotes()).toBe(originalRemoteNotes);
   ```
 
