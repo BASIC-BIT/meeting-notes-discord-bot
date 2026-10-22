@@ -184,3 +184,40 @@ Whole-branch review, published exact-head checks, clean mergeability and the pos
 ## First Sandbox bootstrap tooling
 
 For the separately reviewed one-time introduction from an incompatible runtime, see [Sandbox bootstrap tooling](sandbox-bootstrap.md). Normal deployments still use the existing coordinator. The bootstrap and read-only observation commands do not apply infrastructure, stop legacy work, register an image, alter the listener or start a monitor automatically.
+
+## Production introduction workflow status
+
+`production-introduction.yml` is manual and source-staged. It accepts only a phase,
+operation UUID and reviewed manifest hash, defaults to read-only inspection, and
+shares `chronote-deploy-production` concurrency with ordinary deployment. Neither
+workflow cancels an in-progress deployment. Ordinary frontend publication waits
+for the backend; docs remain a separate prerequisite. Backend writes use the scoped
+production OIDC role and an exact account, role and run-session check.
+
+The introduction bind job uses a read-only session and validates the manifest,
+source revision, operation, current run, attempt 1, exact session, expiry and current
+receipt predecessor. It freezes the completed proposal hash in a job output.
+Inspection bodies and the proposal stay in private runner files. Only sanitized
+status and hashes reach logs. No public artifact carries those bodies.
+
+The dependent job reads the private environment envelope and expected hash when it
+starts. It verifies body hash = expected hash = bind output, then rechecks the exact
+run and current predecessor. It still refuses at `Post-bind human authority
+unavailable`. This refusal has no configuration override. Both introduction jobs
+currently use read-only AWS sessions, and the underlying introduction CLI also
+refuses consequential phases without its trusted collector.
+
+An environment name, preliminary bind approval or hash in a review comment does
+not establish an independent human approval after bind. Enabling execution needs
+reviewed gate wiring and separately authorized, harmless acceptance of the exact
+job topology and protected environment. Approved durable private proposal delivery
+and the actual evidence collector remain prerequisites. Runner files alone do not
+make the proposal available for human review after bind. Recovery proposals retain
+`recovery: null` until reviewed private failure-evidence delivery is implemented;
+this workflow cannot authorize fallback or retry an unknown acknowledgment.
+
+Terraform remains in the existing plan/apply workflows. Product billing flags stay
+disabled. Local HTTP and genuinely signed synthetic webhook tests establish source
+contracts only. They do not prove hosted approval, deployed compatibility, payment
+provider acceptance or the exact static/backend fallback artifacts. Those identities
+and acceptance evidence belong in the future private execution packet.
