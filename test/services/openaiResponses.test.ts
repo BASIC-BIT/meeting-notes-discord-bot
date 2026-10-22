@@ -55,6 +55,12 @@ async function loadResponse(
   return {
     run: (signal?: AbortSignal) =>
       chat(meeting, { messages }, { ...options, signal }),
+    runCorrection: () =>
+      chat(
+        meeting,
+        { messages },
+        { ...options, modelParamRole: "notesCorrection" },
+      ),
     runFrozen: () =>
       chat(
         meeting,
@@ -200,6 +206,15 @@ test.each([
   const fixture = await loadResponse(completed("Notes"), model);
 
   await expect(fixture.run()).resolves.toBe("Notes");
+  expect(fixture.responsesCreate.mock.calls[0][0]).not.toHaveProperty(
+    "prompt_cache_options",
+  );
+});
+
+test("non-notes chat roles keep their existing cache behavior", async () => {
+  const fixture = await loadResponse(completed("Correction"));
+
+  await expect(fixture.runCorrection()).resolves.toBe("Correction");
   expect(fixture.responsesCreate.mock.calls[0][0]).not.toHaveProperty(
     "prompt_cache_options",
   );
