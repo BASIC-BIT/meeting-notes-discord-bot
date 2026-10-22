@@ -1,3 +1,4 @@
+import { localProtection } from "./fixtures/localProtection";
 import { randomUUID } from "node:crypto";
 import {
   CreateTableCommand,
@@ -128,26 +129,10 @@ afterAll(async () => {
 async function startDisabledCandidate() {
   const { createRuntimeLifecycle, installRuntimeLifecycle } =
     await import("../../src/services/runtimeLifecycleService");
-  const { createRuntimeProtectionService } =
-    await import("../../src/services/runtimeProtectionService");
   const { createDynamoDeploymentControlRepository } =
     await import("../../src/repositories/deploymentControlRepository");
   const identity = runtime("disabled-candidate", "candidate").identity;
-  const protection = createRuntimeProtectionService({
-    identity,
-    now: () => 100,
-    onUnsafe: () => {},
-    agentUri: "http://synthetic.invalid",
-    // The supported transport seam supplies protection proof without provider I/O.
-    request: async () =>
-      Response.json({
-        protection: {
-          TaskArn: identity.taskArn,
-          ProtectionEnabled: true,
-          ExpirationDate: new Date(900_000).toISOString(),
-        },
-      }),
-  });
+  const protection = localProtection(identity, () => 100, 900);
   const lifecycle = createRuntimeLifecycle({
     identity,
     repository: createDynamoDeploymentControlRepository(client, {

@@ -3,8 +3,9 @@ import { expect, test } from "@jest/globals";
 import { setImmediate } from "node:timers";
 import vm from "node:vm";
 import ts from "typescript";
-import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
 import legacy from "../fixtures/maintenance/legacy593a.json";
+import { loadLegacyDatabase } from "../fixtures/maintenance/legacyRuntime.js";
 import {
   buildProbeRequests,
   classifyProbe,
@@ -13,39 +14,20 @@ import { buildMaintenancePolicy } from "../../scripts/deployment/maintenance-fen
 const { binding } = legacy;
 function loadLegacy(sendError) {
   const captured = [];
-  const exports = {};
-  class Command {
-    constructor(input) {
-      this.input = input;
-    }
-  }
-  const context = {
-    exports,
-    marshall,
-    unmarshall,
-    PutItemCommand: Command,
-    UpdateItemCommand: Command,
-    DeleteItemCommand: Command,
-    tableName: (name) =>
-      binding[
-        name === "ActiveMeetingTable"
-          ? "activeMeetingTableArn"
-          : "personalMediaUploadJobTableArn"
-      ],
-    dynamoDbClient: {
+  const exports = loadLegacyDatabase(
+    {
       send: async (command) => {
         captured.push(command.input);
         if (sendError) throw sendError;
         return {};
       },
     },
-    isConditionalCheckFailed: () => false,
-  };
-  vm.runInNewContext(
-    ts.transpileModule(legacy.functions.join("\n"), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS },
-    }).outputText,
-    context,
+    (name) =>
+      binding[
+        name === "ActiveMeetingTable"
+          ? "activeMeetingTableArn"
+          : "personalMediaUploadJobTableArn"
+      ],
   );
   return { exports, captured };
 }

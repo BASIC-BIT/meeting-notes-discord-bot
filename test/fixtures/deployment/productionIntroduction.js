@@ -85,9 +85,8 @@ export function manifestFixture() {
   };
 }
 
-export function evidenceFixture() {
-  const m = manifestFixture(),
-    calls = [],
+export function evidenceFixture(m = manifestFixture()) {
+  const calls = [],
     proofs = [];
   const probe = async (request) => {
     calls.push("collect");
@@ -195,8 +194,13 @@ export function phaseAuthorization(
   };
 }
 
-export function introductionFixture(marshall, unmarshall, stateDigest) {
-  const f = evidenceFixture(),
+export function introductionFixture(
+  marshall,
+  unmarshall,
+  stateDigest,
+  manifest,
+) {
+  const f = evidenceFixture(manifest),
     m = f.m,
     rows = new Map(),
     writes = [];

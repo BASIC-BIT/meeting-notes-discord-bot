@@ -134,11 +134,7 @@ test.each(billingRequests)(
     expect(result.body).toMatchObject([{ result: { data: expected } }]);
   },
 );
-test("failed frontend publication leaves the frozen cached-client HTTP contracts usable", async () => {
-  const publishFrontend = async () => {
-    throw new Error("synthetic upload failure");
-  };
-  await expect(publishFrontend()).rejects.toThrow("synthetic upload failure");
+test("frozen cached-client HTTP contracts remain usable against the candidate backend", async () => {
   for (const fixture of billingRequests) {
     const result = await request(fixture.method, fixture.path, fixture.input);
     expect(result.status).toBe(200);

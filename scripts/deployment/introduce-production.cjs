@@ -875,11 +875,12 @@ function createIntroductionEngine(m, ports) {
       collectorAvailable: Boolean(ports.probe),
     };
   }
-  async function run(phase) {
+  async function run(phase, validatedAuthorization) {
     assert.ok(phases.includes(phase), "Unknown phase");
     if (phase === "inspect") return inspect();
     assert.ok(ports.probe, "Trusted evidence collector unavailable");
-    authorization = parsePhaseAuthorization(ports.authorization, m, hash);
+    authorization = validatedAuthorization;
+    assert.ok(authorization, "Validated phase authorization required");
     assert.equal(authorization.phase, phase);
     await identity();
     head = await readHead();
@@ -909,7 +910,21 @@ function createProductionIntroduction(options) {
     options.manifest,
     options.expectedSha256,
   );
-  return createIntroductionEngine(manifest, options);
+  const engine = createIntroductionEngine(manifest, options);
+  return {
+    async run(phase) {
+      assert.ok(phases.includes(phase), "Unknown phase");
+      const authorization =
+        phase === "inspect" || !options.probe
+          ? undefined
+          : parsePhaseAuthorization(
+              options.authorization,
+              manifest,
+              options.expectedSha256,
+            );
+      return engine.run(phase, authorization);
+    },
+  };
 }
 async function runCli(args = process.argv.slice(2), output = console) {
   try {

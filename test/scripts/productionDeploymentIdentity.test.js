@@ -101,7 +101,13 @@ test("production wiring reuses routing and publishes its explicit role variable"
   expect(main).toMatch(
     /ignore_changes\s*=\s*\[task_definition, load_balancer\]/,
   );
-  expect(main).toMatch(/prevent_destroy\s*=\s*true/);
+  const environment =
+    main.match(
+      /resource "github_repository_environment" "repo_env" \{([\s\S]*?)\n\}/,
+    )?.[1] ?? "";
+  expect(environment).toMatch(
+    /lifecycle\s*\{\s*prevent_destroy\s*=\s*true\s*\}/,
+  );
   expect(readFileSync("_infra/api.tf", "utf8")).toMatch(
     /ignore_changes\s*=\s*\[default_action\]/,
   );
