@@ -1,4 +1,14 @@
 import { afterEach, expect, jest, test } from "@jest/globals";
+import { completedTextResponse } from "../../src/testSupport/openaiResponse";
+
+function mockResponsesClient(createResponse: () => unknown) {
+  jest.doMock("openai", () => ({
+    __esModule: true,
+    default: jest.fn().mockImplementation(() => ({
+      responses: { create: createResponse },
+    })),
+  }));
+}
 
 afterEach(() => {
   jest.resetModules();
@@ -86,16 +96,13 @@ test("parseMeetingSummaryResponse keeps valid sentence when label is invalid", a
 });
 
 test("generateMeetingSummaries builds prompts and parses response", async () => {
-  const mockCreate = jest.fn().mockResolvedValue({
-    choices: [
-      {
-        message: {
-          content:
-            '{"summarySentence":"One sentence.","summaryLabel":"Weekly sync"}',
-        },
-      },
-    ],
-  });
+  const mockCreate = jest
+    .fn()
+    .mockResolvedValue(
+      completedTextResponse(
+        '{"summarySentence":"One sentence.","summaryLabel":"Weekly sync"}',
+      ),
+    );
   const mockGetLangfuseChatPrompt = jest
     .fn()
     .mockImplementation(({ variables }) => ({
@@ -125,12 +132,7 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
         isFallback: true,
       },
     }));
-  jest.doMock("openai", () => ({
-    __esModule: true,
-    default: jest.fn().mockImplementation(() => ({
-      chat: { completions: { create: mockCreate } },
-    })),
-  }));
+  mockResponsesClient(mockCreate);
   jest.doMock("../../src/services/langfusePromptService", () => ({
     __esModule: true,
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
@@ -171,9 +173,11 @@ test("generateMeetingSummaries builds prompts and parses response", async () => 
   const call = mockCreate.mock.calls[0][0];
   expect(call.model).toBe(config.notes.model);
   expect(call.temperature).toBe(0);
-  expect(call.reasoning_effort).toBe("none");
-  expect(call.response_format).toEqual({ type: "json_object" });
-  const userPrompt = call.messages[1].content;
+  expect(call.reasoning).toEqual({ effort: "none" });
+  expect(call.text.format).toEqual({ type: "json_object" });
+  expect(call.max_output_tokens).toBe(160);
+  expect(call.store).toBe(false);
+  const userPrompt = call.input[1].content;
   expect(userPrompt).toContain(`Today is ${expectedDate}.`);
   expect(userPrompt).toContain("Server: Chronote HQ");
   expect(userPrompt).toContain("Channel: general");
@@ -197,12 +201,7 @@ test("generateMeetingSummaries returns empty object on error", async () => {
       isFallback: true,
     },
   });
-  jest.doMock("openai", () => ({
-    __esModule: true,
-    default: jest.fn().mockImplementation(() => ({
-      chat: { completions: { create: mockCreate } },
-    })),
-  }));
+  mockResponsesClient(mockCreate);
   jest.doMock("../../src/services/langfusePromptService", () => ({
     __esModule: true,
     getLangfuseChatPrompt: mockGetLangfuseChatPrompt,
