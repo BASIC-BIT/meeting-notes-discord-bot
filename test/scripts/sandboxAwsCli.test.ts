@@ -1,4 +1,9 @@
 /** @jest-environment node */
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { createProductionIntroduction } from "../../scripts/deployment/introduce-production.cjs";
+import { manifestFixture } from "../fixtures/deployment/productionIntroduction.js";
+import { manifestHash } from "../../scripts/deployment/sandbox-manifest.cjs";
 import { awsCaller } from "../../scripts/deployment/sandbox-manifest.cjs";
 
 // Run a generated CLI child, never the AWS executable or any provider endpoint.
@@ -18,20 +23,22 @@ jest.mock("node:child_process", () => {
   }));`;
   return {
     execFile: Object.assign(jest.fn(), {
-      [promisify.custom]: (
-        file: string,
-        args: string[],
-        options: import("node:child_process").ExecFileOptions,
-      ) => {
-        expect(file).toBe("aws");
-        expect(args).not.toContain("--endpoint-url");
-        expect(args).toContain("--no-paginate");
-        return execute(
-          process.execPath,
-          ["-e", generatedCli, ...args],
-          options,
-        );
-      },
+      [promisify.custom]: jest.fn(
+        (
+          file: string,
+          args: string[],
+          options: import("node:child_process").ExecFileOptions,
+        ) => {
+          expect(file).toBe("aws");
+          expect(args).not.toContain("--endpoint-url");
+          expect(args).toContain("--no-paginate");
+          return execute(
+            process.execPath,
+            ["-e", generatedCli, ...args],
+            options,
+          );
+        },
+      ),
     }),
   };
 });
@@ -63,4 +70,30 @@ test.each([undefined, "false"])(
 test("explicit endpoint environment overrides still refuse before any child starts", () => {
   process.env.AWS_ENDPOINT_URL_ECS = "http://127.0.0.1:1";
   expect(() => awsCaller("us-east-1")).toThrow("Custom AWS endpoints");
+});
+
+test("production wrapper uses explicit-page single-attempt transport after its own validation", async () => {
+  const manifest = manifestFixture();
+  const execute = Reflect.get(execFile, promisify.custom);
+  execute.mockClear();
+  await expect(
+    createProductionIntroduction({
+      manifest,
+      expectedSha256: manifestHash(manifest),
+    }).run("inspect"),
+  ).rejects.toThrow();
+  expect(execute).toHaveBeenCalledTimes(1);
+  const [file, args, options] = execute.mock.calls[0];
+  expect(file).toBe("aws");
+  expect(args).toContain("--no-paginate");
+  expect(options.env.AWS_MAX_ATTEMPTS).toBe("1");
+  expect(options.env.AWS_IGNORE_CONFIGURED_ENDPOINT_URLS).toBe("true");
+  execute.mockClear();
+  expect(() =>
+    createProductionIntroduction({
+      manifest: { ...manifest, environment: "sandbox" },
+      expectedSha256: manifestHash(manifest),
+    }),
+  ).toThrow();
+  expect(execute).not.toHaveBeenCalled();
 });
