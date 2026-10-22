@@ -8,14 +8,14 @@ This file provides Copilot review context. AGENTS.md remains the source of truth
 
 ## What this project is
 
-- Discord bot that records voice meetings, transcribes them with OpenAI (gpt-4o-transcribe), generates notes with GPT-5.2, and posts results back to Discord.
+- Discord bot that records voice meetings, transcribes them with OpenAI (gpt-4o-transcribe), generates notes with GPT-6.1 Sol, and posts results back to Discord.
 - Supports auto-recording, meeting history in DynamoDB, context injection (server/channel/meeting), dictionary terms for prompt context, and a user-driven notes correction flow using LLMs.
 
 ## Tech stack
 
 - Runtime: Node.js 24.15.0, TypeScript.
 - Discord: discord.js v14, discord-api-types, @discordjs/voice for audio capture, @discordjs/opus, prism-media.
-- AI: openai SDK; gpt-4o-transcribe for transcription; gpt-5.2 for cleanup/notes/corrections; gpt-5-mini for live gate; DALL-E 3 for images.
+- AI: openai SDK; gpt-4o-transcribe for transcription; gpt-6.1-sol for notes; gpt-5.2 for summaries, cleanup, corrections and image prompts; gpt-5-mini for live gate; DALL-E 3 for images.
 - Observability and prompt management: Langfuse for tracing, prompt versioning, and prompt sync scripts.
 - Storage: AWS DynamoDB (tables include MeetingHistory, MeetingUserIndex, PersonalMediaUploadJob, PersonalRecordingSegment, SessionTable, McpOAuthTable, NotionIntegrationTable), S3 for transcripts/audio.
 - Infra: Terraform -> AWS ECS Fargate, ECR, CloudWatch logs; static frontend on S3 + CloudFront with OAC; local Dynamo via docker-compose.
@@ -52,7 +52,7 @@ This file provides Copilot review context. AGENTS.md remains the source of truth
   - Terms are injected into transcription and context prompts, definitions are used outside transcription to reduce prompt bloat.
 - Notes correction flow: `commands/notesCorrections.ts`
   - "Suggest correction" button -> modal (single textarea).
-  - Fetches saved notes + transcript from DB, calls GPT-4o with a "minimal edits, do not copy transcript" prompt, shows a compact line diff, requires approval (meeting creator or ManageChannels if auto-record), updates embed + MeetingHistory and bumps version/last editor.
+  - Fetches saved notes + transcript from DB, uses the notes-correction model with a "minimal edits, do not copy transcript" prompt, shows a compact line diff, requires approval (meeting creator or ManageChannels if auto-record), updates embed + MeetingHistory and bumps version/last editor.
 - Context management: `commands/context.ts` writes/reads ServerContext and ChannelContext.
 - Meeting history persistence: `commands/saveMeetingHistory.ts`, `db.ts` helpers.
   - Optional `processing` metadata records transcription, notes, and summary outcomes independently of lifecycle status. Missing outcomes are unknown. Never infer transcription failure from an unrelated upload error or insert processing notices into stored notes.
@@ -67,6 +67,8 @@ This file provides Copilot review context. AGENTS.md remains the source of truth
 - Remote MCP: `ENABLE_MCP` defaults true only when Discord OAuth is enabled, requires `OAUTH_SECRET`, and exposes `/mcp` on the API server. Use `MCP_PUBLIC_BASE_URL` for the external API origin so OAuth tokens are resource-bound to the public MCP endpoint.
 - OpenAI org/project IDs are optional (defaults empty).
 - Text generation uses the Responses API through `openaiTextService.ts`. Migrate callers together and delete superseded request paths. Preserve frozen recording settings, cancellation, mention checks and caller fallbacks; audio and image generation keep their dedicated endpoints.
+- `NOTES_MODEL` defaults to `gpt-6.1-sol` for notes only; other previously coupled roles retain independent `gpt-5.2` defaults. Existing `models.*` and compatible `modelParams.*` overrides still apply. Frozen DynamoDB v1 snapshots remain authoritative.
+- Notes use low reasoning by default and omit temperature. Sol-capable notes requests and continuations use explicit 30-minute cache control without breakpoints; older model overrides omit unsupported fields. Preserve prompt ordering. See `docs/adr-20261022-sol-notes-caching.md`.
 - Langfuse prompt sync uses `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`. Optional: `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_TRANSCRIPTION`, `LANGFUSE_PROMPT_DICTIONARY_TEACHING`.
 - Optional Langfuse prompt override for the finalized audio pass: `LANGFUSE_PROMPT_TRANSCRIPTION_FINAL_PASS`.
 - Langfuse MCP tooling uses `node scripts/setup-langfuse-mcp-auth.js` to write `.opencode/langfuse.mcp.auth`, `.opencode/langfuse.public`, and `.opencode/langfuse.secret` for OpenCode. Codex and Claude Code still expect `LANGFUSE_MCP_AUTH` in the environment.
@@ -304,6 +306,7 @@ Never use apologies.
 
 - Prompts live in prompts/ and prompts/\_fragments, and are synced via Langfuse.
 - Notes should be concise and proportional to meeting length, and follow participant instructions over defaults.
+- Capture explicit assignments and volunteered follow-ups with stated owners and deadlines. Preserve qualifications and completed status. The completeness check stays within the notes generation call.
 - Speaker order can be unreliable, avoid strong inference from ordering.
 - Use server nicknames when provided, else display names, else usernames, keep consistent.
 - Notes corrections should be minimal edits and avoid copying transcript text.
