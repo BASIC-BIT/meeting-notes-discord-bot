@@ -164,3 +164,9 @@ export async function generateOpenAIText(
     promptCacheParams,
   });
 }
+
+export function generateOpenAINotes(
+  options: Omit<TextGenerationOptions, "modelParamRole">,
+): Promise<string> {
+  return generateOpenAIText({ ...options, modelParamRole: "notes" });
+}
