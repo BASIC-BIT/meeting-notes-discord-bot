@@ -13,7 +13,10 @@ const truncated = (text: string) => ({
   output: [],
 });
 
-async function loadResponse(response: object | object[], model = "gpt-6.1-sol") {
+async function loadResponse(
+  response: object | object[],
+  model = "gpt-6.1-sol",
+) {
   jest.resetModules();
   const responses = Array.isArray(response) ? response : [response];
   let callIndex = 0;
@@ -181,16 +184,19 @@ test.each([
   "gpt-5.6-terra",
   "gpt-5.6-luna",
   "gpt-6.1-sol-2026-10-01",
-])("notes on %s avoids cache writes for unique meeting inputs", async (model) => {
-  const fixture = await loadResponse(completed("Notes"), model);
+])(
+  "notes on %s avoids cache writes for unique meeting inputs",
+  async (model) => {
+    const fixture = await loadResponse(completed("Notes"), model);
 
-  await expect(fixture.run()).resolves.toBe("Notes");
-  expect(fixture.responsesCreate.mock.calls[0][0]).toMatchObject({
-    model,
-    prompt_cache_options: { mode: "explicit", ttl: "30m" },
-    input: [{ role: "user", content: "Write the notes." }],
-  });
-});
+    await expect(fixture.run()).resolves.toBe("Notes");
+    expect(fixture.responsesCreate.mock.calls[0][0]).toMatchObject({
+      model,
+      prompt_cache_options: { mode: "explicit", ttl: "30m" },
+      input: [{ role: "user", content: "Write the notes." }],
+    });
+  },
+);
 
 test.each([
   "gpt-5.2",
@@ -219,9 +225,8 @@ test("non-notes chat roles keep their existing cache behavior", async () => {
 
 test("ordinary text callers keep their existing cache behavior", async () => {
   const fixture = await loadResponse(completed("Summary"));
-  const { generateOpenAIText } = await import(
-    "../../src/services/openaiTextService"
-  );
+  const { generateOpenAIText } =
+    await import("../../src/services/openaiTextService");
 
   await expect(
     generateOpenAIText({
