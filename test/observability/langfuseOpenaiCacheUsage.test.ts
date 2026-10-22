@@ -1,26 +1,8 @@
 /** @jest-environment node */
-import OpenAI from "openai";
-import { startObservation } from "@langfuse/tracing";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 
-const { observeOpenAI } = jest.requireActual<
-  typeof import("@langfuse/openai")
->("@langfuse/openai");
-
-const mockUpdate = jest.fn();
-
-jest.mock("@langfuse/tracing", () => ({
-  propagateAttributes: (_attributes: unknown, callback: () => unknown) =>
-    callback(),
-  startObservation: jest.fn(() => ({
-    update: mockUpdate.mockReturnThis(),
-    end: jest.fn(),
-  })),
-}));
-
-beforeEach(() => {
-  jest.clearAllMocks();
-});
-
+// Native Node keeps the SDK and Langfuse in one module graph and isolates OTel.
 describe("Langfuse Responses cache usage", () => {
   it.each([
     {
@@ -71,25 +53,24 @@ describe("Langfuse Responses cache usage", () => {
         output: [],
         usage: providerUsage,
       };
-      const fetch = jest.fn(async () => Response.json(providerResponse));
-      const client = observeOpenAI(
-        new OpenAI({ apiKey: "synthetic", fetch, maxRetries: 0 }),
+      const child = spawnSync(
+        process.execPath,
+        [
+          join(__dirname, "fixtures", "langfuseOpenaiCacheUsage.cjs"),
+          JSON.stringify(providerResponse),
+        ],
+        { encoding: "utf8", timeout: 20_000 },
       );
 
-      const request = client.responses.create({
-        model: "synthetic",
-        input: "synthetic",
-      });
-
-      expect(startObservation).toHaveBeenCalledTimes(1);
-      expect(request).toBeInstanceOf(Promise);
-      const response = await request;
-
-      expect(fetch).toHaveBeenCalledTimes(1);
-      expect(response).toMatchObject(providerResponse);
-      expect(response.usage).toEqual(providerUsage);
-      expect(mockUpdate).toHaveBeenCalledTimes(1);
-      const usageDetails = mockUpdate.mock.calls[0][0].usageDetails;
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(child.stderr).toBe("");
+      const result = JSON.parse(child.stdout);
+      expect(result.requestCount).toBe(1);
+      expect(result.response).toMatchObject(providerResponse);
+      expect(result.response.usage).toEqual(providerUsage);
+      expect(result.usageDetails).toHaveLength(1);
+      const [usageDetails] = result.usageDetails;
       expect(usageDetails).toEqual({
         input: expectedInput,
         output: 80,
