@@ -77,6 +77,7 @@ const generateNotesForEval = async (input: EvalInput): Promise<string> => {
     model,
     input: messages,
     modelParams,
+    modelParamRole: "notes",
     continuation: { maxRequests: MEETING_TEXT_MAX_REQUESTS },
     tracing: {
       traceName: "meeting-notes-eval",

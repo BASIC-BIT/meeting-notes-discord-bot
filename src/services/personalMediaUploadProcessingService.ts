@@ -1062,6 +1062,7 @@ const generatePersonalUploadNotes = async (input: {
     model: modelChoice.model,
     input: messages,
     modelParams: chatParams,
+    modelParamRole: "notes",
     signal: input.signal,
     tracing: {
       traceName: "personal-media-upload-notes",
