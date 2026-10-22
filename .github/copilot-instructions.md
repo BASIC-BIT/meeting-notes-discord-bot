@@ -8,14 +8,14 @@ This file provides Copilot review context. AGENTS.md remains the source of truth
 
 ## What this project is
 
-- Discord bot that records voice meetings, transcribes them with OpenAI (gpt-4o-transcribe), generates notes with GPT-5.1, and posts results back to Discord.
+- Discord bot that records voice meetings, transcribes them with OpenAI (gpt-4o-transcribe), generates notes with GPT-5.2, and posts results back to Discord.
 - Supports auto-recording, meeting history in DynamoDB, context injection (server/channel/meeting), dictionary terms for prompt context, and a user-driven notes correction flow using LLMs.
 
 ## Tech stack
 
 - Runtime: Node.js 24.15.0, TypeScript.
 - Discord: discord.js v14, discord-api-types, @discordjs/voice for audio capture, @discordjs/opus, prism-media.
-- AI: openai SDK; gpt-4o-transcribe for transcription; gpt-5.1 for cleanup/notes/corrections; gpt-5-mini for live gate; DALL-E 3 for images.
+- AI: openai SDK; gpt-4o-transcribe for transcription; gpt-5.2 for cleanup/notes/corrections; gpt-5-mini for live gate; DALL-E 3 for images.
 - Observability and prompt management: Langfuse for tracing, prompt versioning, and prompt sync scripts.
 - Storage: AWS DynamoDB (tables include MeetingHistory, MeetingUserIndex, PersonalMediaUploadJob, PersonalRecordingSegment, SessionTable, McpOAuthTable, NotionIntegrationTable), S3 for transcripts/audio.
 - Infra: Terraform -> AWS ECS Fargate, ECR, CloudWatch logs; static frontend on S3 + CloudFront with OAC; local Dynamo via docker-compose.
@@ -66,6 +66,7 @@ This file provides Copilot review context. AGENTS.md remains the source of truth
 - Production OAuth should use the API domain callback (e.g., `https://api.chronote.gg/auth/discord/callback`). The backend sits behind an ALB unless `ENABLE_API_ALB=false`; `API_DOMAIN` selects its hostname and is independent of whether the ALB exists. The frontend build uses `VITE_API_BASE_URL` from GitHub Actions env vars.
 - Remote MCP: `ENABLE_MCP` defaults true only when Discord OAuth is enabled, requires `OAUTH_SECRET`, and exposes `/mcp` on the API server. Use `MCP_PUBLIC_BASE_URL` for the external API origin so OAuth tokens are resource-bound to the public MCP endpoint.
 - OpenAI org/project IDs are optional (defaults empty).
+- Text generation uses the Responses API through `openaiTextService.ts`. Migrate callers together and delete superseded request paths. Preserve frozen recording settings, cancellation, mention checks and caller fallbacks; audio and image generation keep their dedicated endpoints.
 - Langfuse prompt sync uses `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`. Optional: `LANGFUSE_BASE_URL`, `LANGFUSE_PROMPT_LABEL`, `LANGFUSE_PROMPT_TRANSCRIPTION`, `LANGFUSE_PROMPT_DICTIONARY_TEACHING`.
 - Optional Langfuse prompt override for the finalized audio pass: `LANGFUSE_PROMPT_TRANSCRIPTION_FINAL_PASS`.
 - Langfuse MCP tooling uses `node scripts/setup-langfuse-mcp-auth.js` to write `.opencode/langfuse.mcp.auth`, `.opencode/langfuse.public`, and `.opencode/langfuse.secret` for OpenCode. Codex and Claude Code still expect `LANGFUSE_MCP_AUTH` in the environment.
