@@ -162,7 +162,12 @@ function createIntroductionEngine(m, ports) {
     if (authorization.phase === "activate")
       assert.ok(now() < m.warmupDeadline, "Warmup deadline expired");
   }
-  async function append(stage, proof, buildTransactions = () => []) {
+  async function append(
+    stage,
+    proof,
+    buildTransactions = () => [],
+    providerRequest,
+  ) {
     await identity();
     currentProof(proof);
     const predecessorSha256 = head?.receiptSha256 ?? null;
@@ -177,6 +182,7 @@ function createIntroductionEngine(m, ports) {
       principalArn: authorization.principalArn,
       recordedAt: now(),
       proof: receiptProof(proof),
+      ...(providerRequest ? { providerRequest } : {}),
     };
     assert.ok(
       Buffer.byteLength(JSON.stringify(body)) <= 16384,
@@ -542,7 +548,7 @@ function createIntroductionEngine(m, ports) {
         Date.parse(protectedTask.expirationDate) / 1000 - 120,
     };
   }
-  async function runtimeFor(task, role) {
+  async function runtimeFor(task, role, owned) {
     const rows = [];
     let cursor;
     do {
@@ -569,9 +575,10 @@ function createIntroductionEngine(m, ports) {
     assert.equal(row.identity.imageDigest, selected().digest);
     assert.equal(row.retirementRequest, undefined);
     assert.equal(row.retirementAcknowledgment, undefined);
-    assert.ok(
-      row.workCounts && Object.values(row.workCounts).every((v) => v === 0),
-    );
+    if (role === "candidate" || owned)
+      assert.ok(
+        row.workCounts && Object.values(row.workCounts).every((v) => v === 0),
+      );
     for (const field of ["cacheReady", "dependenciesReady"])
       assert.equal(row.readiness[field], true);
     if (m.runtimeMode !== "api") assert.equal(row.readiness.gatewayReady, true);
@@ -592,7 +599,7 @@ function createIntroductionEngine(m, ports) {
   }
   async function candidateProof(owned, role = "candidate") {
     const { task, protectionValidUntil } = await candidateState(),
-      row = await runtimeFor(task, role);
+      row = await runtimeFor(task, role, owned);
     const proof = await evidence.round(
       context(owned, {
         taskArn: task.taskArn,
@@ -764,16 +771,24 @@ function createIntroductionEngine(m, ports) {
         sourceSha: m.binding.sourceSha,
       }),
     );
-    await append("fallback_submitted", proof);
-    await identity();
-    currentProof(proof);
-    await aws("ecs", "update-service", {
+    const request = {
       cluster: m.cluster,
       service: m.service,
       taskDefinition: m.fallbackTaskDefinition,
       desiredCount: 1,
       deploymentConfiguration: m.targetDeploymentConfiguration,
+      ...(m.fallbackTaskDefinition === m.taskDefinition
+        ? { forceNewDeployment: true }
+        : {}),
+    };
+    await append("fallback_submitted", proof, undefined, {
+      service: "ecs",
+      operation: "update-service",
+      input: request,
     });
+    await identity();
+    currentProof(proof);
+    await aws("ecs", "update-service", request);
     await append("fallback_acknowledged", proof);
     const candidate = await waitForCandidate(prior.handoffCapture);
     await promote(candidate);

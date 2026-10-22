@@ -66,6 +66,7 @@ test.each([
 });
 
 test.each([
+  "fallbackTaskDefinition",
   "fallbackSourceSha",
   "fallbackDigest",
   "targetDeploymentConfiguration",
@@ -79,3 +80,20 @@ test("refuses automatic rollback in the approved target configuration", () => {
   m.targetDeploymentConfiguration.deploymentCircuitBreaker.rollback = true;
   expect(() => parseProductionManifest(m, manifestHash(m))).toThrow();
 });
+
+test("accepts explicitly bound candidate-equal fallback definition source and digest", () => {
+  const m = manifestFixture();
+  m.fallbackTaskDefinition = m.taskDefinition;
+  m.fallbackSourceSha = m.binding.sourceSha;
+  m.fallbackDigest = m.binding.candidateDigest;
+  expect(parseProductionManifest(m, manifestHash(m))).toEqual(m);
+});
+
+test.each(["taskDefinition", "fallbackTaskDefinition"])(
+  "rejects legacy as %s",
+  (field) => {
+    const m = manifestFixture();
+    m[field] = m.legacyTaskDefinition;
+    expect(() => parseProductionManifest(m, manifestHash(m))).toThrow();
+  },
+);

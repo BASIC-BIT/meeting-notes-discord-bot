@@ -27,20 +27,28 @@ const client = new DynamoDBClient({
 });
 const created: string[] = [];
 afterAll(() => cleanupOwnedTables(client, created));
-async function readControl(TableName: string) {
+async function readStored(TableName: string, Key: ReturnType<typeof marshall>) {
   const result = await client.send(
-    new GetItemCommand({
-      TableName,
-      Key: marshall({ pk: "ENV", sk: "CONTROL" }),
-      ConsistentRead: true,
-    }),
+    new GetItemCommand({ TableName, Key, ConsistentRead: true }),
   );
-  return result.Item ? unmarshall(result.Item) : undefined;
+  return result.Item;
+}
+async function readControl(TableName: string) {
+  const item = await readStored(
+    TableName,
+    marshall({ pk: "ENV", sk: "CONTROL" }),
+  );
+  return item ? unmarshall(item) : undefined;
 }
 
-async function fixture() {
+async function fixture(sameDefinition = false) {
   const f = introductionFixture(marshall, unmarshall, stateDigest),
     m = f.m;
+  if (sameDefinition) {
+    m.fallbackTaskDefinition = m.taskDefinition;
+    m.fallbackSourceSha = m.binding.sourceSha;
+    m.fallbackDigest = m.binding.candidateDigest;
+  }
   const physical = new Map<string, string>(),
     prefix = "introduction-" + randomUUID() + "-";
   const entries = [
@@ -188,16 +196,25 @@ async function fixture() {
       return result;
     }
   }
+  const serviceRequests: object[] = [];
   async function updateService(input: object) {
     const request = JSON.parse(JSON.stringify(input));
+    serviceRequests.push(request);
+    if (
+      failed &&
+      request.taskDefinition === selectedDefinition &&
+      !request.forceNewDeployment
+    )
+      return {};
     if (request.desiredCount === 0) {
       f.svc.desiredCount = f.svc.runningCount = 0;
       f.legacy.lastStatus = "STOPPED";
     } else {
+      const replacing = candidate;
       candidate = true;
       selectedDefinition = request.taskDefinition;
       failed = fault === "failed";
-      if (selectedDefinition === m.fallbackTaskDefinition) {
+      if (replacing && selectedDefinition === m.fallbackTaskDefinition) {
         activeArn = candidateArn.slice(0, -32) + "b".repeat(32);
         row.identity = {
           ...row.identity,
@@ -393,6 +410,8 @@ async function fixture() {
     run,
     head,
     controlTable,
+    physical,
+    serviceRequests,
     calls,
     setFault: (value: string) => {
       fault = value;
@@ -463,23 +482,58 @@ test("lost removal acknowledgment preserves submitted intent without another rem
   expect(f.calls.filter((op) => op === "delete-role-policy")).toHaveLength(1);
 });
 
-test("known settled FAILED candidate permits only explicitly approved fallback recovery", async () => {
-  const f = await fixture();
-  await f.run("fence", "1");
-  await f.run("drain", "2");
-  f.setFault("failed");
-  await expect(f.run("activate", "3")).rejects.toThrow(
-    "Known candidate startup failure",
-  );
-  expect((await f.head())?.stage).toBe("candidate_failed");
-  expect(f.isOwned()).toBe(true);
-  await expect(f.run("activate", "4")).rejects.toThrow();
-  f.setFault("");
-  await f.run("activate", "5", true);
-  await f.run("complete", "6");
-  expect((await f.head())?.stage).toBe("complete");
-  expect(f.calls.filter((op) => op === "update-service")).toHaveLength(3);
-});
+test.each([false, true])(
+  "known settled FAILED candidate permits only explicitly approved fallback recovery (same definition=%s)",
+  async (sameDefinition) => {
+    const f = await fixture(sameDefinition);
+    await f.run("fence", "1");
+    await f.run("drain", "2");
+    f.setFault("failed");
+    await expect(f.run("activate", "3")).rejects.toThrow(
+      "Known candidate startup failure",
+    );
+    expect((await f.head())?.stage).toBe("candidate_failed");
+    expect(f.isOwned()).toBe(true);
+    await expect(f.run("activate", "4")).rejects.toThrow();
+    f.setFault("");
+    await f.run("activate", "5", true);
+    await f.run("complete", "6");
+    expect((await f.head())?.stage).toBe("complete");
+    expect(f.calls.filter((op) => op === "update-service")).toHaveLength(3);
+    const expected = {
+      cluster: f.m.cluster,
+      service: f.m.service,
+      taskDefinition: f.m.fallbackTaskDefinition,
+      desiredCount: 1,
+      deploymentConfiguration: f.m.targetDeploymentConfiguration,
+      ...(sameDefinition ? { forceNewDeployment: true } : {}),
+    };
+    expect(f.serviceRequests.at(-1)).toEqual(expected);
+    expect(f.serviceRequests.slice(0, 2)).toEqual([
+      { cluster: f.m.cluster, service: f.m.service, desiredCount: 0 },
+      {
+        cluster: f.m.cluster,
+        service: f.m.service,
+        taskDefinition: f.m.taskDefinition,
+        desiredCount: 1,
+        deploymentConfiguration: f.m.targetDeploymentConfiguration,
+      },
+    ]);
+    const journal = await client.send(
+      new ScanCommand({ TableName: f.controlTable }),
+    );
+    const intent = journal
+      .Items!.map(unmarshall)
+      .filter((item) => item.bodyJson)
+      .map((item) => JSON.parse(item.bodyJson))
+      .find((body) => body.stage === "fallback_submitted");
+    expect(intent.providerRequest).toEqual({
+      service: "ecs",
+      operation: "update-service",
+      input: expected,
+    });
+  },
+);
 
 test.each(["initialize", "promotion"])(
   "unknown %s transaction retains submitted stage",
@@ -604,4 +658,173 @@ test("expired proof after final promotion STS preserves generation zero and fenc
   expect(f.isOwned()).toBe(true);
   const control = await readControl(f.controlTable);
   expect(control!.servingGeneration).toBe(0);
+});
+
+test("completion preserves recording and upload started immediately after policy removal", async () => {
+  const f = await fixture();
+  await f.run("fence", "1");
+  await f.run("drain", "2");
+  await f.run("activate", "3");
+  const native = f.options.aws;
+  const records = [
+    {
+      TableName: f.physical.get(f.m.binding.tableArns.leases)!,
+      key: { guildId: "new-recording" },
+      value: {
+        guildId: "new-recording",
+        meetingId: "meeting",
+        ownerInstanceId: "candidate",
+        status: "recording",
+        leaseExpiresAt: 1100,
+      },
+    },
+    {
+      TableName: f.physical.get(f.m.binding.tableArns.uploads)!,
+      key: { uploadId: "new-upload" },
+      value: {
+        uploadId: "new-upload",
+        ownerUserId: "user",
+        status: "processing",
+        processingOwnerInstanceId: "candidate",
+        processingClaimId: "claim",
+        claimExpiresAt: 1100,
+      },
+    },
+  ];
+  let activeRuntime: object | undefined;
+  f.options.aws = async (service, operation, input) => {
+    const result = await native(service, operation, input);
+    if (operation === "delete-role-policy") {
+      expect(f.isOwned()).toBe(false);
+      for (const record of records)
+        await client.send(
+          new PutItemCommand({
+            TableName: record.TableName,
+            Item: marshall(record.value),
+          }),
+        );
+      const stored = await readStored(
+        f.controlTable,
+        marshall({ pk: f.row.pk, sk: f.row.sk }),
+      );
+      const live = unmarshall(stored!);
+      live.workCounts.recording = 1;
+      live.workCounts.personal_processing = 1;
+      activeRuntime = marshall(live);
+      await client.send(
+        new PutItemCommand({ TableName: f.controlTable, Item: marshall(live) }),
+      );
+    }
+    return result;
+  };
+  await f.run("complete", "4");
+  expect((await f.head())?.stage).toBe("complete");
+  for (const record of records) {
+    const stored = await readStored(record.TableName, marshall(record.key));
+    expect(stored).toEqual(marshall(record.value));
+  }
+  const stored = await readStored(
+    f.controlTable,
+    marshall({ pk: f.row.pk, sk: f.row.sk }),
+  );
+  expect(stored).toEqual(activeRuntime);
+  expect(f.calls.filter((op) => op === "delete-role-policy")).toHaveLength(1);
+});
+
+test.each(["candidate", "pre-removal"])(
+  "active work still blocks %s boundary",
+  async (stage) => {
+    const f = await fixture();
+    await f.run("fence", "1");
+    await f.run("drain", "2");
+    if (stage === "candidate") f.row.workCounts!.recording = 1;
+    else {
+      await f.run("activate", "3");
+      const item = await readStored(
+        f.controlTable,
+        marshall({ pk: f.row.pk, sk: f.row.sk }),
+      );
+      const live = unmarshall(item!);
+      live.workCounts.recording = 1;
+      await client.send(
+        new PutItemCommand({ TableName: f.controlTable, Item: marshall(live) }),
+      );
+    }
+    await expect(
+      f.run(stage === "candidate" ? "activate" : "complete", "4"),
+    ).rejects.toThrow();
+    expect(f.isOwned()).toBe(true);
+    expect((await f.head())?.stage).toBe(
+      stage === "candidate" ? "launch_acknowledged" : "promotion_acknowledged",
+    );
+    const item = await readStored(
+      f.controlTable,
+      marshall({ pk: f.row.pk, sk: f.row.sk }),
+    );
+    expect(unmarshall(item!).workCounts.recording).toBe(1);
+    expect(f.calls).not.toContain("delete-role-policy");
+  },
+);
+
+test.each(["live", "serving", "unknown-launch"])(
+  "same-definition recovery refuses %s state without deployment replay",
+  async (fault) => {
+    const f = await fixture(true);
+    await f.run("fence", "1");
+    await f.run("drain", "2");
+    f.setFault(fault === "unknown-launch" ? "launch" : "failed");
+    await expect(f.run("activate", "3")).rejects.toThrow();
+    const before = await f.head();
+    if (fault === "live") f.svc.runningCount = 1;
+    if (fault === "serving") {
+      const control = await readControl(f.controlTable);
+      control!.servingGeneration = 1;
+      await client.send(
+        new PutItemCommand({
+          TableName: f.controlTable,
+          Item: marshall(control!),
+        }),
+      );
+    }
+    f.setFault("");
+    await expect(f.run("activate", "4", true)).rejects.toThrow();
+    expect(await f.head()).toEqual(before);
+    expect(f.serviceRequests).toHaveLength(2);
+    expect(
+      f.serviceRequests.every(
+        (request) => !Object.hasOwn(request, "forceNewDeployment"),
+      ),
+    ).toBe(true);
+    expect(f.isOwned()).toBe(true);
+  },
+);
+
+test("lost same-definition fallback acknowledgment cannot replay deployment", async () => {
+  const f = await fixture(true);
+  await f.run("fence", "1");
+  await f.run("drain", "2");
+  f.setFault("failed");
+  await expect(f.run("activate", "3")).rejects.toThrow(
+    "Known candidate startup failure",
+  );
+  f.setFault("launch");
+  await expect(f.run("activate", "4", true)).rejects.toThrow(
+    "Lost launch acknowledgment",
+  );
+  const submitted = await f.head();
+  expect(submitted?.stage).toBe("fallback_submitted");
+  expect(f.serviceRequests).toHaveLength(3);
+  expect(f.serviceRequests.at(-1)).toEqual({
+    cluster: f.m.cluster,
+    service: f.m.service,
+    taskDefinition: f.m.fallbackTaskDefinition,
+    desiredCount: 1,
+    deploymentConfiguration: f.m.targetDeploymentConfiguration,
+    forceNewDeployment: true,
+  });
+  f.setFault("");
+  await expect(f.run("activate", "5", true)).rejects.toThrow();
+  expect(await f.head()).toEqual(submitted);
+  expect(f.serviceRequests).toHaveLength(3);
+  expect(f.isOwned()).toBe(true);
 });

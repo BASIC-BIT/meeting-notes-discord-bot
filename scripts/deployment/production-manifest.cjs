@@ -131,14 +131,8 @@ function assertResources(m) {
       /^[A-Za-z0-9_-]+:\d+$/,
     );
   }
-  assert.equal(
-    new Set([
-      m.legacyTaskDefinition,
-      m.taskDefinition,
-      m.fallbackTaskDefinition,
-    ]).size,
-    3,
-  );
+  assert.notEqual(m.taskDefinition, m.legacyTaskDefinition);
+  assert.notEqual(m.fallbackTaskDefinition, m.legacyTaskDefinition);
   assert.ok(m.legacyTaskArn.startsWith(ecs + "task/" + m.cluster + "/"));
   assert.match(m.legacyTaskArn.split("/").at(-1), /^[a-f0-9]{32}$/);
   assert.ok(m.listenerArn.startsWith(elb + "listener/app/"));
