@@ -1,0 +1,434 @@
+import { paginationPlan } from "../repositories/meetingUpdateDeliveryFixtures";
+import { randomUUID } from "node:crypto";
+import {
+  CreateTableCommand,
+  type AttributeDefinition,
+  type GlobalSecondaryIndex,
+  DeleteTableCommand,
+  DynamoDBClient,
+  GetItemCommand,
+  PutItemCommand,
+  UpdateItemCommand,
+  TransactWriteItemsCommand,
+} from "@aws-sdk/client-dynamodb";
+import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
+import { createDynamoMeetingUpdateDeliveryRepository } from "../../src/repositories/meetingUpdateDeliveryRepository";
+import type { MeetingHistory } from "../../src/types/db";
+import {
+  deliveryContract,
+  authority,
+  write,
+} from "../repositories/meetingUpdateDeliveryContract";
+import {
+  history,
+  key,
+  now,
+  pointers,
+  pending,
+  attempt,
+  running,
+  planDelivery,
+  registerOperation,
+} from "../types/meetingUpdateDelivery.fixture";
+import { control, runtime } from "./controlFixtures";
+
+const prefix = "meeting-updates-" + randomUUID();
+const tables = {
+  meetingHistory: prefix + "-history",
+  deploymentControl: prefix + "-control",
+};
+const client = new DynamoDBClient({
+  endpoint: process.env.DEPLOYMENT_TEST_DYNAMODB_ENDPOINT,
+  region: "local",
+  credentials: { accessKeyId: "dummy", secretAccessKey: "dummy" },
+  maxAttempts: 1,
+});
+const repository = createDynamoMeetingUpdateDeliveryRepository(client, tables);
+const created: string[] = [];
+const put = (table: string, row: object) =>
+  client.send(
+    new PutItemCommand({
+      TableName: table,
+      Item: marshall(row, { removeUndefinedValues: true }),
+    }),
+  );
+async function read(): Promise<MeetingHistory | undefined> {
+  const result = await client.send(
+    new GetItemCommand({
+      TableName: tables.meetingHistory,
+      Key: marshall(key),
+      ConsistentRead: true,
+    }),
+  );
+  return result.Item ? (unmarshall(result.Item) as MeetingHistory) : undefined;
+}
+async function createTestTable(
+  tableName: string,
+  primaryKeys: string[],
+  dueIndex = false,
+) {
+  const KeySchema = primaryKeys.map((AttributeName, index) => ({
+    AttributeName,
+    KeyType: index === 0 ? ("HASH" as const) : ("RANGE" as const),
+  }));
+  const AttributeDefinitions: AttributeDefinition[] = primaryKeys.map(
+    (AttributeName) => ({ AttributeName, AttributeType: "S" }),
+  );
+  if (dueIndex)
+    AttributeDefinitions.push(
+      { AttributeName: "updateDeliveryQueue", AttributeType: "S" },
+      { AttributeName: "updateDeliveryDueAt", AttributeType: "N" },
+    );
+  const GlobalSecondaryIndexes: GlobalSecondaryIndex[] | undefined = dueIndex
+    ? [
+        {
+          IndexName: "UpdateDeliveryDueIndex",
+          KeySchema: [
+            { AttributeName: "updateDeliveryQueue", KeyType: "HASH" },
+            { AttributeName: "updateDeliveryDueAt", KeyType: "RANGE" },
+          ],
+          Projection: { ProjectionType: "KEYS_ONLY" },
+        },
+      ]
+    : undefined;
+  await client.send(
+    new CreateTableCommand({
+      TableName: tableName,
+      BillingMode: "PAY_PER_REQUEST",
+      KeySchema,
+      AttributeDefinitions,
+      GlobalSecondaryIndexes,
+    }),
+  );
+  created.push(tableName);
+}
+beforeAll(async () => {
+  await createTestTable(
+    tables.meetingHistory,
+    ["guildId", "channelId_timestamp"],
+    true,
+  );
+  await createTestTable(tables.deploymentControl, ["pk", "sk"]);
+});
+afterAll(async () => {
+  jest.restoreAllMocks();
+  for (const TableName of created)
+    await client.send(new DeleteTableCommand({ TableName }));
+  client.destroy();
+});
+describe("real Dynamo atomic persistence", () => {
+  deliveryContract(() => ({
+    repository,
+    seed: async (row) => {
+      await put(tables.meetingHistory, row);
+    },
+    read,
+    async admit(allowed) {
+      await put(tables.deploymentControl, {
+        ...control,
+        servingMembers: allowed ? control.servingMembers : {},
+      });
+      const row = runtime("old");
+      await put(tables.deploymentControl, {
+        ...row,
+        heartbeatAt: now,
+        readiness: {
+          ...row.readiness,
+          provenAt: now - 1,
+          expiresAt: now + 200,
+        },
+        protection: {
+          ...row.protection!,
+          provenAt: now - 1,
+          expiresAt: now + 200,
+        },
+      });
+    },
+  }));
+});
+it("discovers sparse due keys with validated continuation and no future or held rows", async () => {
+  const input = write(history(), "discovery");
+  for (let i = 0; i < 4; i++)
+    await put(tables.meetingHistory, {
+      ...history(),
+      channelId_timestamp: "due-" + i,
+      updateDelivery: input.nextDelivery,
+      updateDeliveryQueue: "meeting-update:v1",
+      updateDeliveryDueAt: now - 100 + i,
+    });
+  await put(tables.meetingHistory, {
+    ...history(),
+    channelId_timestamp: "future",
+    updateDeliveryQueue: "meeting-update:v1",
+    updateDeliveryDueAt: now + 1,
+  });
+  await put(tables.meetingHistory, {
+    ...history(),
+    channelId_timestamp: "held",
+  });
+  const seen: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await repository.listDue({ now: now - 90, limit: 2, cursor });
+    expect(page.keys.length).toBeLessThanOrEqual(2);
+    seen.push(...page.keys.map((item) => item.channelId_timestamp));
+    cursor = page.cursor;
+  } while (cursor);
+  expect(seen.sort()).toEqual(["due-0", "due-1", "due-2", "due-3"]);
+});
+it("recognizes only the exact content write after a lost acknowledgment", async () => {
+  await put(tables.meetingHistory, history());
+  const send = client.send.bind(client);
+  const spy = jest.spyOn(client, "send");
+  let lost = false;
+  spy.mockImplementation(async (command, options) => {
+    const result = await send(command, options);
+    if (command instanceof UpdateItemCommand && !lost) {
+      lost = true;
+      throw Object.assign(new Error("Synthetic lost acknowledgment"), {
+        name: "TimeoutError",
+      });
+    }
+    return result;
+  });
+  try {
+    expect((await repository.updateContentAndDelivery(write())).kind).toBe(
+      "committed",
+    );
+    expect(await read()).toMatchObject({ notesVersion: 2, contentRevision: 1 });
+  } finally {
+    spy.mockRestore();
+  }
+});
+it("propagates unexpected failures without translating them into conflicts", async () => {
+  await put(tables.meetingHistory, history());
+  const send = client.send.bind(client);
+  const error = new Error("Synthetic configuration failure");
+  const spy = jest
+    .spyOn(client, "send")
+    .mockImplementation((command, options) => {
+      if (
+        command instanceof UpdateItemCommand ||
+        command instanceof TransactWriteItemsCommand
+      )
+        return Promise.reject(error);
+      return send(command, options);
+    });
+  try {
+    await expect(repository.updateContentAndDelivery(write())).rejects.toBe(
+      error,
+    );
+    expect(await read()).toEqual(history());
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+async function lostAcknowledgment<T>(operation: () => Promise<T>) {
+  const send = client.send.bind(client);
+  let lost = false;
+  const spy = jest
+    .spyOn(client, "send")
+    .mockImplementation(async (command, options) => {
+      const result = await send(command, options);
+      if (
+        !lost &&
+        (command instanceof UpdateItemCommand ||
+          command instanceof TransactWriteItemsCommand)
+      ) {
+        lost = true;
+        throw Object.assign(new Error("Synthetic lost acknowledgment"), {
+          name: "TimeoutError",
+        });
+      }
+      return result;
+    });
+  try {
+    return await operation();
+  } finally {
+    spy.mockRestore();
+  }
+}
+it("strongly recognizes a committed claim and completion after lost acknowledgments", async () => {
+  const row = {
+    ...history(),
+    ...pointers,
+    contentRevision: 1,
+    updateDelivery: pending(),
+  };
+  await put(tables.meetingHistory, row);
+  await put(tables.deploymentControl, control);
+  const proof = runtime("old");
+  await put(tables.deploymentControl, {
+    ...proof,
+    heartbeatAt: now,
+    readiness: { ...proof.readiness, provenAt: now - 1, expiresAt: now + 200 },
+    protection: {
+      ...proof.protection!,
+      provenAt: now - 1,
+      expiresAt: now + 200,
+    },
+  });
+  expect(
+    await lostAcknowledgment(() =>
+      repository.claim({
+        key,
+        expectedContentRevision: 1,
+        expectedDeliveryRevision: "delivery-1",
+        attempt: attempt(),
+        authority,
+      }),
+    ),
+  ).toBe("claimed");
+  expect((await read())?.updateDelivery?.progress).toMatchObject({
+    kind: "running",
+    claim: { ownerInstanceId: "old" },
+  });
+  const verified = running("verified");
+  await put(tables.meetingHistory, { ...row, updateDelivery: verified });
+  expect(
+    await lostAcknowledgment(() =>
+      repository.transition({
+        key,
+        expectedDeliveryRevision: verified.revision,
+        attemptId: "attempt-1",
+        ownerInstanceId: "synthetic-owner",
+        change: {
+          kind: "complete",
+          revision: "lost-complete",
+          attemptId: "attempt-1",
+          completedAt: now,
+        },
+      }),
+    ),
+  ).toBe("applied");
+  expect((await read())?.updateDelivery).toMatchObject({
+    revision: "lost-complete",
+    progress: { kind: "synced" },
+  });
+});
+it("strongly recognizes exact persisted pointer growth after a lost acknowledgment", async () => {
+  const delivery = paginationPlan("grow");
+  await put(tables.meetingHistory, {
+    ...history(),
+    ...pointers,
+    contentRevision: 1,
+    updateDelivery: delivery,
+  });
+  const nextPointers = {
+    ...pointers,
+    notesMessageIds: [...pointers.notesMessageIds, "created-message"],
+  };
+  expect(
+    await lostAcknowledgment(() =>
+      repository.registerNotesPointers({
+        key,
+        expectedContentRevision: 1,
+        expectedDeliveryRevision: delivery.revision,
+        attemptId: "attempt-1",
+        expectedPointers: pointers,
+        nextPointers,
+      }),
+    ),
+  ).toBe("applied");
+  expect(await read()).toMatchObject(nextPointers);
+});
+it("propagates a write timeout when exact strong state cannot establish commitment", async () => {
+  await put(tables.meetingHistory, history());
+  const send = client.send.bind(client);
+  const failure = Object.assign(new Error("Synthetic not committed"), {
+    name: "TimeoutError",
+  });
+  const spy = jest
+    .spyOn(client, "send")
+    .mockImplementation((command, options) =>
+      command instanceof UpdateItemCommand
+        ? Promise.reject(failure)
+        : send(command, options),
+    );
+  try {
+    await expect(repository.updateContentAndDelivery(write())).rejects.toBe(
+      failure,
+    );
+    expect(await read()).toEqual(history());
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("resolves an interrupted write acknowledgment with an independent strong read", async () => {
+  await put(tables.meetingHistory, history());
+  const controller = new AbortController();
+  const send = client.send.bind(client);
+  const spy = jest
+    .spyOn(client, "send")
+    .mockImplementation(async (command, options) => {
+      const result = await send(command, options);
+      if (command instanceof UpdateItemCommand) {
+        controller.abort();
+        throw Object.assign(new Error("Synthetic interrupted acknowledgment"), {
+          name: "AbortError",
+        });
+      }
+      return result;
+    });
+  try {
+    expect(
+      (await repository.updateContentAndDelivery(write(), controller.signal))
+        .kind,
+    ).toBe("committed");
+    expect(await read()).toMatchObject({ notesVersion: 2, contentRevision: 1 });
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("CAS-checks a no-change pointer registration against a save racing after its read", async () => {
+  const delivery = planDelivery(
+    [registerOperation()],
+    [{ kind: "submitted", submissionId: "register", submittedAt: now }],
+  );
+  const row = {
+    ...history(),
+    ...pointers,
+    contentRevision: 1,
+    updateDelivery: delivery,
+  };
+  await put(tables.meetingHistory, row);
+  const next = write(row, "pointer-racing-save");
+  const send = client.send.bind(client);
+  let raced = false;
+  const spy = jest
+    .spyOn(client, "send")
+    .mockImplementation(async (command, options) => {
+      const result = await send(command, options);
+      if (command instanceof GetItemCommand && !raced) {
+        raced = true;
+        await send(
+          new PutItemCommand({
+            TableName: tables.meetingHistory,
+            Item: marshall(
+              { ...row, contentRevision: 2, updateDelivery: next.nextDelivery },
+              { removeUndefinedValues: true },
+            ),
+          }),
+        );
+      }
+      return result;
+    });
+  try {
+    expect(
+      await repository.registerNotesPointers({
+        key,
+        expectedContentRevision: 1,
+        expectedDeliveryRevision: delivery.revision,
+        attemptId: "attempt-1",
+        expectedPointers: pointers,
+        nextPointers: pointers,
+      }),
+    ).toBe("stale");
+    expect((await read())?.contentRevision).toBe(2);
+  } finally {
+    spy.mockRestore();
+  }
+});

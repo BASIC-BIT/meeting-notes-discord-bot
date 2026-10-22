@@ -576,7 +576,7 @@ function assertWatermarks(
       throw new Error("Only verified captured parts may be acknowledged");
   }
 }
-function knownCreatedCandidates(
+export function knownCreatedCandidates(
   progress: MeetingUpdateProgress,
 ): MeetingUpdateCreatedCandidate[] {
   if (!hasAttempt(progress)) return [];
@@ -602,7 +602,7 @@ function knownCreatedCandidates(
       : [];
   });
 }
-function candidateRegisteredOrDeleted(
+export function candidateRegisteredOrDeleted(
   candidate: MeetingUpdateCreatedCandidate,
   progress: MeetingUpdateProgress,
 ): boolean {
