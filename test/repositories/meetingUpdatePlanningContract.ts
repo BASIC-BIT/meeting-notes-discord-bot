@@ -1,3 +1,4 @@
+import { knownReadFailure } from "../types/meetingUpdateFailureBudget.fixture";
 import {
   sequentialCleanupPlan,
   advanceCleanup,
@@ -307,4 +308,48 @@ export function planningContract(
       lastSuccess: null,
     });
   });
+  it.each([
+    ["prepared", 0],
+    ["prepared", 7],
+    ["observed", 0],
+    ["observed", 7],
+    ["verified", 0],
+    ["verified", 7],
+  ] as const)(
+    "persists known %s prerequisite failure after prior%s exactly once",
+    async (kind, failures) => {
+      const h = current();
+      const before = knownReadFailure(kind, failures);
+      await h.seed(deliveryRow(before));
+      expect(
+        await h.repository.transition({
+          key,
+          expectedDeliveryRevision: before.revision,
+          attemptId: "attempt-1",
+          ownerInstanceId: "synthetic-owner",
+          change: {
+            kind: "progress",
+            revision: "known-read-failed",
+            progress:
+              failures === 7
+                ? { kind: "blocked", reason: "retry_exhausted" }
+                : {
+                    kind: "retrying",
+                    reason: "not_submitted",
+                    nextCheckAt: now + 180,
+                  },
+          },
+        }),
+      ).toBe("applied");
+      const after = (await h.read())?.updateDelivery;
+      expect(after?.attempts).toBe(failures + 1);
+      expect(after?.progress.kind).toBe(
+        failures === 7 ? "blocked" : "retrying",
+      );
+      expect(after?.parts).toEqual(before.parts);
+      expect(after?.createdCandidates).toEqual(before.createdCandidates);
+      expect(after?.cleanupCandidates).toEqual(before.cleanupCandidates);
+      expect(after?.lastSuccess).toEqual(before.lastSuccess);
+    },
+  );
 }

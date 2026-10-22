@@ -26,6 +26,11 @@ import type { MeetingUpdatePayload } from "./meetingUpdatePlanTypes";
 type Submitted = Extract<MeetingUpdateSubmission, { kind: "submitted" }>;
 class RegistrationNotApplied extends Error {}
 const definiteStatuses = new Set([400, 401, 403, 404, 405, 413, 429]);
+export function providerRetryAfter(error: unknown) {
+  return error instanceof DiscordMessageHttpError && error.status === 429
+    ? error.retryAfterSeconds
+    : undefined;
+}
 export function retryAt(
   ctx: DeliveryContext,
   failures: number,
@@ -38,6 +43,7 @@ export function retryAt(
 export async function retireKnownFailure(
   ctx: DeliveryContext,
   row: DeliveryHistory,
+  providerSeconds?: number,
 ) {
   const progress = ctx.own(row);
   const rejected = progress.operations
@@ -54,7 +60,7 @@ export async function retireKnownFailure(
         nextCheckAt:
           rejected?.kind === "rejected"
             ? rejected.retryAt
-            : retryAt(ctx, row.updateDelivery.attempts),
+            : retryAt(ctx, row.updateDelivery.attempts, providerSeconds),
       });
   return ctx.result(
     exhausted ? "blocked" : "retryable",
@@ -221,7 +227,13 @@ async function operationFailed(
   error: unknown,
 ) {
   if (!invoked || error instanceof RegistrationNotApplied) {
-    await markRejected(ctx, index, marker, "not_submitted");
+    await markRejected(
+      ctx,
+      index,
+      marker,
+      "not_submitted",
+      providerRetryAfter(error),
+    );
     return;
   }
   if (

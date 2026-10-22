@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { readMeetingUpdateRevisions } from "../types/meetingUpdateDelivery";
 import {
   createDeliveryContext,
@@ -15,11 +14,15 @@ import {
   executeDeliveryOperation,
   retireKnownFailure,
   retryAt,
+  providerRetryAfter,
 } from "./meetingUpdateDeliveryOperations";
 import { planMeetingUpdate } from "./meetingUpdatePlan";
 import { MeetingUpdatePlanBlocked } from "./meetingUpdatePlanTypes";
 import { DiscordMessageHttpError } from "./discordMessageEditor";
-import { MAX_CONSECUTIVE_KNOWN_FAILURES } from "./meetingUpdateDeliveryTypes";
+import {
+  MAX_CONSECUTIVE_KNOWN_FAILURES,
+  MeetingDeliveryStopped,
+} from "./meetingUpdateDeliveryTypes";
 import type {
   DeliveryHistory,
   MeetingDeliveryDependencies,
@@ -40,10 +43,24 @@ function allSettled(ctx: DeliveryContext, row: DeliveryHistory) {
       ["prepared", "verified", "rejected"].includes(op.submission.kind),
     );
 }
-async function retireSuperseded(ctx: DeliveryContext, row: DeliveryHistory) {
+async function retireSuperseded(
+  ctx: DeliveryContext,
+  row: DeliveryHistory,
+  providerSeconds = 0,
+) {
+  const nextCheckAt = Math.max(
+    ctx.now() + Math.ceil(providerSeconds),
+    ...ctx
+      .own(row)
+      .operations.map((operation) =>
+        operation.submission.kind === "rejected"
+          ? operation.submission.retryAt
+          : 0,
+      ),
+  );
   return ctx.result(
     "superseded",
-    await ctx.progress(row, { kind: "pending", nextCheckAt: ctx.now() }),
+    await ctx.progress(row, { kind: "pending", nextCheckAt }),
   );
 }
 async function finish(ctx: DeliveryContext) {
@@ -152,7 +169,7 @@ async function acquireRetained(
   const result = await ctx.acquireAttempt(row, retained.attempt, authority);
   if (result !== "claimed") return ctx.result("superseded", await ctx.read());
   const claimed = await ctx.read();
-  ctx.capture(claimed);
+  ctx.capture(claimed, retained.attempt, authority);
   ctx.startRenewals();
   return reconcileClaimed(ctx);
 }
@@ -171,12 +188,7 @@ async function acquireFresh(ctx: DeliveryContext, row: DeliveryHistory) {
   const claimed = await ctx.acquireAttempt(row, plan.attempt, authority);
   if (claimed !== "claimed") return ctx.result("superseded", await ctx.read());
   const exact = await ctx.read();
-  if (
-    !("attempt" in exact.updateDelivery.progress) ||
-    !isDeepStrictEqual(exact.updateDelivery.progress.attempt, plan.attempt)
-  )
-    return ctx.result("uncertain");
-  ctx.capture(exact);
+  ctx.capture(exact, plan.attempt, authority);
   ctx.startRenewals();
   for (let index = 0; index < plan.attempt.operations.length; index++) {
     await executeDeliveryOperation(ctx, index, plan.payloads);
@@ -217,8 +229,14 @@ async function claimedFailure(
   row: DeliveryHistory,
   error: unknown,
 ) {
-  ctx.own(row);
+  const progress = ctx.own(row);
   if (!allSettled(ctx, row)) return hold(ctx, row);
+  if (
+    readMeetingUpdateRevisions(row).contentRevision !==
+      progress.attempt.contentRevision ||
+    row.updateDelivery.policy.kind !== "active"
+  )
+    return retireSuperseded(ctx, row, providerRetryAfter(error));
   if (error instanceof MeetingUpdatePlanBlocked)
     return ctx.result(
       "blocked",
@@ -228,7 +246,13 @@ async function claimedFailure(
       }),
       error.message,
     );
-  return retireSuperseded(ctx, row);
+  if (
+    error instanceof MeetingDeliveryStopped ||
+    ctx.input.work.signal.aborted ||
+    ctx.input.signal?.aborted
+  )
+    return retireSuperseded(ctx, row, providerRetryAfter(error));
+  return retireKnownFailure(ctx, row, providerRetryAfter(error));
 }
 function preflightBlockReason(error: unknown) {
   if (error instanceof DiscordMessageHttpError)
@@ -270,9 +294,7 @@ async function preflightFailure(
           nextCheckAt: retryAt(
             ctx,
             row.updateDelivery.attempts,
-            error instanceof DiscordMessageHttpError && error.status === 429
-              ? error.retryAfterSeconds
-              : undefined,
+            providerRetryAfter(error),
           ),
         },
   );

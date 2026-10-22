@@ -872,8 +872,8 @@ function isRetryFailure(
       (result) => result.kind === "prepared" || isSettled(result),
     ) &&
     (submissions.some((result) => result.kind === "rejected") ||
-      (notSubmitted &&
-        submissions.some((result) => result.kind === "prepared")))
+      notSubmitted ||
+      exhausted)
   );
 }
 function assertRetryHistory(

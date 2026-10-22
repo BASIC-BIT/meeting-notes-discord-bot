@@ -138,10 +138,22 @@ export function createDeliveryContext(
       throw new MeetingDeliveryStopped("Claim changed");
     return progress;
   }
-  function capture(row: DeliveryHistory) {
+  function capture(
+    row: DeliveryHistory,
+    expectedAttempt: DeliveryAttemptProgress["attempt"],
+    authority: Parameters<typeof deps.repository.claim>[0]["authority"],
+  ) {
     const progress = row.updateDelivery.progress;
-    if (!("attempt" in progress))
-      throw new MeetingDeliveryStopped("Missing claim");
+    const expectedOwner =
+      authority.kind === "serving"
+        ? authority.context.instanceId
+        : authority.ownership.ownerInstanceId;
+    if (
+      !("attempt" in progress) ||
+      !isDeepStrictEqual(progress.attempt, expectedAttempt) ||
+      progress.claim.ownerInstanceId !== expectedOwner
+    )
+      throw new MeetingDeliveryStopped("Acquired claim changed before capture");
     attempt = progress.attempt;
     const summaryTarget = attempt.observations.find(
       (target) =>
@@ -158,12 +170,24 @@ export function createDeliveryContext(
     input.work.recordClaim(claim);
     input.work.claimed();
   }
+  async function admitClaimMutation(row: DeliveryHistory) {
+    await input.work.authority();
+    input.signal?.throwIfAborted();
+    const progress = own(row);
+    if (
+      row.updateDelivery.policy.kind !== "active" ||
+      progress.claim.leaseExpiresAt <= now() ||
+      progress.kind === "uncertain"
+    )
+      throw new MeetingDeliveryStopped("Claim mutation no longer admitted");
+  }
   async function applyChange(
     row: DeliveryHistory,
     change: MeetingUpdateDeliveryTransition,
     terminal = true,
   ): Promise<DeliveryHistory> {
-    const current = await read(true);
+    const current = await read(terminal);
+    if (!terminal) await admitClaimMutation(current);
     if (claim) {
       const progress = own(current);
       if (change.kind === "progress" && "attempt" in change.progress) {
@@ -350,15 +374,19 @@ export function createDeliveryContext(
             throw new MeetingDeliveryStopped("Renewal no longer admitted");
           if (progress.kind === "uncertain") return;
           const leaseExpiresAt = now() + MEETING_UPDATE_CLAIM_LEASE_SECONDS;
-          await applyChange(row, {
-            kind: "progress",
-            revision: randomUUID(),
-            progress: {
-              ...progress,
-              claim: { ...progress.claim, leaseExpiresAt },
-              nextCheckAt: leaseExpiresAt,
+          await applyChange(
+            row,
+            {
+              kind: "progress",
+              revision: randomUUID(),
+              progress: {
+                ...progress,
+                claim: { ...progress.claim, leaseExpiresAt },
+                nextCheckAt: leaseExpiresAt,
+              },
             },
-          });
+            false,
+          );
         })
           .catch(() => {
             renewalFailed = true;
