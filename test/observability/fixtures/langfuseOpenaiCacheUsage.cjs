@@ -12,8 +12,13 @@ async function main() {
   });
   trace.setGlobalTracerProvider(provider);
 
-  const { default: OpenAI } = require("openai");
-  const { observeOpenAI } = require("@langfuse/openai");
+  const moduleMode = process.argv[3] ?? "cjs";
+  const { default: OpenAI } =
+    moduleMode === "esm" ? await import("openai") : require("openai");
+  const { observeOpenAI } =
+    moduleMode === "esm"
+      ? await import("@langfuse/openai")
+      : require("@langfuse/openai");
   const { LangfuseOtelSpanAttributes } = require("@langfuse/core");
   const providerResponse = JSON.parse(process.argv[2]);
   let requestCount = 0;
