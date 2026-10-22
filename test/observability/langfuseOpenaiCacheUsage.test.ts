@@ -48,53 +48,53 @@ describe("Langfuse Responses cache usage", () => {
       },
       expectedInput: 500,
     },
-  ])("records finite numeric usage for $name", async ({
-    inputDetails,
-    expectedInput,
-  }) => {
-    const providerUsage = {
-      input_tokens: 1000,
-      input_tokens_details: inputDetails,
-      output_tokens: 100,
-      output_tokens_details: { reasoning_tokens: 20 },
-      total_tokens: 1100,
-    };
-    const providerResponse = {
-      id: "resp_synthetic_cache_usage",
-      object: "response",
-      created_at: 0,
-      status: "completed",
-      model: "synthetic",
-      output: [],
-      usage: providerUsage,
-    };
-    const fetch = jest.fn(async () => Response.json(providerResponse));
-    const client = observeOpenAI(
-      new OpenAI({ apiKey: "synthetic", fetch, maxRetries: 0 }),
-    );
+  ])(
+    "records finite numeric usage for $name",
+    async ({ inputDetails, expectedInput }) => {
+      const providerUsage = {
+        input_tokens: 1000,
+        input_tokens_details: inputDetails,
+        output_tokens: 100,
+        output_tokens_details: { reasoning_tokens: 20 },
+        total_tokens: 1100,
+      };
+      const providerResponse = {
+        id: "resp_synthetic_cache_usage",
+        object: "response",
+        created_at: 0,
+        status: "completed",
+        model: "synthetic",
+        output: [],
+        usage: providerUsage,
+      };
+      const fetch = jest.fn(async () => Response.json(providerResponse));
+      const client = observeOpenAI(
+        new OpenAI({ apiKey: "synthetic", fetch, maxRetries: 0 }),
+      );
 
-    const response = await client.responses.create({
-      model: "synthetic",
-      input: "synthetic",
-    });
+      const response = await client.responses.create({
+        model: "synthetic",
+        input: "synthetic",
+      });
 
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(response).toMatchObject(providerResponse);
-    expect(response.usage).toEqual(providerUsage);
-    expect(mockUpdate).toHaveBeenCalledTimes(1);
-    const usageDetails = mockUpdate.mock.calls[0][0].usageDetails;
-    expect(usageDetails).toEqual({
-      input: expectedInput,
-      output: 80,
-      total: 1100,
-      input_cached_tokens: inputDetails.cached_tokens,
-      input_cache_write_tokens: inputDetails.cache_write_tokens,
-      output_reasoning_tokens: 20,
-    });
-    expect(
-      Object.values(usageDetails).every(
-        (value) => typeof value === "number" && Number.isFinite(value),
-      ),
-    ).toBe(true);
-  });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(response).toMatchObject(providerResponse);
+      expect(response.usage).toEqual(providerUsage);
+      expect(mockUpdate).toHaveBeenCalledTimes(1);
+      const usageDetails = mockUpdate.mock.calls[0][0].usageDetails;
+      expect(usageDetails).toEqual({
+        input: expectedInput,
+        output: 80,
+        total: 1100,
+        input_cached_tokens: inputDetails.cached_tokens,
+        input_cache_write_tokens: inputDetails.cache_write_tokens,
+        output_reasoning_tokens: 20,
+      });
+      expect(
+        Object.values(usageDetails).every(
+          (value) => typeof value === "number" && Number.isFinite(value),
+        ),
+      ).toBe(true);
+    },
+  );
 });
