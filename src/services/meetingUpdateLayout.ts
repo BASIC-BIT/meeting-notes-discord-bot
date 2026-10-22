@@ -136,7 +136,25 @@ function findRoutineNotesSlots(
   const candidates = embeds.flatMap((embed, index) =>
     !embed.footer && hasNotesEmbedShape(embed) ? [index] : [],
   );
-  return candidates.length === 1 ? candidates : [];
+  return candidates.length === 1 || coherentFooterlessPages(embeds, candidates)
+    ? candidates
+    : [];
+}
+function coherentFooterlessPages(
+  embeds: EditableEmbed[],
+  candidates: number[],
+): boolean {
+  const labels = candidates.map((index) => readPageLabel(embeds[index]));
+  const first = labels[0];
+  if (first?.kind !== "page") return false;
+  return labels.every(
+    (label, index) =>
+      label.kind === "page" &&
+      label.baseTitle === first.baseTitle &&
+      label.total === first.total &&
+      label.number === first.number + index &&
+      label.number <= label.total,
+  );
 }
 function readRegisteredLayouts(input: MeetingUpdatePlanInput) {
   const pointers = notesPointers(input);

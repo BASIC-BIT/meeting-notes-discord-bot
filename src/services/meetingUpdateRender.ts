@@ -34,13 +34,21 @@ function stripNotice(text: string, required?: string): string {
     throw new MeetingUpdatePlanBlocked("unsupported_notice");
   return text;
 }
-function requiredNotesNotice(history: MeetingHistory): string | undefined {
+function requiredNotesFooterNotice(
+  history: MeetingHistory,
+): string | undefined {
   return (
     getMeetingProcessingNotice(
       history.processing,
       Boolean(history.notes?.trim()),
     )?.text ?? formatMeetingCaptureNotice(history)
   );
+}
+function notesCapturePrefix(history: MeetingHistory): string | undefined {
+  return history.capture?.kind === "interrupted" ||
+    history.status === "interrupted"
+    ? formatMeetingCaptureNotice(history)
+    : undefined;
 }
 function footerPrefix(current: EditableEmbed, fallback: string): string {
   const footer = current.footer?.text ?? "";
@@ -83,7 +91,7 @@ export function renderNotesUpdate(
       if (title.length > 256) throw new MeetingUpdatePlanBlocked("title_limit");
       embed.setTitle(title);
     }
-    const notice = requiredNotesNotice(history);
+    const notice = requiredNotesFooterNotice(history);
     const embeds = normalizePublicationEmbeds(
       rendered.map((embed) => embed.toJSON()),
     ).map((embed) => ({
@@ -103,7 +111,8 @@ export function renderNotesUpdate(
       throw new MeetingUpdatePlanBlocked("truncated_notice");
     return embeds;
   }
-  const notice = requiredNotesNotice(history);
+  const footerNotice = requiredNotesFooterNotice(history);
+  const captureNotice = notesCapturePrefix(history);
   const embeds = slots.map((slot, index) => {
     const next = { ...slot };
     if (captured.notesTitle)
@@ -112,33 +121,30 @@ export function renderNotesUpdate(
       const prefix = footerPrefix(slot, `v${history.notesVersion ?? 1}`);
       next.footer = {
         ...slot.footer,
-        text: notice ? `${prefix} • ${notice}` : prefix,
+        text: footerNotice ? `${prefix} • ${footerNotice}` : prefix,
       };
-      const body = notesBodyWithoutManagedNotice(slot, history);
-      next.description =
-        (history.capture?.kind === "interrupted" ||
-          history.status === "interrupted") &&
-        notice
-          ? `${notice}\n\n${body}`
-          : body;
+      const body = notesBodyWithoutManagedNotice(slot);
+      next.description = captureNotice ? `${captureNotice}\n\n${body}` : body;
     }
     return next;
   });
   return embeds;
 }
-function notesBodyWithoutManagedNotice(
-  slot: EditableEmbed,
-  history: MeetingHistory,
-): string {
+function footerHasNotice(slot: EditableEmbed, notice: string): boolean {
+  const footer = slot.footer?.text ?? "";
+  return footer === notice || footer.endsWith(" • " + notice);
+}
+function notesBodyWithoutManagedNotice(slot: EditableEmbed): string {
   const description = slot.description ?? "";
   const prefix = description.split("\n\n", 1)[0];
-  const footer = slot.footer?.text ?? "";
-  if (
-    !prefix.startsWith("Partial notes: recording was interrupted.") ||
-    (footer !== prefix && !footer.endsWith(" • " + prefix))
-  )
-    return description;
-  return stripNotice(description, formatMeetingCaptureNotice(history));
+  const provenCapturePrefix =
+    interruptedNotice.test(prefix) &&
+    (footerHasNotice(slot, prefix) ||
+      (prefix.endsWith(" " + PARTIAL_TRANSCRIPT_NOTICE) &&
+        footerHasNotice(slot, PARTIAL_TRANSCRIPT_NOTICE)));
+  return provenCapturePrefix
+    ? description.slice(prefix.length + 2)
+    : description;
 }
 function summaryBodyText(history: MeetingHistory): string {
   const summary =
