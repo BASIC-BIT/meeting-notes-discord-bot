@@ -1,3 +1,4 @@
+import { readDynamoIndexStatus } from "./repositories/dynamoIndexStatus";
 import {
   bindDeploymentControlRepository,
   bindMeetingUpdateDeliveryRepository,
@@ -59,7 +60,6 @@ import {
   DeleteItemCommand,
   QueryCommand,
   ScanCommand,
-  DescribeTableCommand,
   UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { marshall, unmarshall } from "@aws-sdk/util-dynamodb";
@@ -149,19 +149,16 @@ const dynamoDbClient = new DynamoDBClient(
 
 const tablePrefix = config.database.tablePrefix ?? "";
 const tableName = (name: string) => `${tablePrefix}${name}`;
-export async function getRenewalRecoveryIndexStatus(): Promise<
-  string | undefined
-> {
-  if (config.mock.enabled) return "ACTIVE";
-  const result = await dynamoDbClient.send(
-    new DescribeTableCommand({
-      TableName: tableName("GuildSubscriptionTable"),
-    }),
-  );
-  return result.Table?.GlobalSecondaryIndexes?.find(
-    (index) => index.IndexName === "RenewalRecoveryDueIndex",
-  )?.IndexStatus;
-}
+const indexStatus = (table: string, indexName: string) =>
+  readDynamoIndexStatus(dynamoDbClient, {
+    mock: config.mock.enabled,
+    tableName: tableName(table),
+    indexName,
+  });
+export const getMeetingUpdateDeliveryIndexStatus = () =>
+  indexStatus("MeetingHistoryTable", "UpdateDeliveryDueIndex");
+export const getRenewalRecoveryIndexStatus = () =>
+  indexStatus("GuildSubscriptionTable", "RenewalRecoveryDueIndex");
 export async function scanGuildSubscriptionPage(
   cursor?: string,
 ): Promise<{ guildIds: string[]; cursor?: string }> {
