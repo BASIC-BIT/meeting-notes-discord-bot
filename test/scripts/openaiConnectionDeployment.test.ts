@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -41,87 +42,128 @@ test.each(["ci.yml", "ci-core.yml", "deploy-staging.yml"])(
   },
 );
 
-const mockCli = `#!/usr/bin/env node
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const command = path.basename(process.argv[1]);
-const args = process.argv.slice(2);
-const failure = process.env.FIXTURE_FAILURE;
-const option = (name) => args[args.indexOf(name) + 1];
-fs.appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify({ command, args }) + "\\n");
-if (command === "aws") {
-  if (args[1] === "describe-services") {
-    assert.equal(option("--cluster"), "fixture-cluster");
-    assert.equal(option("--services"), "fixture-service");
-    process.stdout.write(failure === "service" ? "None" : "arn:aws:ecs:us-east-1:123456789012:task-definition/fixture-bot-task:42");
-  } else if (args[1] === "describe-task-definition") {
-    assert.equal(option("--task-definition"), "arn:aws:ecs:us-east-1:123456789012:task-definition/fixture-bot-task:42");
-    if (failure === "definition") process.exit(1);
-    const environment = [
-      { name: "DDB_TABLE_PREFIX", value: "fixture-" },
-      { name: "OPENAI_PROJECT_ID", value: failure === "project" ? "" : "fixture-project" },
-    ];
-    const app = { name: "fixture-bot", environment };
-    const sidecar = { name: "sidecar", environment: [{ name: "OPENAI_PROJECT_ID", value: "wrong-project" }] };
-    process.stdout.write(JSON.stringify({ taskDefinition: { containerDefinitions: failure === "app" ? [sidecar] : [sidecar, app] } }));
-  } else {
-    assert.equal(args[1], "get-secret-value");
-    assert.equal(option("--secret-id"), "fixture/openai-api-key");
-    assert.equal(option("--version-stage"), "AWSCURRENT");
-    if (failure === "key") process.exit(1);
-    process.stdout.write(failure === "empty-key" ? "  " : "fixture-key");
-  }
-} else {
-  assert.equal(command, "yarn");
-  assert.equal(process.env.OPENAI_API_KEY, "fixture-key");
-  assert.equal(process.env.OPENAI_PROJECT_ID, "fixture-project");
-  const directory = option("--dir");
-  assert.deepEqual(fs.readdirSync(directory), ["openai.yml"]);
-  assert.equal(fs.readFileSync(path.join(directory, "openai.yml"), "utf8"), fs.readFileSync("langfuse/llm-connections/openai.yml", "utf8"));
-  process.stdout.write("Connection command validated\\n");
-  if (failure === "push" && !args.includes("--dry-run")) process.exit(1);
+const mockShell = `
+aws() {
+  printf '%s\\n' "$1 $2" >> aws-calls.txt
+  case "$1 $2" in
+    "ecs describe-services")
+      [[ "$*" == *"--cluster fixture-cluster"* ]] || return 91
+      [[ "$*" == *"--services fixture-service"* ]] || return 91
+      if [ "$FIXTURE_FAILURE" = service ]; then
+        printf '%s' None
+      else
+        printf '%s' fixture-serving-task-definition
+      fi
+      ;;
+    "ecs describe-task-definition")
+      [[ "$*" == *"--task-definition fixture-serving-task-definition"* ]] || return 92
+      [ "$FIXTURE_FAILURE" != definition ] || return 1
+      if [ "$FIXTURE_FAILURE" = invalid-json ]; then
+        printf '%s' not-json
+      else
+        printf '%s' "$FIXTURE_TASK_DEFINITION"
+      fi
+      ;;
+    "secretsmanager get-secret-value")
+      [[ "$*" == *"--secret-id fixture/openai-api-key"* ]] || return 93
+      [[ "$*" == *"--version-stage AWSCURRENT"* ]] || return 93
+      [ "$FIXTURE_FAILURE" != key ] || return 1
+      if [ "$FIXTURE_FAILURE" = empty-key ]; then
+        printf '%s' '  '
+      else
+        printf '%s' fixture-key
+      fi
+      ;;
+    *) return 94 ;;
+  esac
+}
+yarn() {
+  local directory="$3"
+  local files=("$directory"/*)
+  [ "$OPENAI_API_KEY" = fixture-key ] || return 95
+  [ "$OPENAI_PROJECT_ID" = fixture-project ] || return 95
+  [ "$2" = --dir ] || return 96
+  [ "\${#files[@]}" = 1 ] || return 96
+  [ "\${files[0]##*/}" = openai.yml ] || return 96
+  [ "$(< "$directory/openai.yml")" = "$(< langfuse/llm-connections/openai.yml)" ] || return 96
+  printf '%s|%s\\n' "$1" "\${4:-}" >> yarn-calls.txt
+  printf '%s\\n' "$directory" > connection-directory.txt
+  printf '%s\\n' 'Connection command validated'
+  [ "$FIXTURE_FAILURE" != dry-run ] || return 1
+  if [ "$FIXTURE_FAILURE" = push ] && [ "\${4:-}" != --dry-run ]; then return 1; fi
+  return 0
 }
 `;
 
 function runSync(failure = "", prefix = "") {
   const directory = mkdtempSync(join(tmpdir(), "openai-sync-test-"));
-  const calls = join(directory, "calls.jsonl");
+  const connections = join(directory, "langfuse/llm-connections");
+  mkdirSync(connections, { recursive: true });
+  writeFileSync(
+    join(connections, "openai.yml"),
+    readFileSync("langfuse/llm-connections/openai.yml", "utf8"),
+  );
+  writeFileSync(join(connections, "bedrock.yml"), "provider: bedrock\n");
+  const environment = [
+    { name: "DDB_TABLE_PREFIX", value: "fixture-" },
+    {
+      name: "OPENAI_PROJECT_ID",
+      value: failure === "project" ? "" : "fixture-project",
+    },
+  ];
+  if (failure === "duplicate-project") environment.push(environment[1]);
+  const app = { name: "fixture-bot", environment };
+  const sidecar = {
+    name: "sidecar",
+    environment: [{ name: "OPENAI_PROJECT_ID", value: "wrong-project" }],
+  };
+  const containers = failure === "app" ? [sidecar] : [sidecar, app];
+  if (failure === "duplicate-app") containers.push(app);
   try {
-    for (const command of ["aws", "yarn"]) {
-      writeFileSync(join(directory, command), mockCli, { mode: 0o755 });
-    }
-    const result = spawnSync("bash", ["-c", step.run], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${directory}:${process.env.PATH}`,
-        TMPDIR: directory,
-        ECS_CLUSTER: "fixture-cluster",
-        ECS_SERVICE: "fixture-service",
-        ECS_TASK_FAMILY: "fixture-bot-task",
-        SECRETS_PREFIX: prefix,
-        FIXTURE_FAILURE: failure,
-        FIXTURE_CALLS: calls,
-        GITHUB_ENV: join(directory, "github-env"),
-        GITHUB_OUTPUT: join(directory, "github-output"),
-        GITHUB_STEP_SUMMARY: join(directory, "github-summary"),
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `${mockShell}
+(${step.run})
+sync_status=$?
+if [ -f connection-directory.txt ]; then
+  IFS= read -r connection_directory < connection-directory.txt
+  [ ! -d "$connection_directory" ] || exit 97
+fi
+exit "$sync_status"`,
+      ],
+      {
+        cwd: directory,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ECS_CLUSTER: "fixture-cluster",
+          ECS_SERVICE: "fixture-service",
+          ECS_TASK_FAMILY: "fixture-bot-task",
+          SECRETS_PREFIX: prefix,
+          FIXTURE_FAILURE: failure,
+          FIXTURE_TASK_DEFINITION: JSON.stringify({
+            taskDefinition: { containerDefinitions: containers },
+          }),
+          GITHUB_ENV: "github-env",
+          GITHUB_OUTPUT: "github-output",
+          GITHUB_STEP_SUMMARY: "github-summary",
+        },
       },
-    });
+    );
     expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(97);
     for (const file of ["github-env", "github-output", "github-summary"]) {
       expect(existsSync(join(directory, file))).toBe(false);
     }
-    const invocations: { command: string; args: string[] }[] = existsSync(calls)
+    const calls = join(directory, "yarn-calls.txt");
+    const yarn = existsSync(calls)
       ? readFileSync(calls, "utf8")
           .trim()
           .split("\n")
-          .map((line) => JSON.parse(line))
+          .map((line) => line.split("|"))
       : [];
-    const yarn = invocations.filter((call) => call.command === "yarn");
-    for (const call of yarn) {
-      expect(existsSync(call.args[call.args.indexOf("--dir") + 1])).toBe(false);
-    }
     const visible = result.stdout.replace(/^::add-mask::.*$/gm, "");
     expect(visible + result.stderr).not.toMatch(
       /fixture-key|fixture-project|wrong-project/,
@@ -137,15 +179,10 @@ test.each(["", "fixture"])(
   (prefix) => {
     const result = runSync("", prefix);
     expect(result.status).toBe(0);
-    expect(result.yarn.map((call) => call.args[0])).toEqual([
-      "llm-connections:push",
-      "llm-connections:push",
-      "llm-connections:check",
-    ]);
-    expect(result.yarn.map((call) => call.args.includes("--dry-run"))).toEqual([
-      true,
-      false,
-      false,
+    expect(result.yarn).toEqual([
+      ["llm-connections:push", "--dry-run"],
+      ["llm-connections:push", ""],
+      ["llm-connections:check", ""],
     ]);
     expect(result.stdout.indexOf("::add-mask::fixture-key")).toBeLessThan(
       result.stdout.indexOf("Connection command validated"),
@@ -156,18 +193,31 @@ test.each(["", "fixture"])(
   },
 );
 
-test.each(["service", "definition", "app", "key", "empty-key", "project"])(
-  "missing %s fails before any connection push",
-  (failure) => {
+test.each([
+  "service",
+  "definition",
+  "invalid-json",
+  "app",
+  "duplicate-app",
+  "key",
+  "empty-key",
+  "project",
+  "duplicate-project",
+])("missing or invalid %s fails before any connection push", (failure) => {
+  const result = runSync(failure);
+  expect(result.status).not.toBe(0);
+  expect(result.yarn).toEqual([]);
+  expect(result.stdout + result.stderr).toContain("ERROR:");
+});
+
+test.each([
+  { failure: "dry-run", calls: 1 },
+  { failure: "push", calls: 2 },
+])(
+  "a failed $failure prevents later commands and cleans up",
+  ({ failure, calls }) => {
     const result = runSync(failure);
     expect(result.status).not.toBe(0);
-    expect(result.yarn).toEqual([]);
-    expect(result.stdout + result.stderr).toContain("ERROR:");
+    expect(result.yarn).toHaveLength(calls);
   },
 );
-
-test("a failed live push prevents verification and cleans up", () => {
-  const result = runSync("push");
-  expect(result.status).not.toBe(0);
-  expect(result.yarn).toHaveLength(2);
-});

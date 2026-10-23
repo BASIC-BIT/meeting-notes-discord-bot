@@ -457,13 +457,19 @@ jobs:
           fi
           # Match the app container exactly as the deployment coordinator does.
           if ! OPENAI_PROJECT_ID=$(aws ecs describe-task-definition \
-            --task-definition "$task_definition_arn" --output json 2>/dev/null | jq -er '
-              [.taskDefinition.containerDefinitions[]
-                | select(any(.environment[]?; .name == "DDB_TABLE_PREFIX"))]
-              | select(length == 1) | .[0]
-              | [.environment[]? | select(.name == "OPENAI_PROJECT_ID") | .value]
-              | select(length == 1) | .[0]
-              | select(type == "string" and test("\\S"))
+            --task-definition "$task_definition_arn" --output json 2>/dev/null | node -e '
+              const { readFileSync } = require("node:fs");
+              const { taskDefinition } = JSON.parse(readFileSync(0, "utf8"));
+              const apps = taskDefinition.containerDefinitions.filter((container) =>
+                container.environment?.some((entry) => entry.name === "DDB_TABLE_PREFIX"),
+              );
+              if (apps.length !== 1) process.exit(1);
+              const projects = apps[0].environment.filter(
+                (entry) => entry.name === "OPENAI_PROJECT_ID",
+              );
+              if (projects.length !== 1 || typeof projects[0].value !== "string"
+                || !projects[0].value.trim()) process.exit(1);
+              process.stdout.write(projects[0].value);
             ' 2>/dev/null); then
             echo "ERROR: Serving task definition must have one app container with a nonempty OPENAI_PROJECT_ID."
             exit 1
