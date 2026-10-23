@@ -19,6 +19,40 @@ test("real conditional receipts complete introduction and preserve all work tabl
   expect(control!.servingGeneration).toBe(1);
   expect(f.calls.filter((op) => op === "update-service")).toHaveLength(2);
 });
+test.each(["cacheReady", "dependenciesReady", "gatewayReady"] as const)(
+  "candidate waits for %s warmup before promotion without repeating stop or launch",
+  async (field) => {
+    const f = await fixture();
+    await f.run("fence", "1");
+    await f.run("drain", "2");
+    f.row.readiness[field] = false;
+    let pauses = 0;
+    f.options.pause = async () => {
+      pauses++;
+      expect((await f.head())?.stage).toBe("launch_acknowledged");
+      expect((await readControl(f.controlTable))!.servingGeneration).toBe(0);
+      f.row.readiness[field] = true;
+      await client.send(
+        new PutItemCommand({
+          TableName: f.controlTable,
+          Item: marshall(f.row),
+        }),
+      );
+    };
+    await f.run("activate", "3");
+    expect(pauses).toBe(1);
+    expect((await f.head())?.stage).toBe("promotion_acknowledged");
+    expect((await readControl(f.controlTable))!.servingGeneration).toBe(1);
+    expect(f.serviceRequests).toHaveLength(2);
+    expect(f.serviceRequests[0]).toMatchObject({ desiredCount: 0 });
+    expect(f.serviceRequests[1]).toMatchObject({
+      desiredCount: 1,
+      taskDefinition: f.m.taskDefinition,
+    });
+    expect(f.isOwned()).toBe(true);
+  },
+);
+
 test("real conditional receipt lost acknowledgment prevents policy submission", async () => {
   const f = await fixture();
   f.setFault("receipt");

@@ -581,9 +581,6 @@ function createIntroductionEngine(m, ports) {
       assert.ok(
         row.workCounts && Object.values(row.workCounts).every((v) => v === 0),
       );
-    for (const field of ["cacheReady", "dependenciesReady"])
-      assert.equal(row.readiness[field], true);
-    if (m.runtimeMode !== "api") assert.equal(row.readiness.gatewayReady, true);
     assert.equal(row.readiness.runtimeMode, m.runtimeMode);
     assert.equal(row.readiness.observedEpoch, 1);
     assert.equal(
@@ -597,6 +594,10 @@ function createIntroductionEngine(m, ports) {
       row.protection.provenAt <= now() &&
         row.protection.expiresAt > now() + 120,
     );
+    for (const field of ["cacheReady", "dependenciesReady"])
+      ready(row.readiness[field], `Candidate ${field} warming`);
+    if (m.runtimeMode !== "api")
+      ready(row.readiness.gatewayReady, "Candidate gateway warming");
     return row;
   }
   async function candidateProof(owned, role = "candidate") {
