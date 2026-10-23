@@ -19,13 +19,14 @@ on:
         type: string
         default: sandbox
       plan_scope:
-        description: Full infrastructure or only the purchase-coordination permission prerequisite
+        description: Full infrastructure or a fixed permission/deployment prerequisite scope
         required: true
         type: choice
         default: full
         options:
           - full
           - purchase-permission
+          - deployment-prerequisites
 
 permissions:
   contents: read
@@ -209,10 +210,26 @@ jobs:
         env:
           PLAN_SCOPE: ${{ inputs.plan_scope }}
         run: |
+          set -euo pipefail
           plan_args=()
-          if [ "$PLAN_SCOPE" = "purchase-permission" ]; then
-            plan_args=(-target=aws_iam_role_policy.initial_purchase_condition)
-          fi
+          case "$PLAN_SCOPE" in
+            full) ;;
+            purchase-permission)
+              plan_args=(-target=aws_iam_role_policy.initial_purchase_condition)
+              ;;
+            deployment-prerequisites)
+              plan_args=(
+                -target=aws_dynamodb_table.deployment_control_table
+                '-target=aws_lb_target_group.api_spare_tg[0]'
+                -target=aws_iam_role_policy.deployment_control
+                '-target=aws_iam_policy.deployment_routing[0]'
+              )
+              ;;
+            *)
+              echo "ERROR: Unsupported PLAN_SCOPE: $PLAN_SCOPE" >&2
+              exit 1
+              ;;
+          esac
           set +e
           terraform -chdir=_infra plan -no-color -input=false -detailed-exitcode -out=tfplan "${plan_args[@]}" | tee _infra/terraform-plan.txt
           exit_code=${PIPESTATUS[0]}
@@ -229,6 +246,15 @@ jobs:
           else
             echo "changes=false" >> "$GITHUB_OUTPUT"
             echo "Terraform plan completed with no pending changes."
+          fi
+
+      - name: Validate deployment prerequisite actions
+        if: inputs.plan_scope == 'deployment-prerequisites'
+        run: |
+          set -euo pipefail
+          if ! terraform -chdir=_infra show -json tfplan 2>/dev/null | node scripts/deployment/validate-prerequisite-plan.cjs; then
+            echo "ERROR: Deployment prerequisite plan validation failed." >&2
+            exit 1
           fi
 
       - name: Record plan artifact metadata
