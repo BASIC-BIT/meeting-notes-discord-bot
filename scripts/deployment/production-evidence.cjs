@@ -1,5 +1,10 @@
 "use strict";
 const assert = require("node:assert/strict");
+const {
+  renderCollector,
+  verifyCollectorRequest,
+  captureNamespace,
+} = require("./collector-command.cjs");
 const { randomUUID } = require("node:crypto");
 const { buildProbeRequests } = require("./maintenance-probe.cjs");
 const {
@@ -128,10 +133,7 @@ function createEvidenceCollector({ m, aws, probe, now, manifestSha256 }) {
     const reference = await probe.capture(JSON.parse(serialized));
     assertFresh(value.proof, now(), m.observationMaxAgeSeconds);
     assert.equal(reference.storeId, m.evidenceStoreId);
-    assert.equal(
-      reference.namespace,
-      `production-introduction/${m.binding.operationId}/${manifestSha256}`,
-    );
+    assert.equal(reference.namespace, captureNamespace(m, manifestSha256));
     assert.equal(reference.sha256, expected);
     assert.equal(reference.size, Buffer.byteLength(serialized));
     assert.ok(
@@ -155,10 +157,7 @@ function createEvidenceCollector({ m, aws, probe, now, manifestSha256 }) {
   async function readRetained(reference) {
     assert.ok(reference);
     assert.equal(reference.storeId, m.evidenceStoreId);
-    assert.equal(
-      reference.namespace,
-      `production-introduction/${m.binding.operationId}/${manifestSha256}`,
-    );
+    assert.equal(reference.namespace, captureNamespace(m, manifestSha256));
     const value = await probe.readCapture(reference);
     assert.equal(metadataDigest(value), reference.sha256);
     assert.equal(Buffer.byteLength(JSON.stringify(value)), reference.size);
@@ -167,21 +166,22 @@ function createEvidenceCollector({ m, aws, probe, now, manifestSha256 }) {
   async function priorProof(reference) {
     assert.ok(reference, "Missing pre-shutdown proof");
     assert.equal(reference.storeId, m.evidenceStoreId);
-    assert.equal(
-      reference.namespace,
-      `production-introduction/${m.binding.operationId}/${manifestSha256}`,
-    );
+    assert.equal(reference.namespace, captureNamespace(m, manifestSha256));
     const previous = await probe.readCapture(reference);
     assert.equal(metadataDigest(previous), reference.sha256);
     assert.equal(Buffer.byteLength(JSON.stringify(previous)), reference.size);
     const request = previous.proof.request;
+    verifyCollectorRequest(m, request);
     assert.equal(request.operationId, m.binding.operationId);
     assert.equal(request.manifestSha256, manifestSha256);
     assert.equal(request.taskArn, m.legacyTaskArn);
     assert.equal(request.taskDefinition, m.legacyTaskDefinition);
     assert.equal(request.sourceSha, m.binding.legacySha);
     assert.equal(request.roleArn, m.binding.taskRoleArn);
-    assert.equal(request.commandSha256, m.collectorCommandSha256);
+    assert.equal(
+      request.commandTemplateSha256,
+      m.collectorCommandTemplateSha256,
+    );
     assert.equal(
       request.probeRequestsSha256,
       metadataDigest(buildProbeRequests(m.binding)),
@@ -209,7 +209,8 @@ function createEvidenceCollector({ m, aws, probe, now, manifestSha256 }) {
       maxRows: m.maxRows,
       pageSize: m.pageSize,
     });
-    const request = {
+    const base = {
+      ...(context.phase ? { phase: context.phase } : {}),
       compatibilityTarget: context.compatibilityTarget ?? {
         taskDefinition: m.taskDefinition,
         sourceSha: m.binding.sourceSha,
@@ -222,12 +223,12 @@ function createEvidenceCollector({ m, aws, probe, now, manifestSha256 }) {
       taskDefinition: context.taskDefinition,
       sourceSha: context.sourceSha,
       roleArn: m.binding.taskRoleArn,
-      commandSha256: m.collectorCommandSha256,
       probeRequestsSha256: metadataDigest(buildProbeRequests(m.binding)),
       predecessorSha256: context.predecessorSha256,
       nonce: randomUUID(),
       snapshotSha256: metadataDigest(snapshot),
     };
+    const request = renderCollector(m, base).request;
     const proof = await probe(
       JSON.parse(JSON.stringify(request)),
       JSON.parse(JSON.stringify(snapshot)),

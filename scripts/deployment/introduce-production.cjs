@@ -1,4 +1,5 @@
 "use strict";
+const { verifyCollectorRequest } = require("./collector-command.cjs");
 const assert = require("node:assert/strict");
 const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb");
 const {
@@ -147,7 +148,7 @@ function createIntroductionEngine(m, ports) {
       assert.equal(request.operationId, m.binding.operationId);
       assert.equal(request.manifestSha256, hash);
       assert.equal(request.roleArn, m.binding.taskRoleArn);
-      assert.equal(request.commandSha256, m.collectorCommandSha256);
+      verifyCollectorRequest(m, request);
       assert.deepEqual(request.compatibilityTarget, selected());
       assert.ok(
         observation.observedAt <= now() &&
@@ -269,6 +270,7 @@ function createIntroductionEngine(m, ports) {
   }
   function context(owned, extra = {}) {
     return {
+      phase: authorization.phase,
       compatibilityTarget: selected(),
       predecessorSha256: head?.receiptSha256 ?? null,
       taskArn: m.legacyTaskArn,

@@ -82,7 +82,7 @@ const schema = z
     originalControllerSha256: hash,
     targetControllerSha256: hash,
     knownWriterSha256: hash,
-    collectorCommandSha256: hash,
+    collectorCommandTemplateSha256: hash,
     originalServiceSha256: hash,
     originalRoutingSha256: hash,
     evidenceStoreId: text,

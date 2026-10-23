@@ -1,3 +1,7 @@
+import {
+  collectorTemplateSha256,
+  captureNamespace,
+} from "../../../scripts/deployment/collector-command.cjs";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { manifestHash } from "../../../scripts/deployment/sandbox-manifest.cjs";
@@ -71,7 +75,7 @@ export function manifestFixture() {
     originalControllerSha256: "f".repeat(64),
     targetControllerSha256: "7".repeat(64),
     knownWriterSha256: "1".repeat(64),
-    collectorCommandSha256: "2".repeat(64),
+    collectorCommandTemplateSha256: collectorTemplateSha256(),
     originalServiceSha256: "3".repeat(64),
     originalRoutingSha256: "4".repeat(64),
     evidenceStoreId: "approved-private-fixture",
@@ -141,7 +145,7 @@ export function evidenceFixture(m = manifestFixture()) {
   probe.capture = async (value) => {
     const body = JSON.stringify(value),
       sha256 = manifestHash(value),
-      namespace = `production-introduction/${m.binding.operationId}/${manifestHash(m)}`;
+      namespace = captureNamespace(m, manifestHash(m));
     captures.set(sha256, JSON.parse(body));
     return {
       storeId: m.evidenceStoreId,
