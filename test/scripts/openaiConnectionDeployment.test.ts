@@ -184,6 +184,8 @@ test.each(["", "fixture"])(
       ["llm-connections:push", ""],
       ["llm-connections:check", ""],
     ]);
+    expect(result.stdout).toContain("::add-mask::fixture-key");
+    expect(result.stdout).toContain("::add-mask::fixture-project");
     expect(result.stdout.indexOf("::add-mask::fixture-key")).toBeLessThan(
       result.stdout.indexOf("Connection command validated"),
     );
