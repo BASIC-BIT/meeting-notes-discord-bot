@@ -217,3 +217,64 @@ test("fixed native reader requests only identity metadata, without command lines
   };
   await captureWindowsHost(f.options);
 });
+
+test.each([
+  ["at preparation expiry", 1020, 1050, false],
+  ["after preparation expiry", 1021, 1050, false],
+  ["past preparation expiry", 1000, 1021, false],
+  ["ending exactly at preparation expiry", 1000, 1020, true],
+])(
+  "proof %s respects the complete preparation lifetime",
+  async (_label, now, validUntil, accepted) => {
+    const f = fixture();
+    f.preparation.validUntil = 1020;
+    const ref = await captureWindowsHost(f.options);
+    const store = createPreparationCapture({
+      ...f.f.options,
+      preparation: f.preparation,
+    });
+    const capture = await store.readCapture(ref);
+    const verify = () =>
+      verifyWindowsQuiescence({
+        preparation: f.preparation,
+        host: f.host,
+        capture,
+        now,
+        validUntil,
+        maxAge: 60,
+      });
+    if (accepted)
+      expect(verify()).toEqual({ hostName: "OPERATOR", writers: [] });
+    else expect(verify).toThrow();
+  },
+);
+
+test.each(["PutObjectCommand", "GetObjectCommand"])(
+  "committed capture with lost %s response preserves safe reconciliation instructions",
+  async (lostResponse) => {
+    const f = fixture();
+    const send = f.options.s3.send;
+    const secret = "PROVIDER_SECRET_SENTINEL";
+    f.options.s3.send = async (command) => {
+      const result = await send(command);
+      if (command.constructor.name === lostResponse) throw new Error(secret);
+      return result;
+    };
+    let failure;
+    try {
+      await captureWindowsHost(f.options);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure?.message).toBe(
+      "UNKNOWN: private capture acknowledgment; read-only reconciliation required; do not retry",
+    );
+    expect(String(failure)).not.toContain(secret);
+    expect(f.f.objects.size).toBe(1);
+    expect(
+      f.f.calls.filter(
+        (command) => command.constructor.name === "PutObjectCommand",
+      ),
+    ).toHaveLength(1);
+  },
+);

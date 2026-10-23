@@ -112,6 +112,8 @@ function verifyWindowsQuiescence({
   const selected = hostBinding(host);
   assert.equal(capture.kind, "windows-cim-zero-writers-v1");
   assert.deepEqual(capture.preparation, preparation);
+  assert.ok(now < preparation.validUntil);
+  assert.ok(validUntil <= preparation.validUntil);
   assert.equal(capture.hostSha256, metadataDigest(selected));
   assert.equal(capture.hostName, selected.hostName);
   assert.equal(capture.readerSid, selected.readerSid);
@@ -132,10 +134,11 @@ async function captureWindowsHost(options) {
   const { preparation, storageBinding, s3, host } = options;
   const now = options.now ?? (() => Date.now() / 1000);
   const startedAt = now();
+  let store, capture;
   try {
     assert.equal(options.platform ?? process.platform, "win32");
     const selected = hostBinding(host);
-    const store = createPreparationCapture({
+    store = createPreparationCapture({
       preparation,
       binding: storageBinding,
       client: s3,
@@ -167,7 +170,7 @@ async function captureWindowsHost(options) {
     );
     const raw = JSON.parse(result.stdout),
       rows = processRows(raw);
-    const capture = {
+    capture = {
       kind: "windows-cim-zero-writers-v1",
       preparation,
       hostSha256: metadataDigest(selected),
@@ -190,11 +193,11 @@ async function captureWindowsHost(options) {
       validUntil: Math.min(preparation.validUntil, selected.window.validUntil),
       maxAge: 30,
     });
-    return await store.capture(capture);
   } catch {
     throw new Error(
       "UNKNOWN: fixed Windows native quiescence prerequisite unavailable",
     );
   }
+  return store.capture(capture);
 }
 module.exports = { captureWindowsHost, verifyWindowsQuiescence };
