@@ -66,6 +66,7 @@ function parseDispatch(env, event) {
   };
 }
 async function main() {
+  let result = { status: "refused" };
   try {
     process.umask(0o077);
     const { nativeGitHub } = require("./terraform-native.cjs");
@@ -96,9 +97,8 @@ async function main() {
     process.once("SIGINT", abort);
     process.once("SIGTERM", abort);
     const deadline = setTimeout(abort, 5 * 60 * 60 * 1000);
-    let result;
     try {
-      result = await runTerraform({
+      const executionOptions = {
         ...options,
         directory,
         privateDirectory,
@@ -107,25 +107,31 @@ async function main() {
         reference,
         get: nativeGitHub(env.GH_TOKEN),
         signal: controller.signal,
-      });
+      };
+      result = { status: "unknown" };
+      result = await runTerraform(executionOptions);
     } finally {
       clearTimeout(deadline);
       process.removeListener("SIGINT", abort);
       process.removeListener("SIGTERM", abort);
     }
+  } catch {
+    // Once delegated, an unexpected failure cannot establish non-execution.
+  }
+  process.exitCode = [
+    "planned-changes",
+    "planned-no-changes",
+    "applied",
+  ].includes(result.status)
+    ? 0
+    : 1;
+  try {
     const publicValue = JSON.stringify(result);
     console.log(publicValue);
-    if (env.GITHUB_STEP_SUMMARY)
-      appendFileSync(env.GITHUB_STEP_SUMMARY, publicValue + "\n");
-    process.exitCode = [
-      "planned-changes",
-      "planned-no-changes",
-      "applied",
-    ].includes(result.status)
-      ? 0
-      : 1;
+    if (process.env.GITHUB_STEP_SUMMARY)
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, publicValue + "\n");
   } catch {
-    console.log('{"status":"refused"}');
+    // Publication failure does not replace the known or uncertain provider outcome.
     process.exitCode = 1;
   }
 }

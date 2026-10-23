@@ -63,7 +63,7 @@ function checkProtection(environment, invocation, run) {
   assert.equal(environment.protection_rules.length, 1);
   const rule = environment.protection_rules[0];
   assert.equal(rule.type, "required_reviewers");
-  assert.equal(rule.prevent_self_review, true);
+  assert.equal(typeof rule.prevent_self_review, "boolean");
   assert.equal(rule.reviewers.length, 1);
   const reviewer = rule.reviewers[0];
   assert.equal(reviewer.type, "User");
@@ -95,8 +95,10 @@ async function verifyApproval(get, invocation, inputs) {
   assert.equal(review.state, "approved");
   assert.equal(review.user.type, "User");
   assert.equal(review.user.id, reviewerId);
-  assert.notEqual(review.user.id, run.actor.id);
-  assert.notEqual(review.user.id, run.triggering_actor.id);
+  if (environment.protection_rules[0].prevent_self_review) {
+    assert.notEqual(review.user.id, run.actor.id);
+    assert.notEqual(review.user.id, run.triggering_actor.id);
+  }
   assert.equal(review.environments.length, 1);
   assert.equal(review.environments[0].id, environment.id);
   assert.equal(review.environments[0].name, invocation.environment);

@@ -26,7 +26,9 @@ The JSON capture limit is 32 MiB, including base64 encoding. A command's combine
 
 ## Supported native approval profile
 
-The supported profile is one environment job, one required-reviewer rule, one individual User reviewer, self-review prevented and explicit native `can_admins_bypass: false`. Additional rules, teams, branch policies, absent fields, multiple or missing reviews, rejections, reruns, mismatched sources and unsupported metadata refuse. This intentionally small profile needs a reviewed extension before another protection configuration can be used.
+The supported profile is one environment job, one required-reviewer rule, one individual User reviewer, an explicit boolean native `prevent_self_review` setting and explicit native `can_admins_bypass: false`. Additional rules, teams, branch policies, absent fields, multiple or missing reviews, rejections, reruns, mismatched sources and unsupported metadata refuse. This intentionally small profile needs a reviewed extension before another protection configuration can be used.
+
+The selected source behavior permits the same person to dispatch and explicitly approve when the native required-reviewer rule has `prevent_self_review: false`. That person must be the configured individual and must provide the actual approved review for this exact run and environment. With `prevent_self_review: true`, the reviewer must differ from both the dispatcher and triggering actor. Missing or malformed settings refuse; no dispatch confirmation or caller Boolean substitutes for native approval. This source choice does not authorize a live setting change. Branch-policy support remains unselected, and this verifier still refuses non-null branch policies.
 
 The verifier also reads the separate [custom deployment protection rules endpoint](https://docs.github.com/en/rest/deployments/protection-rules#get-all-deployment-protection-rules-for-an-environment). It requires an explicit zero count and empty rules array and includes that response in the unchanged-protection comparison. Missing or enabled custom rules refuse this supported profile.
 

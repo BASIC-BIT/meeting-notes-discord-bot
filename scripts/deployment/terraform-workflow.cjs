@@ -246,11 +246,6 @@ async function runTerraform(options) {
           applyStarted = true;
         });
   } catch (error) {
-    writeFileSync(
-      join(options.privateDirectory, "failure.txt"),
-      String(error.stack),
-      { mode: 0o600 },
-    );
     result = {
       status:
         applyStarted || e?.isUncertain() || e?.hasUnknownCommand()
@@ -259,8 +254,17 @@ async function runTerraform(options) {
             ? "failed"
             : "refused",
     };
+    try {
+      writeFileSync(
+        join(options.privateDirectory, "failure.txt"),
+        String(error.stack),
+        { flag: "wx", mode: 0o600 },
+      );
+    } catch {
+      // Preserve the primary outcome and any existing evidence if local persistence fails.
+    }
   }
-  if (e && ready && !e.isUncertain()) {
+  if (ready && !e.isUncertain()) {
     try {
       await e.retain({
         kind: "terraform-execution-output-v1",

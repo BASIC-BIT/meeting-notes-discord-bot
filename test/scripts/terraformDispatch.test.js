@@ -1,5 +1,8 @@
 /** @jest-environment node */
 import process from "node:process";
+import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
+import { join } from "node:path";
 import { test, expect } from "@jest/globals";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
@@ -117,3 +120,74 @@ test.each(["plan", "apply"])(
     );
   },
 );
+
+async function executeDispatchBoundary(status, summaryFails = true) {
+  const realRequire = createRequire(
+    join(process.cwd(), "scripts/deployment/terraform-dispatch.cjs"),
+  );
+  const messages = [];
+  let invocations = 0;
+  const fakeProcess = {
+    env: {
+      ...env,
+      GH_TOKEN: "fake-token",
+      GITHUB_EVENT_PATH: "event",
+      RUNNER_TEMP: "private",
+      TERRAFORM_PRIVATE_STORAGE_JSON: "{}",
+      GITHUB_STEP_SUMMARY: "summary",
+    },
+    umask: () => {},
+    cwd: () => "checkout",
+    once: () => {},
+    removeListener: () => {},
+    exitCode: undefined,
+  };
+  const modules = {
+    "node:fs": {
+      readFileSync: () => JSON.stringify(event),
+      mkdirSync: () => {},
+      appendFileSync: () => {
+        if (summaryFails) throw new Error("SECRET_SUMMARY_ERROR");
+      },
+    },
+    "node:child_process": { execFileSync: () => sha },
+    "./terraform-native.cjs": { nativeGitHub: () => () => {} },
+    "./terraform-workflow.cjs": {
+      runTerraform: async () => {
+        invocations++;
+        if (status === "throw") throw new Error("SECRET_DELEGATED_ERROR");
+        return { status };
+      },
+    },
+  };
+  await runInNewContext(
+    readFileSync("scripts/deployment/terraform-dispatch.cjs", "utf8") +
+      "\nmain();",
+    {
+      require: (name) => modules[name] ?? realRequire(name),
+      module: { exports: {} },
+      process: fakeProcess,
+      console: { log: (value) => messages.push(value) },
+      AbortController,
+      setTimeout,
+      clearTimeout,
+    },
+  );
+  return { messages, invocations, exitCode: fakeProcess.exitCode };
+}
+
+test.each(["unknown", "applied", "refused"])(
+  "summary failure preserves the %s execution result without retry",
+  async (status) => {
+    const result = await executeDispatchBoundary(status);
+    expect(result.messages).toEqual([JSON.stringify({ status })]);
+    expect(result.invocations).toBe(1);
+    expect(result.exitCode).toBe(1);
+  },
+);
+test("unexpected delegated failure stays unknown without raw errors or retry", async () => {
+  const result = await executeDispatchBoundary("throw", false);
+  expect(result.messages).toEqual(['{"status":"unknown"}']);
+  expect(result.invocations).toBe(1);
+  expect(result.exitCode).toBe(1);
+});

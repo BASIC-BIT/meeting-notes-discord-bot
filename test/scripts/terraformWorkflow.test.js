@@ -1,7 +1,7 @@
 /** @jest-environment node */
 import { Buffer } from "node:buffer";
 import { test, expect } from "@jest/globals";
-import { readFileSync, rmSync, readdirSync } from "node:fs";
+import { readFileSync, rmSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { runTerraform } from "../../scripts/deployment/terraform-workflow.cjs";
 import {
@@ -220,3 +220,48 @@ test.each(["canceled", "capture-bound"])(
     }
   },
 );
+
+test("failure-file persistence after apply begins preserves unknown and never retries", async () => {
+  const f = fixture(),
+    originalOptions = f.options;
+  f.options = (current) => {
+    const options = originalOptions(current),
+      command = options.command;
+    options.command = async (file, args, settings) => {
+      const result = await command(file, args, settings);
+      if (args[1] === "apply") {
+        mkdirSync(join(options.privateDirectory, "failure.txt"));
+        return { ...result, outcome: "unknown", exitCode: null };
+      }
+      return result;
+    };
+    return options;
+  };
+  try {
+    const result = await planAndApply(f);
+    expect(result.apply).toEqual({ status: "unknown" });
+    expect(f.commands.filter((c) => c.args[1] === "apply")).toHaveLength(1);
+    expect(readdirSync(join(f.directory, "private-20", "failure.txt"))).toEqual(
+      [],
+    );
+  } finally {
+    rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
+test("local failure-detail error before execution preserves refusal", async () => {
+  const f = fixture();
+  try {
+    const options = f.options();
+    mkdirSync(join(options.privateDirectory, "failure.txt"));
+    expect(await runTerraform({ ...options, binding: undefined })).toEqual({
+      status: "refused",
+    });
+    expect(f.commands).toHaveLength(0);
+    expect(readdirSync(join(options.privateDirectory, "failure.txt"))).toEqual(
+      [],
+    );
+  } finally {
+    rmSync(f.directory, { recursive: true, force: true });
+  }
+});

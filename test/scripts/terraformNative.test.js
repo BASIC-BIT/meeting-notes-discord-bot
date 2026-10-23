@@ -253,3 +253,78 @@ test.each([
     verifyApproval(f.get, invocation, reviewInputs),
   ).rejects.toThrow();
 });
+
+function selfReviewFixture() {
+  const f = fixture();
+  f.data.environment.protection_rules[0].prevent_self_review = false;
+  f.data.environment.protection_rules[0].reviewers[0].reviewer.id = 1;
+  f.data.approvals[0].user.id = 1;
+  return f;
+}
+test("native false self-review setting permits the dispatcher's explicit approved review", async () => {
+  const f = selfReviewFixture();
+  const proof = await verifyApproval(f.get, invocation, reviewInputs);
+  expect(proof.review.user.id).toBe(f.data.run.actor.id);
+  expect(proof.environment.protection_rules[0].prevent_self_review).toBe(false);
+});
+test.each(["actor", "triggering_actor"])(
+  "native true self-review setting refuses the %s's review",
+  async (actor) => {
+    const f = selfReviewFixture();
+    f.data.environment.protection_rules[0].prevent_self_review = true;
+    f.data.run.actor.id = 3;
+    f.data.run.triggering_actor.id = 4;
+    f.data.run[actor].id = 1;
+    await expect(
+      verifyApproval(f.get, invocation, reviewInputs),
+    ).rejects.toThrow();
+  },
+);
+test.each([undefined, null, "false", 0, {}, []])(
+  "malformed self-review setting %s never grants approval",
+  async (value) => {
+    const f = selfReviewFixture();
+    f.data.environment.protection_rules[0].prevent_self_review = value;
+    await expect(
+      verifyApproval(f.get, invocation, reviewInputs),
+    ).rejects.toThrow();
+  },
+);
+test.each([
+  "missing-review",
+  "rejected",
+  "stale-run",
+  "recent-config",
+  "foreign-reviewer",
+  "foreign-environment",
+  "bypass",
+])("self-review profile refuses %s evidence", async (fault) => {
+  const f = selfReviewFixture();
+  const mutations = {
+    "missing-review": () => {
+      f.data.approvals = [];
+    },
+    rejected: () => {
+      f.data.approvals[0].state = "rejected";
+    },
+    "stale-run": () => {
+      f.data.run.id = 19;
+    },
+    "recent-config": () => {
+      f.data.environment.updated_at = f.data.run.created_at;
+    },
+    "foreign-reviewer": () => {
+      f.data.approvals[0].user.id = 3;
+    },
+    "foreign-environment": () => {
+      f.data.approvals[0].environments[0].id = 8;
+    },
+    bypass: () => {
+      f.data.environment.can_admins_bypass = true;
+    },
+  };
+  mutations[fault]();
+  await expect(
+    verifyApproval(f.get, invocation, reviewInputs),
+  ).rejects.toThrow();
+});
