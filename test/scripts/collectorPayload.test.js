@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import { Buffer } from "node:buffer";
-import { test, expect } from "@jest/globals";
+import { test, expect, jest } from "@jest/globals";
 import { runInNewContext } from "node:vm";
 import { createRequire } from "node:module";
 import process from "node:process";
@@ -14,7 +14,11 @@ import { buildProbeRequests } from "../../scripts/deployment/maintenance-probe.c
 const nodeRequire = createRequire(process.cwd() + "/package.json");
 test("the exact rendered loader rejects changed source or input bytes before payload execution", async () => {
   const m = manifestFixture(),
-    rendered = renderCollector(m, { nonce: "nonce", taskArn: m.legacyTaskArn });
+    rendered = renderCollector(m, {
+      nonce: "nonce",
+      validUntil: Date.now() / 1000 + 60,
+      taskArn: m.legacyTaskArn,
+    });
   for (const field of ["sourceSha256", "inputSha256"]) {
     const command = rendered.command.replace(
       rendered.request[field],
@@ -30,7 +34,11 @@ test("the exact rendered loader rejects changed source or input bytes before pay
 });
 test("exact rendered loader emits only sanitized UNKNOWN when metadata is unavailable", async () => {
   const m = manifestFixture(),
-    rendered = renderCollector(m, { nonce: "nonce", taskArn: m.legacyTaskArn });
+    rendered = renderCollector(m, {
+      nonce: "nonce",
+      validUntil: Date.now() / 1000 + 60,
+      taskArn: m.legacyTaskArn,
+    });
   const output = [],
     fakeProcess = {
       env: {},
@@ -198,6 +206,7 @@ test("the actual embedded payload executes the six fixed commands with fake meta
   };
   const rendered = renderCollector(m, {
     nonce: "nonce",
+    validUntil: Date.now() / 1000 + 60,
     taskArn: m.legacyTaskArn,
     taskDefinition: m.legacyTaskDefinition,
     roleArn: m.binding.taskRoleArn,
@@ -235,4 +244,32 @@ test("the actual embedded payload executes the six fixed commands with fake meta
   expect(JSON.parse(output.at(-1)).value.status).toBe("complete");
   expect(output.join("")).not.toContain("AKIDEXAMPLE");
   expect(output.join("")).not.toContain("synthetic");
+});
+
+test("expired embedded input emits UNKNOWN without metadata or credentials", async () => {
+  const m = manifestFixture(),
+    output = [],
+    fetch = jest.fn();
+  const rendered = renderCollector(m, {
+    nonce: "nonce",
+    validUntil: Date.now() / 1000 - 1,
+  });
+  const require = jest.fn(nodeRequire);
+  await runInNewContext(
+    rendered.command.slice("/usr/local/bin/node -e '".length, -1),
+    {
+      require,
+      Buffer,
+      AbortSignal,
+      URL,
+      TextDecoder,
+      fetch,
+      process: { env: {}, stdout: { write: (s) => output.push(s) } },
+    },
+  );
+  expect(fetch).not.toHaveBeenCalled();
+  expect(require.mock.calls.some(([name]) => name.startsWith("/app/"))).toBe(
+    false,
+  );
+  expect(JSON.parse(output.at(-1)).value.status).toBe("UNKNOWN");
 });

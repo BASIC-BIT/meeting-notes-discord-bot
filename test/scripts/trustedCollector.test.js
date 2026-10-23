@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { test, expect } from "@jest/globals";
+import { test, expect, jest } from "@jest/globals";
 import { EventEmitter } from "node:events";
 import { Buffer } from "node:buffer";
 import process from "node:process";
@@ -16,6 +16,13 @@ import {
 import { renderCollector } from "../../scripts/deployment/collector-command.cjs";
 import { manifestFixture } from "../fixtures/deployment/productionIntroduction.js";
 import { manifestHash } from "../../scripts/deployment/sandbox-manifest.cjs";
+import { collectNativeInventory } from "../../scripts/deployment/collector-inventory.cjs";
+import { metadataDigest } from "../../scripts/deployment/production-work.cjs";
+import { buildProbeRequests } from "../../scripts/deployment/maintenance-probe.cjs";
+jest.mock("../../scripts/deployment/collector-inventory.cjs", () => ({
+  ...jest.requireActual("../../scripts/deployment/collector-inventory.cjs"),
+  collectNativeInventory: jest.fn(),
+}));
 test("session secret response exists only in the child environment and is never an argument", async () => {
   const m = manifestFixture(),
     session = {
@@ -150,6 +157,7 @@ test("ambiguous Exec submission is made once and never opens an unrelated plugin
   const m = manifestFixture(),
     request = renderCollector(m, {
       nonce: "nonce",
+      validUntil: Date.now() / 1000 + 60,
       taskArn: m.legacyTaskArn,
     }).request;
   let submissions = 0,
@@ -181,6 +189,7 @@ test("foreign native Exec response cannot be attached to the requested task", as
   const m = manifestFixture(),
     request = renderCollector(m, {
       nonce: "nonce",
+      validUntil: Date.now() / 1000 + 60,
       taskArn: m.legacyTaskArn,
     }).request;
   let plugins = 0;
@@ -201,4 +210,101 @@ test("foreign native Exec response cannot be attached to the requested task", as
     }),
   ).rejects.toThrow(/UNKNOWN/);
   expect(plugins).toBe(0);
+});
+
+test("expiry during session preparation prevents Exec submission", async () => {
+  const m = manifestFixture(),
+    now = Date.now();
+  const clock = jest.spyOn(Date, "now").mockReturnValue(now);
+  const send = jest.fn();
+  try {
+    await expect(
+      collectTaskSession({
+        m,
+        request: renderCollector(m, {
+          nonce: "nonce",
+          validUntil: (now + 1000) / 1000,
+        }).request,
+        native: {},
+        platform: "linux",
+        ecs: { config: { maxAttempts: async () => 1 }, send },
+        version: async () => {
+          clock.mockReturnValue(now + 1000);
+          return { stdout: "1.2.835.0" };
+        },
+      }),
+    ).rejects.toThrow();
+    expect(send).not.toHaveBeenCalled();
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test("plugin deadline kills and waits for the owned child close before rejection", async () => {
+  const controller = new AbortController(),
+    child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = jest.fn();
+  const pending = pluginStream([], {}, () => child, controller.signal);
+  let settled = false;
+  const checked = pending.catch(() => {
+    settled = true;
+  });
+  controller.abort();
+  await Promise.resolve();
+  expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+  expect(settled).toBe(false);
+  child.emit("close", null);
+  await checked;
+  expect(settled).toBe(true);
+});
+
+test("expiry during native inventory refuses before Exec and private capture", async () => {
+  const m = manifestFixture(),
+    expectedSha256 = manifestHash(m);
+  let now = 1000;
+  const snapshot = { binding: m.binding, tables: {} };
+  const request = renderCollector(m, {
+    nonce: m.binding.operationId,
+    operationId: m.binding.operationId,
+    manifestSha256: expectedSha256,
+    roleArn: m.binding.taskRoleArn,
+    phase: "fence",
+    snapshotSha256: metadataDigest(snapshot),
+    probeRequestsSha256: metadataDigest(buildProbeRequests(m.binding)),
+    validUntil: 1001,
+  }).request;
+  collectNativeInventory.mockImplementationOnce(async () => {
+    now = 1001;
+    return { tasks: { bound: { lastStatus: "RUNNING" } } };
+  });
+  const send = jest.fn();
+  const collector = createTrustedCollector({
+    manifest: m,
+    expectedSha256,
+    now: () => now,
+    aws: jest.fn(),
+    ecs: { send },
+    s3: { send },
+    storageBinding: {
+      kind: "versioned-private-s3-v1",
+      storeId: m.evidenceStoreId,
+      bucket: "private-synthetic",
+      accountId: m.binding.accountId,
+      region: m.binding.region,
+      kmsKeyArn:
+        "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-4111-8111-111111111111",
+      policySha256: "a".repeat(64),
+      lifecycleSha256: "b".repeat(64),
+      retentionUntil: 6000,
+      administratorTrustSha256: "c".repeat(64),
+    },
+  });
+  await expect(collector(request, snapshot)).rejects.toThrow(
+    "UNKNOWN: observation expired",
+  );
+  expect(send).not.toHaveBeenCalled();
+  await expect(collector(request, snapshot)).rejects.toThrow();
+  expect(collectNativeInventory).toHaveBeenCalledTimes(1);
 });

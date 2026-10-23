@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import { Buffer } from "node:buffer";
-import { test, expect } from "@jest/globals";
+import { test, expect, jest } from "@jest/globals";
 import { Readable } from "node:stream";
 import * as sdk from "@aws-sdk/client-dynamodb";
 import {
@@ -140,4 +140,32 @@ test("strict identity rejects unsupported entities and omitted fields", () => {
   expect(() =>
     parseIdentity(xml.replace("AROAEXAMPLE", "AROA&amp;"), expected),
   ).toThrow();
+});
+
+test("expired absolute deadline refuses before resolving credentials", async () => {
+  const f = setup();
+  await expect(
+    collectPrincipal({ ...f.options, deadlineMs: Date.now() - 1 }),
+  ).rejects.toThrow();
+  expect(f.calls()).toBe(0);
+  expect(f.requests).toHaveLength(0);
+});
+test("expiry between probe requests prevents every later submission", async () => {
+  const f = setup(),
+    started = Date.now();
+  const clock = jest.spyOn(Date, "now").mockReturnValue(started);
+  const handle = f.options.requestHandler.handle;
+  f.options.requestHandler.handle = async (request) => {
+    const response = await handle(request);
+    if (f.requests.length === 2) clock.mockReturnValue(started + 1000);
+    return response;
+  };
+  try {
+    await expect(
+      collectPrincipal({ ...f.options, deadlineMs: started + 1000 }),
+    ).rejects.toThrow();
+    expect(f.requests).toHaveLength(2);
+  } finally {
+    clock.mockRestore();
+  }
 });

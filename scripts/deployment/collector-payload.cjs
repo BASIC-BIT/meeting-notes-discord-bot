@@ -2,6 +2,7 @@
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const {
+  checkDeadline,
   withinDeadline,
   readBody,
   boundedBody,
@@ -14,7 +15,7 @@ const { validateBinding } = require("./maintenance-fence.cjs");
 function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
-async function readTaskMetadata(input, signal) {
+async function readTaskMetadata(input, signal, deadlineMs) {
   const uri = new URL(process.env.ECS_CONTAINER_METADATA_URI_V4);
   assert.equal(uri.protocol, "http:");
   assert.equal(uri.hostname, "169.254.170.2");
@@ -24,6 +25,7 @@ async function readTaskMetadata(input, signal) {
   assert.match(uri.pathname, /^\/v4\/[A-Za-z0-9-]+\/?$/);
   const rows = [];
   for (const suffix of ["", "/task"]) {
+    checkDeadline(signal, deadlineMs);
     const response = await fetch(uri.href.replace(/\/$/, "") + suffix, {
       signal,
       redirect: "error",
@@ -52,7 +54,11 @@ async function readTaskMetadata(input, signal) {
   };
 }
 async function runPayload(input, provenance) {
-  const signal = AbortSignal.timeout(60000);
+  let signal;
+  const deadlineMs = Math.min(
+    input.request.validUntil * 1000,
+    Date.now() + 60000,
+  );
   const lines = [];
   const emit = (type, value) => {
     const record = {
@@ -70,7 +76,12 @@ async function runPayload(input, provenance) {
   };
   try {
     emit("start", { taskArn: input.request.taskArn });
-    const metadata = await readTaskMetadata(input, signal);
+    assert.ok(
+      Number.isFinite(deadlineMs) && deadlineMs > Date.now(),
+      "UNKNOWN: invocation deadline",
+    );
+    signal = AbortSignal.timeout(Math.ceil(deadlineMs - Date.now()));
+    const metadata = await readTaskMetadata(input, signal, deadlineMs);
     emit("result", { kind: "metadata", ...metadata });
     const sdk = require("/app/node_modules/@aws-sdk/client-dynamodb");
     const version =
@@ -86,6 +97,7 @@ async function runPayload(input, provenance) {
       },
       probes: buildProbeRequests(input.binding),
       signal,
+      deadlineMs,
     });
     emit("result", { kind: "identity", ...result.identity });
     for (const [name, value] of Object.entries(result.results))
@@ -118,6 +130,7 @@ function payloadSource() {
       digest,
       validateBinding,
       buildProbeRequests,
+      checkDeadline,
       withinDeadline,
       readBody,
       boundedBody,

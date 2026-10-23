@@ -1,6 +1,5 @@
 "use strict";
 const assert = require("node:assert/strict");
-const { withinDeadline } = require("./collector-principal.cjs");
 const { metadataDigest } = require("./production-work.cjs");
 const { stateDigest } = require("./production-evidence.cjs");
 async function collectPages(
@@ -294,10 +293,7 @@ async function controllerInventory(aws, m) {
 async function collectNativeInventory({ m, request, aws }) {
   const safe = async (service, operation, input) => {
     try {
-      return await withinDeadline(
-        aws(service, operation, input),
-        AbortSignal.timeout(30000),
-      );
+      return await aws(service, operation, input);
     } catch {
       throw new Error(
         `UNKNOWN: native ${service}.${operation} prerequisite unavailable`,

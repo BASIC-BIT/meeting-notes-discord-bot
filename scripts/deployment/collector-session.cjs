@@ -1,11 +1,12 @@
 "use strict";
 const assert = require("node:assert/strict");
-const { spawn, execFile } = require("node:child_process");
-const { promisify } = require("node:util");
+const { spawn } = require("node:child_process");
+const { executeChild } = require("./owned-child.cjs");
 const { ExecuteCommandCommand } = require("@aws-sdk/client-ecs");
 const { digest } = require("./collector-payload.cjs");
 const { buildProbeRequests } = require("./maintenance-probe.cjs");
 const { verifyCollectorRequest } = require("./collector-command.cjs");
+const { checkDeadline } = require("./collector-principal.cjs");
 const probeNames = [
   "meetingAcquire",
   "uploadClaim",
@@ -92,7 +93,13 @@ function sessionArguments(m, native, session) {
     `https://ecs.${m.binding.region}.amazonaws.com`,
   ];
 }
-function pluginStream(args, session, launch = spawn) {
+function pluginStream(
+  args,
+  session,
+  launch = spawn,
+  signal = AbortSignal.timeout(75000),
+) {
+  signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = launch("session-manager-plugin", args, {
       windowsHide: true,
@@ -104,16 +111,14 @@ function pluginStream(args, session, launch = spawn) {
     });
     const chunks = [];
     let length = 0,
-      failed = false,
-      timer;
+      failed = false;
     const fail = () => {
       if (failed) return;
       failed = true;
-      clearTimeout(timer);
-      child.kill();
-      reject(new Error("UNKNOWN: session transport; do not retry"));
+      child.kill("SIGKILL");
     };
-    timer = setTimeout(fail, 75000);
+    signal.addEventListener("abort", fail, { once: true });
+    if (signal.aborted) fail();
     child.once("error", fail);
     child.stderr.on("data", fail);
     child.stdout.on("data", (bytes) => {
@@ -122,8 +127,9 @@ function pluginStream(args, session, launch = spawn) {
       else chunks.push(Buffer.from(bytes));
     });
     child.once("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0 || failed) return fail();
+      signal.removeEventListener("abort", fail);
+      if (code !== 0 || failed)
+        return reject(new Error("UNKNOWN: session transport; do not retry"));
       resolve(Buffer.concat(chunks));
     });
     // Keep stdin open: plugin EOF is not remote completion. Only close terminates this bounded capture.
@@ -153,7 +159,7 @@ async function collectTaskSession({
   native,
   ecs,
   launch = spawn,
-  version = promisify(execFile),
+  version = executeChild,
   platform = process.platform,
 }) {
   assert.equal(
@@ -162,8 +168,16 @@ async function collectTaskSession({
     "UNKNOWN: only Linux pipe transport is source-supported; Windows console transport unavailable",
   );
   const rendered = verifyCollectorRequest(m, request);
+  const deadlineMs = Math.min(request.validUntil * 1000, Date.now() + 75000);
+  assert.ok(
+    Number.isFinite(deadlineMs) && deadlineMs > Date.now(),
+    "UNKNOWN: invocation deadline",
+  );
+  const signal = AbortSignal.timeout(Math.ceil(deadlineMs - Date.now()));
   const installed = await version("session-manager-plugin", ["--version"], {
-    timeout: 5000,
+    timeout: Math.min(5000, Math.ceil(deadlineMs - Date.now())),
+    signal,
+    killSignal: "SIGKILL",
     maxBuffer: 1024,
     windowsHide: true,
   });
@@ -171,6 +185,7 @@ async function collectTaskSession({
   assert.equal(await ecs.config.maxAttempts(), 1, "UNKNOWN: Exec retries");
   let response;
   try {
+    checkDeadline(signal, deadlineMs);
     response = await ecs.send(
       new ExecuteCommandCommand({
         cluster: m.cluster,
@@ -179,7 +194,7 @@ async function collectTaskSession({
         command: rendered.command,
         interactive: true,
       }),
-      { abortSignal: AbortSignal.timeout(15000) },
+      { abortSignal: AbortSignal.any([signal, AbortSignal.timeout(15000)]) },
     );
     assert.equal(response.taskArn, native.taskArn);
     assert.equal(response.containerArn, native.containerArn);
@@ -189,8 +204,9 @@ async function collectTaskSession({
       `arn:aws:ecs:${m.binding.region}:${m.binding.accountId}:cluster/${m.cluster}`,
     );
     assert.equal(response.interactive, true);
+    checkDeadline(signal, deadlineMs);
     const args = sessionArguments(m, native, response.session);
-    const bytes = await pluginStream(args, response.session, launch);
+    const bytes = await pluginStream(args, response.session, launch, signal);
     const records = decodeCollectorStream(
       bytes,
       request,

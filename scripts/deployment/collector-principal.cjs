@@ -1,5 +1,9 @@
 "use strict";
 const assert = require("node:assert/strict");
+function checkDeadline(signal, deadlineMs) {
+  signal.throwIfAborted();
+  assert.ok(Date.now() < deadlineMs, "UNKNOWN: invocation deadline");
+}
 async function withinDeadline(promise, signal) {
   signal.throwIfAborted();
   let onAbort;
@@ -68,8 +72,8 @@ function parseIdentity(xml, expected) {
     requestId: envelope[2],
   };
 }
-async function runProbe(client, sdk, probe, signal) {
-  signal.throwIfAborted();
+async function runProbe(client, sdk, probe, signal, deadlineMs) {
+  checkDeadline(signal, deadlineMs);
   let errorName,
     requestId = null;
   try {
@@ -84,6 +88,7 @@ async function runProbe(client, sdk, probe, signal) {
     if (/^[A-Za-z0-9-]{1,128}$/.test(error.$metadata?.requestId ?? ""))
       requestId = error.$metadata.requestId;
   }
+  checkDeadline(signal, deadlineMs);
   assert.ok(
     ["AccessDeniedException", "ConditionalCheckFailedException"].includes(
       errorName,
@@ -108,6 +113,7 @@ async function collectPrincipal({
   credentials,
   requestHandler,
   signingDate,
+  deadlineMs = Date.now() + 60000,
 }) {
   assert.equal(version, "3.1149.0", "UNKNOWN: SDK version");
   const options = {
@@ -120,11 +126,12 @@ async function collectPrincipal({
   const resolver = new sdk.DynamoDBClient(options);
   let client;
   try {
+    checkDeadline(signal, deadlineMs);
     const resolved = await withinDeadline(
       resolver.config.credentials(),
       signal,
     );
-    signal.throwIfAborted();
+    checkDeadline(signal, deadlineMs);
     const snapshot = {
       accessKeyId: resolved.accessKeyId,
       secretAccessKey: resolved.secretAccessKey,
@@ -163,7 +170,7 @@ async function collectPrincipal({
         ...(signingDate ? { signingDate } : {}),
       },
     );
-    signal.throwIfAborted();
+    checkDeadline(signal, deadlineMs);
     const { response } = await withinDeadline(
       client.config.requestHandler.handle(signed, { abortSignal: signal }),
       signal,
@@ -175,7 +182,7 @@ async function collectPrincipal({
     );
     const results = {};
     for (const [name, probe] of Object.entries(probes))
-      results[name] = await runProbe(client, sdk, probe, signal);
+      results[name] = await runProbe(client, sdk, probe, signal, deadlineMs);
     return { identity, results };
   } finally {
     client?.destroy();
@@ -183,6 +190,7 @@ async function collectPrincipal({
   }
 }
 module.exports = {
+  checkDeadline,
   withinDeadline,
   readBody,
   boundedBody,

@@ -5,6 +5,7 @@ const { parseProductionManifest } = require("./production-manifest.cjs");
 const { parseRehearsalManifest } = require("./rehearsal-manifest.cjs");
 const { awsCaller } = require("./sandbox-manifest.cjs");
 const { verifyCollectorRequest } = require("./collector-command.cjs");
+const { nativeTransport } = require("./collector-native.cjs");
 const { collectNativeInventory } = require("./collector-inventory.cjs");
 const { collectRehearsalTags } = require("./collector-tags.cjs");
 const { collectTaskSession } = require("./collector-session.cjs");
@@ -41,7 +42,7 @@ function createTrustedCollector(options) {
     now: options.now,
   });
   const aws = options.aws ?? awsCaller(m.binding.region),
-    now = options.now ?? (() => Math.floor(Date.now() / 1000));
+    now = options.now ?? (() => Date.now() / 1000);
   const ecs =
     options.ecs ??
     new ECSClient({
@@ -73,8 +74,18 @@ function createTrustedCollector(options) {
       "UNKNOWN: observation already submitted; do not retry",
     );
     submitted.add(request.nonce);
-    const native = await collectNativeInventory({ m, request, aws });
-    const tags = await collectRehearsalTags(aws, m);
+    const boundedAws = nativeTransport(
+      aws,
+      request.validUntil,
+      () => now() * 1000,
+    );
+    const native = await collectNativeInventory({
+      m,
+      request,
+      aws: boundedAws,
+    });
+    const tags = await collectRehearsalTags(boundedAws, m);
+    assert.ok(now() < request.validUntil, "UNKNOWN: observation expired");
     const session =
       native.tasks.bound.lastStatus === "STOPPED"
         ? null
@@ -93,7 +104,7 @@ function createTrustedCollector(options) {
       native,
       tags,
       session,
-      observedAt: now(),
+      observedAt: Math.floor(now()),
       blockers,
     });
     const error = new Error(
