@@ -89,23 +89,48 @@ async function checkStore(send, b, now) {
   );
   assert.ok(now() < b.retentionUntil, "retention binding expired");
 }
-function createPrivateCapture({
-  m,
-  manifestSha256,
+function createPrivateCapture({ m, manifestSha256, ...options }) {
+  return createStore({
+    ...options,
+    storeId: m.evidenceStoreId,
+    validUntil: m.validUntil,
+    namespace: captureNamespace(m, manifestSha256),
+  });
+}
+function createTerraformCapture({
+  invocation,
   binding,
   client,
   now = () => Math.floor(Date.now() / 1000),
 }) {
+  const { parseInvocation } = require("./terraform-bundle.cjs");
+  const i = parseInvocation(invocation);
+  return createStore({
+    binding,
+    client,
+    now,
+    storeId: binding?.storeId,
+    validUntil: now() + 21600,
+    namespace: `terraform/${i.environment}/${i.runId}/1/${digest(JSON.stringify(i))}`,
+  });
+}
+function createStore({
+  binding,
+  client,
+  storeId,
+  validUntil,
+  namespace,
+  now = () => Math.floor(Date.now() / 1000),
+}) {
   const b = storageBinding.parse(binding);
-  assert.equal(b.storeId, m.evidenceStoreId);
+  assert.equal(b.storeId, storeId);
   assert.ok(
-    b.retentionUntil >= m.validUntil,
+    b.retentionUntil >= validUntil,
     "retention binding does not cover operation",
   );
   assert.ok(
     b.kmsKeyArn.startsWith(`arn:aws:kms:${b.region}:${b.accountId}:key/`),
   );
-  const namespace = captureNamespace(m, manifestSha256);
   const sdk =
     client ??
     new s3.S3Client({
@@ -231,6 +256,6 @@ function createPrivateCapture({
       );
     }
   }
-  return { capture, readCapture };
+  return { capture, readCapture, checkReady: () => checkStore(send, b, now) };
 }
-module.exports = { createPrivateCapture };
+module.exports = { createPrivateCapture, createTerraformCapture };

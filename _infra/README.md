@@ -274,18 +274,24 @@ If you prefer separate variable files, use:
 
 `.github/workflows/terraform-plan.yml` is a manual plan workflow. It does not run
 on merge. Use it before planned infra work or when checking drift after deploys.
-When the plan has changes, it uploads a short-lived `tfplan` artifact and writes
-the artifact name, plan run ID, and SHA-256 to the workflow summary.
+The plan and all Terraform output are retained through the approved private,
+versioned capture store. Its public summary contains only status, a logical
+bundle label and the plan and whole-bundle SHA-256 digests.
 
-`.github/workflows/terraform-apply.yml` is a manual apply workflow. It downloads a
-reviewed plan artifact from a specific plan run, verifies the SHA-256, and applies
-that saved plan. It does not generate a fresh unreviewed plan during apply.
+`.github/workflows/terraform-apply.yml` verifies the completed native producer,
+exact source, private object version, whole bundle and actual protected-environment
+individual approval before applying the saved plan. It never replans. Missing
+private storage or supported native protection metadata refuses execution.
+See [private Terraform delivery](../docs/terraform-private-delivery.md) for review,
+configuration, supported protection rules and unknown-acknowledgment handling.
 
 Each GitHub environment used by the workflow must provide:
 
 - Secret `AWS_ACCESS_KEY_ID`
 - Secret `AWS_SECRET_ACCESS_KEY`
 - Secret `TERRAFORM_TFVARS_JSON`
+- Approved secret `TERRAFORM_PRIVATE_STORAGE_JSON`
+- For apply, exact private secret `TERRAFORM_PLAN_REFERENCE_JSON`
 - Optional secret `REDIS_AUTH_TOKEN`
 - Optional secret `REDIS_URL`
 

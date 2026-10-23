@@ -2,100 +2,9 @@
 import { Buffer } from "node:buffer";
 import { test, expect } from "@jest/globals";
 import { createPrivateCapture } from "../../scripts/deployment/private-capture.cjs";
-import { manifestFixture } from "../fixtures/deployment/productionIntroduction.js";
+import { privateCaptureFixture as fixture } from "../fixtures/deployment/privateCapture.js";
 import { digest } from "../../scripts/deployment/collector-payload.cjs";
-import { manifestHash } from "../../scripts/deployment/sandbox-manifest.cjs";
-function fixture() {
-  const m = manifestFixture(),
-    calls = [],
-    objects = new Map();
-  const binding = {
-    kind: "versioned-private-s3-v1",
-    storeId: m.evidenceStoreId,
-    bucket: "private-synthetic",
-    accountId: m.binding.accountId,
-    region: m.binding.region,
-    kmsKeyArn:
-      "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-4111-8111-111111111111",
-    policySha256: digest("{}"),
-    lifecycleSha256: digest("null"),
-    retentionUntil: 6000,
-    administratorTrustSha256: "a".repeat(64),
-  };
-  const client = {
-    config: { maxAttempts: async () => 1, region: async () => binding.region },
-    send: async (command) => {
-      calls.push(command);
-      const key = command.constructor.name,
-        i = command.input;
-      const native = {
-        GetBucketLocationCommand: { LocationConstraint: null },
-        GetBucketVersioningCommand: { Status: "Enabled" },
-        GetBucketOwnershipControlsCommand: {
-          OwnershipControls: {
-            Rules: [{ ObjectOwnership: "BucketOwnerEnforced" }],
-          },
-        },
-        GetPublicAccessBlockCommand: {
-          PublicAccessBlockConfiguration: {
-            BlockPublicAcls: true,
-            IgnorePublicAcls: true,
-            BlockPublicPolicy: true,
-            RestrictPublicBuckets: true,
-          },
-        },
-        GetBucketPolicyStatusCommand: { PolicyStatus: { IsPublic: false } },
-        GetBucketPolicyCommand: { Policy: "{}" },
-        GetBucketEncryptionCommand: {
-          ServerSideEncryptionConfiguration: {
-            Rules: [
-              {
-                ApplyServerSideEncryptionByDefault: {
-                  SSEAlgorithm: "aws:kms",
-                  KMSMasterKeyID: binding.kmsKeyArn,
-                },
-                BucketKeyEnabled: false,
-              },
-            ],
-          },
-        },
-      };
-      if (key === "GetBucketLifecycleConfigurationCommand")
-        throw Object.assign(new Error("absent"), {
-          name: "NoSuchLifecycleConfiguration",
-        });
-      if (key === "PutObjectCommand") {
-        objects.set(i.Key, Buffer.from(i.Body));
-        return { VersionId: "v1" };
-      }
-      if (key === "GetObjectCommand")
-        return {
-          VersionId: "v1",
-          ContentLength: objects.get(i.Key).length,
-          ServerSideEncryption: "aws:kms",
-          SSEKMSKeyId: binding.kmsKeyArn,
-          BucketKeyEnabled: false,
-          Body: [objects.get(i.Key)],
-        };
-      if (!native[key]) throw new Error(key);
-      return native[key];
-    },
-  };
-  return {
-    m,
-    binding,
-    client,
-    calls,
-    objects,
-    options: {
-      m,
-      manifestSha256: manifestHash(m),
-      binding,
-      client,
-      now: () => 1000,
-    },
-  };
-}
+
 test("private capture uses conditional one-attempt creation and exact version original-byte readback", async () => {
   const f = fixture(),
     store = createPrivateCapture(f.options),
@@ -175,4 +84,53 @@ test.each([
     f.calls.filter((c) => c.constructor.name === "PutObjectCommand").length,
   ).toBeLessThanOrEqual(1);
   expect(f.calls.some((c) => /Delete/.test(c.constructor.name))).toBe(false);
+});
+
+test("Terraform capture derives a separate strict invocation namespace and checks storage before provider work", async () => {
+  const { createTerraformCapture } =
+    await import("../../scripts/deployment/private-capture.cjs");
+  const f = fixture();
+  f.binding.retentionUntil = 40000;
+  const invocation = {
+    repository: "Chronote-gg/Chronote",
+    sourceSha: "a".repeat(40),
+    workflowPath: ".github/workflows/terraform-plan.yml",
+    runId: "10",
+    runAttempt: 1,
+    environment: "production",
+    workspace: "default",
+    scope: "full",
+  };
+  const store = createTerraformCapture({
+    invocation,
+    binding: f.binding,
+    client: f.client,
+    now: () => 1000,
+  });
+  await store.checkReady();
+  expect(f.calls.some((c) => c.constructor.name === "PutObjectCommand")).toBe(
+    false,
+  );
+  const ref = await store.capture({ bytes: "AP8=" });
+  expect(ref.namespace).toBe(
+    "terraform/production/10/1/" + digest(JSON.stringify(invocation)),
+  );
+  expect(await store.readCapture(ref)).toEqual({ bytes: "AP8=" });
+  expect(() =>
+    createTerraformCapture({
+      invocation: {
+        ...invocation,
+        namespace: "production-introduction/arbitrary",
+      },
+      binding: f.binding,
+      client: f.client,
+    }),
+  ).toThrow();
+  expect(() =>
+    createTerraformCapture({
+      invocation: { ...invocation, workspace: "sandbox" },
+      binding: f.binding,
+      client: f.client,
+    }),
+  ).toThrow();
 });
