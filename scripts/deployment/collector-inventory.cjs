@@ -2,6 +2,12 @@
 const assert = require("node:assert/strict");
 const { metadataDigest } = require("./production-work.cjs");
 const { stateDigest } = require("./production-evidence.cjs");
+const {
+  taskProjection,
+  definitionProjection,
+  serviceProjection,
+  imageProjection,
+} = require("./collector-metadata.cjs");
 async function collectPages(
   aws,
   m,
@@ -69,12 +75,15 @@ async function taskInventory(aws, m, request) {
         tasks: batch,
         include: ["TAGS"],
       });
-    assert.deepEqual(result.failures ?? [], []);
+    assert.ok(
+      (result.failures ?? []).length === 0,
+      "UNKNOWN: task metadata failure",
+    );
     assert.deepEqual(
       result.tasks.map((t) => t.taskArn).sort(),
       [...batch].sort(),
     );
-    tasks.push(...result.tasks);
+    tasks.push(...result.tasks.map(taskProjection));
   }
   const definitions = [];
   for (const taskDefinition of new Set(tasks.map((t) => t.taskDefinitionArn))) {
@@ -83,7 +92,9 @@ async function taskInventory(aws, m, request) {
       include: ["TAGS"],
     });
     assert.equal(result.taskDefinition.taskDefinitionArn, taskDefinition);
-    definitions.push(result);
+    definitions.push({
+      taskDefinition: definitionProjection(result.taskDefinition),
+    });
   }
   const service = await aws("ecs", "describe-services", {
     cluster: m.cluster,
@@ -131,11 +142,12 @@ async function taskInventory(aws, m, request) {
     );
   }
   return {
+    projectionKind: "ecs-metadata-v1",
     listings,
     tasks,
     definitions,
-    service: service.services[0],
-    images: images.imageDetails,
+    service: serviceProjection(service.services[0]),
+    images: images.imageDetails.map(imageProjection),
     bound: {
       taskArn: bound.taskArn,
       containerArn: container.containerArn,
@@ -291,17 +303,23 @@ async function controllerInventory(aws, m) {
   return { scaling, buses, rules, schedules };
 }
 async function collectNativeInventory({ m, request, aws }) {
+  const failures = new WeakSet();
   const safe = async (service, operation, input) => {
     try {
       return await aws(service, operation, input);
     } catch {
-      throw new Error(
+      const failure = new Error(
         `UNKNOWN: native ${service}.${operation} prerequisite unavailable`,
       );
+      failures.add(failure);
+      throw failure;
     }
   };
   return {
-    tasks: await taskInventory(safe, m, request),
+    tasks: await taskInventory(safe, m, request).catch((error) => {
+      if (failures.has(error)) throw error;
+      throw new Error("UNKNOWN: native ECS metadata unsupported");
+    }),
     policies: await policyInventory(safe, m),
     controllers: await controllerInventory(safe, m),
   };

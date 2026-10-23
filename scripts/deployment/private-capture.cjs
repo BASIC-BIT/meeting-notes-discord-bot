@@ -97,6 +97,29 @@ function createPrivateCapture({ m, manifestSha256, ...options }) {
     namespace: captureNamespace(m, manifestSha256),
   });
 }
+const preparationSchema = z
+  .object({
+    kind: z.enum([
+      "production-introduction-preparation",
+      "rehearsal-introduction-preparation",
+    ]),
+    operationId: z.string().uuid(),
+    sourceSha: z.string().regex(/^[a-f0-9]{40}$/),
+    evidenceStoreId: z.string().min(1).max(128),
+    validUntil: z.number().int().positive(),
+  })
+  .strict();
+function createPreparationCapture({ preparation, binding, client, now }) {
+  const identity = preparationSchema.parse(preparation);
+  return createStore({
+    binding,
+    client,
+    now,
+    storeId: identity.evidenceStoreId,
+    validUntil: identity.validUntil,
+    namespace: `${identity.kind}/${identity.operationId}/${identity.sourceSha}`,
+  });
+}
 function createTerraformCapture({
   invocation,
   binding,
@@ -258,4 +281,8 @@ function createStore({
   }
   return { capture, readCapture, checkReady: () => checkStore(send, b, now) };
 }
-module.exports = { createPrivateCapture, createTerraformCapture };
+module.exports = {
+  createPrivateCapture,
+  createPreparationCapture,
+  createTerraformCapture,
+};
