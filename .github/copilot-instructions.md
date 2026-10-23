@@ -183,6 +183,7 @@ Why each check exists:
 - Markdown lint (markdownlint-cli2) enforces consistent Markdown style across all repo `.md` files. Config in `.markdownlint-cli2.jsonc`. Command: `yarn markdownlint:check` (or `yarn markdownlint:fix` to auto-fix). Docs: https://github.com/DavidAnson/markdownlint-cli2 and https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
 - IaC scan (Checkov via uvx) catches Terraform misconfigurations. Docs: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html and https://docs.astral.sh/uv/concepts/tools/
 - Prompt sync (Langfuse) keeps repo prompt files aligned with Langfuse. Command: `yarn prompts:check`.
+- Production promotes prompts and syncs only the OpenAI LLM connection after backend deployment. Keep live sync out of PR and staging workflows because staging shares the Langfuse project. Provider credentials come from the existing production runtime configuration. YAML changes may show expected PR drift until the merged revision is synced; preserve drift checks and code-quality gates. Details: `docs/langfuse-llm-connections.md`.
 
 Coverage guidance:
 

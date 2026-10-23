@@ -64,6 +64,7 @@ of meeting completion; see [meeting lifecycle](apps/docs-site/docs/core-concepts
 - `yarn llm-connections:push` upserts local connections to Langfuse.
 - `yarn llm-connections:pull` pulls connections from Langfuse into YAML files.
 - `yarn llm-connections:check` compares local YAML with Langfuse (keys only, no secrets). It runs inside `yarn run check` and CI.
+- Production automatically syncs only the OpenAI connection after backend deployment. Staging shares Langfuse and checks drift without pushing; other providers remain explicitly managed.
 - Details and schema: `docs/langfuse-llm-connections.md`.
 
 ## Checks
